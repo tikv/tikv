@@ -38,13 +38,17 @@ impl RaftLogEngine {
 }
 
 #[derive(Default)]
-pub struct RaftLogBatch(LogBatch<Entry, EntryExtTyped>);
+pub struct RaftLogBatch {
+    inner: LogBatch<Entry, EntryExtTyped>,
+    count: usize,
+}
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        self.0.add_entries(raft_group_id, entries);
+        self.count += entries.len();
+        self.inner.add_entries(raft_group_id, entries);
         Ok(())
     }
 
@@ -54,13 +58,17 @@ impl RaftLogBatchTrait for RaftLogBatch {
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         box_try!(self
-            .0
+            .inner
             .put_msg(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state));
         Ok(())
     }
 
     fn is_empty(&self) -> bool {
-        self.0.items.is_empty()
+        self.inner.items.is_empty()
+    }
+
+    fn count(&self) -> usize {
+        self.count
     }
 }
 
@@ -101,7 +109,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        let ret = box_try!(self.0.write(&mut batch.0, sync));
+        let ret = box_try!(self.0.write(&mut batch.inner, sync));
         Ok(ret)
     }
 
@@ -112,7 +120,7 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        let ret = box_try!(self.0.write(&mut batch.0, sync));
+        let ret = box_try!(self.0.write(&mut batch.inner, sync));
         Ok(ret)
     }
 
@@ -122,14 +130,14 @@ impl RaftEngine for RaftLogEngine {
         _: &RaftLocalState,
         batch: &mut RaftLogBatch,
     ) -> Result<()> {
-        batch.0.clean_region(raft_group_id);
+        batch.inner.clean_region(raft_group_id);
         Ok(())
     }
 
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
-        batch.0.add_entries(raft_group_id, entries);
-        let ret = box_try!(self.0.write(&mut batch.0, false));
+        batch.inner.add_entries(raft_group_id, entries);
+        let ret = box_try!(self.0.write(&mut batch.inner, false));
         Ok(ret)
     }
 

@@ -3244,7 +3244,7 @@ where
                 |_| unimplemented!()
             );
 
-            apply_ctx.flush();
+            apply_ctx.commit(&mut self.delegate);
             // For now, it's more like last_flush_apply_index.
             // TODO: Update it only when `flush()` returns true.
             self.delegate.last_sync_apply_index = applied_index;
@@ -3543,6 +3543,10 @@ where
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
         }
+    }
+
+    fn processed_messages(&self) -> usize {
+        self.apply_ctx.committed_count
     }
 }
 

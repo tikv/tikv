@@ -226,6 +226,10 @@ pub trait PollHandler<N, C> {
     /// This function is called at the end of every round.
     fn end(&mut self, batch: &mut [Box<N>]);
 
+    /// The messages which will be persisted in disk or written to engine. We shall control
+    /// the batch size of it to make batch-system balance.
+    fn processed_messages(&self) -> usize;
+
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
 }
@@ -277,8 +281,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
-            let max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
-            self.handler.begin(max_batch_size);
+            self.handler.begin(self.max_batch_size);
 
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
@@ -311,14 +314,17 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while batch.normals.len() < max_batch_size {
+            while batch.normals.len() < self.max_batch_size {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
                 // may change state of the handler, we shall deal with it immediately after
                 // calling `begin` of `Handler`.
-                if !run || fsm_cnt >= batch.normals.len() {
+                if !run
+                    || fsm_cnt >= batch.normals.len()
+                    || self.handler.processed_messages() > self.max_batch_size
+                {
                     break;
                 }
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);

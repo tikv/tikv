@@ -11,8 +11,10 @@ use tikv_util::mpsc;
 pub enum Message {
     /// `Runner` will do simple calculation for the given times.
     Loop(usize),
+    /// `Runner` will cost little time for the given messages.
+    HeartBeat,
     /// `Runner` will call the callback directly.
-    Callback(Box<dyn FnOnce(&mut Runner) + Send + 'static>),
+    Callback(Box<dyn FnOnce(&mut Runner, &HandleMetrics) + Send + 'static>),
 }
 
 /// A simple runner used for benchmarking only.
@@ -61,6 +63,7 @@ pub struct HandleMetrics {
     pub begin: usize,
     pub control: usize,
     pub normal: usize,
+    pub processed_count: usize,
 }
 
 pub struct Handler {
@@ -78,8 +81,10 @@ impl Handler {
                         r.res *= count;
                         r.res %= count + 1;
                     }
+                    self.local.processed_count += 1;
                 }
-                Ok(Message::Callback(cb)) => cb(r),
+                Ok(Message::HeartBeat) => {}
+                Ok(Message::Callback(cb)) => cb(r, &self.local),
                 Err(_) => break,
             }
         }
@@ -106,6 +111,10 @@ impl PollHandler<Runner, Runner> for Handler {
         let mut c = self.metrics.lock().unwrap();
         *c += self.local;
         self.local = HandleMetrics::default();
+    }
+
+    fn processed_messages(&self) -> usize {
+        self.local.processed_count
     }
 }
 

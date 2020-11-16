@@ -189,7 +189,7 @@ impl RaftEngine for RocksEngine {
         for idx in from..to {
             let key = keys::raft_log_key(raft_group_id, idx);
             raft_wb.delete(&key)?;
-            if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
+            if RaftLogBatch::count(&raft_wb) >= Self::WRITE_BATCH_MAX_KEYS {
                 self.write(&raft_wb)?;
                 raft_wb.clear();
             }
@@ -249,6 +249,10 @@ impl RaftLogBatch for RocksWriteBatch {
 
     fn is_empty(&self) -> bool {
         Mutable::is_empty(self)
+    }
+
+    fn count(&self) -> usize {
+        Mutable::count(self)
     }
 }
 

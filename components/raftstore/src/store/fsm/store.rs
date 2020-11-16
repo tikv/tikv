@@ -855,6 +855,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.store_stat.flush();
     }
 
+    fn processed_messages(&self) -> usize {
+        self.poll_ctx.raft_wb.count()
+    }
+
     fn pause(&mut self) {
         if self.poll_ctx.need_flush_trans {
             self.poll_ctx.trans.flush();
