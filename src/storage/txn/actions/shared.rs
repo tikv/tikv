@@ -20,6 +20,7 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
     max_commit_ts: TimeStamp,
     try_one_pc: bool,
     has_pessimistic_lock: bool,
+    fallback_from_async_commit: bool,
 ) -> MvccResult<TimeStamp> {
     let mut lock = Lock::new(
         lock_type,
@@ -36,7 +37,9 @@ pub(super) fn prewrite_key_value<S: Snapshot>(
         if is_short_value(&value) {
             // If the value is short, embed it in Lock.
             lock.short_value = Some(value);
-        } else {
+
+        // needn't set value again when fallback
+        } else if !fallback_from_async_commit {
             // value is long
             txn.put_value(key.clone(), txn.start_ts, value);
         }
