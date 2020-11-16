@@ -16,8 +16,8 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let str = String::from_utf8_lossy(bstr);
-        let s = str.trim_end_matches(TRIM_PADDING_SPACE);
+        let sstr = String::from_utf8_lossy(bstr);
+        let s = sstr.trim_end_matches(TRIM_PADDING_SPACE);
         writer.write_bytes(s.as_bytes())?;
         Ok(s.len())
     }
@@ -33,8 +33,8 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let str = String::from_utf8_lossy(bstr);
-        let s = str.trim_end_matches(TRIM_PADDING_SPACE);
+        let sstr = String::from_utf8_lossy(bstr);
+        let s = sstr.trim_end_matches(TRIM_PADDING_SPACE);
         s.hash(state);
         Ok(())
     }
