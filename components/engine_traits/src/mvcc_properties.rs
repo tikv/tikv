@@ -3,7 +3,7 @@
 use std::cmp;
 use txn_types::TimeStamp;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct MvccProperties {
     pub min_ts: TimeStamp,     // The minimal timestamp.
     pub max_ts: TimeStamp,     // The maximal timestamp.
