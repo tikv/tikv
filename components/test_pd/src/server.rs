@@ -435,4 +435,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn get_dc_locations(
+        &mut self,
+        _ctx: grpcio::RpcContext<'_>,
+        _req: GetDcLocationsRequest,
+        _sink: UnarySink<GetDcLocationsResponse>,
+    ) {
+        unimplemented!()
+    }
 }
