@@ -4,9 +4,9 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
 use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::actions::check_txn_status::*;
 use crate::storage::txn::commands::{
     Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
     WriteResult,
@@ -87,71 +87,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         ));
 
         let result = match txn.reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.lock_ts => {
-                if lock.use_async_commit
-                    && (!self.caller_start_ts.is_zero() || !self.current_ts.is_zero())
-                {
-                    warn!(
-                        "check async commit txn status with non-zero caller_start_ts or current_ts";
-                        "caller_start_ts" => self.caller_start_ts,
-                        "current_ts" => self.current_ts
-                    );
-                    self.caller_start_ts = TimeStamp::zero();
-                    self.current_ts = TimeStamp::zero();
-                }
-
-                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-
-                if lock.ts.physical() + lock.ttl < self.current_ts.physical() {
-                    // If the lock is expired, clean it up.
-                    let released = txn.check_write_and_rollback_lock(
-                        self.primary_key,
-                        &lock,
-                        is_pessimistic_txn,
-                    )?;
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-                    Ok((TxnStatus::TtlExpire, released))
-                } else {
-                    // Although we won't really push forward min_commit_ts when caller_start_ts is max,
-                    // we should return MinCommitTsPushed result to the client to keep backward
-                    // compatibility.
-                    let mut min_commit_ts_pushed = self.caller_start_ts.is_max();
-
-                    // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
-                    // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
-                    // during rolling update.
-                    if !lock.min_commit_ts.is_zero()
-                        // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                        // We don't push forward lock's min_commit_ts and the point get can ignore the lock
-                        // next time because it's not committed.
-                        && !self.caller_start_ts.is_max()
-                        // Push forward the min_commit_ts so that reading won't be blocked by locks.
-                        && self.caller_start_ts >= lock.min_commit_ts
-                    {
-                        assert!(!lock.use_async_commit);
-                        lock.min_commit_ts = self.caller_start_ts.next();
-
-                        if lock.min_commit_ts < self.current_ts {
-                            lock.min_commit_ts = self.current_ts;
-                        }
-
-                        txn.put_lock(self.primary_key, &lock);
-                        min_commit_ts_pushed = true;
-                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
-                    }
-
-                    Ok((TxnStatus::uncommitted(lock, min_commit_ts_pushed), None))
-                }
-            }
+            Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
+                &mut txn,
+                self.primary_key,
+                lock,
+                self.current_ts,
+                self.caller_start_ts,
+            ),
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            l => txn
-                .check_txn_status_missing_lock(
-                    self.primary_key,
-                    l,
-                    MissingLockAction::rollback(self.rollback_if_not_exist),
-                )
-                .map(|s| (s, None)),
+            l => check_txn_status_missing_lock(
+                &mut txn,
+                self.primary_key,
+                l,
+                MissingLockAction::rollback(self.rollback_if_not_exist),
+            )
+            .map(|s| (s, None)),
         };
         let (txn_status, released) = result?;
 
