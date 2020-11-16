@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::Cell;
-use std::cmp::Ordering as CmpOrdering;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -157,7 +156,6 @@ struct WriteCompactionFilter {
 
     key_prefix: Vec<u8>,
     remove_older: bool,
-    deleting: Option<Vec<Vec<u8>>>,
 
     // To handle delete marks.
     write_iter: Option<RocksEngineIterator>,
@@ -194,7 +192,6 @@ impl WriteCompactionFilter {
             write_batch,
             key_prefix: vec![],
             remove_older: false,
-            deleting: None,
             write_iter,
             near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
@@ -204,36 +201,22 @@ impl WriteCompactionFilter {
         }
     }
 
-    // Do gc before a delete mark. Must be called before switching `key_prefix`.
-    fn handle_deleting(&mut self) {
-        let mut deleting = match self.deleting.take() {
-            Some(v) => v,
-            None => return,
-        };
-
-        let mut valid = self.write_iter_seek_to(deleting[0].as_slice());
+    // Do gc before a delete mark.
+    fn handle_delete_mark(&mut self, mark: &[u8]) {
+        let mut valid = self.write_iter_seek_to(mark);
         let mut write_iter = self.write_iter.take().unwrap();
+        if valid && write_iter.key() == mark {
+            // The delete mark itself is handled in `filter`.
+            valid = write_iter.next().unwrap();
+        }
+
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
             if truncate_ts(key) != self.key_prefix.as_slice() {
                 break;
             }
-
-            let (mut drain_pos, mut found) = (0, false);
-            while drain_pos < deleting.len() {
-                match write_iter.key().cmp(deleting[drain_pos].as_slice()) {
-                    CmpOrdering::Equal => found = true,
-                    CmpOrdering::Less => break,
-                    _ => {}
-                }
-                drain_pos += 1;
-            }
-            deleting.drain(0..drain_pos);
-            if !found {
-                self.handle_filtered_write(parse_write(value));
-                self.delete_write_key(key);
-            }
-
+            self.handle_filtered_write(parse_write(value));
+            self.delete_write_key(key);
             valid = write_iter.next().unwrap();
         }
         self.write_iter = Some(write_iter);
@@ -308,8 +291,6 @@ thread_local! {
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
-        self.handle_deleting();
-
         if !self.write_batch.is_empty() {
             let mut opts = WriteOptions::new();
             opts.set_sync(true);
@@ -351,7 +332,6 @@ impl CompactionFilter for WriteCompactionFilter {
 
         self.versions += 1;
         if self.key_prefix != key_prefix {
-            self.handle_deleting();
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
@@ -367,16 +347,13 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = true;
-                    self.deleting = Some(Vec::with_capacity(16));
+                    self.handle_delete_mark(key);
                 }
             }
         }
 
         if filtered {
             self.handle_filtered_write(write);
-            if let Some(deleting) = self.deleting.as_mut() {
-                deleting.push(key.to_vec());
-            }
             self.deleted += 1;
         }
 
