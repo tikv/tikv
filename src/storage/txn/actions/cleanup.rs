@@ -5,6 +5,8 @@ use crate::storage::mvcc::{
 };
 use crate::storage::{Snapshot, TxnStatus};
 
+use super::check_txn_status::check_txn_status_missing_lock;
+
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
 /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
 /// transaction, the rollback record is protected from being collapsed.
@@ -34,7 +36,8 @@ pub fn cleanup<S: Snapshot>(
             let is_pessimistic_txn = !lock.for_update_ts.is_zero();
             txn.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
         }
-        l => match txn.check_txn_status_missing_lock(
+        l => match check_txn_status_missing_lock(
+            txn,
             key,
             l,
             MissingLockAction::rollback_protect(protect_rollback),
