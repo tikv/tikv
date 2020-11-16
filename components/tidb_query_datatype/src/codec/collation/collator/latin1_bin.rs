@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::*;
+use bstr::{ByteSlice, B};
 
 /// Collator for latin1_bin collation with padding behavior (trims right spaces).
 #[derive(Debug)]
@@ -16,26 +17,19 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let sstr = String::from_utf8_lossy(bstr);
-        let s = sstr.trim_end_matches(TRIM_PADDING_SPACE);
-        writer.write_bytes(s.as_bytes())?;
+        let s = B(bstr).trim_end();
+        writer.write_bytes(s)?;
         Ok(s.len())
     }
 
     #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let str_a = String::from_utf8_lossy(a);
-        let str_b = String::from_utf8_lossy(b);
-        let sa = str_a.trim_end_matches(TRIM_PADDING_SPACE);
-        let sb = str_b.trim_end_matches(TRIM_PADDING_SPACE);
-        Ok(sa.as_bytes().cmp(sb.as_bytes()))
+        Ok(B(a).trim_end().cmp(B(b).trim_end()))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let sstr = String::from_utf8_lossy(bstr);
-        let s = sstr.trim_end_matches(TRIM_PADDING_SPACE);
-        s.hash(state);
+        B(bstr).trim_end().hash(state);
         Ok(())
     }
 }

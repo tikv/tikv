@@ -1,16 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod binary;
+mod latin1_bin;
 mod utf8mb4_binary;
 mod utf8mb4_general_ci;
 mod utf8mb4_unicode_ci;
-mod latin1_bin;
 
 pub use binary::*;
+pub use latin1_bin::*;
 pub use utf8mb4_binary::*;
 pub use utf8mb4_general_ci::*;
 pub use utf8mb4_unicode_ci::*;
-pub use latin1_bin::*;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
