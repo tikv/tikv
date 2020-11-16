@@ -1062,13 +1062,13 @@ mod tests {
     fn test_gc_with_compaction_filter() {
         use crate::server::gc_worker::gc_by_compact;
 
-        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
+        test_gc_imp(b"zk1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
 
         let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, gc_by_compact);
+        test_gc_imp(b"zk2", &v1, &v2, &v3, &v4, gc_by_compact);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
