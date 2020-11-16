@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use test_raftstore::*;
 use test_util;
 
