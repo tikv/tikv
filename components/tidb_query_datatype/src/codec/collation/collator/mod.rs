@@ -42,6 +42,7 @@ mod tests {
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4GeneralCi, 2),
             (Collation::Utf8Mb4UnicodeCi, 3),
+            (Collation::Latin1Bin, 4),
         ];
         let cases = vec![
             // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
@@ -49,6 +50,7 @@ mod tests {
                 "a".as_bytes(),
                 "a".as_bytes(),
                 [
+                    Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
@@ -63,6 +65,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
                 ],
             ),
             (
@@ -73,12 +76,14 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "aa ".as_bytes(),
                 "a a".as_bytes(),
                 [
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -93,6 +98,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -103,6 +109,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -113,6 +120,7 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -123,6 +131,7 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
         ];
@@ -176,12 +185,19 @@ mod tests {
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4GeneralCi, 2),
             (Collation::Utf8Mb4UnicodeCi, 3),
+            (Collation::Latin1Bin, 4),
         ];
         let cases = vec![
             // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
             (
                 "a",
-                [vec![0x61], vec![0x61], vec![0x00, 0x41], vec![0x0E, 0x33]],
+                [
+                    vec![0x61],
+                    vec![0x61],
+                    vec![0x00, 0x41],
+                    vec![0x0E, 0x33],
+                    vec![0x61],
+                ],
             ),
             (
                 "A ",
@@ -190,11 +206,18 @@ mod tests {
                     vec![0x41, 0x20],
                     vec![0x00, 0x41],
                     vec![0x0E, 0x33],
+                    vec![0x41],
                 ],
             ),
             (
                 "A",
-                [vec![0x41], vec![0x41], vec![0x00, 0x41], vec![0x0E, 0x33]],
+                [
+                    vec![0x41],
+                    vec![0x41],
+                    vec![0x00, 0x41],
+                    vec![0x0E, 0x33],
+                    vec![0x41],
+                ],
             ),
             (
                 "😃",
@@ -203,6 +226,7 @@ mod tests {
                     vec![0xF0, 0x9F, 0x98, 0x83],
                     vec![0xff, 0xfd],
                     vec![0xff, 0xfd],
+                    vec![0xF0, 0x9F, 0x98, 0x83],
                 ],
             ),
             (
@@ -230,6 +254,11 @@ mod tests {
                         0x0E, 0x4A, 0x0E, 0x33, 0x10, 0x6A, 0x02, 0x09, 0x06, 0xFF, 0x02, 0x09,
                         0x0F, 0xB4, 0x10, 0x1F, 0x10, 0x5A,
                     ],
+                    vec![
+                        0x46, 0x6F, 0x6F, 0x20, 0xC2, 0xA9, 0x20, 0x62, 0x61, 0x72, 0x20, 0xF0,
+                        0x9D, 0x8C, 0x86, 0x20, 0x62, 0x61, 0x7A, 0x20, 0xE2, 0x98, 0x83, 0x20,
+                        0x71, 0x75, 0x78,
+                    ],
                 ],
             ),
             (
@@ -242,6 +271,7 @@ mod tests {
                         0x13, 0x5E, 0x13, 0xAB, 0x02, 0x09, 0x13, 0x5E, 0x13, 0xAB, 0x13, 0x50,
                         0x13, 0xAB, 0x13, 0xB7,
                     ],
+                    vec![0xEF, 0xB7, 0xBB],
                 ],
             ),
         ];
@@ -258,6 +288,42 @@ mod tests {
                     s, collation
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_latin1_bin() {
+        use crate::codec::collation::collator::CollatorLatin1Bin;
+        use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
+
+        let cases = vec![
+            (vec![0xFF, 0x88, 0x00, 0x13], vec![0xFF, 0x88, 0x00, 0x13]),
+            (
+                vec![0xFF, 0x88, 0x00, 0x13, 0x20, 0x20, 0x20],
+                vec![0xFF, 0x88, 0x00, 0x13],
+            ),
+        ];
+
+        for (sa, sb) in cases {
+            let eval_hash = |s| {
+                let mut hasher = DefaultHasher::default();
+                CollatorLatin1Bin::sort_hash(&mut hasher, s).unwrap();
+                hasher.finish()
+            };
+
+            let cmp = CollatorLatin1Bin::sort_compare(sa.as_slice(), sb.as_slice()).unwrap();
+            let ha = eval_hash(sa.as_slice());
+            let hb = eval_hash(sb.as_slice());
+
+            assert_eq!(cmp, Ordering::Equal, "when comparing {:?} and {:?}", sa, sb);
+
+            assert_eq!(
+                ha, hb,
+                "when comparing the hash of {:?} and {:?}, which should be equal",
+                sa, sb
+            );
         }
     }
 }
