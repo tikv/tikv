@@ -18,22 +18,14 @@ struct CbReceivers {
 
 impl CbReceivers {
     fn assert_not_ready(&self) {
-        self.proposed
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        self.committed
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        self.applied
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        sleep_ms(100);
+        assert_eq!(self.proposed.try_recv().unwrap_err(), TryRecvError::Empty);
+        assert_eq!(self.committed.try_recv().unwrap_err(), TryRecvError::Empty);
+        assert_eq!(self.applied.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
     fn assert_ok(&self) {
-        let resp = self
-            .applied
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap();
+        let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(
             !resp.get_header().has_error(),
             "{:?}",
@@ -46,15 +38,14 @@ impl CbReceivers {
 
     // When fails to propose, only applied callback will be invoked.
     fn assert_err(&self) {
-        assert!(self.applied.recv().unwrap().get_header().has_error());
-        assert_eq!(
-            self.proposed.try_recv().unwrap_err(),
-            TryRecvError::Disconnected
-        );
-        assert_eq!(
-            self.committed.try_recv().unwrap_err(),
-            TryRecvError::Disconnected
-        );
+        assert!(self
+            .applied
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .get_header()
+            .has_error());
+        self.proposed.try_recv().unwrap_err();
+        self.committed.try_recv().unwrap_err();
     }
 }
 
@@ -94,12 +85,13 @@ fn test_reject_proposal_during_region_split() {
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
-    let r = cluster.run_conf_change();
-    pd_client.must_add_peer(r, new_peer(2, 1002));
-    pd_client.must_add_peer(r, new_peer(3, 1003));
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+    cluster.must_put(b"k", b"v");
 
     // Pause on applying so that region split is not finished.
-    let fp = "apply_before_split";
+    let fp = "apply_before_split_1_3";
+    // let fp = "apply_before_split";
     fail::cfg(fp, "pause").unwrap();
 
     // Try to split region.
@@ -109,7 +101,9 @@ fn test_reject_proposal_during_region_split() {
     }));
     let r = cluster.get_region(b"");
     cluster.split_region(&r, b"k", cb);
-    split_rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+    split_rx
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
 
     // Try to put a key.
     let write_req = make_write_req(&mut cluster, b"k1");
@@ -117,14 +111,18 @@ fn test_reject_proposal_during_region_split() {
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, write_req, cb)
+        .async_command_on_node(3, write_req, cb)
         .unwrap();
     // The write request should be blocked until split is finished.
     cb_receivers.assert_not_ready();
 
     fail::remove(fp);
     // Split is finished.
-    assert!(!split_rx.recv().unwrap().get_header().has_error());
+    assert!(!split_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .get_header()
+        .has_error());
 
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
@@ -135,7 +133,7 @@ fn test_reject_proposal_during_region_split() {
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, write_req, cb)
+        .async_command_on_node(3, write_req, cb)
         .unwrap();
     cb_receivers.assert_ok();
 }
@@ -146,16 +144,15 @@ fn test_reject_proposal_during_region_merge() {
     configure_for_merge(&mut cluster);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
-    let r = cluster.run_conf_change();
-    pd_client.must_add_peer(r, new_peer(2, 1002));
-    pd_client.must_add_peer(r, new_peer(3, 1003));
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k", b"v");
 
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"k");
     // Let the new region catch up.
     cluster.must_put(b"a", b"v");
     cluster.must_put(b"k", b"v");
-    sleep_ms(100);
 
     let prepare_merge_fp = "apply_before_prepare_merge";
     let commit_merge_fp = "apply_before_commit_merge";
@@ -170,7 +167,9 @@ fn test_reject_proposal_during_region_merge() {
     let source = cluster.get_region(b"");
     let target = cluster.get_region(b"k");
     cluster.merge_region(source.get_id(), target.get_id(), cb);
-    merge_rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+    merge_rx
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
 
     // Try to put a key on the source region.
     let write_req = make_write_req(&mut cluster, b"a");
@@ -188,7 +187,11 @@ fn test_reject_proposal_during_region_merge() {
 
     // prepare-merge is finished.
     fail::remove(prepare_merge_fp);
-    assert!(!merge_rx.recv().unwrap().get_header().has_error());
+    assert!(!merge_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .get_header()
+        .has_error());
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
 
@@ -216,7 +219,7 @@ fn test_reject_proposal_during_region_merge() {
 
     // Wait for region merge done.
     fail::remove(commit_merge_fp);
-    sleep_ms(100);
+    pd_client.check_merged_timeout(source.get_id(), Duration::from_secs(1));
     // The write request fails due to epoch not match.
     cb_receivers.assert_err();
 
@@ -233,7 +236,7 @@ fn test_reject_proposal_during_region_merge() {
 
 #[test]
 fn test_reject_proposal_during_rollback_region_merge() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
@@ -260,7 +263,7 @@ fn test_reject_proposal_during_rollback_region_merge() {
     let rollback_merge_fp = "apply_before_rollback_merge";
     fail::cfg(rollback_merge_fp, "pause").unwrap();
     fail::remove(schedule_merge_fp);
-    sleep_ms(100);
+    sleep_ms(200);
 
     // Write request is rejected because the source region is merging.
     // It's not handled by epoch checker now.
@@ -274,7 +277,8 @@ fn test_reject_proposal_during_rollback_region_merge() {
     cb_receivers.assert_err();
 
     fail::remove(rollback_merge_fp);
-    sleep_ms(100);
+    // Make sure the rollback is done.
+    cluster.must_put(b"a", b"v");
 
     // New write request can succeed.
     let write_req = make_write_req(&mut cluster, b"a");
@@ -293,7 +297,7 @@ fn test_reject_proposal_during_leader_transfer() {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
-    pd_client.must_add_peer(r, new_peer(2, 1002));
+    pd_client.must_add_peer(r, new_peer(2, 2));
 
     // Don't allow leader transfer succeed if it is actually triggered.
     cluster.add_send_filter(CloneFilterFactory(
@@ -303,11 +307,11 @@ fn test_reject_proposal_during_leader_transfer() {
     ));
 
     cluster.must_put(b"k", b"v");
-    cluster.transfer_leader(r, new_peer(2, 1002));
+    cluster.transfer_leader(r, new_peer(2, 2));
     // The leader can't change to transferring state immediately due to pre-transfer-leader
     // feature, so wait for a while.
     sleep_ms(100);
-    assert_ne!(cluster.leader_of_region(r).unwrap(), new_peer(2, 1002));
+    assert_ne!(cluster.leader_of_region(r).unwrap(), new_peer(2, 2));
 
     let write_req = make_write_req(&mut cluster, b"k");
     let (cb, cb_receivers) = make_cb(&write_req);
@@ -329,7 +333,7 @@ fn test_accept_proposal_during_conf_change() {
 
     let conf_change_fp = "apply_on_conf_change_all_1";
     fail::cfg(conf_change_fp, "pause").unwrap();
-    let add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2002)).unwrap();
+    let add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2)).unwrap();
     add_peer_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();
@@ -344,21 +348,21 @@ fn test_accept_proposal_during_conf_change() {
         .unwrap();
     cb_receivers
         .committed
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_millis(300))
         .unwrap();
     cb_receivers.proposed.try_recv().unwrap();
 
     fail::remove(conf_change_fp);
     assert!(!add_peer_rx
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_secs(1))
         .unwrap()
         .get_header()
         .has_error());
     assert!(!cb_receivers
         .applied
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_secs(1))
         .unwrap()
         .get_header()
-        .has_error(),);
+        .has_error());
     must_get_equal(&cluster.get_engine(2), b"k", b"v");
 }

@@ -2032,7 +2032,6 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        fail_point!("apply_before_split");
         fail_point!(
             "apply_before_split_1_3",
             self.id == 3 && self.region_id() == 1,
