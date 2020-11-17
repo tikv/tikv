@@ -86,6 +86,7 @@ We provide multiple deployment methods, but it is recommended to use our Ansible
     You can use [`tidb-docker-compose`](https://github.com/pingcap/tidb-docker-compose/) to quickly test TiKV and TiDB on a single machine. This is the easiest way. For other ways, see [TiDB documentation](https://docs.pingcap.com/).
 
 - Try TiKV separately
+
     - [Deploy TiKV Using Docker Stack](https://tikv.org/docs/4.0/tasks/try/docker-stack/): To quickly test TiKV separately without TiDB on a single machine
     - [Deploy TiKV Using Docker](https://tikv.org/docs/4.0/tasks/deploy/docker/): To deploy a multi-node TiKV testing cluster using Docker
     - [Deploy TiKV Using Binary Files](https://tikv.org/docs/4.0/tasks/deploy/binary/): To deploy a TiKV cluster using binary files on a single node or on multiple nodes
@@ -124,13 +125,13 @@ Quick links:
 
 ### Security audit
 
-A third-party security auditing was performed by Cure53. See the full report [here](./docs/Security-Audit.pdf).
+A third-party security auditing was performed by Cure53. See the full report [here](./security/Security-Audit.pdf).
 
 ### Reporting Security Vulnerabilities
 
 To report a security vulnerability, please send an email to [TiKV-security](mailto:tikv-security@lists.cncf.io) group.
 
-See [Security](./SECURITY.md) for the process and policy followed by the TiKV project.
+See [Security](./security/SECURITY.md) for the process and policy followed by the TiKV project.
 
 ## Communication
 
