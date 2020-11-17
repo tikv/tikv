@@ -54,6 +54,8 @@ impl RpnExpressionNode {
                 EvalType::Int => ExprType::Int64,
                 EvalType::Json => ExprType::MysqlJson,
                 EvalType::Real => ExprType::Float64,
+                EvalType::Enum => ExprType::MysqlEnum,
+                EvalType::Set => ExprType::MysqlSet,
             },
             RpnExpressionNode::ColumnRef { .. } => ExprType::ColumnRef,
         }

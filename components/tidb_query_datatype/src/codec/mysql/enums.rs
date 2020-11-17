@@ -80,6 +80,12 @@ impl<'a> EnumRef<'a> {
     pub fn new(data: &'a BufferVec, value: usize) -> Self {
         Self { data, value }
     }
+    pub fn to_owned(self) -> Enum {
+        Enum {
+            data: Arc::new(self.data.clone()),
+            value: self.value,
+        }
+    }
     pub fn is_empty(&self) -> bool {
         self.value == 0
     }
