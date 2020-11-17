@@ -264,9 +264,9 @@ impl WriteCompactionFilter {
 
     fn flush_pending_writes_if_need(&mut self) {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(false);
-            self.engine.write_opt(&self.write_batch, &opts).unwrap();
+            self.engine
+                .write_opt(&self.write_batch, &WriteOptions::new())
+                .unwrap();
             self.write_batch.clear();
         }
     }
@@ -292,13 +292,12 @@ thread_local! {
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.write_batch.is_empty() {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(true);
-            self.engine.write_opt(&self.write_batch, &opts).unwrap();
+            self.engine
+                .write_opt(&self.write_batch, &WriteOptions::new())
+                .unwrap();
             self.write_batch.clear();
-        } else {
-            self.engine.sync_wal().unwrap();
         }
+        self.engine.sync_wal().unwrap();
 
         self.switch_key_metrics();
         VERSIONS_AND_DELETES.with(|x| {
