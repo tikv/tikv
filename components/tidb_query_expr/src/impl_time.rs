@@ -9,7 +9,7 @@ use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
-use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::mysql::{Duration, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
 
@@ -150,30 +150,52 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
-    arg.cloned().map_or(Ok(None), |daynr: Int| {
-        let time = Time::from_days(ctx, daynr as u32)?;
-        Ok(Some(time))
-    })
+pub fn add_datetime_and_duration(
+    ctx: &mut EvalContext,
+    datetime: &DateTime,
+    duration: &Duration,
+) -> Result<Option<DateTime>> {
+    let mut res = match datetime.checked_add(ctx, *duration) {
+        Some(res) => res,
+        None => return Ok(None),
+    };
+    if res.set_time_type(TimeType::DateTime).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(res))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn make_date(
+pub fn sub_datetime_and_duration(
     ctx: &mut EvalContext,
-    year: Option<&Int>,
-    day: Option<&Int>,
-) -> Result<Option<Time>> {
-    if year.is_none() {
+    datetime: &DateTime,
+    duration: &Duration,
+) -> Result<Option<DateTime>> {
+    let mut res = match datetime.checked_sub(ctx, *duration) {
+        Some(res) => res,
+        None => return Ok(None),
+    };
+    if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
     }
-    if day.is_none() {
-        return Ok(None);
-    }
-    let mut year = *year.unwrap();
-    let mut day = *day.unwrap();
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
+    let time = DateTime::from_days(ctx, *arg as u32)?;
+    Ok(Some(time))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<DateTime>> {
+    let mut year = *year;
+    let mut day = *day;
     if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
         return Ok(None);
     }
@@ -189,7 +211,7 @@ pub fn make_date(
     let leap = d4 - d100 + d400;
     day = day + leap + year * 365 + 365;
     let days = day as u32;
-    let ret = Time::from_days(ctx, days)?;
+    let ret = DateTime::from_days(ctx, days)?;
     if ret.year() > 9999 || ret.is_zero() {
         return Ok(None);
     }
@@ -327,13 +349,9 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>> {
-    if t.is_none() {
-        return Ok(None);
-    }
-    let t = t.as_ref().unwrap();
+pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     if t.month() == 0 {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
@@ -341,7 +359,7 @@ pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>>
     }
     if t.day() == 0 {
         let one_day = Duration::parse(ctx, b"1 00:00:00", 6).unwrap();
-        let adjusted_t: Time = t.checked_add(ctx, one_day).unwrap();
+        let adjusted_t: DateTime = t.checked_add(ctx, one_day).unwrap();
         return Ok(adjusted_t.last_date_of_month());
     }
     Ok(t.last_date_of_month())
@@ -355,7 +373,7 @@ mod tests {
 
     use crate::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::Time;
+    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
     use tidb_query_datatype::FieldTypeTp;
 
     #[test]
@@ -693,6 +711,131 @@ mod tests {
                 .evaluate(ScalarFuncSig::ToSeconds)
                 .unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_add_datetime_and_duration() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+            // normal cases
+            (
+                Some("2018-01-01"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01 11:30:45.123456"),
+            ),
+            (
+                Some("2018-02-28 23:00:00"),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456"),
+            ),
+            (
+                Some("2016-02-28 23:00:00"),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02 00:30:30"),
+            ),
+            (
+                Some("2019-01-01 01:00:00"),
+                Some("-01:01:00"),
+                Some("2018-12-31 23:59:00"),
+            ),
+        ];
+        for (arg1, arg2, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let arg2 =
+                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::AddDatetimeAndDuration)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_sub_datetime_and_duration() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None, true),
+            (None, Some("11:30:45.123456"), None, true),
+            (Some("2019-01-01 01:00:00"), None, None, true),
+            // normal cases
+            (
+                Some("2018-01-01"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01 11:30:45.123456"),
+                false,
+            ),
+            (
+                Some("2018-02-28 23:00:00"),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456"),
+                false,
+            ),
+            (
+                Some("2016-02-28 23:00:00"),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30"),
+                false,
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30"),
+                false,
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02 00:30:30"),
+                false,
+            ),
+            (
+                Some("2019-01-01 01:00:00"),
+                Some("-01:01:00"),
+                Some("2018-12-31 23:59:00"),
+                false,
+            ),
+        ];
+        for (arg1, arg2, exp, null_case) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let arg2 =
+                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            if null_case {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(arg1)
+                    .push_param(arg2)
+                    .evaluate(ScalarFuncSig::SubDatetimeAndDuration)
+                    .unwrap();
+                assert_eq!(output, exp);
+            } else {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(exp)
+                    .push_param(arg2)
+                    .evaluate(ScalarFuncSig::SubDatetimeAndDuration)
+                    .unwrap();
+                assert_eq!(output, arg1);
+            }
         }
     }
 
