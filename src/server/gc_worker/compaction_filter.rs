@@ -17,7 +17,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
-    WriteOptions, CF_WRITE,
+    CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -264,9 +264,7 @@ impl WriteCompactionFilter {
 
     fn flush_pending_writes_if_need(&mut self) {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            self.engine
-                .write_opt(&self.write_batch, &WriteOptions::new())
-                .unwrap();
+            self.engine.write(&self.write_batch).unwrap();
             self.write_batch.clear();
         }
     }
@@ -292,9 +290,7 @@ thread_local! {
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.write_batch.is_empty() {
-            self.engine
-                .write_opt(&self.write_batch, &WriteOptions::new())
-                .unwrap();
+            self.engine.write(&self.write_batch).unwrap();
             self.write_batch.clear();
         }
         self.engine.sync_wal().unwrap();
