@@ -18,10 +18,10 @@ fi
 # they require special compile-time and run-time setup
 # Fortunately rebuilding with the mem-profiling feature will only
 # rebuild starting at jemalloc-sys.
-# if [[ "$(uname)" == "Linux" ]]; then
-#     export MALLOC_CONF=prof:true,prof_active:false
-#     ./scripts/test -p tikv -p tikv_alloc --lib "$@" -- --nocapture --ignored
-# fi
+if [[ "$(uname)" == "Linux" ]]; then
+    export MALLOC_CONF=prof:true,prof_active:false
+    ./scripts/test -p tikv -p tikv_alloc --lib "$@" -- --nocapture --ignored
+fi
 
 if [[ "$(uname)" = "Linux" ]]; then
     EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run -- --nocapture |
