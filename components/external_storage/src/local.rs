@@ -19,15 +19,6 @@ use super::{util::error_stream, ExternalStorage};
 const LOCAL_STORAGE_TMP_DIR: &str = "localtmp";
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
-fn maybe_create_dir(path: &Path) -> io::Result<()> {
-    if let Err(e) = fs::create_dir_all(path) {
-        if e.kind() != io::ErrorKind::AlreadyExists {
-            return Err(e);
-        }
-    }
-    Ok(())
-}
-
 /// A storage saves files in local file system.
 #[derive(Clone)]
 pub struct LocalStorage {
@@ -41,7 +32,6 @@ impl LocalStorage {
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
         let tmp_dir = base.join(LOCAL_STORAGE_TMP_DIR);
-        maybe_create_dir(&tmp_dir)?;
         let base_dir = Arc::new(File::open(base)?);
         Ok(LocalStorage {
             base: base.to_owned(),
