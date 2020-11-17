@@ -17,7 +17,7 @@ use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::data_type::Decimal;
 use tidb_query_datatype::codec::datum::{Datum, DatumEncoder};
 use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
-use tidb_query_vec_executors::interface::*;
+use tidb_query_executors::interface::*;
 use tikv::storage::{RocksEngine, Statistics};
 
 use crate::util::bencher::Bencher;

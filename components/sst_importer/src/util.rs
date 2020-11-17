@@ -4,7 +4,6 @@ use std::{
     fs::{self, File},
     io,
     path::Path,
-    sync::Arc,
 };
 
 use encryption::DataKeyManager;
@@ -25,7 +24,7 @@ use super::Result;
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
-    encryption_key_manager: Option<&Arc<DataKeyManager>>,
+    encryption_key_manager: Option<&DataKeyManager>,
 ) -> Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
@@ -130,7 +129,7 @@ mod tests {
     fn check_prepare_sst_for_ingestion(
         db_opts: Option<RocksDBOptions>,
         cf_opts: Option<Vec<RocksCFOptions>>,
-        key_manager: Option<&Arc<DataKeyManager>>,
+        key_manager: Option<&DataKeyManager>,
         was_encrypted: bool,
     ) {
         let path = Builder::new()
