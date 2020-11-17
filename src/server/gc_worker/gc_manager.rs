@@ -17,7 +17,7 @@ use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
 use super::{is_compaction_filter_allowd, Result};
 
-const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
+const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
 const BEGIN_KEY: &[u8] = b"";
 
@@ -425,9 +425,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // Records how many region we have GC-ed.
         let mut processed_regions = 0;
 
-        info!(
-            "gc_worker: start auto gc"; "safe_point" => self.curr_safe_point()
-        );
+        info!("gc_worker: auto gc starts"; "safe_point" => self.curr_safe_point());
 
         // The following loop iterates all regions whose leader is on this TiKV and does GC on them.
         // At the same time, check whether safe_point is updated periodically. If it's updated,
@@ -442,9 +440,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                     // We have worked to the end and we need to rewind. Restart from beginning.
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
-                    info!(
-                        "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
-                    );
+                    info!("gc_worker: auto gc rewinds"; "processed_regions" => processed_regions);
 
                     processed_regions = 0;
                     // Set the metric to zero to show that rewinding has happened.
@@ -465,9 +461,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 if finished {
                     // We have worked to the end of the TiKV or our progress has reached `end`, and we
                     // don't need to rewind. In this case, the round of GC has finished.
-                    info!(
-                        "gc_worker: finished auto gc"; "processed_regions" => processed_regions
-                    );
+                    info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
                     return Ok(());
                 }
             }
