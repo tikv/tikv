@@ -212,9 +212,16 @@ trait MockKvService {
         PhysicalScanLockRequest,
         PhysicalScanLockResponse
     );
+    unary_call!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
+    unary_call!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
     unary_call!(coprocessor, Request, Response);
     sstream_call!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call!(coprocessor_stream, Request, Response);
+    sstream_call!(
+        establish_mpp_connection,
+        EstablishMppConnectionRequest,
+        MppDataPacket
+    );
     cstream_call!(raft, RaftMessage, Done);
     cstream_call!(batch_raft, BatchRaftMessage, Done);
     cstream_call!(snapshot, SnapshotChunk, Done);
@@ -227,14 +234,6 @@ trait MockKvService {
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
-
-    unary_call!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
-    unary_call!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
-    sstream_call!(
-        establish_mpp_connection,
-        EstablishMppConnectionRequest,
-        MppDataPacket
-    );
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
@@ -327,9 +326,16 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         PhysicalScanLockRequest,
         PhysicalScanLockResponse
     );
+    unary_call_dispatch!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
+    unary_call_dispatch!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
     unary_call_dispatch!(coprocessor, Request, Response);
     sstream_call_dispatch!(batch_coprocessor, BatchRequest, BatchResponse);
     sstream_call_dispatch!(coprocessor_stream, Request, Response);
+    sstream_call_dispatch!(
+        establish_mpp_connection,
+        EstablishMppConnectionRequest,
+        MppDataPacket
+    );
     cstream_call_dispatch!(raft, RaftMessage, Done);
     cstream_call_dispatch!(batch_raft, BatchRaftMessage, Done);
     cstream_call_dispatch!(snapshot, SnapshotChunk, Done);
@@ -342,14 +348,6 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
-
-    unary_call!(dispatch_mpp_task, DispatchTaskRequest, DispatchTaskResponse);
-    unary_call!(cancel_mpp_task, CancelTaskRequest, CancelTaskResponse);
-    sstream_call_dispatch!(
-        establish_mpp_connection,
-        EstablishMppConnectionRequest,
-        MppDataPacket
-    );
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>
