@@ -4,6 +4,8 @@ use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -161,11 +163,11 @@ struct WriteCompactionFilter {
     write_iter: Option<RocksEngineIterator>,
     near_seek_distance: usize,
 
-    // For metrics about (versions, deleted_versions) for every MVCC key.
     versions: usize,
+    filtered: usize,
     deleted: usize,
-    // Total versions and deleted versions in the compaction.
     total_versions: usize,
+    total_filtered: usize,
     total_deleted: usize,
 }
 
@@ -195,8 +197,10 @@ impl WriteCompactionFilter {
             write_iter,
             near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
+            filtered: 0,
             deleted: 0,
             total_versions: 0,
+            total_filtered: 0,
             total_deleted: 0,
         }
     }
@@ -260,6 +264,7 @@ impl WriteCompactionFilter {
     fn delete_write_key(&mut self, key: &[u8]) {
         self.write_batch.delete_cf(CF_WRITE, key).unwrap();
         self.flush_pending_writes_if_need();
+        self.deleted += 1;
     }
 
     fn flush_pending_writes_if_need(&mut self) {
@@ -277,16 +282,52 @@ impl WriteCompactionFilter {
             self.total_versions += self.versions;
             self.versions = 0;
         }
-        if self.deleted != 0 {
+        if self.filtered != 0 {
             GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted as f64);
-            self.total_deleted += self.deleted;
-            self.deleted = 0;
+            self.total_filtered += self.filtered;
+            self.filtered = 0;
         }
+        self.total_deleted += self.deleted;
+        self.deleted = 0;
+    }
+}
+
+struct CompactionFilterStats {
+    versions: Cell<usize>, // Total stale versions meet by compaction filters.
+    filtered: Cell<usize>, // Filtered versions by compaction filters.
+    deleted: Cell<usize>,  // Deleted versions from RocksDB.
+    last_report: Cell<Instant>,
+}
+impl CompactionFilterStats {
+    fn report(&self) {
+        let versions = self.versions.replace(0);
+        let filtered = self.filtered.replace(0);
+        let deleted = self.deleted.replace(0);
+        info!(
+            "Compaction filter in thread {:?} reports", thread::current().name();
+            "total" => versions, "filtered" => filtered, "deleted" => deleted,
+        );
+        self.last_report.set(Instant::now());
+    }
+}
+impl Default for CompactionFilterStats {
+    fn default() -> Self {
+        CompactionFilterStats {
+            versions: Cell::new(0),
+            filtered: Cell::new(0),
+            deleted: Cell::new(0),
+            last_report: Cell::new(Instant::now()),
+        }
+    }
+}
+impl Drop for CompactionFilterStats {
+    fn drop(&mut self) {
+        self.report();
     }
 }
 
 thread_local! {
-    static VERSIONS_AND_DELETES: Cell<(usize, usize)> = Cell::new((0, 0));
+    static STATS: CompactionFilterStats = CompactionFilterStats::default();
 }
 
 impl Drop for WriteCompactionFilter {
@@ -301,17 +342,15 @@ impl Drop for WriteCompactionFilter {
         }
 
         self.switch_key_metrics();
-        VERSIONS_AND_DELETES.with(|x| {
-            x.update(|(mut versions, mut deletes)| {
-                versions += self.total_versions;
-                deletes += self.total_deleted;
-                if versions >= 1024 * 1024 {
-                    info!("Compaction filter reports"; "total" => versions, "gc" => deletes);
-                    return (0, 0);
-                }
-                (versions, deletes)
-            })
-        });
+        STATS.with(|stats| {
+            stats.versions.update(|x| x + self.total_versions);
+            stats.filtered.update(|x| x | self.total_deleted);
+            if stats.versions.get() >= 1024 * 1024
+                || stats.last_report.get().elapsed() >= Duration::from_secs(60)
+            {
+                stats.report();
+            }
+        })
     }
 }
 
@@ -354,7 +393,7 @@ impl CompactionFilter for WriteCompactionFilter {
 
         if filtered {
             self.handle_filtered_write(write);
-            self.deleted += 1;
+            self.filtered += 1;
         }
 
         filtered
