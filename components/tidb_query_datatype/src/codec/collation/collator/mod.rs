@@ -299,14 +299,20 @@ mod tests {
         use std::hash::Hasher;
 
         let cases = vec![
-            (vec![0xFF, 0x88, 0x00, 0x13], vec![0xFF, 0x88, 0x00, 0x13]),
+            (vec![0xFF, 0x88, 0x00, 0x13], vec![0xFF, 0x88, 0x00, 0x13], Ordering::Equal),
             (
                 vec![0xFF, 0x88, 0x00, 0x13, 0x20, 0x20, 0x20],
                 vec![0xFF, 0x88, 0x00, 0x13],
+                Ordering::Equal
+            ),
+            (
+                vec![0xFF, 0x88, 0x00, 0x13, 0x09, 0x09, 0x09],
+                vec![0xFF, 0x88, 0x00, 0x13],
+                Ordering::Greater
             ),
         ];
 
-        for (sa, sb) in cases {
+        for (sa, sb, od) in cases {
             let eval_hash = |s| {
                 let mut hasher = DefaultHasher::default();
                 CollatorLatin1Bin::sort_hash(&mut hasher, s).unwrap();
@@ -317,13 +323,21 @@ mod tests {
             let ha = eval_hash(sa.as_slice());
             let hb = eval_hash(sb.as_slice());
 
-            assert_eq!(cmp, Ordering::Equal, "when comparing {:?} and {:?}", sa, sb);
+            assert_eq!(cmp, od, "when comparing {:?} and {:?}", sa, sb);
 
-            assert_eq!(
-                ha, hb,
-                "when comparing the hash of {:?} and {:?}, which should be equal",
-                sa, sb
-            );
+            if od == Ordering::Equal {
+                assert_eq!(
+                    ha, hb,
+                    "when comparing the hash of {:?} and {:?}, which should be equal",
+                    sa, sb
+                );
+            } else {
+                assert_ne!(
+                    ha, hb,
+                    "when comparing the hash of {:?} and {:?}, which should not be equal",
+                    sa, sb
+                );
+            }
         }
     }
 }

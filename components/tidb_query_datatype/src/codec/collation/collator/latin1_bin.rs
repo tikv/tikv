@@ -17,19 +17,19 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = B(bstr).trim_end();
+        let s = B(bstr).trim_with(|c| c == ' ');
         writer.write_bytes(s)?;
         Ok(s.len())
     }
 
     #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        Ok(B(a).trim_end().cmp(B(b).trim_end()))
+        Ok(B(a).trim_with(|c| c == ' ').cmp(B(b).trim_with(|c| c == ' ')))
     }
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        B(bstr).trim_end().hash(state);
+        B(bstr).trim_with(|c| c == ' ').hash(state);
         Ok(())
     }
 }
