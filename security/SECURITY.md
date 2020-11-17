@@ -10,7 +10,7 @@ Security vulnerabilities should be handled quickly and sometimes privately. The 
 
 The TiKV Security Team is responsible for organizing the entire response including internal communication and external disclosure but will need help from relevant developers to successfully run this process.
 
-The TiKV Security Team will consist of TiKV contributors assigned by the TiKV Maintainer team. 
+The TiKV Security Team will consist of TiKV contributors assigned by the TiKV Maintainer team.
 
 ## Supported versions
 
@@ -32,12 +32,13 @@ If you want to, you can choose to use the PGP public key provided by us to encry
 ## Disclosure policy
 
 For known public security vulnerabilities, we will disclose the disclosure as soon as possible after receiving the report. Vulnerabilities discovered for the first time will be disclosed in accordance with the following process:
+
 1. The received security vulnerability report shall be handed over to the security team for follow-up coordination and repair work.
 2. After the vulnerability is confirmed, we will create a draft Security Advisory on Github that lists the details of the vulnerability.
-3. Invite related personnel to discuss about the fix
-4. Fork the temporary private repository on Github, and collaborate to fix the vulnerability
-5. After the fix code is merged into all supported versions, the vulnerability will be publicly posted in the GitHub Advisory Database
-	
+3. Invite related personnel to discuss about the fix.
+4. Fork the temporary private repository on Github, and collaborate to fix the vulnerability.
+5. After the fix code is merged into all supported versions, the vulnerability will be publicly posted in the GitHub Advisory Database.
+
 ## PGP Public Key
 
 ```

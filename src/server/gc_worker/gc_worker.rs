@@ -180,7 +180,7 @@ where
             Some(c) => c,
             None => return true,
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, props)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
     }
 
     /// Cleans up outdated data.
