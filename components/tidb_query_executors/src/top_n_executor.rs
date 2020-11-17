@@ -284,7 +284,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                                     // TODO: This clone is not necessary.
                                     dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }
-                            }
+                            },
+                            // TODO: implement after we decide how to encode/decode
+                            VectorValue::Enum(_) => unimplemented!(),
+                            VectorValue::Set(_) => unimplemented!(),
                         }
                     }
                 }
