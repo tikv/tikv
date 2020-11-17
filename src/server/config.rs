@@ -39,6 +39,8 @@ const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
+const DEFAULT_END_POINT_SLOW_LOG_THRESHOLD: f64 = 1.0; // 1 second.
+
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -101,6 +103,8 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
     pub background_thread_count: usize,
+    // If handle time is larger than the threshold, it will print slow log in end point.
+    pub end_point_slow_log_threshold: f64,
 
     // Test only.
     #[doc(hidden)]
@@ -176,6 +180,7 @@ impl Default for Config {
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
+            end_point_slow_log_threshold: DEFAULT_END_POINT_SLOW_LOG_THRESHOLD
         }
     }
 }
