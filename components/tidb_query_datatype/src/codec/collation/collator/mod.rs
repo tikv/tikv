@@ -299,16 +299,20 @@ mod tests {
         use std::hash::Hasher;
 
         let cases = vec![
-            (vec![0xFF, 0x88, 0x00, 0x13], vec![0xFF, 0x88, 0x00, 0x13], Ordering::Equal),
+            (
+                vec![0xFF, 0x88, 0x00, 0x13],
+                vec![0xFF, 0x88, 0x00, 0x13],
+                Ordering::Equal,
+            ),
             (
                 vec![0xFF, 0x88, 0x00, 0x13, 0x20, 0x20, 0x20],
                 vec![0xFF, 0x88, 0x00, 0x13],
-                Ordering::Equal
+                Ordering::Equal,
             ),
             (
                 vec![0xFF, 0x88, 0x00, 0x13, 0x09, 0x09, 0x09],
                 vec![0xFF, 0x88, 0x00, 0x13],
-                Ordering::Greater
+                Ordering::Greater,
             ),
         ];
 

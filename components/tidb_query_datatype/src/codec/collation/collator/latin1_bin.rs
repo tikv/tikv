@@ -24,7 +24,9 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        Ok(B(a).trim_with(|c| c == ' ').cmp(B(b).trim_with(|c| c == ' ')))
+        Ok(B(a)
+            .trim_with(|c| c == ' ')
+            .cmp(B(b).trim_with(|c| c == ' ')))
     }
 
     #[inline]
