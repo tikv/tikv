@@ -6,16 +6,19 @@ publish = false
 
 [features]
 protobuf-codec = [
+  "keys/protobuf-codec",
   "raft/protobuf-codec",
   "kvproto/protobuf-codec",
 ]
 prost-codec = [
+  "keys/protobuf-codec",
   "raft/prost-codec",
   "kvproto/prost-codec",
 ]
 
 [dependencies]
 error_code = { path = "../error_code" }
+keys = { path = "../keys" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
 quick-error = "1.2.3"

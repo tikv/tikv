@@ -1150,6 +1150,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "keys",
  "kvproto",
  "log_wrappers",
  "protobuf",
