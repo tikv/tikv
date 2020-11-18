@@ -5,13 +5,10 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
     txn::{
-        actions::{
-            prewrite::{pessimistic_prewrite, prewrite},
-            shared::handle_1pc,
-        },
+        actions::prewrite::{pessimistic_prewrite, prewrite},
         commands::{
-            Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-            WriteResult,
+            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult,
         },
         Error, ErrorInner, Result,
     },
@@ -19,7 +16,7 @@ use crate::storage::{
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
 use engine_traits::CF_WRITE;
-use txn_types::{Key, Mutation, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp, Write, WriteType};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -557,6 +554,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             response_policy,
         })
     }
+}
+
+fn handle_1pc<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> ReleasedLocks {
+    let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
+
+    for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        let write = Write::new(
+            WriteType::from_lock_type(lock.lock_type).unwrap(),
+            txn.start_ts,
+            lock.short_value,
+        );
+        // Transactions committed with 1PC should be impossible to overwrite rollback records.
+        txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+        if delete_pessimistic_lock {
+            released_locks.push(txn.unlock_key(key, true));
+        }
+    }
+
+    released_locks
 }
 
 #[cfg(test)]
