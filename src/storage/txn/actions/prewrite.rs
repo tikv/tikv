@@ -13,7 +13,7 @@ use crate::storage::{
 };
 use fail::fail_point;
 use std::cmp;
-use txn_types::{is_short_value, Key, Mutation, TimeStamp, Value, WriteType};
+use txn_types::{is_short_value, Key, Mutation, TimeStamp, Value, Write, WriteType};
 
 pub fn prewrite<S: Snapshot>(
     txn: &mut MvccTxn<S>,
@@ -32,8 +32,8 @@ pub fn prewrite<S: Snapshot>(
     let should_not_exist = mutation.should_not_exists();
     let should_not_write = mutation.should_not_write();
     let mutation_type = mutation.mutation_type();
-    let mut fallback_from_async_commit = false;
     let (key, value) = mutation.into_key_value();
+    let mut fallback_from_async_commit = false;
 
     fail_point!("prewrite", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
@@ -64,47 +64,12 @@ pub fn prewrite<S: Snapshot>(
         }
     }
 
-    let mut prev_write = None;
-    // Check whether there is a newer version.
-    if !skip_constraint_check && !fallback_from_async_commit {
-        if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
-            // Abort on writes after our start timestamp ...
-            // If exists a commit version whose commit timestamp is larger than current start
-            // timestamp, we should abort current prewrite.
-            if commit_ts > txn.start_ts {
-                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                return Err(ErrorInner::WriteConflict {
-                    start_ts: txn.start_ts,
-                    conflict_start_ts: write.start_ts,
-                    conflict_commit_ts: commit_ts,
-                    key: key.into_raw()?,
-                    primary: primary.to_vec(),
-                }
-                .into());
-            }
-            // If there's a write record whose commit_ts equals to our start ts, the current
-            // transaction is ok to continue, unless the record means that the current
-            // transaction has been rolled back.
-            if commit_ts == txn.start_ts
-                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-            {
-                MVCC_CONFLICT_COUNTER.rolled_back.inc();
-                // TODO: Maybe we need to add a new error for the rolled back case.
-                return Err(ErrorInner::WriteConflict {
-                    start_ts: txn.start_ts,
-                    conflict_start_ts: write.start_ts,
-                    conflict_commit_ts: commit_ts,
-                    key: key.into_raw()?,
-                    primary: primary.to_vec(),
-                }
-                .into());
-            }
-            // Should check it when no lock exists, otherwise it can report error when there is
-            // a lock belonging to a committed transaction which deletes the key.
-            check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
-            prev_write = Some(write);
-        }
-    }
+    let prev_write = if !skip_constraint_check && !fallback_from_async_commit {
+        check_for_newer_version(&key, primary, should_not_exist, txn)?
+    } else {
+        None
+    };
+
     if should_not_write {
         return Ok(TimeStamp::zero());
     }
@@ -112,6 +77,7 @@ pub fn prewrite<S: Snapshot>(
     if !fallback_from_async_commit {
         txn.check_extra_op(&key, mutation_type, prev_write)?;
     }
+
     prewrite_key_value(
         txn,
         key,
@@ -128,6 +94,55 @@ pub fn prewrite<S: Snapshot>(
         false,
         fallback_from_async_commit,
     )
+}
+
+fn check_for_newer_version<S: Snapshot>(
+    key: &Key,
+    primary: &[u8],
+    should_not_exist: bool,
+    txn: &mut MvccTxn<S>,
+) -> MvccResult<Option<Write>> {
+    match txn.reader.seek_write(&key, TimeStamp::max())? {
+        Some((commit_ts, write)) => {
+            // Abort on writes after our start timestamp ...
+            // If exists a commit version whose commit timestamp is larger than current start
+            // timestamp, we should abort current prewrite.
+            if commit_ts > txn.start_ts {
+                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                return Err(ErrorInner::WriteConflict {
+                    start_ts: txn.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.to_raw()?,
+                    primary: primary.to_vec(),
+                }
+                .into());
+            }
+            // If there's a write record whose commit_ts equals to our start ts, the current
+            // transaction is ok to continue, unless the record means that the current
+            // transaction has been rolled back.
+            if commit_ts == txn.start_ts
+                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+            {
+                MVCC_CONFLICT_COUNTER.rolled_back.inc();
+                // TODO: Maybe we need to add a new error for the rolled back case.
+                return Err(ErrorInner::WriteConflict {
+                    start_ts: txn.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.to_raw()?,
+                    primary: primary.to_vec(),
+                }
+                .into());
+            }
+            // Should check it when no lock exists, otherwise it can report error when there is
+            // a lock belonging to a committed transaction which deletes the key.
+            check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
+
+            Ok(Some(write))
+        }
+        None => Ok(None),
+    }
 }
 
 pub fn pessimistic_prewrite<S: Snapshot>(
@@ -148,10 +163,10 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             "cannot handle checkNotExists in pessimistic prewrite"
         ));
     }
-    let mutation_type = mutation.mutation_type();
     let lock_type = LockType::from_mutation(&mutation);
-    let mut fallback_from_async_commit = false;
+    let mutation_type = mutation.mutation_type();
     let (key, value) = mutation.into_key_value();
+    let mut fallback_from_async_commit = false;
 
     fail_point!("pessimistic_prewrite", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
