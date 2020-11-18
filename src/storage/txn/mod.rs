@@ -9,8 +9,11 @@ pub mod scheduler;
 mod actions;
 
 pub use actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock, cleanup::cleanup, commit::commit, gc::gc,
-    pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
+    acquire_pessimistic_lock::acquire_pessimistic_lock,
+    cleanup::cleanup,
+    commit::commit,
+    gc::gc,
+    prewrite::{pessimistic_prewrite, prewrite},
 };
 
 mod latch;
@@ -248,7 +251,9 @@ pub mod tests {
     pub use actions::cleanup::tests::{must_err as must_cleanup_err, must_succeed as must_cleanup};
     pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
     pub use actions::gc::tests::must_succeed as must_gc;
-    pub use actions::pessimistic_prewrite::tests::try_pessimistic_prewrite_check_not_exists;
-    pub use actions::prewrite::tests::{try_prewrite_check_not_exists, try_prewrite_insert};
+    pub use actions::prewrite::tests::{
+        try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
+        try_prewrite_insert,
+    };
     pub use actions::tests::*;
 }

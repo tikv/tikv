@@ -9,8 +9,7 @@ use crate::storage::mvcc::{Error, Key, Mutation, MvccTxn, TimeStamp};
 use crate::storage::{txn, Engine};
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::Context;
-use pessimistic_prewrite::pessimistic_prewrite;
-use prewrite::prewrite;
+use prewrite::{pessimistic_prewrite, prewrite};
 
 pub fn must_prewrite_put_impl<E: Engine>(
     engine: &E,

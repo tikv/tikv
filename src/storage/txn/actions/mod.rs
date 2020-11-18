@@ -13,6 +13,5 @@ pub mod check_txn_status;
 pub mod cleanup;
 pub mod commit;
 pub mod gc;
-pub mod pessimistic_prewrite;
 pub mod prewrite;
 pub mod tests;
