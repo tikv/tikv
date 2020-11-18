@@ -5,7 +5,6 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::error::Error;
 use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
 use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::*;
@@ -233,11 +232,13 @@ pub fn add_string_and_duration(
     let duration = Duration::parse(ctx, arg0, MAX_FSP);
     if duration.is_ok() {
         let arg0 = duration.unwrap();
-        let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
-        let tmp_dur = arg0.checked_add(*arg1).ok_or(overflow)?;
-        let dur = match tmp_dur.subsec_micros() {
-            0 => tmp_dur.minimize_fsp(),
-            _ => tmp_dur.maximize_fsp(),
+        let dur = match arg0.checked_add(*arg1) {
+            Some(dur) => dur,
+            None => return Ok(writer.write(None)),
+        };
+        match dur.subsec_micros() {
+            0 => dur.minimize_fsp(),
+            _ => dur.maximize_fsp(),
         };
         return Ok(writer.write(Some(dur.to_string().into_bytes())));
     }
@@ -246,8 +247,10 @@ pub fn add_string_and_duration(
         Ok(arg0) => arg0,
         Err(_) => return Ok(writer.write(None)),
     };
-    let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
-    let mut res = arg0.checked_add(ctx, *arg1).ok_or(overflow)?;
+    let mut res = match arg0.checked_add(ctx, *arg1) {
+        Some(res) => res,
+        None => return Ok(writer.write(None)),
+    };
     match res.micro() {
         0 => res.minimize_fsp(),
         _ => res.maximize_fsp(),
@@ -266,11 +269,13 @@ pub fn sub_string_and_duration(
     let duration = Duration::parse(ctx, arg0, MAX_FSP);
     if duration.is_ok() {
         let arg0 = duration.unwrap();
-        let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
-        let tmp_dur = arg0.checked_sub(*arg1).ok_or(overflow)?;
-        let dur = match tmp_dur.subsec_micros() {
-            0 => tmp_dur.minimize_fsp(),
-            _ => tmp_dur.maximize_fsp(),
+        let dur = match arg0.checked_sub(*arg1) {
+            Some(dur) => dur,
+            None => return Ok(writer.write(None)),
+        };
+        match dur.subsec_micros() {
+            0 => dur.minimize_fsp(),
+            _ => dur.maximize_fsp(),
         };
         return Ok(writer.write(Some(dur.to_string().into_bytes())));
     }
@@ -279,8 +284,10 @@ pub fn sub_string_and_duration(
         Ok(arg0) => arg0,
         Err(_) => return Ok(writer.write(None)),
     };
-    let overflow = Error::overflow("STRING", &format!("({} - {})", &arg0, &arg1));
-    let mut res = arg0.checked_sub(ctx, *arg1).ok_or(overflow)?;
+    let mut res = match arg0.checked_sub(ctx, *arg1) {
+        Some(res) => res,
+        None => return Ok(writer.write(None)),
+    };
     match res.micro() {
         0 => res.minimize_fsp(),
         _ => res.maximize_fsp(),
