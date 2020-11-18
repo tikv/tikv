@@ -1,12 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, LockType, MvccTxn, Result as MvccResult,
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, LockType, MvccTxn, Result as MvccResult,
+    },
+    txn::actions::{check_data_constraint::check_data_constraint, shared::prewrite_key_value},
+    Snapshot,
 };
-use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
-use crate::storage::txn::actions::shared::prewrite_key_value;
-use crate::storage::Snapshot;
 use txn_types::{Key, Mutation, TimeStamp, WriteType};
 
 pub fn prewrite<S: Snapshot>(

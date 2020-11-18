@@ -1,22 +1,25 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::CF_WRITE;
-use txn_types::{Key, Mutation, TimeStamp};
-
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-};
-use crate::storage::txn::actions::prewrite::{pessimistic_prewrite, prewrite};
-use crate::storage::txn::actions::shared::handle_1pc;
-use crate::storage::txn::commands::{ResponsePolicy, WriteCommand, WriteContext, WriteResult};
-use crate::storage::txn::{Error, ErrorInner, Result};
 use crate::storage::{
-    txn::commands::{Command, CommandExt, TypedCommand},
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
+    txn::{
+        actions::{
+            prewrite::{pessimistic_prewrite, prewrite},
+            shared::handle_1pc,
+        },
+        commands::{
+            Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Error, ErrorInner, Result,
+    },
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
+use engine_traits::CF_WRITE;
+use txn_types::{Key, Mutation, TimeStamp};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -558,18 +561,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::Context;
-
+    use crate::storage::{
+        mvcc::{
+            tests::{must_get, must_get_commit_ts, must_unlocked},
+            Error as MvccError, ErrorInner as MvccErrorInner,
+        },
+        txn::{
+            commands::{test_util::*, FORWARD_MIN_MUTATIONS_NUM},
+            tests::must_acquire_pessimistic_lock,
+            Error, ErrorInner,
+        },
+        Engine, Snapshot, Statistics, TestEngineBuilder,
+    };
     use engine_traits::CF_WRITE;
+    use kvproto::kvrpcpb::Context;
     use txn_types::{Key, Mutation};
-
-    use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
-    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::commands::test_util::*;
-    use crate::storage::txn::commands::FORWARD_MIN_MUTATIONS_NUM;
-    use crate::storage::txn::tests::must_acquire_pessimistic_lock;
-    use crate::storage::txn::{Error, ErrorInner};
-    use crate::storage::{Engine, Snapshot, Statistics, TestEngineBuilder};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
