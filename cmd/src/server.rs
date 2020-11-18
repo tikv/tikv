@@ -127,7 +127,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             get_tiflash_server_helper().handle_set_proxy(&proxy_helper);
 
             info!("wait for tiflash server to start");
-            while get_tiflash_server_helper().handle_get_tiflash_status() == TiFlashStatus::IDLE {
+            while get_tiflash_server_helper().handle_get_tiflash_status() == TiFlashStatus::Idle {
                 thread::sleep(Duration::from_millis(200));
             }
 

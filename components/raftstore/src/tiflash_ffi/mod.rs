@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 mod read_index_helper;
 pub use read_index_helper::{ReadIndex, ReadIndexClient};
+use std::borrow::Borrow;
 
 type TiFlashServerPtr = *const u8;
 type RegionId = u64;
@@ -88,22 +89,22 @@ pub extern "C" fn ffi_batch_read_index(
     proxy_ptr: TiFlashRaftProxyPtr,
     view: CppStrVecView,
 ) -> *const u8 {
+    assert_ne!(proxy_ptr, std::ptr::null());
     unsafe {
         let mut req_vec = Vec::with_capacity(view.len as usize);
         for i in 0..view.len as usize {
             let mut req = kvrpcpb::ReadIndexRequest::default();
-            let p = &*view.view.offset(i as isize);
+            let p = &(*view.view.offset(i as isize));
             req.merge_from_bytes(p.to_slice()).unwrap();
             req_vec.push(req);
         }
         let resp = (*proxy_ptr).read_index_client.batch_read_index(req_vec);
-        let mut resp_str = Vec::with_capacity(resp.len());
         let res = get_tiflash_server_helper().gen_batch_read_index_res(resp.len() as u64);
         for (r, region_id) in &resp {
-            resp_str.push(ProtoMsgBaseBuff::new(r));
+            let r = ProtoMsgBaseBuff::new(r);
             get_tiflash_server_helper().insert_batch_read_index_resp(
                 res,
-                resp_str.last().unwrap().buff_view.to_slice(),
+                r.borrow().into(),
                 *region_id,
             );
         }
@@ -572,18 +573,22 @@ impl RaftCmdHeader {
 }
 
 struct ProtoMsgBaseBuff {
-    _data: Vec<u8>,
-    buff_view: BaseBuffView,
+    data: Vec<u8>,
 }
 
 impl ProtoMsgBaseBuff {
     fn new<T: protobuf::Message>(msg: &T) -> Self {
-        let v = msg.write_to_bytes().unwrap();
-        let ptr = v.as_ptr();
-        let len = v.len() as u64;
         ProtoMsgBaseBuff {
-            _data: v,
-            buff_view: BaseBuffView { data: ptr, len },
+            data: msg.write_to_bytes().unwrap(),
+        }
+    }
+}
+
+impl From<&ProtoMsgBaseBuff> for BaseBuffView {
+    fn from(p: &ProtoMsgBaseBuff) -> Self {
+        Self {
+            data: p.data.as_ptr(),
+            len: p.data.len() as u64,
         }
     }
 }
@@ -672,7 +677,7 @@ pub fn get_tiflash_server_helper() -> &'static TiFlashServerHelper {
 
 #[derive(Eq, PartialEq)]
 pub enum TiFlashStatus {
-    IDLE,
+    Idle,
     Running,
     Stopped,
 }
@@ -680,7 +685,7 @@ pub enum TiFlashStatus {
 impl From<u8> for TiFlashStatus {
     fn from(s: u8) -> Self {
         match s {
-            0 => TiFlashStatus::IDLE,
+            0 => TiFlashStatus::Idle,
             1 => TiFlashStatus::Running,
             2 => TiFlashStatus::Stopped,
             _ => unreachable!(),
@@ -744,10 +749,13 @@ impl TiFlashServerHelper {
         resp: &raft_cmdpb::AdminResponse,
         header: RaftCmdHeader,
     ) -> TiFlashApplyRes {
+        let req = ProtoMsgBaseBuff::new(req);
+        let resp = ProtoMsgBaseBuff::new(resp);
+
         let res = (self.handle_admin_raft_cmd)(
             self.inner,
-            ProtoMsgBaseBuff::new(req).buff_view,
-            ProtoMsgBaseBuff::new(resp).buff_view,
+            req.borrow().into(),
+            resp.borrow().into(),
             header,
         );
         res.into()
@@ -761,9 +769,10 @@ impl TiFlashServerHelper {
         index: u64,
         term: u64,
     ) -> RawCppPtr {
+        let region = ProtoMsgBaseBuff::new(region);
         (self.pre_handle_snapshot)(
             self.inner,
-            ProtoMsgBaseBuff::new(region).buff_view,
+            region.borrow().into(),
             peer_id,
             snaps.gen_snapshot_view(),
             index,
@@ -804,7 +813,7 @@ impl TiFlashServerHelper {
         (self.gen_batch_read_index_res)(cap)
     }
 
-    fn insert_batch_read_index_resp(&self, data: *const u8, buf: &[u8], region_id: u64) {
-        (self.insert_batch_read_index_resp)(data, buf.into(), region_id)
+    fn insert_batch_read_index_resp(&self, data: *const u8, buf: BaseBuffView, region_id: u64) {
+        (self.insert_batch_read_index_resp)(data, buf, region_id)
     }
 }
