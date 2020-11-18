@@ -180,7 +180,7 @@ impl Default for Config {
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
-            end_point_slow_log_threshold: DEFAULT_END_POINT_SLOW_LOG_THRESHOLD
+            end_point_slow_log_threshold: DEFAULT_END_POINT_SLOW_LOG_THRESHOLD,
         }
     }
 }
