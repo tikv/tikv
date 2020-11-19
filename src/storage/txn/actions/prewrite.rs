@@ -115,7 +115,10 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             LockStatus::None => (false, false),
         };
 
-    txn.check_extra_op(&key, mutation_type, None)?;
+    if !fallback_from_async_commit {
+        txn.check_extra_op(&key, mutation_type, None)?;
+    }
+
     // No need to check data constraint, it's resolved by pessimistic locks.
     prewrite_key_value(
         txn,
