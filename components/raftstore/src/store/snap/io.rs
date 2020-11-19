@@ -157,15 +157,14 @@ where
     };
 
     let mut wb = db.write_batch();
-    let mut write_to_db =
-        |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
-            batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
-            wb.write()?;
-            wb.clear();
-            callback(batch);
-            batch.clear();
-            Ok(())
-        };
+    let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))?;
+        wb.write()?;
+        wb.clear();
+        callback(batch);
+        batch.clear();
+        Ok(())
+    };
 
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);

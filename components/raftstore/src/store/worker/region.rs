@@ -714,7 +714,7 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::KvEngine;
     use engine_traits::{
-        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteBatch
+        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
     };
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};

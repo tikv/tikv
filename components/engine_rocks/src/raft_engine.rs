@@ -2,8 +2,8 @@ use crate::{RocksEngine, RocksWriteBatch};
 
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, WriteBatch,
+    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;

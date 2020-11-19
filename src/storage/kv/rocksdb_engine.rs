@@ -13,7 +13,7 @@ use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatchExt, WriteBatch,
+    WriteBatch, WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};

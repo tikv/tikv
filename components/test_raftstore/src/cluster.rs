@@ -20,7 +20,7 @@ use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT, WriteBatch,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
@@ -1070,7 +1070,7 @@ impl<T: Simulator> Cluster<T> {
             kv_wb.put(k, v).unwrap();
             Ok(true)
         })
-            .unwrap();
+        .unwrap();
         kv_wb.write().unwrap();
     }
 

@@ -637,7 +637,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            self.poll_ctx.kv_wb.write_opt(&write_opts)
+            self.poll_ctx
+                .kv_wb
+                .write_opt(&write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });

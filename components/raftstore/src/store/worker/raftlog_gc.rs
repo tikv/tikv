@@ -175,7 +175,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT, WriteBatch};
+    use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;

@@ -252,7 +252,7 @@ mod tests {
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
     use engine_test::kv::{new_engine, new_engine_opt};
-    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatchExt, WriteBatch};
+    use engine_traits::{MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempfile::Builder;
 

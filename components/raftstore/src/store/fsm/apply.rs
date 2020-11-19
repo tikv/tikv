@@ -468,11 +468,9 @@ where
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb()
-                .write_opt(&write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
+            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+                panic!("failed to write to engine: {:?}", e);
+            });
             report_perf_context!(
                 self.perf_context_statistics,
                 APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC

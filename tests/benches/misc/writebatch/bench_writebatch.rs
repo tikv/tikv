@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksWriteBatch};
-use engine_traits::{Mutable, WriteBatchExt, WriteBatch};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use tempfile::Builder;
 use test::Bencher;
 

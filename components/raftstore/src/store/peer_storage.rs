@@ -1636,7 +1636,7 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_test::raft::{RaftTestEngine, RaftTestWriteBatch};
     use engine_traits::Engines;
-    use engine_traits::{Iterable, SyncMutable, WriteBatchExt, WriteBatch};
+    use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;

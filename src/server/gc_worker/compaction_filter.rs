@@ -18,8 +18,8 @@ use engine_rocks::{
     RocksWriteBatch,
 };
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey,
-    CF_WRITE, WriteBatch,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatch,
+    CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
