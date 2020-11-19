@@ -14,7 +14,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            max_batch_size: 256,
+            max_batch_size: 1024,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
         }
