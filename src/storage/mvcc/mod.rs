@@ -10,7 +10,7 @@ pub(super) mod txn;
 pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,

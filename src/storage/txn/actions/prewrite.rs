@@ -16,58 +16,81 @@ use std::cmp;
 use txn_types::{is_short_value, Key, Mutation, TimeStamp, Value, Write, WriteType};
 
 #[derive(Clone, Debug)]
-pub enum TransactionKind {
-    // bool is skip_constraint_check
-    Optimistic(bool),
-    // is_pessimistic_lock, for_update_ts
-    Pessimistic(bool, TimeStamp),
+pub struct TransactionProperties<'a> {
+    pub start_ts: TimeStamp,
+    pub kind: TransactionKind,
+    pub commit_kind: CommitKind,
+    pub primary: &'a [u8],
+    pub txn_size: u64,
 }
 
-impl TransactionKind {
+impl<'a> TransactionProperties<'a> {
+    fn try_one_pc(&self) -> bool {
+        match &self.commit_kind {
+            CommitKind::TwoPc => false,
+            CommitKind::OnePc(_) => true,
+            CommitKind::Async(_) => false,
+        }
+    }
+
+    fn max_commit_ts(&self) -> TimeStamp {
+        match &self.commit_kind {
+            CommitKind::TwoPc => unreachable!(),
+            CommitKind::OnePc(ts) => *ts,
+            CommitKind::Async(ts) => *ts,
+        }
+    }
+
     fn skip_constraint_check(&self) -> bool {
-        match self {
+        match &self.kind {
             TransactionKind::Optimistic(s) => *s,
-            TransactionKind::Pessimistic(..) => true,
+            TransactionKind::Pessimistic(_) => true,
         }
     }
 
     fn is_pessimistic(&self) -> bool {
-        match self {
+        match &self.kind {
             TransactionKind::Optimistic(_) => false,
-            TransactionKind::Pessimistic(..) => true,
-        }
-    }
-
-    fn is_pessimistic_lock(&self) -> bool {
-        match self {
-            TransactionKind::Optimistic(_) => false,
-            TransactionKind::Pessimistic(pl, _) => *pl,
+            TransactionKind::Pessimistic(_) => true,
         }
     }
 
     fn for_update_ts(&self) -> TimeStamp {
-        match self {
+        match &self.kind {
             TransactionKind::Optimistic(_) => TimeStamp::zero(),
-            TransactionKind::Pessimistic(_, ts) => *ts,
+            TransactionKind::Pessimistic(ts) => *ts,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum CommitKind {
+    TwoPc,
+    OnePc(TimeStamp),
+    Async(TimeStamp),
+}
+
+#[derive(Clone, Debug)]
+pub enum TransactionKind {
+    // bool is skip_constraint_check
+    Optimistic(bool),
+    // for_update_ts
+    Pessimistic(TimeStamp),
+}
+
+/// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
-    kind: TransactionKind,
+    txn_props: TransactionProperties,
     txn: &mut MvccTxn<S>,
     mutation: Mutation,
-    primary: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
     mut lock_ttl: u64,
-    txn_size: u64,
     mut min_commit_ts: TimeStamp,
-    max_commit_ts: TimeStamp,
-    try_one_pc: bool,
+    is_pessimistic_lock: bool,
 ) -> MvccResult<TimeStamp> {
     let should_not_write = mutation.should_not_write();
 
-    if kind.is_pessimistic() && should_not_write {
+    if txn_props.is_pessimistic() && should_not_write {
         return Err(box_err!(
             "cannot handle checkNotExists in pessimistic prewrite"
         ));
@@ -80,37 +103,34 @@ pub fn prewrite<S: Snapshot>(
     let (key, mut value) = mutation.into_key_value();
 
     fail_point!("prewrite", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, txn_props.start_ts).into()
     ));
 
-    let (has_pessimistic_lock, fallback_from_async_commit) = match check_lock(
+    let lock_status = check_lock(
         &key,
         secondary_keys.is_some(),
-        kind.is_pessimistic_lock(),
-        kind.is_pessimistic(),
+        is_pessimistic_lock,
+        txn_props.is_pessimistic(),
         txn,
-    )? {
-        LockStatus::Locked(ts) => return Ok(ts),
-        LockStatus::AsyncFallback => (false, true),
-        LockStatus::Pessimistic(ttl, ts) => {
-            lock_ttl = std::cmp::max(lock_ttl, ttl);
-            min_commit_ts = std::cmp::max(min_commit_ts, ts);
-            (true, false)
-        }
-        LockStatus::None => (false, false),
-    };
+    )?;
 
-    let prev_write = if !kind.skip_constraint_check() && !fallback_from_async_commit {
-        check_for_newer_version(&key, primary, should_not_exist, txn)?
-    } else {
-        None
-    };
+    if let LockStatus::Pessimistic(ttl, ts) = lock_status {
+        lock_ttl = std::cmp::max(lock_ttl, ttl);
+        min_commit_ts = std::cmp::max(min_commit_ts, ts);
+    }
+
+    let prev_write =
+        if !txn_props.skip_constraint_check() && !lock_status.fallback_from_async_commit() {
+            check_for_newer_version(&key, txn_props.primary, should_not_exist, txn)?
+        } else {
+            None
+        };
 
     if should_not_write {
         return Ok(TimeStamp::zero());
     }
 
-    if fallback_from_async_commit {
+    if lock_status.fallback_from_async_commit() {
         value = None;
     } else {
         txn.check_extra_op(&key, mutation_type, prev_write)?;
@@ -120,25 +140,23 @@ pub fn prewrite<S: Snapshot>(
         txn,
         &key,
         lock_type.unwrap(),
-        primary,
+        &txn_props,
         secondary_keys,
         value,
         lock_ttl,
-        kind.for_update_ts(),
-        txn_size,
         min_commit_ts,
     );
 
     // The final_min_commit_ts will be calculated if either async commit or 1PC is enabled.
     // It's allowed to enable 1PC without enabling async commit.
-    let final_min_commit_ts = if secondary_keys.is_some() || try_one_pc {
-        async_commit_timestamps(txn, &key, &mut lock, kind.for_update_ts(), max_commit_ts)?
+    let final_min_commit_ts = if secondary_keys.is_some() || txn_props.try_one_pc() {
+        async_commit_timestamps(txn, &key, &mut lock, txn_props)?
     } else {
         TimeStamp::zero()
     };
 
-    if try_one_pc {
-        txn.put_locks_for_1pc(key, lock, has_pessimistic_lock);
+    if txn_props.try_one_pc() {
+        txn.put_locks_for_1pc(key, lock, lock_status.has_pessimistic_lock());
     } else {
         txn.put_lock(key, &lock);
     }
@@ -156,6 +174,16 @@ enum LockStatus {
     // The ttl and min_commit_ts of the lock may have been pushed forward.
     Pessimistic(u64, TimeStamp),
     None,
+}
+
+impl LockStatus {
+    fn has_pessimistic_lock(&self) -> bool {
+        matches!(self, LockStatus::Pessimistic(..))
+    }
+
+    fn fallback_from_async_commit(&self) -> bool {
+        matches!(self, LockStatus::AsyncFallback)
+    }
 }
 
 /// Check whether the current key is locked at any timestamp.
@@ -281,22 +309,20 @@ fn make_lock<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
     lock_type: LockType,
-    primary: &[u8],
+    txn_props: &TransactionProperties,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     value: Option<Value>,
     lock_ttl: u64,
-    for_update_ts: TimeStamp,
-    txn_size: u64,
     min_commit_ts: TimeStamp,
 ) -> Lock {
     let mut lock = Lock::new(
         lock_type,
-        primary.to_vec(),
-        txn.start_ts,
+        txn_props.primary.to_vec(),
+        txn_props.start_ts,
         lock_ttl,
         None,
-        for_update_ts,
-        txn_size,
+        txn_props.for_update_ts(),
+        txn_props.txn_size(),
         min_commit_ts,
     );
 
@@ -306,7 +332,7 @@ fn make_lock<S: Snapshot>(
             lock.short_value = Some(value);
         } else {
             // value is long
-            txn.put_value(key.clone(), txn.start_ts, value);
+            txn.put_value(key.clone(), txn_props.start_ts, value);
         }
     }
 
@@ -322,8 +348,7 @@ fn async_commit_timestamps<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
     lock: &mut Lock,
-    for_update_ts: TimeStamp,
-    max_commit_ts: TimeStamp,
+    txn_props: &TransactionProperties,
 ) -> MvccResult<TimeStamp> {
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
@@ -334,12 +359,17 @@ fn async_commit_timestamps<S: Snapshot>(
     let final_min_commit_ts = key_guard.with_lock(|l| {
         let max_ts = txn.concurrency_manager.max_ts();
         fail_point!("before-set-lock-in-memory");
-        let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
+        let min_commit_ts = cmp::max(
+            cmp::max(max_ts, txn_props.start_ts),
+            txn_props.for_update_ts(),
+        )
+        .next();
         lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
+        let max_commit_ts = txn_props.max_commit_ts();
         if !max_commit_ts.is_zero() && lock.min_commit_ts > max_commit_ts {
             return Err(ErrorInner::CommitTsTooLarge {
-                start_ts: txn.start_ts,
+                start_ts: txn_props.start_ts,
                 min_commit_ts: lock.min_commit_ts,
                 max_commit_ts,
             });
@@ -400,6 +430,37 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
 
+    fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
+        TransactionProperties {
+            start_ts,
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary,
+            txn_size: 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn optimistic_async_props(
+        primary: &[u8],
+        start_ts: TimeStamp,
+        max_commit_ts: TimeStamp,
+        txn_size: u64,
+        one_pc: bool,
+    ) -> TransactionProperties<'_> {
+        TransactionProperties {
+            start_ts,
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: if one_pc {
+                CommitKind::OnePc(max_commit_ts)
+            } else {
+                CommitKind::Async(max_commit_ts)
+            },
+            primary,
+            txn_size,
+        }
+    }
+
     // Insert has a constraint that key should not exist
     pub fn try_prewrite_insert<E: Engine>(
         engine: &E,
@@ -415,14 +476,11 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_txn_props(pk, ts),
             &mut txn,
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
-            pk,
             &None,
             0,
-            0,
-            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )?;
@@ -442,14 +500,11 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_txn_props(pk, ts),
             &mut txn,
             Mutation::CheckNotExists(Key::from_raw(key)),
-            pk,
             &None,
             0,
-            0,
-            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )?;
@@ -466,15 +521,12 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
-            b"k1",
             &Some(vec![b"k2".to_vec()]),
             2000,
-            2,
             10.into(),
-            50.into(),
             false,
         )
         .unwrap();
@@ -482,15 +534,12 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
-            b"k1",
             &Some(vec![]),
             2000,
-            1,
             10.into(),
-            50.into(),
             false,
         )
         .unwrap_err();
@@ -504,34 +553,30 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
+        let props = optimistic_1pc_props(b"k1", 10.into(), 50.into(), 2);
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
-            b"k1",
             &None,
             2000,
-            2,
             10.into(),
-            50.into(),
-            true,
+            false,
         )
         .unwrap();
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            TransactionKind::Optimistic(false),
+            optimistic_async_props(b"k1", 10.into(), 50.into(), 1),
+            true,
             &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
-            b"k1",
             &None,
             2000,
-            1,
             10.into(),
-            50.into(),
-            true,
+            false,
         )
         .unwrap_err();
     }
@@ -572,14 +617,17 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
-            TransactionKind::Pessimistic(false, TimeStamp::default()),
+            TransactionProperties {
+                start_ts: ts,
+                kind: TransactionKind::Pessimistic(TimeStamp::default()),
+                commit_kind: CommitKind::TwoPc,
+                primary: pk,
+                txn_size: 0,
+            },
             &mut txn,
             Mutation::CheckNotExists(Key::from_raw(key)),
-            pk,
             &None,
             0,
-            0,
-            TimeStamp::default(),
             TimeStamp::default(),
             false,
         )?;
@@ -599,32 +647,38 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            TransactionKind::Pessimistic(true, 20.into()),
+            TransactionProperties {
+                start_ts: ts,
+                kind: TransactionKind::Pessimistic(20.into()),
+                commit_kind: CommitKind::Async(50.into()),
+                primary: b"k1",
+                txn_size: 2,
+            },
             &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
-            b"k1",
             &Some(vec![b"k2".to_vec()]),
             2000,
-            2,
             10.into(),
-            50.into(),
-            false,
+            true,
         )
         .unwrap();
 
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            TransactionKind::Pessimistic(true, 20.into()),
+            TransactionProperties {
+                start_ts: ts,
+                kind: TransactionKind::Pessimistic(20.into()),
+                commit_kind: CommitKind::Async(50.into()),
+                primary: b"k1",
+                txn_size: 2,
+            },
             &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
-            b"k1",
             &Some(vec![]),
             2000,
-            2,
             10.into(),
-            50.into(),
-            false,
+            true,
         )
         .unwrap_err();
     }
@@ -642,15 +696,18 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            TransactionKind::Pessimistic(true, 20.into()),
+            TransactionProperties {
+                start_ts: ts,
+                kind: TransactionKind::Pessimistic(20.into()),
+                commit_kind: CommitKind::OnePc(50.into()),
+                primary: b"k1",
+                txn_size: 2,
+            },
             &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
-            b"k1",
             &None,
             2000,
-            2,
             10.into(),
-            50.into(),
             true,
         )
         .unwrap();
@@ -658,15 +715,18 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            TransactionKind::Pessimistic(true, 20.into()),
+            TransactionProperties {
+                start_ts: ts,
+                kind: TransactionKind::Pessimistic(20.into()),
+                commit_kind: CommitKind::OnePc(50.into()),
+                primary: b"k1",
+                txn_size: 2,
+            },
             &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
-            b"k1",
             &None,
             2000,
-            2,
             10.into(),
-            50.into(),
             true,
         )
         .unwrap_err();

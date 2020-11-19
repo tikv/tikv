@@ -92,13 +92,6 @@ impl ReleasedLock {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum SecondaryLockStatus {
-    Locked(Lock),
-    Committed(TimeStamp),
-    RolledBack,
-}
-
 /// An abstraction of a locally-transactional MVCC key-value store
 pub struct MvccTxn<S: Snapshot> {
     pub(crate) reader: MvccReader<S>,

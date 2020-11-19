@@ -5,7 +5,7 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
     txn::{
-        actions::prewrite::{prewrite, TransactionKind},
+        actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
@@ -16,6 +16,7 @@ use crate::storage::{
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
 use engine_traits::CF_WRITE;
+use std::mem;
 use txn_types::{Key, Mutation, TimeStamp, Write, WriteType};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
@@ -78,6 +79,21 @@ impl CommandExt for Prewrite {
 }
 
 impl Prewrite {
+    fn txn_props(&self) -> TransactionProperties<'_> {
+        let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
+            (_, true) => CommitKind::OnePc(self.max_commit_ts),
+            (&Some(_), false) => CommitKind::Async(self.max_commit_ts),
+            (&None, false) => CommitKind::TwoPc,
+        };
+        TransactionProperties {
+            start_ts: self.start_ts,
+            kind: TransactionKind::Optimistic(self.skip_constraint_check),
+            commit_kind,
+            primary: &self.primary,
+            txn_size: self.txn_size,
+        }
+    }
+
     #[cfg(test)]
     pub fn with_defaults(
         mutations: Vec<Mutation>,
@@ -190,6 +206,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             }
         }
 
+        let mutations = mem::take(&mut self.mutations);
+
         // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
         // If it is possibly stale due to leader transfer or region merge, return an error.
         // TODO: Fallback to non-async commit if not synced instead of returning an error.
@@ -207,6 +225,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             !self.ctx.get_not_fill_cache(),
             context.concurrency_manager,
         );
+        let props = self.txn_props();
 
         // Set extra op here for getting the write record when check write conflict in prewrite.
         txn.extra_op = context.extra_op;
@@ -219,23 +238,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
 
         let mut locks = vec![];
         let mut final_min_commit_ts = TimeStamp::zero();
-        for m in self.mutations {
+        for m in mutations {
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
 
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
             match prewrite(
-                TransactionKind::Optimistic(self.skip_constraint_check),
+                props.clone(),
                 &mut txn,
                 m,
-                &self.primary,
                 secondaries,
                 self.lock_ttl,
-                self.txn_size,
                 self.min_commit_ts,
-                self.max_commit_ts,
-                self.try_one_pc,
+                false,
             ) {
                 Ok(ts) => {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
@@ -376,6 +392,21 @@ impl CommandExt for PrewritePessimistic {
 }
 
 impl PrewritePessimistic {
+    fn txn_props(&self) -> TransactionProperties<'_> {
+        let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
+            (_, true) => CommitKind::OnePc(self.max_commit_ts),
+            (&Some(_), false) => CommitKind::Async(self.max_commit_ts),
+            (&None, false) => CommitKind::TwoPc,
+        };
+        TransactionProperties {
+            start_ts: self.start_ts,
+            kind: TransactionKind::Pessimistic(self.for_update_ts),
+            commit_kind,
+            primary: &self.primary,
+            txn_size: self.txn_size,
+        }
+    }
+
     #[cfg(test)]
     pub fn with_defaults(
         mutations: Vec<(Mutation, bool)>,
@@ -443,6 +474,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             !self.ctx.get_not_fill_cache(),
             context.concurrency_manager,
         );
+        let props = self.txn_props();
+
         // Althrough pessimistic prewrite doesn't read the write record for checking conflict, we still set extra op here
         // for getting the written keys.
         txn.extra_op = context.extra_op;
@@ -462,16 +495,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
                 secondaries = &self.secondary_keys;
             }
             match prewrite(
-                TransactionKind::Pessimistic(is_pessimistic_lock, self.for_update_ts),
+                props.clone(),
                 &mut txn,
                 m,
-                &self.primary,
                 secondaries,
                 self.lock_ttl,
-                self.txn_size,
                 self.min_commit_ts,
-                self.max_commit_ts,
-                self.try_one_pc,
+                is_pessimistic_lock,
             ) {
                 Ok(ts) => {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
