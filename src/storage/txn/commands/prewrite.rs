@@ -459,7 +459,7 @@ mod tests {
         let pri_key = &[pri_key_number];
         for i in 0..40 {
             mutations.push(Mutation::Insert((
-                Key::from_raw(&[i as u8]),
+                Key::from_raw(&[b'z', i as u8]),
                 b"100".to_vec(),
             )));
         }

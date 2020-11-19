@@ -14,8 +14,8 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, RaftCmdRequest,
-    RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -39,7 +39,9 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
@@ -626,7 +628,7 @@ where
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(&self, ctx: &PollContext<EK, ER, T, C>) {
+    pub fn activate<T>(&self, ctx: &PollContext<EK, ER, T>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
 
@@ -694,10 +696,7 @@ where
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy<T, C>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
-    ) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -740,11 +739,7 @@ where
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T, C>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
-        keep_data: bool,
-    ) -> Result<()> {
+    pub fn destroy<T>(&mut self, ctx: &PollContext<EK, ER, T>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
@@ -1015,9 +1010,9 @@ where
     }
 
     /// Steps the raft message.
-    pub fn step<T, C>(
+    pub fn step<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         mut m: eraftpb::Message,
     ) -> Result<()> {
         fail_point!(
@@ -1033,28 +1028,33 @@ where
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
-        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
-        // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        let committed = self.raft_group.raft.raft_log.committed;
-        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
-        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
-            // If the leader hasn't committed any entries in its term, it can't response read only
-            // requests. Please also take a look at raft-rs.
-            let state = self.inspect_lease();
-            if let LeaseState::Valid = state {
-                let mut resp = eraftpb::Message::default();
-                resp.set_msg_type(MessageType::MsgReadIndexResp);
-                resp.term = self.term();
-                resp.to = m.from;
-                resp.index = self.get_store().committed_index();
-                resp.set_entries(m.take_entries());
+        if msg_type == MessageType::MsgReadIndex {
+            ctx.coprocessor_host.on_step_read_index(&mut m);
 
-                self.pending_messages.push(resp);
-                return Ok(());
+            // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+            // request directly, rather than send a heartbeat to check quorum.
+            let committed = self.raft_group.raft.raft_log.committed;
+            let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+            if expected_term == self.raft_group.raft.term {
+                // If the leader hasn't committed any entries in its term, it can't response read only
+                // requests. Please also take a look at raft-rs.
+                let state = self.inspect_lease();
+                if let LeaseState::Valid = state {
+                    let mut resp = eraftpb::Message::default();
+                    resp.set_msg_type(MessageType::MsgReadIndexResp);
+                    resp.term = self.term();
+                    resp.to = m.from;
+                    resp.index = self.get_store().committed_index();
+                    resp.set_entries(m.take_entries());
+
+                    self.pending_messages.push(resp);
+                    return Ok(());
+                }
+                self.should_wake_up = state == LeaseState::Expired;
             }
-            self.should_wake_up = state == LeaseState::Expired;
         }
+
         if msg_type == MessageType::MsgTransferLeader {
             self.execute_transfer_leader(ctx, &m);
             return Ok(());
@@ -1108,10 +1108,7 @@ where
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers<T, C>(
-        &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
-    ) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T>(&mut self, ctx: &PollContext<EK, ER, T>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -1205,7 +1202,7 @@ where
         false
     }
 
-    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) -> StaleState {
+    pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
             //
@@ -1245,7 +1242,7 @@ where
         }
     }
 
-    fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>, ready: &Ready) {
+    fn on_role_changed<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
             match ss.raft_state {
@@ -1414,9 +1411,9 @@ where
             && !self.replication_sync
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(
+    pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
             return None;
@@ -1596,9 +1593,9 @@ where
         Some((ready, invoke_ctx))
     }
 
-    pub fn post_raft_ready_append<T: Transport, C>(
+    pub fn post_raft_ready_append<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         ready: &mut Ready,
         invoke_ctx: InvokeContext,
     ) -> Option<ApplySnapResult> {
@@ -1653,9 +1650,9 @@ where
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(
+    pub fn handle_raft_ready_apply<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         ready: &mut Ready,
         invoke_ctx: &InvokeContext,
     ) {
@@ -1782,10 +1779,10 @@ where
         self.proposals.gc();
     }
 
-    fn response_read<T, C>(
+    fn response_read<T>(
         &self,
         read: &mut ReadIndexRequest<EK::Snapshot>,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
         debug!(
@@ -1796,6 +1793,19 @@ where
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         for (req, cb, mut read_index) in read.cmds.drain(..) {
+            // leader reports key is locked
+            if let Some(locked) = read.locked.take() {
+                let mut response = raft_cmdpb::Response::default();
+                response.mut_read_index().set_locked(*locked);
+                let mut cmd_resp = RaftCmdResponse::default();
+                cmd_resp.mut_responses().push(response);
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+                continue;
+            }
             if !replica_read {
                 if read_index.is_none() {
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
@@ -1818,8 +1828,14 @@ where
     }
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>) {
+    fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
         while let Some(mut read) = self.pending_reads.pop_front() {
+            // addition_request indicates an ongoing lock checking. We must wait until lock checking finished.
+            if read.addition_request.is_some() {
+                self.pending_reads.push_front(read);
+                break;
+            }
+
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
@@ -1837,11 +1853,11 @@ where
         }
     }
 
-    fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<EK, ER, T, C>, ready: &Ready) {
+    fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
-            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-            (uuid, state.index)
+            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -1881,9 +1897,9 @@ where
         }
     }
 
-    pub fn post_apply<T, C>(
+    pub fn post_apply<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         apply_state: RaftApplyState,
         applied_index_term: u64,
         apply_metrics: &ApplyMetrics,
@@ -1942,10 +1958,10 @@ where
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease<T, C>(
+    fn maybe_renew_leader_lease<T>(
         &mut self,
         ts: Timespec,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
@@ -2024,9 +2040,9 @@ where
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
-    pub fn propose<T: Transport, C>(
+    pub fn propose<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
@@ -2104,9 +2120,9 @@ where
         }
     }
 
-    fn post_propose<T, C>(
+    fn post_propose<T>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         mut p: Proposal<EK::Snapshot>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
@@ -2125,9 +2141,9 @@ where
     /// right after all conf change is applied.
     /// If 'allow_remove_leader' is false then the peer to be removed should
     /// not be the leader.
-    fn check_conf_change<T, C>(
+    fn check_conf_change<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         change_peers: &[ChangePeerRequest],
         cc: &impl ConfChangeI,
     ) -> Result<()> {
@@ -2280,9 +2296,9 @@ where
         true
     }
 
-    fn ready_to_transfer_leader<T, C>(
+    fn ready_to_transfer_leader<T>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
         peer: &metapb::Peer,
     ) -> Option<&'static str> {
@@ -2320,9 +2336,9 @@ where
         None
     }
 
-    fn read_local<T, C>(
+    fn read_local<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) {
@@ -2369,7 +2385,12 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
-        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                read.id,
+                read.addition_request.as_deref(),
+                None,
+            ));
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -2383,10 +2404,10 @@ where
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T: Transport, C>(
+    fn read_index<T: Transport>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
-        req: RaftCmdRequest,
+        poll_ctx: &mut PollContext<EK, ER, T>,
+        mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
@@ -2467,8 +2488,19 @@ where
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         self.bcast_wake_up_time = None;
+
         let id = Uuid::new_v4();
-        self.raft_group.read_index(id.as_bytes().to_vec());
+        let request = req
+            .mut_requests()
+            .get_mut(0)
+            .filter(|req| req.has_read_index())
+            .map(|req| req.take_read_index());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                id,
+                request.as_ref(),
+                None,
+            ));
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2482,7 +2514,8 @@ where
             return false;
         }
 
-        let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        let mut read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        read.addition_request = request.map(Box::new);
         self.pending_reads.push_back(read, self.is_leader());
         self.should_wake_up = true;
 
@@ -2544,9 +2577,9 @@ where
         Ok((min_m.unwrap_or(0), min_c.unwrap_or(0)))
     }
 
-    fn pre_propose_prepare_merge<T, C>(
+    fn pre_propose_prepare_merge<T>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<()> {
         let last_index = self.raft_group.raft.raft_log.last_index();
@@ -2616,9 +2649,9 @@ where
         Ok(())
     }
 
-    fn pre_propose<T, C>(
+    fn pre_propose<T>(
         &self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
         poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
@@ -2649,9 +2682,9 @@ where
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
     /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
     /// the last conflict admin cmd.
-    fn propose_normal<T, C>(
+    fn propose_normal<T>(
         &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T, C>,
+        poll_ctx: &mut PollContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some()
@@ -2730,9 +2763,9 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    fn execute_transfer_leader<T, C>(
+    fn execute_transfer_leader<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
     ) {
         // log_term is set by original leader, represents the term last log is written
@@ -2804,9 +2837,9 @@ where
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T, C>(
+    fn propose_transfer_leader<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
@@ -2832,9 +2865,9 @@ where
     /// Returns Ok(Either::Left(index)) means the proposal is proposed successfully and is located on `index` position.
     /// Ok(Either::Right(index)) means the proposal is rejected by `CmdEpochChecker` and the `index` is the position of
     /// the last conflict admin cmd.
-    fn propose_conf_change<T, C>(
+    fn propose_conf_change<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: &RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
@@ -2892,9 +2925,9 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
-    fn propose_conf_change_internal<T, C, CP: ChangePeerI>(
+    fn propose_conf_change_internal<T, CP: ChangePeerI>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         change_peer: CP,
         data: Vec<u8>,
     ) -> Result<u64> {
@@ -2927,9 +2960,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<T, C>(
+    fn handle_read<T>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -3060,7 +3093,7 @@ where
         Some(status)
     }
 
-    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<EK, ER, T, C>) {
+    pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
             region: self.region().clone(),
@@ -3156,7 +3189,7 @@ where
         }
     }
 
-    pub fn bcast_wake_up_message<T: Transport, C>(&self, ctx: &mut PollContext<EK, ER, T, C>) {
+    pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
         for peer in self.region().get_peers() {
             if peer.get_id() == self.peer_id() {
                 continue;
@@ -3165,9 +3198,9 @@ where
         }
     }
 
-    pub fn send_wake_up_message<T: Transport, C>(
+    pub fn send_wake_up_message<T: Transport>(
         &self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         peer: &metapb::Peer,
     ) {
         let mut send_msg = RaftMessage::default();
@@ -3190,9 +3223,9 @@ where
         }
     }
 
-    pub fn bcast_check_stale_peer_message<T: Transport, C>(
+    pub fn bcast_check_stale_peer_message<T: Transport>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) {
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
@@ -3234,10 +3267,10 @@ where
         }
     }
 
-    pub fn send_want_rollback_merge<T: Transport, C>(
+    pub fn send_want_rollback_merge<T: Transport>(
         &self,
         premerge_commit: u64,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
     ) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
@@ -3405,7 +3438,7 @@ where
     }
 }
 
-impl<EK, ER, T, C> ReadExecutor<EK> for PollContext<EK, ER, T, C>
+impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -3735,10 +3768,15 @@ mod tests {
     #[test]
     fn test_cmd_epoch_checker() {
         use engine_test::kv::KvTestSnapshot;
+        use std::sync::mpsc;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
             request
+        }
+        fn new_cb() -> (Callback<KvTestSnapshot>, mpsc::Receiver<()>) {
+            let (tx, rx) = mpsc::channel();
+            (Callback::write(Box::new(move |_| tx.send(()).unwrap())), rx)
         }
 
         let region = metapb::Region::default();
@@ -3810,5 +3848,33 @@ mod tests {
         assert_eq!(epoch_checker.term, 11);
         // Should be empty
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+
+        // Test attaching multiple callbacks.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
+        let mut rxs = vec![];
+        for _ in 0..3 {
+            let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
+            rxs.push(rx);
+        }
+        epoch_checker.advance_apply(7, 12, &region);
+        for rx in rxs {
+            rx.try_recv().unwrap();
+        }
+
+        // Should invoke callbacks when term is increased.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(8, cb);
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
+        rx.try_recv().unwrap();
+
+        // Should invoke callbacks when it's dropped.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(9, cb);
+        drop(epoch_checker);
+        rx.try_recv().unwrap();
     }
 }
