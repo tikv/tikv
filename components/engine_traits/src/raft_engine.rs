@@ -128,18 +128,17 @@ pub mod raft_engine_impl_reexports {
 #[macro_export]
 macro_rules! def_raft_engine {
     ($engine_name:ident, $write_batch_name:ident) => {
-
-        use $crate::{Error, RaftEngine, RaftLogBatch, Result};
-        use $crate::{
-            Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
-            CF_DEFAULT,
-        };
         use $crate::raft_engine_impl_reexports::{
             keys,
             kvproto::raft_serverpb::RaftLocalState,
             protobuf::Message,
             raft::eraftpb::Entry,
             tikv_util::{box_err, box_try},
+        };
+        use $crate::{Error, RaftEngine, RaftLogBatch, Result};
+        use $crate::{
+            Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+            WriteOptions, CF_DEFAULT,
         };
 
         const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
@@ -309,7 +308,9 @@ macro_rules! def_raft_engine {
                     let start_key = keys::raft_log_key(raft_group_id, 0);
                     let prefix = keys::raft_log_prefix(raft_group_id);
                     match self.seek(&start_key)? {
-                        Some((k, _)) if k.starts_with(&prefix) => from = box_try!(keys::raft_log_index(&k)),
+                        Some((k, _)) if k.starts_with(&prefix) => {
+                            from = box_try!(keys::raft_log_index(&k))
+                        }
                         // No need to gc.
                         _ => return Ok(0),
                     }
@@ -398,5 +399,5 @@ macro_rules! def_raft_engine {
                 Ok(())
             }
         }
-    }
+    };
 }
