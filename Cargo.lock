@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3-hotfix#fb1896c705253c4c43d107343f69b81bb01c0d6b"
 dependencies = [
  "cc",
  "cmake",
@@ -1984,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3-hotfix#fb1896c705253c4c43d107343f69b81bb01c0d6b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2004,7 +2004,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3-hotfix#fb1896c705253c4c43d107343f69b81bb01c0d6b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3419,7 +3419,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3-hotfix#fb1896c705253c4c43d107343f69b81bb01c0d6b"
 dependencies = [
  "libc",
  "librocksdb_sys",
