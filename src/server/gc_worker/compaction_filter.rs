@@ -4,14 +4,13 @@ use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
-    DBCompactionFilter, DB,
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter, DB,
 };
 use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksUserCollectedPropertiesNoRc,
@@ -146,13 +145,19 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let name = CString::new("write_compaction_filter").unwrap();
         let db = Arc::clone(&gc_context.db);
-        let filter = Box::new(WriteCompactionFilter::new(db, safe_point, context));
+        let filter = Box::new(WriteCompactionFilter::new(
+            db,
+            safe_point,
+            context,
+            &mvcc_props,
+        ));
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
 struct WriteCompactionFilter {
     safe_point: u64,
+    handle_mvcc_deletes: bool,
     engine: RocksEngine,
     write_batch: RocksWriteBatch,
 
@@ -172,7 +177,12 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(db: Arc<DB>, safe_point: u64, context: &CompactionFilterContext) -> Self {
+    fn new(
+        db: Arc<DB>,
+        safe_point: u64,
+        context: &CompactionFilterContext,
+        props: &MvccProperties,
+    ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
         debug!(
@@ -190,6 +200,7 @@ impl WriteCompactionFilter {
 
         WriteCompactionFilter {
             safe_point,
+            handle_mvcc_deletes: context.is_bottommost_level() || too_many_delete_marks(props),
             engine,
             write_batch,
             key_prefix: vec![],
@@ -297,15 +308,17 @@ struct CompactionFilterStats {
     last_report: Cell<Instant>,
 }
 impl CompactionFilterStats {
-    fn report(&self) {
+    fn need_report(&self) -> bool {
+        self.versions.get() >= 1024 * 1024 // 1M versions.
+            || self.last_report.get().elapsed() >= Duration::from_secs(60)
+    }
+
+    fn prepare_report(&self) -> (usize, usize, usize) {
         let versions = self.versions.replace(0);
         let filtered = self.filtered.replace(0);
         let deleted = self.deleted.replace(0);
-        info!(
-            "Compaction filter in thread {:?} reports", thread::current().name();
-            "total" => versions, "filtered" => filtered, "deleted" => deleted,
-        );
         self.last_report.set(Instant::now());
+        (versions, filtered, deleted)
     }
 }
 impl Default for CompactionFilterStats {
@@ -316,11 +329,6 @@ impl Default for CompactionFilterStats {
             deleted: Cell::new(0),
             last_report: Cell::new(Instant::now()),
         }
-    }
-}
-impl Drop for CompactionFilterStats {
-    fn drop(&mut self) {
-        self.report();
     }
 }
 
@@ -337,32 +345,35 @@ impl Drop for WriteCompactionFilter {
         self.engine.sync_wal().unwrap();
 
         self.switch_key_metrics();
-        STATS.with(|stats| {
+        if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);
             stats.deleted.update(|x| x + self.total_deleted);
-            if stats.versions.get() >= 1024 * 1024
-                || stats.last_report.get().elapsed() >= Duration::from_secs(60)
-            {
-                stats.report();
+            if stats.need_report() {
+                return Some(stats.prepare_report());
             }
-        })
+            None
+        }) {
+            info!(
+                "Compaction filter reports"; "total" => versions,
+                "filtered" => filtered, "deleted" => deleted,
+            );
+        }
     }
 }
 
 impl CompactionFilter for WriteCompactionFilter {
-    fn filter(
+    fn filter_v2(
         &mut self,
         _start_level: usize,
         key: &[u8],
         value: &[u8],
-        _: &mut Vec<u8>,
-        _: &mut bool,
-    ) -> bool {
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
         self.near_seek_distance += 1;
         let (key_prefix, commit_ts) = split_ts(key);
-        if commit_ts > self.safe_point {
-            return false;
+        if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
+            return CompactionFilterDecision::Keep;
         }
 
         self.versions += 1;
@@ -381,18 +392,25 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    filtered = true;
-                    self.handle_delete_mark(key);
+                    if self.handle_mvcc_deletes {
+                        filtered = true;
+                        self.handle_delete_mark(key);
+                    }
                 }
             }
         }
 
-        if filtered {
-            self.handle_filtered_write(write);
-            self.filtered += 1;
+        match (filtered, self.remove_older) {
+            (true, true) => {
+                self.handle_filtered_write(write);
+                self.filtered += 1;
+                let prefix = Key::from_encoded_slice(key_prefix);
+                let skip_until = prefix.append_ts(0.into()).into_encoded();
+                CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
+            }
+            (true, false) => CompactionFilterDecision::Remove,
+            (false, _) => CompactionFilterDecision::Keep,
         }
-
-        filtered
     }
 }
 
@@ -415,6 +433,10 @@ fn parse_write(value: &[u8]) -> WriteRef {
         Ok(write) => write,
         Err(_) => panic!("invalid write cf value: {}", hex::encode_upper(value)),
     }
+}
+
+fn too_many_delete_marks(props: &MvccProperties) -> bool {
+    props.num_deletes as f64 / props.num_versions as f64 > 0.2
 }
 
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
