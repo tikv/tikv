@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::ffi::CString;
+use std::result::Result;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -159,6 +160,7 @@ struct WriteCompactionFilter {
     safe_point: u64,
     handle_mvcc_deletes: bool,
     engine: RocksEngine,
+    is_invalid: bool,
     write_batch: RocksWriteBatch,
 
     key_prefix: Vec<u8>,
@@ -185,104 +187,162 @@ impl WriteCompactionFilter {
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
-        debug!(
-            "gc in compaction filter";
-            "safe_point" => safe_point, "files" => ?context.file_numbers(),
-        );
+        debug!("gc in compaction filter"; "safe_point" => safe_point);
 
-        let engine = RocksEngine::from_db(db.clone());
-        let write_batch = RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE);
-        let write_iter = {
-            // TODO: give lower bound and upper bound to the iterator.
-            let opts = IterOptions::default();
-            Some(engine.iterator_cf_opt(CF_WRITE, opts).unwrap())
-        };
-
-        WriteCompactionFilter {
+        let mut filter = WriteCompactionFilter {
             safe_point,
             handle_mvcc_deletes: context.is_bottommost_level() || too_many_delete_marks(props),
-            engine,
-            write_batch,
+            engine: RocksEngine::from_db(db.clone()),
+            is_invalid: false,
+            write_batch: RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE),
+
             key_prefix: vec![],
             remove_older: false,
-            write_iter,
+            write_iter: None,
             near_seek_distance: NEAR_SEEK_LIMIT,
+
             versions: 0,
             filtered: 0,
             deleted: 0,
             total_versions: 0,
             total_filtered: 0,
             total_deleted: 0,
+        };
+
+        let iter_opts = IterOptions::default();
+        match filter.engine.iterator_cf_opt(CF_WRITE, iter_opts) {
+            Ok(iter) => filter.write_iter = Some(iter),
+            Err(e) => {
+                warn!("compaction filter can't init iterator"; "err" => ?e);
+                filter.is_invalid = true;
+            }
         }
+        filter
+    }
+
+    fn do_filter_v2(
+        &mut self,
+        _start_level: usize,
+        key: &[u8],
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> Result<CompactionFilterDecision, String> {
+        self.near_seek_distance += 1;
+        let (key_prefix, commit_ts) = split_ts(key)?;
+        if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
+            return Ok(CompactionFilterDecision::Keep);
+        }
+
+        self.versions += 1;
+        if self.key_prefix != key_prefix {
+            self.key_prefix.clear();
+            self.key_prefix.extend_from_slice(key_prefix);
+            self.remove_older = false;
+            self.switch_key_metrics();
+        }
+
+        let mut filtered = self.remove_older;
+        let write = parse_write(value)?;
+        if !self.remove_older {
+            match write.write_type {
+                WriteType::Rollback | WriteType::Lock => filtered = true,
+                WriteType::Put => self.remove_older = true,
+                WriteType::Delete => {
+                    self.remove_older = true;
+                    if self.handle_mvcc_deletes {
+                        filtered = true;
+                        self.handle_delete_mark(key)?;
+                    }
+                }
+            }
+        }
+
+        let decision = match (filtered, self.remove_older) {
+            (true, true) => {
+                self.handle_filtered_write(write)?;
+                self.filtered += 1;
+                let prefix = Key::from_encoded_slice(key_prefix);
+                let skip_until = prefix.append_ts(0.into()).into_encoded();
+                CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
+            }
+            (true, false) => CompactionFilterDecision::Remove,
+            (false, _) => CompactionFilterDecision::Keep,
+        };
+        Ok(decision)
     }
 
     // Do gc before a delete mark.
-    fn handle_delete_mark(&mut self, mark: &[u8]) {
-        let mut valid = self.write_iter_seek_to(mark);
+    fn handle_delete_mark(&mut self, mark: &[u8]) -> Result<(), String> {
+        let mut valid = self.write_iter_seek_to(mark)?;
         let mut write_iter = self.write_iter.take().unwrap();
         if valid && write_iter.key() == mark {
             // The delete mark itself is handled in `filter`.
-            valid = write_iter.next().unwrap();
+            valid = write_iter.next()?;
         }
 
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if truncate_ts(key) != self.key_prefix.as_slice() {
+            if truncate_ts(key)? != self.key_prefix.as_slice() {
                 break;
             }
-            self.handle_filtered_write(parse_write(value));
-            self.delete_write_key(key);
-            valid = write_iter.next().unwrap();
+            self.handle_filtered_write(parse_write(value)?)?;
+            self.delete_write_key(key)?;
+            valid = write_iter.next()?;
         }
         self.write_iter = Some(write_iter);
+        Ok(())
     }
 
-    fn write_iter_seek_to(&mut self, mark: &[u8]) -> bool {
+    fn write_iter_seek_to(&mut self, mark: &[u8]) -> Result<bool, String> {
         let write_iter = self.write_iter.as_mut().unwrap();
         if self.near_seek_distance >= NEAR_SEEK_LIMIT {
             self.near_seek_distance = 0;
-            return write_iter.seek(SeekKey::Key(mark)).unwrap();
+            let valid = write_iter.seek(SeekKey::Key(mark))?;
+            return Ok(valid);
         }
 
-        let mut valid = write_iter.valid().unwrap();
+        let mut valid = write_iter.valid()?;
         let (mut next_count, mut found) = (0, false);
         while valid && next_count <= NEAR_SEEK_LIMIT {
             if write_iter.key() >= mark {
                 found = true;
                 break;
             }
-            valid = write_iter.next().unwrap();
+            valid = write_iter.next()?;
             next_count += 1;
         }
 
         if valid && !found {
             // Fallback to `seek` after some `next`s.
-            valid = write_iter.seek(SeekKey::Key(mark)).unwrap();
+            valid = write_iter.seek(SeekKey::Key(mark))?;
         }
         self.near_seek_distance = 0;
-        valid
+        Ok(valid)
     }
 
-    fn handle_filtered_write(&mut self, write: WriteRef) {
+    fn handle_filtered_write(&mut self, write: WriteRef) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             let prefix = Key::from_encoded_slice(&self.key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
-            self.write_batch.delete(&def_key).unwrap();
-            self.flush_pending_writes_if_need();
+            self.write_batch.delete(&def_key)?;
+            self.flush_pending_writes_if_need()?;
         }
+        Ok(())
     }
 
-    fn delete_write_key(&mut self, key: &[u8]) {
-        self.write_batch.delete_cf(CF_WRITE, key).unwrap();
-        self.flush_pending_writes_if_need();
+    fn delete_write_key(&mut self, key: &[u8]) -> Result<(), String> {
+        self.write_batch.delete_cf(CF_WRITE, key)?;
+        self.flush_pending_writes_if_need()?;
         self.deleted += 1;
+        Ok(())
     }
 
-    fn flush_pending_writes_if_need(&mut self) {
+    fn flush_pending_writes_if_need(&mut self) -> Result<(), String> {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            self.engine.write(&self.write_batch).unwrap();
+            self.engine.write(&self.write_batch)?;
             self.write_batch.clear();
         }
+        Ok(())
     }
 
     fn switch_key_metrics(&mut self) {
@@ -365,73 +425,48 @@ impl Drop for WriteCompactionFilter {
 impl CompactionFilter for WriteCompactionFilter {
     fn filter_v2(
         &mut self,
-        _start_level: usize,
+        level: usize,
         key: &[u8],
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        self.near_seek_distance += 1;
-        let (key_prefix, commit_ts) = split_ts(key);
-        if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
+        if self.is_invalid {
+            // If there are already some errors, do nothing.
             return CompactionFilterDecision::Keep;
         }
 
-        self.versions += 1;
-        if self.key_prefix != key_prefix {
-            self.key_prefix.clear();
-            self.key_prefix.extend_from_slice(key_prefix);
-            self.remove_older = false;
-            self.switch_key_metrics();
-        }
-
-        let mut filtered = self.remove_older;
-        let write = parse_write(value);
-        if !self.remove_older {
-            match write.write_type {
-                WriteType::Rollback | WriteType::Lock => filtered = true,
-                WriteType::Put => self.remove_older = true,
-                WriteType::Delete => {
-                    self.remove_older = true;
-                    if self.handle_mvcc_deletes {
-                        filtered = true;
-                        self.handle_delete_mark(key);
-                    }
-                }
+        match self.do_filter_v2(level, key, value, value_type) {
+            Ok(decision) => decision,
+            Err(e) => {
+                warn!("compaction filter meet error: {}", e);
+                self.is_invalid = true;
+                CompactionFilterDecision::Keep
             }
-        }
-
-        match (filtered, self.remove_older) {
-            (true, true) => {
-                self.handle_filtered_write(write);
-                self.filtered += 1;
-                let prefix = Key::from_encoded_slice(key_prefix);
-                let skip_until = prefix.append_ts(0.into()).into_encoded();
-                CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
-            }
-            (true, false) => CompactionFilterDecision::Remove,
-            (false, _) => CompactionFilterDecision::Keep,
         }
     }
 }
 
-fn split_ts(key: &[u8]) -> (&[u8], u64) {
+fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
-        Ok((key, ts)) => (key, ts.into_inner()),
-        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+        Ok((key, ts)) => Ok((key, ts.into_inner())),
+        Err(_) => Err(format!("invalid write cf key: {}", hex::encode_upper(key))),
     }
 }
 
-fn truncate_ts(key: &[u8]) -> &[u8] {
+fn truncate_ts(key: &[u8]) -> Result<&[u8], String> {
     match Key::truncate_ts_for(key) {
-        Ok(prefix) => prefix,
-        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+        Ok(prefix) => Ok(prefix),
+        Err(_) => Err(format!("invalid write cf key: {}", hex::encode_upper(key))),
     }
 }
 
-fn parse_write(value: &[u8]) -> WriteRef {
+fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
     match WriteRef::parse(value) {
-        Ok(write) => write,
-        Err(_) => panic!("invalid write cf value: {}", hex::encode_upper(value)),
+        Ok(write) => Ok(write),
+        Err(_) => Err(format!(
+            "invalid write cf value: {}",
+            hex::encode_upper(value)
+        )),
     }
 }
 
