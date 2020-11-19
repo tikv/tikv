@@ -976,7 +976,6 @@ mod write_batch {
         assert!(db.engine.get_value(b"a").unwrap().is_none());
     }
 
-    #[ignore]
     #[test]
     fn write_batch_write_twice_1() {
         let db = default_engine();
@@ -991,7 +990,6 @@ mod write_batch {
         assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
     }
 
-    #[ignore]
     #[test]
     fn write_batch_write_twice_2() {
         let db = default_engine();
@@ -1010,7 +1008,6 @@ mod write_batch {
         assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
     }
 
-    #[ignore]
     #[test]
     fn write_batch_write_twice_3() {
         let db = default_engine();
