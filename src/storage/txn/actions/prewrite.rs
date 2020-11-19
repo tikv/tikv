@@ -32,7 +32,7 @@ pub fn prewrite<S: Snapshot>(
     let should_not_exist = mutation.should_not_exists();
     let should_not_write = mutation.should_not_write();
     let mutation_type = mutation.mutation_type();
-    let (key, value) = mutation.into_key_value();
+    let (key, mut value) = mutation.into_key_value();
 
     fail_point!("prewrite", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
@@ -55,13 +55,15 @@ pub fn prewrite<S: Snapshot>(
         return Ok(TimeStamp::zero());
     }
 
-    if !fallback_from_async_commit {
+    if fallback_from_async_commit {
+        value = None;
+    } else {
         txn.check_extra_op(&key, mutation_type, prev_write)?;
     }
 
-    prewrite_key_value(
+    let lock = make_lock(
         txn,
-        key,
+        &key,
         lock_type.unwrap(),
         primary,
         secondary_keys,
@@ -70,10 +72,17 @@ pub fn prewrite<S: Snapshot>(
         TimeStamp::zero(),
         txn_size,
         min_commit_ts,
+    );
+
+    prewrite_key_value(
+        txn,
+        key,
+        lock,
+        secondary_keys,
+        TimeStamp::zero(),
         max_commit_ts,
         try_one_pc,
         false,
-        fallback_from_async_commit,
     )
 }
 
@@ -97,7 +106,7 @@ pub fn pessimistic_prewrite<S: Snapshot>(
     }
     let lock_type = LockType::from_mutation(&mutation);
     let mutation_type = mutation.mutation_type();
-    let (key, value) = mutation.into_key_value();
+    let (key, mut value) = mutation.into_key_value();
 
     fail_point!("pessimistic_prewrite", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
@@ -115,14 +124,15 @@ pub fn pessimistic_prewrite<S: Snapshot>(
             LockStatus::None => (false, false),
         };
 
-    if !fallback_from_async_commit {
+    if fallback_from_async_commit {
+        value = None;
+    } else {
         txn.check_extra_op(&key, mutation_type, None)?;
     }
 
-    // No need to check data constraint, it's resolved by pessimistic locks.
-    prewrite_key_value(
+    let lock = make_lock(
         txn,
-        key,
+        &key,
         lock_type.unwrap(),
         primary,
         secondary_keys,
@@ -131,10 +141,18 @@ pub fn pessimistic_prewrite<S: Snapshot>(
         for_update_ts,
         txn_size,
         min_commit_ts,
+    );
+
+    // No need to check data constraint, it's resolved by pessimistic locks.
+    prewrite_key_value(
+        txn,
+        key,
+        lock,
+        secondary_keys,
+        for_update_ts,
         max_commit_ts,
         try_one_pc,
         has_pessimistic_lock,
-        fallback_from_async_commit,
     )
 }
 
@@ -280,9 +298,9 @@ fn check_for_newer_version<S: Snapshot>(
     }
 }
 
-fn prewrite_key_value<S: Snapshot>(
+fn make_lock<S: Snapshot>(
     txn: &mut MvccTxn<S>,
-    key: Key,
+    key: &Key,
     lock_type: LockType,
     primary: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
@@ -291,11 +309,7 @@ fn prewrite_key_value<S: Snapshot>(
     for_update_ts: TimeStamp,
     txn_size: u64,
     min_commit_ts: TimeStamp,
-    max_commit_ts: TimeStamp,
-    try_one_pc: bool,
-    has_pessimistic_lock: bool,
-    fallback_from_async_commit: bool,
-) -> MvccResult<TimeStamp> {
+) -> Lock {
     let mut lock = Lock::new(
         lock_type,
         primary.to_vec(),
@@ -311,50 +325,37 @@ fn prewrite_key_value<S: Snapshot>(
         if is_short_value(&value) {
             // If the value is short, embed it in Lock.
             lock.short_value = Some(value);
-
-        // needn't set value again when fallback
-        } else if !fallback_from_async_commit {
+        } else {
             // value is long
             txn.put_value(key.clone(), txn.start_ts, value);
         }
     }
 
-    let mut final_min_commit_ts = TimeStamp::zero();
+    if let Some(secondary_keys) = secondary_keys {
+        lock.use_async_commit = true;
+        lock.secondaries = secondary_keys.to_owned();
+    }
+
+    lock
+}
+
+fn prewrite_key_value<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    key: Key,
+    mut lock: Lock,
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    for_update_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+    try_one_pc: bool,
+    has_pessimistic_lock: bool,
+) -> MvccResult<TimeStamp> {
     // The final_min_commit_ts will be calculated if either async commit or 1PC is enabled.
     // It's allowed to enable 1PC without enabling async commit.
-    if secondary_keys.is_some() || try_one_pc {
-        if let Some(secondary_keys) = secondary_keys {
-            lock.use_async_commit = true;
-            lock.secondaries = secondary_keys.to_owned();
-        }
-
-        // This operation should not block because the latch makes sure only one thread
-        // is operating on this key.
-        let key_guard =
-            CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
-                ::futures_executor::block_on(txn.concurrency_manager.lock_key(&key))
-            });
-
-        final_min_commit_ts = key_guard.with_lock(|l| {
-            let max_ts = txn.concurrency_manager.max_ts();
-            fail_point!("before-set-lock-in-memory");
-            let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
-            lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
-
-            if !max_commit_ts.is_zero() && lock.min_commit_ts > max_commit_ts {
-                return Err(ErrorInner::CommitTsTooLarge {
-                    start_ts: txn.start_ts,
-                    min_commit_ts: lock.min_commit_ts,
-                    max_commit_ts,
-                });
-            }
-
-            *l = Some(lock.clone());
-            Ok(lock.min_commit_ts)
-        })?;
-
-        txn.guards.push(key_guard);
-    }
+    let final_min_commit_ts = if secondary_keys.is_some() || try_one_pc {
+        async_commit_timestamps(txn, &key, &mut lock, for_update_ts, max_commit_ts)?
+    } else {
+        TimeStamp::zero()
+    };
 
     if try_one_pc {
         txn.put_locks_for_1pc(key, lock, has_pessimistic_lock);
@@ -363,6 +364,42 @@ fn prewrite_key_value<S: Snapshot>(
     }
 
     fail_point!("after_prewrite_one_key");
+
+    Ok(final_min_commit_ts)
+}
+
+fn async_commit_timestamps<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    key: &Key,
+    lock: &mut Lock,
+    for_update_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+) -> MvccResult<TimeStamp> {
+    // This operation should not block because the latch makes sure only one thread
+    // is operating on this key.
+    let key_guard = CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
+        ::futures_executor::block_on(txn.concurrency_manager.lock_key(key))
+    });
+
+    let final_min_commit_ts = key_guard.with_lock(|l| {
+        let max_ts = txn.concurrency_manager.max_ts();
+        fail_point!("before-set-lock-in-memory");
+        let min_commit_ts = cmp::max(cmp::max(max_ts, txn.start_ts), for_update_ts).next();
+        lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
+
+        if !max_commit_ts.is_zero() && lock.min_commit_ts > max_commit_ts {
+            return Err(ErrorInner::CommitTsTooLarge {
+                start_ts: txn.start_ts,
+                min_commit_ts: lock.min_commit_ts,
+                max_commit_ts,
+            });
+        }
+
+        *l = Some(lock.clone());
+        Ok(lock.min_commit_ts)
+    })?;
+
+    txn.guards.push(key_guard);
 
     Ok(final_min_commit_ts)
 }
