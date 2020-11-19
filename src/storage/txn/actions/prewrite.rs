@@ -33,36 +33,17 @@ pub fn prewrite<S: Snapshot>(
     let should_not_write = mutation.should_not_write();
     let mutation_type = mutation.mutation_type();
     let (key, value) = mutation.into_key_value();
-    let mut fallback_from_async_commit = false;
 
     fail_point!("prewrite", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
     ));
 
-    // Check whether the current key is locked at any timestamp.
-    if let Some(lock) = txn.reader.load_lock(&key)? {
-        if lock.ts != txn.start_ts {
-            return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
-        }
-        // TODO: remove it in future
-        if lock.lock_type == LockType::Pessimistic {
-            return Err(ErrorInner::LockTypeNotMatch {
-                start_ts: txn.start_ts,
-                key: key.into_raw()?,
-                pessimistic: true,
-            }
-            .into());
-        }
-        // Allow to overwrite the primary lock to fallback from async commit.
-        if lock.use_async_commit && secondary_keys.is_none() {
-            info!("fallback from async commit"; "start_ts" => txn.start_ts);
-            fallback_from_async_commit = true;
-        } else {
-            // Duplicated command. No need to overwrite the lock and data.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(lock.min_commit_ts);
-        }
-    }
+    let fallback_from_async_commit = match check_lock(&key, secondary_keys.is_some(), txn)? {
+        LockStatus::Locked(ts) => return Ok(ts),
+        LockStatus::AsyncFallback => true,
+        LockStatus::Pessimistic(..) => unreachable!(),
+        LockStatus::None => false,
+    };
 
     let prev_write = if !skip_constraint_check && !fallback_from_async_commit {
         check_for_newer_version(&key, primary, should_not_exist, txn)?
@@ -94,6 +75,157 @@ pub fn prewrite<S: Snapshot>(
         false,
         fallback_from_async_commit,
     )
+}
+
+pub fn pessimistic_prewrite<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    mutation: Mutation,
+    primary: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    is_pessimistic_lock: bool,
+    mut lock_ttl: u64,
+    for_update_ts: TimeStamp,
+    txn_size: u64,
+    mut min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+    try_one_pc: bool,
+) -> MvccResult<TimeStamp> {
+    if mutation.should_not_write() {
+        return Err(box_err!(
+            "cannot handle checkNotExists in pessimistic prewrite"
+        ));
+    }
+    let lock_type = LockType::from_mutation(&mutation);
+    let mutation_type = mutation.mutation_type();
+    let (key, value) = mutation.into_key_value();
+
+    fail_point!("pessimistic_prewrite", |err| Err(
+        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+    ));
+
+    let (has_pessimistic_lock, fallback_from_async_commit) =
+        match check_lock_pessimistic(&key, secondary_keys.is_some(), is_pessimistic_lock, txn)? {
+            LockStatus::Locked(ts) => return Ok(ts),
+            LockStatus::AsyncFallback => (false, true),
+            LockStatus::Pessimistic(ttl, ts) => {
+                lock_ttl = std::cmp::max(lock_ttl, ttl);
+                min_commit_ts = std::cmp::max(min_commit_ts, ts);
+                (true, false)
+            }
+            LockStatus::None => (false, false),
+        };
+
+    txn.check_extra_op(&key, mutation_type, None)?;
+    // No need to check data constraint, it's resolved by pessimistic locks.
+    prewrite_key_value(
+        txn,
+        key,
+        lock_type.unwrap(),
+        primary,
+        secondary_keys,
+        value,
+        lock_ttl,
+        for_update_ts,
+        txn_size,
+        min_commit_ts,
+        max_commit_ts,
+        try_one_pc,
+        has_pessimistic_lock,
+        fallback_from_async_commit,
+    )
+}
+
+enum LockStatus {
+    // min_commit_ts of lock.
+    Locked(TimeStamp),
+    AsyncFallback,
+    // The lock is pessimistic and owned by this txn, go through to overwrite it.
+    // The ttl and min_commit_ts of the lock may have been pushed forward.
+    Pessimistic(u64, TimeStamp),
+    None,
+}
+
+/// Check whether the current key is locked at any timestamp.
+fn check_lock<S: Snapshot>(
+    key: &Key,
+    has_secondary_keys: bool,
+    txn: &mut MvccTxn<S>,
+) -> MvccResult<LockStatus> {
+    Ok(match txn.reader.load_lock(key)? {
+        Some(lock) => {
+            if lock.ts != txn.start_ts {
+                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.to_raw()?)).into());
+            }
+            // TODO: remove it in future
+            if lock.lock_type == LockType::Pessimistic {
+                return Err(ErrorInner::LockTypeNotMatch {
+                    start_ts: txn.start_ts,
+                    key: key.to_raw()?,
+                    pessimistic: true,
+                }
+                .into());
+            }
+
+            // Allow to overwrite the primary lock to fallback from async commit.
+            if lock.use_async_commit && !has_secondary_keys {
+                info!("fallback from async commit"; "start_ts" => txn.start_ts);
+                LockStatus::AsyncFallback
+            } else {
+                // Duplicated command. No need to overwrite the lock and data.
+                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                LockStatus::Locked(lock.min_commit_ts)
+            }
+        }
+        None => LockStatus::None,
+    })
+}
+
+fn check_lock_pessimistic<S: Snapshot>(
+    key: &Key,
+    has_secondary_keys: bool,
+    is_pessimistic_lock: bool,
+    txn: &mut MvccTxn<S>,
+) -> MvccResult<LockStatus> {
+    Ok(match txn.reader.load_lock(key)? {
+        Some(lock) => {
+            if lock.ts != txn.start_ts {
+                // Abort on lock belonging to other transaction if
+                // prewrites a pessimistic lock.
+                if is_pessimistic_lock {
+                    warn!(
+                        "prewrite failed (pessimistic lock not found)";
+                        "start_ts" => txn.start_ts,
+                        "key" => %key,
+                        "lock_ts" => lock.ts
+                    );
+                    return Err(ErrorInner::PessimisticLockNotFound {
+                        start_ts: txn.start_ts,
+                        key: key.to_raw()?,
+                    }
+                    .into());
+                }
+                return Err(handle_non_pessimistic_lock_conflict(key, lock).unwrap_err());
+            } else if lock.lock_type != LockType::Pessimistic {
+                // Allow to overwrite the primary lock to fallback from async commit.
+                if lock.use_async_commit && !has_secondary_keys {
+                    info!("fallback from async commit"; "start_ts" => txn.start_ts);
+                    // needn't clear pessimistic locks
+                    LockStatus::AsyncFallback
+                } else {
+                    // Duplicated command. No need to overwrite the lock and data.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                    LockStatus::Locked(lock.min_commit_ts)
+                }
+            } else {
+                LockStatus::Pessimistic(lock.ttl, lock.min_commit_ts)
+            }
+        }
+        None if is_pessimistic_lock => {
+            amend_pessimistic_lock(key, txn)?;
+            LockStatus::None
+        }
+        None => LockStatus::None,
+    })
 }
 
 fn check_for_newer_version<S: Snapshot>(
@@ -143,99 +275,6 @@ fn check_for_newer_version<S: Snapshot>(
         }
         None => Ok(None),
     }
-}
-
-pub fn pessimistic_prewrite<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
-    mutation: Mutation,
-    primary: &[u8],
-    secondary_keys: &Option<Vec<Vec<u8>>>,
-    is_pessimistic_lock: bool,
-    mut lock_ttl: u64,
-    for_update_ts: TimeStamp,
-    txn_size: u64,
-    mut min_commit_ts: TimeStamp,
-    max_commit_ts: TimeStamp,
-    try_one_pc: bool,
-) -> MvccResult<TimeStamp> {
-    if mutation.should_not_write() {
-        return Err(box_err!(
-            "cannot handle checkNotExists in pessimistic prewrite"
-        ));
-    }
-    let lock_type = LockType::from_mutation(&mutation);
-    let mutation_type = mutation.mutation_type();
-    let (key, value) = mutation.into_key_value();
-    let mut fallback_from_async_commit = false;
-
-    fail_point!("pessimistic_prewrite", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
-    ));
-
-    let has_pessimistic_lock = if let Some(lock) = txn.reader.load_lock(&key)? {
-        if lock.ts != txn.start_ts {
-            // Abort on lock belonging to other transaction if
-            // prewrites a pessimistic lock.
-            if is_pessimistic_lock {
-                warn!(
-                    "prewrite failed (pessimistic lock not found)";
-                    "start_ts" => txn.start_ts,
-                    "key" => %key,
-                    "lock_ts" => lock.ts
-                );
-                return Err(ErrorInner::PessimisticLockNotFound {
-                    start_ts: txn.start_ts,
-                    key: key.into_raw()?,
-                }
-                .into());
-            }
-            return Err(txn
-                .handle_non_pessimistic_lock_conflict(key, lock)
-                .unwrap_err());
-        } else if lock.lock_type != LockType::Pessimistic {
-            // Allow to overwrite the primary lock to fallback from async commit.
-            if lock.use_async_commit && secondary_keys.is_none() {
-                info!("fallback from async commit"; "start_ts" => txn.start_ts);
-                fallback_from_async_commit = true;
-                // needn't clear pessimistic locks
-                false
-            } else {
-                // Duplicated command. No need to overwrite the lock and data.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                return Ok(lock.min_commit_ts);
-            }
-        } else {
-            // The lock is pessimistic and owned by this txn, go through to overwrite it.
-            // The ttl and min_commit_ts of the lock may have been pushed forward.
-            lock_ttl = std::cmp::max(lock_ttl, lock.ttl);
-            min_commit_ts = std::cmp::max(min_commit_ts, lock.min_commit_ts);
-            true
-        }
-    } else if is_pessimistic_lock {
-        txn.amend_pessimistic_lock(&key)?;
-        false
-    } else {
-        false
-    };
-
-    txn.check_extra_op(&key, mutation_type, None)?;
-    // No need to check data constraint, it's resolved by pessimistic locks.
-    prewrite_key_value(
-        txn,
-        key,
-        lock_type.unwrap(),
-        primary,
-        secondary_keys,
-        value,
-        lock_ttl,
-        for_update_ts,
-        txn_size,
-        min_commit_ts,
-        max_commit_ts,
-        try_one_pc,
-        has_pessimistic_lock,
-        fallback_from_async_commit,
-    )
 }
 
 fn prewrite_key_value<S: Snapshot>(
@@ -323,6 +362,60 @@ fn prewrite_key_value<S: Snapshot>(
     fail_point!("after_prewrite_one_key");
 
     Ok(final_min_commit_ts)
+}
+
+// Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
+// The corresponding secondary index keys are not locked until pessimistic prewrite.
+// It's possible that lock conflict occurs on them, but the isolation is
+// guaranteed by pessimistic locks, so let TiDB resolves these locks immediately.
+fn handle_non_pessimistic_lock_conflict(key: &Key, lock: Lock) -> MvccResult<()> {
+    // The previous pessimistic transaction has been committed or aborted.
+    // Resolve it immediately.
+    //
+    // Because the row key is locked, the optimistic transaction will
+    // abort. Resolve it immediately.
+    let mut info = lock.into_lock_info(key.to_raw()?);
+    // Set ttl to 0 so TiDB will resolve lock immediately.
+    info.set_lock_ttl(0);
+    Err(ErrorInner::KeyIsLocked(info).into())
+}
+
+// TiKV may fails to write pessimistic locks due to pipelined process.
+// If the data is not changed after acquiring the lock, we can still prewrite the key.
+fn amend_pessimistic_lock<S: Snapshot>(key: &Key, txn: &mut MvccTxn<S>) -> MvccResult<()> {
+    if let Some((commit_ts, _)) = txn.reader.seek_write(key, TimeStamp::max())? {
+        // The invariants of pessimistic locks are:
+        //   1. lock's for_update_ts >= key's latest commit_ts
+        //   2. lock's for_update_ts >= txn's start_ts
+        //   3. If the data is changed after acquiring the pessimistic lock, key's new commit_ts > lock's for_update_ts
+        //
+        // So, if the key's latest commit_ts is still less than or equal to lock's for_update_ts, the data is not changed.
+        // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
+        // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
+        // lock's for_update_ts too.
+        if commit_ts >= txn.start_ts {
+            warn!(
+                "prewrite failed (pessimistic lock not found)";
+                "start_ts" => txn.start_ts,
+                "commit_ts" => commit_ts,
+                "key" => %key
+            );
+            MVCC_CONFLICT_COUNTER
+                .pipelined_acquire_pessimistic_lock_amend_fail
+                .inc();
+            return Err(ErrorInner::PessimisticLockNotFound {
+                start_ts: txn.start_ts,
+                key: key.clone().into_raw()?,
+            }
+            .into());
+        }
+    }
+    // Used pipelined pessimistic lock acquiring in this txn but failed
+    // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
+    MVCC_CONFLICT_COUNTER
+        .pipelined_acquire_pessimistic_lock_amend_success
+        .inc();
+    Ok(())
 }
 
 pub mod tests {

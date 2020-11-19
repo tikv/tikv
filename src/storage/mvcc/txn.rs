@@ -330,60 +330,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.put_lock(key.clone(), &lock);
     }
 
-    // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
-    // The corresponding secondary index keys are not locked until pessimistic prewrite.
-    // It's possible that lock conflict occurs on them, but the isolation is
-    // guaranteed by pessimistic locks, so let TiDB resolves these locks immediately.
-    pub(crate) fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
-        // The previous pessimistic transaction has been committed or aborted.
-        // Resolve it immediately.
-        //
-        // Because the row key is locked, the optimistic transaction will
-        // abort. Resolve it immediately.
-        let mut info = lock.into_lock_info(key.into_raw()?);
-        // Set ttl to 0 so TiDB will resolve lock immediately.
-        info.set_lock_ttl(0);
-        Err(ErrorInner::KeyIsLocked(info).into())
-    }
-
-    // TiKV may fails to write pessimistic locks due to pipelined process.
-    // If the data is not changed after acquiring the lock, we can still prewrite the key.
-    pub(crate) fn amend_pessimistic_lock(&mut self, key: &Key) -> Result<()> {
-        if let Some((commit_ts, _)) = self.reader.seek_write(key, TimeStamp::max())? {
-            // The invariants of pessimistic locks are:
-            //   1. lock's for_update_ts >= key's latest commit_ts
-            //   2. lock's for_update_ts >= txn's start_ts
-            //   3. If the data is changed after acquiring the pessimistic lock, key's new commit_ts > lock's for_update_ts
-            //
-            // So, if the key's latest commit_ts is still less than or equal to lock's for_update_ts, the data is not changed.
-            // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
-            // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
-            // lock's for_update_ts too.
-            if commit_ts >= self.start_ts {
-                warn!(
-                    "prewrite failed (pessimistic lock not found)";
-                    "start_ts" => self.start_ts,
-                    "commit_ts" => commit_ts,
-                    "key" => %key
-                );
-                MVCC_CONFLICT_COUNTER
-                    .pipelined_acquire_pessimistic_lock_amend_fail
-                    .inc();
-                return Err(ErrorInner::PessimisticLockNotFound {
-                    start_ts: self.start_ts,
-                    key: key.clone().into_raw()?,
-                }
-                .into());
-            }
-        }
-        // Used pipelined pessimistic lock acquiring in this txn but failed
-        // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
-        MVCC_CONFLICT_COUNTER
-            .pipelined_acquire_pessimistic_lock_amend_success
-            .inc();
-        Ok(())
-    }
-
     pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
