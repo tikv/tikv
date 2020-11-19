@@ -16,7 +16,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
-const DEFAULT_GRPC_CONCURRENCY: usize = 4;
+const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
@@ -100,6 +100,7 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
+    pub background_thread_count: usize,
 
     // Test only.
     #[doc(hidden)]
@@ -128,6 +129,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
+        let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -171,6 +173,7 @@ impl Default for Config {
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
+            background_thread_count,
         }
     }
 }
@@ -188,7 +191,7 @@ impl Config {
             );
             self.advertise_addr = self.addr.clone();
         }
-        if self.advertise_addr.starts_with("0.0.0.0") {
+        if box_try!(config::check_addr(&self.advertise_addr)) {
             return Err(box_err!(
                 "invalid advertise-addr: {:?}",
                 self.advertise_addr
@@ -198,21 +201,26 @@ impl Config {
             return Err(box_err!("status-addr can not be empty"));
         }
         if !self.status_addr.is_empty() {
-            box_try!(config::check_addr(&self.status_addr));
+            let status_addr_unspecified = box_try!(config::check_addr(&self.status_addr));
             if !self.advertise_status_addr.is_empty() {
-                box_try!(config::check_addr(&self.advertise_status_addr));
-                if self.advertise_status_addr.starts_with("0.0.0.0") {
+                if box_try!(config::check_addr(&self.advertise_status_addr)) {
                     return Err(box_err!(
                         "invalid advertise-status-addr: {:?}",
                         self.advertise_status_addr
                     ));
                 }
-            } else {
+            } else if !status_addr_unspecified {
                 info!(
                     "no advertise-status-addr is specified, falling back to status-addr";
                     "status-addr" => %self.status_addr
                 );
                 self.advertise_status_addr = self.status_addr.clone();
+            } else {
+                info!(
+                    "no advertise-status-addr is specified, and we can't falling back to \
+                    status-addr because it is invalid as advertise-status-addr";
+                    "status-addr" => %self.status_addr
+                );
             }
         }
         if self.advertise_status_addr == self.advertise_addr {
@@ -342,16 +350,19 @@ mod tests {
 
         invalid_cfg = Config::default();
         invalid_cfg.status_addr = "0.0.0.0:1000".to_owned();
-        invalid_cfg.validate().unwrap();
+        for _ in 0..10 {
+            invalid_cfg.validate().unwrap();
+        }
+        assert!(invalid_cfg.advertise_status_addr.is_empty());
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
         assert!(invalid_cfg.validate().is_err());
 
-        let mut invalid_cfg = cfg.clone();
+        invalid_cfg = Config::default();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
         assert!(invalid_cfg.validate().is_err());
 

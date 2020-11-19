@@ -299,11 +299,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
             };
             (pr, WriteData::default(), 0, self.ctx, None, vec![])
         };
-        let response_policy = if !async_commit_ts.is_zero() && context.async_apply_prewrite {
-            ResponsePolicy::OnCommitted
-        } else {
-            ResponsePolicy::OnApplied
-        };
+        // Currently if `try_one_pc` is set, it must have succeeded here.
+        let response_policy =
+            if (!async_commit_ts.is_zero() || self.try_one_pc) && context.async_apply_prewrite {
+                ResponsePolicy::OnCommitted
+            } else {
+                ResponsePolicy::OnApplied
+            };
         Ok(WriteResult {
             ctx,
             to_be_write,
@@ -430,7 +432,7 @@ mod tests {
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
-        let snap = engine.snapshot(&ctx).unwrap();
+        let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
             assert!(v.is_some());
@@ -457,7 +459,7 @@ mod tests {
         let pri_key = &[pri_key_number];
         for i in 0..40 {
             mutations.push(Mutation::Insert((
-                Key::from_raw(&[i as u8]),
+                Key::from_raw(&[b'z', i as u8]),
                 b"100".to_vec(),
             )));
         }

@@ -3567,8 +3567,8 @@ impl<EK: KvEngine, W> Builder<EK, W>
 where
     W: WriteBatch<EK>,
 {
-    pub fn new<T, C, ER: RaftEngine>(
-        builder: &RaftPollerBuilder<EK, ER, T, C>,
+    pub fn new<T, ER: RaftEngine>(
+        builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
     ) -> Builder<EK, W> {
@@ -3987,7 +3987,7 @@ mod tests {
         let sender = Box::new(TestNotifier { tx });
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
-        let (region_scheduler, snapshot_rx) = dummy_scheduler();
+        let (region_scheduler, mut snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));

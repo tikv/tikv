@@ -8,7 +8,6 @@ use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use tikv_util::time::Duration;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const MAX_GC_REGION_BATCH: usize = 128;
@@ -135,12 +134,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
             }
         }
     }
-
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
-        timer
-    }
 }
 
 impl<EK, ER, R> Runnable for Runner<EK, ER, R>
@@ -170,10 +163,12 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK>,
 {
-    type TimeoutTask = ();
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         self.flush();
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
+    }
+
+    fn get_interval(&self) -> Duration {
+        COMPACT_LOG_INTERVAL
     }
 }
 

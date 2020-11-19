@@ -430,7 +430,7 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: MvccProperties) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
@@ -464,7 +464,9 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
-    use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
+    use crate::storage::txn::{
+        acquire_pessimistic_lock, cleanup, commit, pessimistic_prewrite, prewrite,
+    };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
@@ -577,7 +579,6 @@ mod tests {
                 TimeStamp::default(),
                 TimeStamp::default(),
                 false,
-                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -631,7 +632,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
-            txn.rollback(Key::from_raw(pk)).unwrap();
+            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), false).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -642,8 +643,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
-            txn.cleanup(Key::from_raw(pk), TimeStamp::zero(), true)
-                .unwrap();
+            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), true).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -747,7 +747,7 @@ mod tests {
             .c()
             .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
         if let Some(props) = props.as_ref() {
-            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
+            assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
         }
         props
     }

@@ -33,7 +33,7 @@ use txn_types::TimeStamp;
 
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    Statistics,
+    SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
@@ -399,7 +399,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
@@ -478,7 +482,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished"; 
+        debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -620,7 +624,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock,
             async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
@@ -665,6 +668,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 // The committed callback is not guaranteed to be invoked. So store
                                 // the `pr` to the tctx instead of capturing it to the closure.
                                 let committed_cb = Box::new(move || {
+                                    fail_point!("before_async_apply_prewrite_finish", |_| {});
                                     let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
                                     Self::early_response(
                                         cid,

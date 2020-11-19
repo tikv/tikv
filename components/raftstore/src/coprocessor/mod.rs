@@ -6,7 +6,7 @@ use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
-use raft::StateRole;
+use raft::{eraftpb, StateRole};
 
 pub mod config;
 mod consistency_check;
@@ -218,13 +218,11 @@ impl CmdBatch {
                 ref response,
                 ..
             } = cmd;
-            if !response.get_header().has_error() {
-                if !request.has_admin_request() {
-                    for req in request.requests.iter() {
-                        let put = req.get_put();
-                        cmd_bytes += put.get_key().len();
-                        cmd_bytes += put.get_value().len();
-                    }
+            if !response.get_header().has_error() && !request.has_admin_request() {
+                for req in request.requests.iter() {
+                    let put = req.get_put();
+                    cmd_bytes += put.get_key().len();
+                    cmd_bytes += put.get_value().len();
                 }
             }
         }
@@ -239,4 +237,9 @@ pub trait CmdObserver<E>: Coprocessor {
     fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
+}
+
+pub trait ReadIndexObserver: Coprocessor {
+    // Hook to call when stepping in raft and the message is a read index message.
+    fn on_step(&self, _msg: &mut eraftpb::Message) {}
 }

@@ -2,7 +2,7 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn};
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -56,53 +56,27 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             .into()
         ));
 
-        let lock: MvccResult<_> = if let Some(mut lock) = txn.reader.load_lock(&self.primary_key)? {
-            if lock.ts == self.start_ts {
+        let lock = match txn.reader.load_lock(&self.primary_key)? {
+            Some(mut lock) if lock.ts == self.start_ts => {
                 if lock.ttl < self.advise_ttl {
                     lock.ttl = self.advise_ttl;
                     txn.put_lock(self.primary_key.clone(), &lock);
-                } else {
-                    debug!(
-                        "txn_heart_beat with advise_ttl not larger than current ttl";
-                        "primary_key" => %self.primary_key,
-                        "start_ts" => self.start_ts,
-                        "advise_ttl" => self.advise_ttl,
-                        "current_ttl" => lock.ttl,
-                    );
                 }
-                Ok(lock)
-            } else {
-                debug!(
-                    "txn_heart_beat invoked but lock is absent";
-                    "primary_key" => %self.primary_key,
-                    "start_ts" => self.start_ts,
-                    "advise_ttl" => self.advise_ttl,
-                );
-                Err(MvccErrorInner::TxnLockNotFound {
+                lock
+            }
+            _ => {
+                context.statistics.add(&txn.take_statistics());
+                return Err(MvccError::from(MvccErrorInner::TxnNotFound {
                     start_ts: self.start_ts,
-                    commit_ts: TimeStamp::zero(),
-                    key: self.primary_key.clone().into_raw()?,
-                }
-                .into())
+                    key: self.primary_key.into_raw()?,
+                })
+                .into());
             }
-        } else {
-            debug!(
-                "txn_heart_beat invoked but lock is absent";
-                "primary_key" => %self.primary_key,
-                "start_ts" => self.start_ts,
-                "advise_ttl" => self.advise_ttl,
-            );
-            Err(MvccErrorInner::TxnLockNotFound {
-                start_ts: self.start_ts,
-                commit_ts: TimeStamp::zero(),
-                key: self.primary_key.clone().into_raw()?,
-            }
-            .into())
         };
 
         context.statistics.add(&txn.take_statistics());
         let pr = ProcessResult::TxnStatus {
-            txn_status: TxnStatus::uncommitted(lock?, false),
+            txn_status: TxnStatus::uncommitted(lock, false),
         };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
@@ -137,7 +111,7 @@ pub mod tests {
         expect_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -154,7 +128,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )
@@ -177,7 +150,7 @@ pub mod tests {
         advise_ttl: u64,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let command = crate::storage::txn::commands::TxnHeartBeat {
@@ -194,7 +167,6 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
                     async_apply_prewrite: false,
                 },
             )

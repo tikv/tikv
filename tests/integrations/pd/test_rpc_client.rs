@@ -31,7 +31,7 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
+        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
@@ -216,7 +216,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), mgr.clone()).is_err());
+    assert!(validate_endpoints(env, &new_config(eps), mgr).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {

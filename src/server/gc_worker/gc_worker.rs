@@ -180,7 +180,7 @@ where
             Some(c) => c,
             None => return true,
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, props)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
     }
 
     /// Cleans up outdated data.
@@ -843,12 +843,11 @@ mod tests {
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
-    use tikv_util::time::ThreadReadId;
     use txn_types::Mutation;
 
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
-        TestEngineBuilder, WriteData,
+        SnapContext, TestEngineBuilder, WriteData,
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
@@ -933,13 +932,11 @@ mod tests {
 
         fn async_snapshot(
             &self,
-            ctx: &Context,
-            _read_id: Option<ThreadReadId>,
+            ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
-                None,
                 Box::new(move |(cb_ctx, r)| {
                     callback((
                         cb_ctx,

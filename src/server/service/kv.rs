@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error,
+        extract_kv_pairs_and_statistics, extract_region_error,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -32,6 +32,7 @@ use grpcio::{
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
+use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
@@ -699,6 +700,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
             callback: Callback::write(cb),
+            source: ctx.peer().into(),
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
@@ -763,7 +765,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: ReadIndexRequest,
+        req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
         if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
@@ -776,6 +778,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let mut header = RaftRequestHeader::default();
         let mut inner_req = RaftRequest::default();
         inner_req.set_cmd_type(CmdType::ReadIndex);
+        inner_req.mut_read_index().set_start_ts(req.get_start_ts());
+        for r in req.get_ranges() {
+            let mut range = kvproto::kvrpcpb::KeyRange::default();
+            range.set_start_key(Key::from_raw(r.get_start_key()).into_encoded());
+            range.set_end_key(Key::from_raw(r.get_end_key()).into_encoded());
+            inner_req.mut_read_index().mut_key_ranges().push(range);
+        }
         header.set_region_id(req.get_context().get_region_id());
         header.set_peer(req.get_context().get_peer().clone());
         header.set_region_epoch(req.get_context().get_region_epoch().clone());
@@ -806,19 +815,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             return;
         }
 
-        let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
-            req.take_context(),
-            req.get_start_ts().into(),
-            req.take_ranges().into(),
-        );
-
         let task = async move {
             let mut res = f.await?;
             let mut resp = ReadIndexResponse::default();
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());
             } else {
-                let raft_resps = res.response.get_responses();
+                let mut raft_resps = res.response.take_responses();
                 if raft_resps.len() != 1 {
                     error!(
                         "invalid read index response";
@@ -830,23 +833,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                         raft_resps
                     ));
                 } else {
-                    // Update max_read_ts and check memory locks after read index command finishes.
-                    // It reduces the chance of encountering locks if we check it as late as possibile.
-                    match check_memory_locks_fut.await {
-                        Ok(Some(lock)) => {
-                            resp.set_locked(lock);
-                        }
-                        Ok(None) => {
-                            let read_index = raft_resps[0].get_read_index().get_read_index();
-                            resp.set_read_index(read_index);
-                        }
-                        res => {
-                            if let Some(err) = extract_region_error(&res) {
-                                resp.set_region_error(err);
-                            } else {
-                                warn!("unknown error: {:?}", res);
-                            }
-                        }
+                    let mut read_index_resp = raft_resps[0].take_read_index();
+                    if read_index_resp.has_locked() {
+                        resp.set_locked(read_index_resp.take_locked());
+                    } else {
+                        resp.set_read_index(read_index_resp.get_read_index());
                     }
                 }
             }
@@ -997,6 +988,33 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         _ctx: RpcContext<'_>,
         _req: BatchRequest,
         _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: DispatchTaskRequest,
+        _: UnarySink<DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _: RpcContext<'_>,
+        _: CancelTaskRequest,
+        _: UnarySink<CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _: RpcContext<'_>,
+        _: EstablishMppConnectionRequest,
+        _: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
     }
@@ -1166,8 +1184,14 @@ fn future_get<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(Some(val)) => resp.set_value(val),
-                Ok(None) => resp.set_not_found(true),
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
+                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1216,7 +1240,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
+            statistics.write_scan_detail(resp.mut_scan_detail_v2());
+            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+            resp.set_pairs(val.into());
         }
         Ok(resp)
     }
