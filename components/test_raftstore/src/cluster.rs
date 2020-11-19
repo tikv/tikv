@@ -1175,7 +1175,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = self
             .pd_client
             .get_region_by_id(target)
@@ -1189,9 +1189,35 @@ impl<T: Simulator> Cluster<T> {
             .wait()
             .unwrap()
             .unwrap();
-        let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
-        self.call_command_on_leader(req, Duration::from_secs(3))
-            .unwrap()
+        new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge)
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, cb: Callback<RocksEngine>) {
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)
+            .unwrap();
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
     }
 
     /// Make sure region exists on that store.

@@ -1909,6 +1909,7 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         {
+            fail_point!("apply_before_commit_merge");
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
@@ -2044,6 +2045,8 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
+        fail_point!("apply_before_rollback_merge");
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
