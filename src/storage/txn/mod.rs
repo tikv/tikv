@@ -13,7 +13,7 @@ pub use actions::{
     cleanup::cleanup,
     commit::commit,
     gc::gc,
-    prewrite::{pessimistic_prewrite, prewrite},
+    prewrite::{prewrite, TransactionKind},
 };
 
 mod latch;

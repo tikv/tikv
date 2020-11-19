@@ -5,7 +5,7 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn},
     txn::{
-        actions::prewrite::{pessimistic_prewrite, prewrite},
+        actions::prewrite::{prewrite, TransactionKind},
         commands::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
@@ -226,11 +226,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
                 secondaries = &self.secondary_keys;
             }
             match prewrite(
+                TransactionKind::Optimistic(self.skip_constraint_check),
                 &mut txn,
                 m,
                 &self.primary,
                 secondaries,
-                self.skip_constraint_check,
                 self.lock_ttl,
                 self.txn_size,
                 self.min_commit_ts,
@@ -461,14 +461,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
             if Some(m.key()) == async_commit_pk.as_ref() {
                 secondaries = &self.secondary_keys;
             }
-            match pessimistic_prewrite(
+            match prewrite(
+                TransactionKind::Pessimistic(is_pessimistic_lock, self.for_update_ts),
                 &mut txn,
                 m,
                 &self.primary,
                 secondaries,
-                is_pessimistic_lock,
                 self.lock_ttl,
-                self.for_update_ts,
                 self.txn_size,
                 self.min_commit_ts,
                 self.max_commit_ts,
