@@ -4517,6 +4517,7 @@ dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
+ "bstr",
  "chrono",
  "chrono-tz",
  "codec",

@@ -214,6 +214,8 @@ impl Simulator for ServerCluster {
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(node_id) {
             cfg.server.addr = addr;
+        } else {
+            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
