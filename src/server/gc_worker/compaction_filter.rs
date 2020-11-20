@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::Cell;
-use std::cmp::Ordering as CmpOrdering;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
@@ -18,7 +19,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
-    WriteOptions, CF_WRITE,
+    CF_WRITE,
 };
 use pd_client::ClusterVersion;
 use txn_types::{Key, WriteRef, WriteType};
@@ -157,17 +158,16 @@ struct WriteCompactionFilter {
 
     key_prefix: Vec<u8>,
     remove_older: bool,
-    deleting: Option<Vec<Vec<u8>>>,
 
     // To handle delete marks.
     write_iter: Option<RocksEngineIterator>,
     near_seek_distance: usize,
 
-    // For metrics about (versions, deleted_versions) for every MVCC key.
     versions: usize,
+    filtered: usize,
     deleted: usize,
-    // Total versions and deleted versions in the compaction.
     total_versions: usize,
+    total_filtered: usize,
     total_deleted: usize,
 }
 
@@ -194,46 +194,33 @@ impl WriteCompactionFilter {
             write_batch,
             key_prefix: vec![],
             remove_older: false,
-            deleting: None,
             write_iter,
             near_seek_distance: NEAR_SEEK_LIMIT,
             versions: 0,
+            filtered: 0,
             deleted: 0,
             total_versions: 0,
+            total_filtered: 0,
             total_deleted: 0,
         }
     }
 
-    // Do gc before a delete mark. Must be called before switching `key_prefix`.
-    fn handle_deleting(&mut self) {
-        let mut deleting = match self.deleting.take() {
-            Some(v) => v,
-            None => return,
-        };
-
-        let mut valid = self.write_iter_seek_to(deleting[0].as_slice());
+    // Do gc before a delete mark.
+    fn handle_delete_mark(&mut self, mark: &[u8]) {
+        let mut valid = self.write_iter_seek_to(mark);
         let mut write_iter = self.write_iter.take().unwrap();
+        if valid && write_iter.key() == mark {
+            // The delete mark itself is handled in `filter`.
+            valid = write_iter.next().unwrap();
+        }
+
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
             if truncate_ts(key) != self.key_prefix.as_slice() {
                 break;
             }
-
-            let (mut drain_pos, mut found) = (0, false);
-            while drain_pos < deleting.len() {
-                match write_iter.key().cmp(deleting[drain_pos].as_slice()) {
-                    CmpOrdering::Equal => found = true,
-                    CmpOrdering::Less => break,
-                    _ => {}
-                }
-                drain_pos += 1;
-            }
-            deleting.drain(0..drain_pos);
-            if !found {
-                self.handle_filtered_write(parse_write(value));
-                self.delete_write_key(key);
-            }
-
+            self.handle_filtered_write(parse_write(value));
+            self.delete_write_key(key);
             valid = write_iter.next().unwrap();
         }
         self.write_iter = Some(write_iter);
@@ -277,13 +264,12 @@ impl WriteCompactionFilter {
     fn delete_write_key(&mut self, key: &[u8]) {
         self.write_batch.delete_cf(CF_WRITE, key).unwrap();
         self.flush_pending_writes_if_need();
+        self.deleted += 1;
     }
 
     fn flush_pending_writes_if_need(&mut self) {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(false);
-            self.engine.write_opt(&self.write_batch, &opts).unwrap();
+            self.engine.write(&self.write_batch).unwrap();
             self.write_batch.clear();
         }
     }
@@ -294,43 +280,73 @@ impl WriteCompactionFilter {
             self.total_versions += self.versions;
             self.versions = 0;
         }
-        if self.deleted != 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted as f64);
-            self.total_deleted += self.deleted;
-            self.deleted = 0;
+        if self.filtered != 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.filtered as f64);
+            self.total_filtered += self.filtered;
+            self.filtered = 0;
         }
+        self.total_deleted += self.deleted;
+        self.deleted = 0;
+    }
+}
+
+struct CompactionFilterStats {
+    versions: Cell<usize>, // Total stale versions meet by compaction filters.
+    filtered: Cell<usize>, // Filtered versions by compaction filters.
+    deleted: Cell<usize>,  // Deleted versions from RocksDB.
+    last_report: Cell<Instant>,
+}
+impl CompactionFilterStats {
+    fn report(&self) {
+        let versions = self.versions.replace(0);
+        let filtered = self.filtered.replace(0);
+        let deleted = self.deleted.replace(0);
+        info!(
+            "Compaction filter in thread {:?} reports", thread::current().name();
+            "total" => versions, "filtered" => filtered, "deleted" => deleted,
+        );
+        self.last_report.set(Instant::now());
+    }
+}
+impl Default for CompactionFilterStats {
+    fn default() -> Self {
+        CompactionFilterStats {
+            versions: Cell::new(0),
+            filtered: Cell::new(0),
+            deleted: Cell::new(0),
+            last_report: Cell::new(Instant::now()),
+        }
+    }
+}
+impl Drop for CompactionFilterStats {
+    fn drop(&mut self) {
+        self.report();
     }
 }
 
 thread_local! {
-    static VERSIONS_AND_DELETES: Cell<(usize, usize)> = Cell::new((0, 0));
+    static STATS: CompactionFilterStats = CompactionFilterStats::default();
 }
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
-        self.handle_deleting();
-
         if !self.write_batch.is_empty() {
-            let mut opts = WriteOptions::new();
-            opts.set_sync(true);
-            self.engine.write_opt(&self.write_batch, &opts).unwrap();
+            self.engine.write(&self.write_batch).unwrap();
             self.write_batch.clear();
-        } else {
-            self.engine.sync_wal().unwrap();
         }
+        self.engine.sync_wal().unwrap();
 
         self.switch_key_metrics();
-        VERSIONS_AND_DELETES.with(|x| {
-            x.update(|(mut versions, mut deletes)| {
-                versions += self.total_versions;
-                deletes += self.total_deleted;
-                if versions >= 1024 * 1024 {
-                    info!("Compaction filter reports"; "total" => versions, "gc" => deletes);
-                    return (0, 0);
-                }
-                (versions, deletes)
-            })
-        });
+        STATS.with(|stats| {
+            stats.versions.update(|x| x + self.total_versions);
+            stats.filtered.update(|x| x + self.total_filtered);
+            stats.deleted.update(|x| x + self.total_deleted);
+            if stats.versions.get() >= 1024 * 1024
+                || stats.last_report.get().elapsed() >= Duration::from_secs(60)
+            {
+                stats.report();
+            }
+        })
     }
 }
 
@@ -351,7 +367,6 @@ impl CompactionFilter for WriteCompactionFilter {
 
         self.versions += 1;
         if self.key_prefix != key_prefix {
-            self.handle_deleting();
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
@@ -367,17 +382,14 @@ impl CompactionFilter for WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     filtered = true;
-                    self.deleting = Some(Vec::with_capacity(16));
+                    self.handle_delete_mark(key);
                 }
             }
         }
 
         if filtered {
             self.handle_filtered_write(write);
-            if let Some(deleting) = self.deleting.as_mut() {
-                deleting.push(key.to_vec());
-            }
-            self.deleted += 1;
+            self.filtered += 1;
         }
 
         filtered
