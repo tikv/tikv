@@ -289,7 +289,7 @@ impl WriteCompactionFilter {
             (true, false) => {
                 self.filtered += 1;
                 CompactionFilterDecision::Remove
-            },
+            }
             (false, _) => CompactionFilterDecision::Keep,
         };
         Ok(decision)
