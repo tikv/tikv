@@ -1113,6 +1113,14 @@ where
 struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
     background_worker: Worker,
+
+    // Cleanup tasks gets their own workers, instead of reusing background_workers.
+    // This is because the underlying compact_range call is a blocking operation, which
+    // can take an extensive amount of time. Also putting the cleanup tasks on
+    // background_workers pool can create a deadlock when compaction guard is enabled:
+    // https://github.com/tikv/tikv/issues/9044.
+    cleanup_worker: Worker,
+
     coprocessor_host: CoprocessorHost<EK>,
 }
 
@@ -1163,6 +1171,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let workers = Workers {
             pd_worker,
             background_worker,
+            cleanup_worker: Worker::new("cleanup-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
         mgr.init()?;
@@ -1182,7 +1191,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSSTRunner::new(
             meta.get_id(),
@@ -1192,7 +1200,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         let cleanup_scheduler = workers
-            .background_worker
+            .cleanup_worker
             .start("cleanup-worker", cleanup_runner);
         let consistency_check_runner =
             ConsistencyCheckRunner::<EK, _>::new(self.router.clone(), coprocessor_host.clone());
@@ -1343,6 +1351,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         workers.coprocessor_host.shutdown();
         workers.background_worker.stop();
+        workers.cleanup_worker.stop();
     }
 }
 
