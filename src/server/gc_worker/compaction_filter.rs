@@ -55,6 +55,11 @@ lazy_static! {
         "Deleted versions by compaction"
     )
     .unwrap();
+    static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_failure",
+        "Compaction filter meets failure"
+    )
+    .unwrap();
 }
 
 pub trait CompactionFilterInitializer {
@@ -227,6 +232,7 @@ impl WriteCompactionFilter {
                 Ok(iter) => filter.write_iter = Some(iter),
                 Err(e) => {
                     warn!("compaction filter can't init iterator"; "err" => ?e);
+                    GC_COMPACTION_FAILURE.inc();
                     filter.is_invalid = true;
                 }
             }
@@ -280,7 +286,10 @@ impl WriteCompactionFilter {
                 let skip_until = prefix.append_ts(0.into()).into_encoded();
                 CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
             }
-            (true, false) => CompactionFilterDecision::Remove,
+            (true, false) => {
+                self.filtered += 1;
+                CompactionFilterDecision::Remove
+            },
             (false, _) => CompactionFilterDecision::Keep,
         };
         Ok(decision)
@@ -456,6 +465,7 @@ impl CompactionFilter for WriteCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
+                GC_COMPACTION_FAILURE.inc();
                 self.is_invalid = true;
                 CompactionFilterDecision::Keep
             }
