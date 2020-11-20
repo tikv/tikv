@@ -267,7 +267,7 @@ pre-format: unset-override
 
 metrics-format: metrics/grafana/*
 	@for j in $^; do \
-		python -m json.tool $$j > ./tmp.json ; \
+		./metrics/json_format.py $$j > ./tmp.json ; \
 		mv ./tmp.json $$j ; \
 	done
 
