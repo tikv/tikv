@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_kv_pairs_and_statistics, extract_region_error,
+        extract_region_error, map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -1240,10 +1240,17 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
-            statistics.write_scan_detail(resp.mut_scan_detail_v2());
-            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
-            resp.set_pairs(val.into());
+            match v {
+                Ok((kv_res, statistics, perf_statistics_delta)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
+                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    resp.set_error(extract_key_error(&e));
+                }
+            }
         }
         Ok(resp)
     }

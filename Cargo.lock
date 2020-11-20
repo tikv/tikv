@@ -326,6 +326,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
+name = "boringssl-src"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c212e3cd725f096e4de48d4ded0909cb62cb92c1a3420ff0e95edb46390a7736"
+dependencies = [
+ "cmake",
+]
+
+[[package]]
 name = "bstr"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1543,16 +1552,16 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63fac32f9f74fa1fd78215d04b47f134c1ee5a535c237a54d52bf18cf65ac983"
+checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
  "grpcio-sys",
  "libc",
  "log",
- "parking_lot 0.10.0",
+ "parking_lot 0.11.0",
  "prost",
  "protobuf",
 ]
@@ -1573,11 +1582,12 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.6.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d4e9309f1151c9ebcd07622858c4a504b6ea6cd2821524fe74ccde8ea830d7"
+checksum = "3e6ea7ecb083588c8b3446270e95415c14ea856539e41ed3ad0c53614398a13f"
 dependencies = [
  "bindgen",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc",
@@ -1900,7 +1910,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#13345c110d832c71632bbacbc3ae78de9e7ccf43"
+source = "git+https://github.com/sticnarf/kvproto.git?branch=batch-get-async-commit#4ea030e045749a8b9dc4d4c6189652d6f7aed79f"
 dependencies = [
  "futures 0.3.7",
  "grpcio",

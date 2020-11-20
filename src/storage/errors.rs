@@ -6,7 +6,7 @@ use std::io::Error as IoError;
 
 use crate::storage::{
     kv::{
-        self, Error as EngineError, ErrorInner as EngineErrorInner, PerfStatisticsDelta, Statistics,
+        self, Error as EngineError, ErrorInner as EngineErrorInner,
     },
     mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
@@ -344,24 +344,7 @@ pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair
     }
 }
 
-pub fn extract_kv_pairs_and_statistics(
-    res: Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>,
-) -> (Vec<kvrpcpb::KvPair>, Statistics, PerfStatisticsDelta) {
-    match res {
-        Ok((r, s, ps)) => (map_kv_pairs(r), s, ps),
-        Err(e) => {
-            let mut pair = kvrpcpb::KvPair::default();
-            pair.set_error(extract_key_error(&e));
-            (
-                vec![pair],
-                Statistics::default(),
-                PerfStatisticsDelta::default(),
-            )
-        }
-    }
-}
-
-fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
+pub fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
     r.into_iter()
         .map(|r| match r {
             Ok((key, value)) => {
