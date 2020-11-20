@@ -467,7 +467,7 @@ fn pb_error_inc(e: &errorpb::Error) {
         "store_not_match"
     } else if e.has_region_not_found() {
         "region_not_found"
-    } else if e.has_key_not_in_range() {
+    } else if e.has_key_not_in_region() {
         "key_not_in_range"
     } else if e.has_epoch_not_match() {
         "epoch_not_match"
