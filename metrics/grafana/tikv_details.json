@@ -24256,7 +24256,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "delta(tikv_import_error_counter[1m])",
+              "expr": "delta(tikv_import_error_counter{instance=~\"$instance\"}[1m])",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,

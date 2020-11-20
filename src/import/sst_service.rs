@@ -291,7 +291,7 @@ where
                     let mut resp = IngestResponse::default();
                     let mut header = res.response.take_header();
                     if header.has_error() {
-                        pb_error_inc(header.get_error());
+                        pb_error_inc(label, header.get_error());
                         resp.set_error(header.take_error());
                     }
                     Ok(resp)
@@ -460,7 +460,7 @@ where
 }
 
 // add error statistics from pb error response
-fn pb_error_inc(e: &errorpb::Error) {
+fn pb_error_inc(type_: &str, e: &errorpb::Error) {
     let label = if e.has_not_leader() {
         "not_leader"
     } else if e.has_store_not_match() {
@@ -478,10 +478,8 @@ fn pb_error_inc(e: &errorpb::Error) {
     } else if e.has_raft_entry_too_large() {
         "raft_entry_too_large"
     } else {
-        ""
+        "unknown"
     };
 
-    if !label.is_empty() {
-        IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
-    }
+    IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
