@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{GcConfig, GcWorkerConfigManager};
-use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter, DB,
@@ -22,7 +20,11 @@ use engine_traits::{
     CF_WRITE,
 };
 use pd_client::ClusterVersion;
+use prometheus::*;
 use txn_types::{Key, WriteRef, WriteType};
+
+use super::{GcConfig, GcWorkerConfigManager};
+use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
@@ -43,6 +45,16 @@ struct GcContext {
 
 lazy_static! {
     static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
+    static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filtered",
+        "Filtered versions by compaction"
+    )
+    .unwrap();
+    static ref GC_COMPACTION_DELETED: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_deleted",
+        "Deleted versions by compaction"
+    )
+    .unwrap();
 }
 
 pub trait CompactionFilterInitializer {
@@ -209,14 +221,17 @@ impl WriteCompactionFilter {
             total_deleted: 0,
         };
 
-        let iter_opts = IterOptions::default();
-        match filter.engine.iterator_cf_opt(CF_WRITE, iter_opts) {
-            Ok(iter) => filter.write_iter = Some(iter),
-            Err(e) => {
-                warn!("compaction filter can't init iterator"; "err" => ?e);
-                filter.is_invalid = true;
+        if filter.handle_mvcc_deletes {
+            let iter_opts = IterOptions::default();
+            match filter.engine.iterator_cf_opt(CF_WRITE, iter_opts) {
+                Ok(iter) => filter.write_iter = Some(iter),
+                Err(e) => {
+                    warn!("compaction filter can't init iterator"; "err" => ?e);
+                    filter.is_invalid = true;
+                }
             }
         }
+
         filter
     }
 
@@ -414,6 +429,8 @@ impl Drop for WriteCompactionFilter {
             }
             None
         }) {
+            GC_COMPACTION_FILTERED.inc_by(filtered as i64);
+            GC_COMPACTION_DELETED.inc_by(deleted as i64);
             info!(
                 "Compaction filter reports"; "total" => versions,
                 "filtered" => filtered, "deleted" => deleted,
