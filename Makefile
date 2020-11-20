@@ -265,7 +265,13 @@ unset-override:
 pre-format: unset-override
 	@rustup component add rustfmt
 
-format: pre-format
+metrics-format: metrics/grafana/*
+	@for j in $^; do \
+		python -m json.tool $$j > ./tmp.json ; \
+		mv ./tmp.json $$j ; \
+	done
+
+format: pre-format metrics-format
 	@cargo fmt -- --check >/dev/null || \
 	cargo fmt
 
