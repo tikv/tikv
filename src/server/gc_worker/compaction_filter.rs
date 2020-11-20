@@ -220,7 +220,7 @@ impl WriteCompactionFilter {
         filter
     }
 
-    fn do_filter_v2(
+    fn do_filter(
         &mut self,
         _start_level: usize,
         key: &[u8],
@@ -435,7 +435,7 @@ impl CompactionFilter for WriteCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        match self.do_filter_v2(level, key, value, value_type) {
+        match self.do_filter(level, key, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
@@ -471,7 +471,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
 }
 
 fn too_many_delete_marks(props: &MvccProperties) -> bool {
-    props.num_deletes as f64 / props.num_versions as f64 > 0.2
+    props.num_deletes as f64 / props.num_versions as f64 > 0.1
 }
 
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
