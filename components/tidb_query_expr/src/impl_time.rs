@@ -157,14 +157,13 @@ pub fn add_datetime_and_duration(
     datetime: &DateTime,
     duration: &Duration,
 ) -> Result<Option<DateTime>> {
-    if datetime.invalid_zero() {
-        return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
-            .map(|_| Ok(None))?;
-    }
     let mut res = match datetime.checked_add(ctx, *duration) {
         Some(res) => res,
-        None => return Ok(None),
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
+                .map(|_| Ok(None))?
+        }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
@@ -179,14 +178,13 @@ pub fn sub_datetime_and_duration(
     datetime: &DateTime,
     duration: &Duration,
 ) -> Result<Option<DateTime>> {
-    if datetime.invalid_zero() {
-        return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
-            .map(|_| Ok(None))?;
-    }
     let mut res = match datetime.checked_sub(ctx, *duration) {
         Some(res) => res,
-        None => return Ok(None),
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
+                .map(|_| Ok(None))?
+        }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
