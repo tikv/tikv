@@ -1,17 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use regex::Regex;
+
 use tidb_query_codegen::rpn_fn;
 
-use tidb_query_datatype::expr::EvalContext;
-
 use tidb_query_common::Result;
+
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
-use tidb_query_datatype::codec::mysql::Time;
+use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
 use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::SqlMode;
+use tidb_query_datatype::expr::{EvalContext, SqlMode};
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -148,6 +149,117 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
             .map(|_| Ok(None))?;
     }
     Ok(Some(t.second_number()))
+}
+
+// is_duration returns a boolean indicating whether the str matches the format of duration.
+// See https://dev.mysql.com/doc/refman/5.7/en/time.html
+#[inline]
+fn is_duration(s: &str) -> bool {
+    let re =
+        Regex::new(r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$")
+            .unwrap();
+    re.is_match(s)
+}
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn add_string_and_duration(
+    ctx: &mut EvalContext,
+    arg0: BytesRef,
+    arg1: &Duration,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    match is_duration(std::str::from_utf8(arg0).unwrap()) {
+        true => {
+            let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
+                Ok(arg0) => arg0,
+                Err(_) => return Ok(writer.write(None)),
+            };
+            let dur = match arg0.checked_add(*arg1) {
+                Some(dur) => dur,
+                None => {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .map(|_| Ok(writer.write(None)))?
+                }
+            };
+            let dur = match dur.subsec_micros() {
+                0 => dur.minimize_fsp(),
+                _ => dur.maximize_fsp(),
+            };
+            return Ok(writer.write(Some(dur.to_string().into_bytes())));
+        }
+        false => {
+            let s = std::str::from_utf8(arg0).unwrap();
+            let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
+                Ok(arg0) => arg0,
+                Err(_) => return Ok(writer.write(None)),
+            };
+            let mut res = match arg0.checked_add(ctx, *arg1) {
+                Some(res) => res,
+                None => {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .map(|_| Ok(writer.write(None)))?
+                }
+            };
+            match res.micro() {
+                0 => res.minimize_fsp(),
+                _ => res.maximize_fsp(),
+            };
+            return Ok(writer.write(Some(res.to_string().into_bytes())));
+        }
+    };
+}
+
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn sub_string_and_duration(
+    ctx: &mut EvalContext,
+    arg0: BytesRef,
+    arg1: &Duration,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    match is_duration(std::str::from_utf8(arg0).unwrap()) {
+        true => {
+            let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
+                Ok(arg0) => arg0,
+                Err(_) => return Ok(writer.write(None)),
+            };
+            let dur = match arg0.checked_sub(*arg1) {
+                Some(dur) => dur,
+                None => {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .map(|_| Ok(writer.write(None)))?
+                }
+            };
+            let dur = match dur.subsec_micros() {
+                0 => dur.minimize_fsp(),
+                _ => dur.maximize_fsp(),
+            };
+            return Ok(writer.write(Some(dur.to_string().into_bytes())));
+        }
+        false => {
+            let s = std::str::from_utf8(arg0).unwrap();
+            let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
+                Ok(arg0) => arg0,
+                Err(_) => return Ok(writer.write(None)),
+            };
+            let mut res = match arg0.checked_sub(ctx, *arg1) {
+                Some(res) => res,
+                None => {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .map(|_| Ok(writer.write(None)))?
+                }
+            };
+            match res.micro() {
+                0 => res.minimize_fsp(),
+                _ => res.maximize_fsp(),
+            };
+            return Ok(writer.write(Some(res.to_string().into_bytes())));
+        }
+    };
 }
 
 #[rpn_fn(nullable, capture = [ctx])]
@@ -355,7 +467,7 @@ mod tests {
 
     use crate::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::Time;
+    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
     use tidb_query_datatype::FieldTypeTp;
 
     #[test]
@@ -693,6 +805,127 @@ mod tests {
                 .evaluate(ScalarFuncSig::ToSeconds)
                 .unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_is_duration() {
+        let cases = vec![
+            ("110:00:00", true),
+            ("aa:bb:cc", false),
+            ("1 01:00:00", true),
+            ("01:00:00.999999", true),
+            ("071231235959.999999", false),
+            ("20171231235959.999999", false),
+            ("2017-01-01 01:01:01.11", false),
+            ("07-12-31 23:59:59.999999", false),
+            ("2007-12-31 23:59:59.999999", false),
+        ];
+        for (arg, exp) in cases {
+            let got = is_duration(arg);
+            assert_eq!(got, exp);
+        }
+    }
+    #[test]
+    fn test_add_sub_string_and_duration() {
+        let cases = vec![
+            // normal cases
+            (
+                Some("01:00:00.999999".as_bytes().to_vec()),
+                Some("02:00:00.999998"),
+                Some("03:00:01.999997".as_bytes().to_vec()),
+            ),
+            (
+                Some("23:59:59".as_bytes().to_vec()),
+                Some("00:00:01"),
+                Some("24:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("110:00:00".as_bytes().to_vec()),
+                Some("1 02:00:00"),
+                Some("136:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("-110:00:00".as_bytes().to_vec()),
+                Some("1 02:00:00"),
+                Some("-84:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("00:00:01".as_bytes().to_vec()),
+                Some("-00:00:01"),
+                Some("00:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("00:00:03".as_bytes().to_vec()),
+                Some("-00:00:01"),
+                Some("00:00:02".as_bytes().to_vec()),
+            ),
+            (
+                Some("2018-02-28 23:00:00".as_bytes().to_vec()),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456".as_bytes().to_vec()),
+            ),
+            (
+                Some("2016-02-28 23:00:00".as_bytes().to_vec()),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30".as_bytes().to_vec()),
+            ),
+            (
+                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30".as_bytes().to_vec()),
+            ),
+            (
+                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
+                Some("1 01:30:30"),
+                Some("2019-01-02 00:30:30".as_bytes().to_vec()),
+            ),
+            (
+                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+                Some("-01:01:00"),
+                Some("2018-12-31 23:59:00".as_bytes().to_vec()),
+            ),
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (
+                Some("00:00:00".as_bytes().to_vec()),
+                None,
+                Some("00:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("01:00:00".as_bytes().to_vec()),
+                None,
+                Some("01:00:00".as_bytes().to_vec()),
+            ),
+            (
+                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+                None,
+                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (arg_str, arg_dur, sum) in cases {
+            let arg_dur = match arg_dur {
+                Some(arg_dur) => Some(
+                    Duration::parse(&mut EvalContext::default(), arg_dur.as_bytes(), MAX_FSP)
+                        .unwrap(),
+                ),
+                None => Some(Duration::zero()),
+            };
+            let add_output = RpnFnScalarEvaluator::new()
+                .push_param(arg_str.clone())
+                .push_param(arg_dur)
+                .evaluate(ScalarFuncSig::AddStringAndDuration)
+                .unwrap();
+            assert_eq!(add_output, sum);
+
+            let sub_output = RpnFnScalarEvaluator::new()
+                .push_param(sum)
+                .push_param(arg_dur)
+                .evaluate(ScalarFuncSig::SubStringAndDuration)
+                .unwrap();
+            assert_eq!(sub_output, arg_str);
         }
     }
 

@@ -5,8 +5,6 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
-use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
@@ -219,80 +217,6 @@ pub fn rpad(arg: BytesRef, len: &Int, pad: BytesRef, writer: BytesWriter) -> Res
             Ok(writer.write(Some(r)))
         }
     }
-}
-
-#[rpn_fn(writer, capture = [ctx])]
-#[inline]
-pub fn add_string_and_duration(
-    ctx: &mut EvalContext,
-    arg0: BytesRef,
-    arg1: &Duration,
-    writer: BytesWriter,
-) -> Result<BytesGuard> {
-    let duration = Duration::parse(ctx, arg0, MAX_FSP);
-    if duration.is_ok() {
-        let arg0 = duration.unwrap();
-        let dur = match arg0.checked_add(*arg1) {
-            Some(dur) => dur,
-            None => return Ok(writer.write(None)),
-        };
-        match dur.subsec_micros() {
-            0 => dur.minimize_fsp(),
-            _ => dur.maximize_fsp(),
-        };
-        return Ok(writer.write(Some(dur.to_string().into_bytes())));
-    }
-    let s = std::str::from_utf8(arg0).unwrap();
-    let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
-        Ok(arg0) => arg0,
-        Err(_) => return Ok(writer.write(None)),
-    };
-    let mut res = match arg0.checked_add(ctx, *arg1) {
-        Some(res) => res,
-        None => return Ok(writer.write(None)),
-    };
-    match res.micro() {
-        0 => res.minimize_fsp(),
-        _ => res.maximize_fsp(),
-    };
-    Ok(writer.write(Some(res.to_string().into_bytes())))
-}
-
-#[rpn_fn(writer, capture = [ctx])]
-#[inline]
-pub fn sub_string_and_duration(
-    ctx: &mut EvalContext,
-    arg0: BytesRef,
-    arg1: &Duration,
-    writer: BytesWriter,
-) -> Result<BytesGuard> {
-    let duration = Duration::parse(ctx, arg0, MAX_FSP);
-    if duration.is_ok() {
-        let arg0 = duration.unwrap();
-        let dur = match arg0.checked_sub(*arg1) {
-            Some(dur) => dur,
-            None => return Ok(writer.write(None)),
-        };
-        match dur.subsec_micros() {
-            0 => dur.minimize_fsp(),
-            _ => dur.maximize_fsp(),
-        };
-        return Ok(writer.write(Some(dur.to_string().into_bytes())));
-    }
-    let s = std::str::from_utf8(arg0).unwrap();
-    let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
-        Ok(arg0) => arg0,
-        Err(_) => return Ok(writer.write(None)),
-    };
-    let mut res = match arg0.checked_sub(ctx, *arg1) {
-        Some(res) => res,
-        None => return Ok(writer.write(None)),
-    };
-    match res.micro() {
-        0 => res.minimize_fsp(),
-        _ => res.maximize_fsp(),
-    };
-    Ok(writer.write(Some(res.to_string().into_bytes())))
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -896,7 +820,6 @@ pub fn repeat(input: BytesRef, cnt: &Int, writer: BytesWriter) -> Result<BytesGu
 mod tests {
     use std::{f64, i64};
 
-    use tidb_query_datatype::codec::mysql::MAX_FSP;
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -1574,109 +1497,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::Rpad)
                 .unwrap();
             assert_eq!(output, expect_output);
-        }
-    }
-
-    #[test]
-    fn test_add_sub_string_and_duration() {
-        let cases = vec![
-            // normal cases
-            (
-                Some("01:00:00.999999".as_bytes().to_vec()),
-                Some("02:00:00.999998"),
-                Some("03:00:01.999997".as_bytes().to_vec()),
-            ),
-            (
-                Some("23:59:59".as_bytes().to_vec()),
-                Some("00:00:01"),
-                Some("24:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("110:00:00".as_bytes().to_vec()),
-                Some("1 02:00:00"),
-                Some("136:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("-110:00:00".as_bytes().to_vec()),
-                Some("1 02:00:00"),
-                Some("-84:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("00:00:01".as_bytes().to_vec()),
-                Some("-00:00:01"),
-                Some("00:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("00:00:03".as_bytes().to_vec()),
-                Some("-00:00:01"),
-                Some("00:00:02".as_bytes().to_vec()),
-            ),
-            (
-                Some("2018-02-28 23:00:00".as_bytes().to_vec()),
-                Some("01:30:30.123456"),
-                Some("2018-03-01 00:30:30.123456".as_bytes().to_vec()),
-            ),
-            (
-                Some("2016-02-28 23:00:00".as_bytes().to_vec()),
-                Some("01:30:30"),
-                Some("2016-02-29 00:30:30".as_bytes().to_vec()),
-            ),
-            (
-                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
-                Some("01:30:30"),
-                Some("2019-01-01 00:30:30".as_bytes().to_vec()),
-            ),
-            (
-                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
-                Some("1 01:30:30"),
-                Some("2019-01-02 00:30:30".as_bytes().to_vec()),
-            ),
-            (
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
-                Some("-01:01:00"),
-                Some("2018-12-31 23:59:00".as_bytes().to_vec()),
-            ),
-            // null cases
-            (None, None, None),
-            (None, Some("11:30:45.123456"), None),
-            (
-                Some("00:00:00".as_bytes().to_vec()),
-                None,
-                Some("00:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("01:00:00".as_bytes().to_vec()),
-                None,
-                Some("01:00:00".as_bytes().to_vec()),
-            ),
-            (
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
-                None,
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
-            ),
-        ];
-
-        for (arg_str, arg_dur, sum) in cases {
-            let arg_dur = match arg_dur {
-                Some(arg_dur) => Some(
-                    Duration::parse(&mut EvalContext::default(), arg_dur.as_bytes(), MAX_FSP)
-                        .unwrap(),
-                ),
-                None => Some(Duration::zero()),
-            };
-            let add_output = RpnFnScalarEvaluator::new()
-                .push_param(arg_str.clone())
-                .push_param(arg_dur)
-                .evaluate(ScalarFuncSig::AddStringAndDuration)
-                .unwrap();
-            assert_eq!(add_output, sum);
-
-            let sub_output = RpnFnScalarEvaluator::new()
-                .push_param(sum)
-                .push_param(arg_dur)
-                .evaluate(ScalarFuncSig::SubStringAndDuration)
-                .unwrap();
-            assert_eq!(sub_output, arg_str);
         }
     }
 
