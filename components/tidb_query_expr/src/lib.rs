@@ -531,7 +531,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::UnHex => unhex_fn_meta(),
         ScalarFuncSig::Locate2ArgsUtf8 => locate_2_args_utf8_fn_meta(),
-        // ScalarFuncSig::Locate3ArgsUtf8 => locate_3_args_utf8_fn_meta(),
+        ScalarFuncSig::Locate3ArgsUtf8 => locate_3_args_utf8_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),

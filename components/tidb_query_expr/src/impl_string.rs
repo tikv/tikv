@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str;
+use std::{iter, str};
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
@@ -63,6 +63,27 @@ pub fn locate_2_args_utf8(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> 
     let s = str::from_utf8(s).unwrap();
     Ok(Some(
         find_str(&s.to_lowercase(), &substr.to_lowercase()).map_or(0, |i| 1 + i as i64),
+    ))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_3_args_utf8(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<i64>> {
+    if *pos < 1 {
+        return Ok(Some(0));
+    }
+    let substr = str::from_utf8(substr).unwrap();
+    let s = str::from_utf8(s).unwrap();
+    Ok(Some(
+        s.char_indices()
+            .map(|(i, _)| i)
+            .chain(iter::once(s.len()))
+            .nth(*pos as usize - 1)
+            .map_or(0, |offset| {
+                find_str(&s[offset..].to_lowercase(), &substr.to_lowercase())
+                    .map(|i| i as i64 + pos)
+                    .unwrap_or(0)
+            }),
     ))
 }
 
@@ -1134,9 +1155,46 @@ mod tests {
 
         for (substr, s, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(substr.map(|s| s.as_bytes().to_vec()))
+                .push_param(substr.map(|substr| substr.as_bytes().to_vec()))
                 .push_param(s.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_3_args_utf8() {
+        let cases = vec![
+            // normal case
+            (Some("bar"), Some("foobarbar"), Some(5), Some(7)),
+            (Some("xbar"), Some("foobar"), Some(1), Some(0)),
+            (Some(""), Some("foobar"), Some(2), Some(2)),
+            (Some("foobar"), Some(""), Some(1), Some(0)),
+            (Some(""), Some(""), Some(2), Some(0)),
+            (Some("A"), Some("大A写的A"), Some(0), Some(0)),
+            (Some("A"), Some("大A写的A"), Some(-1), Some(0)),
+            (Some("A"), Some("大A写的A"), Some(1), Some(2)),
+            (Some("A"), Some("大A写的A"), Some(2), Some(2)),
+            (Some("A"), Some("大A写的A"), Some(3), Some(5)),
+            (Some("bAr"), Some("foobarBaR"), Some(5), Some(7)),
+            (Some(""), Some("aa"), Some(2), Some(2)),
+            (Some(""), Some("aa"), Some(3), Some(3)),
+            (Some(""), Some("aa"), Some(4), Some(0)),
+            // null case
+            (None, None, Some(1), None),
+            (Some(""), None, Some(1), None),
+            (None, Some(""), Some(1), None),
+            (Some("foo"), None, Some(-1), None),
+            (None, Some("bar"), Some(0), None),
+        ];
+
+        for (substr, s, pos, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr.map(|substr| substr.as_bytes().to_vec()))
+                .push_param(s.map(|s| s.as_bytes().to_vec()))
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::Locate3ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }
