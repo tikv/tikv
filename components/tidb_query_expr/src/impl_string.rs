@@ -51,6 +51,21 @@ pub fn unhex(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     Ok(writer.write(hex::decode(padded_content).ok()))
 }
 
+#[inline]
+fn find_str(text: &str, pattern: &str) -> Option<usize> {
+    twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_2_args_utf8(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
+    let substr = str::from_utf8(substr).unwrap();
+    let s = str::from_utf8(s).unwrap();
+    Ok(Some(
+        find_str(&s.to_lowercase(), &substr.to_lowercase()).map_or(0, |i| 1 + i as i64),
+    ))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn bit_length(arg: BytesRef) -> Result<Option<i64>> {
@@ -1091,6 +1106,37 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::ConcatWs)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_2_args_utf8() {
+        let cases = vec![
+            // normal cases
+            (Some("bar"), Some("foobarbar"), Some(4i64)),
+            (Some("xbar"), Some("foobar"), Some(0i64)),
+            (Some(""), Some("foobar"), Some(1i64)),
+            (Some("foobar"), Some(""), Some(0i64)),
+            (Some(""), Some(""), Some(1i64)),
+            (Some("好世"), Some("你好世界"), Some(2i64)),
+            (Some("界面"), Some("你好世界"), Some(0i64)),
+            (Some("b"), Some("中a英b文"), Some(4i64)),
+            (Some("BaR"), Some("foobArbar"), Some(4i64)),
+            // null cases
+            (None, Some(""), None),
+            (None, Some("foobar"), None),
+            (Some(""), None, None),
+            (Some("foobar"), None, None),
+            (None, None, None),
+        ];
+
+        for (substr, s, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr.map(|s| s.as_bytes().to_vec()))
+                .push_param(s.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }
