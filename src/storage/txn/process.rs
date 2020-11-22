@@ -241,14 +241,8 @@ impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
         let scheduler = self.take_scheduler();
         let lock_mgr = self.take_lock_mgr();
         let pipelined = self.pipelined_pessimistic_lock && task.cmd.can_pipelined();
-        let msg = match process_write_impl(
-            task.cmd,
-            snapshot,
-            lock_mgr,
-            extra_op,
-            &mut statistics,
-            self.pipelined_pessimistic_lock,
-        ) {
+        let msg = match process_write_impl(task.cmd, snapshot, lock_mgr, extra_op, &mut statistics)
+        {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -553,7 +547,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     lock_mgr: Option<L>,
     extra_op: ExtraOp,
     statistics: &mut Statistics,
-    pipelined_pessimistic_lock: bool,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite(Prewrite {
@@ -654,7 +647,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     for_update_ts,
                     txn_size,
                     min_commit_ts,
-                    pipelined_pessimistic_lock,
                 ) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -1136,7 +1128,7 @@ mod tests {
         let snap = engine.snapshot(&ctx)?;
         let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ret = process_write_impl(cmd, snap, Some(m), ExtraOp::Noop, statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1166,7 +1158,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics, false)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), ExtraOp::Noop, statistics)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

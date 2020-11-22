@@ -432,7 +432,6 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
-            false,
         )?;
         Ok(())
     }
@@ -448,7 +447,6 @@ pub mod tests {
         for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
-        pipelined_pessimistic_lock: bool,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -466,7 +464,6 @@ pub mod tests {
                 for_update_ts,
                 txn_size,
                 min_commit_ts,
-                pipelined_pessimistic_lock,
             )
             .unwrap();
         }
@@ -491,7 +488,6 @@ pub mod tests {
             TimeStamp::default(),
             0,
             TimeStamp::default(),
-            false,
         );
     }
 
@@ -515,31 +511,6 @@ pub mod tests {
             for_update_ts.into(),
             0,
             TimeStamp::default(),
-            false,
-        );
-    }
-
-    pub fn must_pipelined_pessimistic_prewrite_put<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            is_pessimistic_lock,
-            0,
-            for_update_ts.into(),
-            0,
-            TimeStamp::default(),
-            true,
         );
     }
 
@@ -564,7 +535,6 @@ pub mod tests {
             for_update_ts.into(),
             0,
             TimeStamp::default(),
-            false,
         );
     }
 
@@ -592,7 +562,6 @@ pub mod tests {
             for_update_ts,
             0,
             min_commit_ts,
-            false,
         );
     }
 
@@ -604,7 +573,6 @@ pub mod tests {
         ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
-        pipelined_pessimistic_lock: bool,
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -623,7 +591,6 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
-                pipelined_pessimistic_lock,
             )
             .unwrap_err()
         }
@@ -636,7 +603,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false, false)
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
     }
 
     pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -656,28 +623,6 @@ pub mod tests {
             ts,
             for_update_ts,
             is_pessimistic_lock,
-            false,
-        )
-    }
-
-    pub fn must_pipelined_pessimistic_prewrite_put_err<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        value: &[u8],
-        pk: &[u8],
-        ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-        is_pessimistic_lock: bool,
-    ) -> Error {
-        must_prewrite_put_err_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            for_update_ts,
-            is_pessimistic_lock,
-            true,
         )
     }
 
@@ -706,7 +651,6 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
-                false,
             )
             .unwrap();
         }
@@ -760,7 +704,6 @@ pub mod tests {
                 for_update_ts,
                 0,
                 TimeStamp::default(),
-                false,
             )
             .unwrap();
         }
