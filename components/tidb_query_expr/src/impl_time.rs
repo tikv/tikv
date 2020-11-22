@@ -4,6 +4,7 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_datatype::expr::EvalContext;
 
+use crate::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
@@ -218,6 +219,94 @@ pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<
     Ok(Some(ret))
 }
 
+pub fn make_time(
+    ctx: &mut EvalContext,
+    hour: &Int,
+    minute: &Int,
+    second: &Real,
+    fsp: i8,
+    isunsinged: bool,
+) -> Result<Option<Duration>> {
+    let mut hour = *hour;
+    let mut minute = *minute;
+    if second.is_nan() {
+        return Ok(None);
+    }
+    let mut second = second.into_inner();
+
+    if minute < 0 || minute >= 60 || second < 0.0 || second >= 60.0 {
+        return Ok(None);
+    }
+    let mut overflow = false;
+    if hour < 0 && isunsinged {
+        hour = 838;
+        overflow = true;
+    }
+    if hour < -838 {
+        hour = -838;
+        overflow = true;
+    } else if hour > 838 {
+        hour = 838;
+        overflow = true;
+    }
+
+    if (hour == -838 || hour == 838) && minute == 59 && second > 59.0 {
+        second = 59.0;
+    }
+
+    if overflow {
+        minute = 59;
+        second = 59.0;
+    }
+
+    match Duration::parse(
+        ctx,
+        format!("{:02}:{:02}:{}", hour, minute, second).as_bytes(),
+        fsp,
+    ) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[rpn_fn(capture = [ctx,extra])]
+#[inline]
+pub fn make_time_signed(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    hour: &Int,
+    minute: &Int,
+    second: &Real,
+) -> Result<Option<Duration>> {
+    make_time(
+        ctx,
+        hour,
+        minute,
+        second,
+        extra.ret_field_type.get_decimal() as i8,
+        false,
+    )
+}
+
+#[rpn_fn(capture = [ctx,extra])]
+#[inline]
+pub fn make_time_unsigned(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    hour: &Int,
+    minute: &Int,
+    second: &Real,
+) -> Result<Option<Duration>> {
+    make_time(
+        ctx,
+        hour,
+        minute,
+        second,
+        extra.ret_field_type.get_decimal() as i8,
+        true,
+    )
+}
+
 #[rpn_fn(nullable)]
 #[inline]
 pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
@@ -390,6 +479,7 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::types::test_util::RpnFnScalarEvaluator;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
     use tidb_query_datatype::FieldTypeTp;
@@ -1309,5 +1399,98 @@ mod tests {
             .evaluate::<Time>(ScalarFuncSig::LastDay)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_make_time() {
+        let cases = vec![
+            (12 as i64, 15 as i64, 30 as f64, "12:15:30"),
+            (25, 15, 30.0, "25:15:30"),
+            (-25, 15, 30 as f64, "-25:15:30"),
+            (12, 15, 30.1, "12:15:30.1"),
+            (12, 15, 30.2, "12:15:30.2"),
+            (12, 15, 30.3000001, "12:15:30.3"),
+            (12, 15, 30.0000005, "12:15:30.000001"),
+            (0, 0, 0.0, "00:00:00"),
+            (0, 1, 59.1, "00:01:59.1"),
+            (837, 59, 59.1, "837:59:59.1"),
+            (838, 59, 59.1, "838:59:59"),
+            (-838, 59, 59.1, "-838:59:59"),
+            (1000, 1, 1.0, "838:59:59"),
+            (-1000, 1, 1.23, "-838:59:59"),
+            (1000, 59, 1.0, "838:59:59"),
+            (1000, 1, 59.1, "838:59:59"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (hour, minute, second, ans) in cases {
+            for fsp in 0..MAX_FSP {
+                let ans_val = Some(Duration::parse(&mut ctx, ans.as_bytes(), fsp).unwrap());
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, ans_val);
+            }
+        }
+        let none_case = vec![
+            (12 as i64, -15 as i64, 30 as f64),
+            (12, 15, -30.0),
+            (12, 15, 60.0),
+            (12, 60, 0.0),
+        ];
+        for (hour, minute, second) in none_case {
+            for fsp in 0..MAX_FSP {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, None);
+            }
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(None::<i64>)
+                .push_param(None::<i64>)
+                .push_param(None::<Real>)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal(MAX_FSP as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                .unwrap();
+            assert_eq!(output, None);
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<f64>(1.0))
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal((MAX_FSP + 1) as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime);
+            assert!(output.is_err());
+        }
     }
 }

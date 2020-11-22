@@ -169,6 +169,26 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+pub fn map_make_time_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 3 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED)
+    {
+        Ok(make_time_unsigned_fn_meta())
+    } else {
+        Ok(make_time_signed_fn_meta())
+    }
+}
+
 fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool) -> RpnFnMeta,
@@ -599,6 +619,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
         ScalarFuncSig::LastDay => last_day_fn_meta(),
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
+        ScalarFuncSig::MakeTime => map_make_time_func(value, children)?,
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
