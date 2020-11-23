@@ -59,8 +59,14 @@ fn find_str(text: &str, pattern: &str) -> Option<usize> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args_utf8(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    let substr = str::from_utf8(substr).unwrap();
-    let s = str::from_utf8(s).unwrap();
+    let substr = match str::from_utf8(substr) {
+        Ok(substr) => substr,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let s = match str::from_utf8(s) {
+        Ok(s) => s,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
     Ok(Some(
         find_str(&s.to_lowercase(), &substr.to_lowercase()).map_or(0, |i| 1 + i as i64),
     ))
@@ -72,18 +78,25 @@ pub fn locate_3_args_utf8(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Op
     if *pos < 1 {
         return Ok(Some(0));
     }
-    let substr = str::from_utf8(substr).unwrap();
-    let s = str::from_utf8(s).unwrap();
+    let substr = match str::from_utf8(substr) {
+        Ok(substr) => substr,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let s = match str::from_utf8(s) {
+        Ok(s) => s,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let offset = match s
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(iter::once(s.len()))
+        .nth(*pos as usize - 1)
+    {
+        Some(offset) => offset,
+        None => return Ok(Some(0)),
+    };
     Ok(Some(
-        s.char_indices()
-            .map(|(i, _)| i)
-            .chain(iter::once(s.len()))
-            .nth(*pos as usize - 1)
-            .map_or(0, |offset| {
-                find_str(&s[offset..].to_lowercase(), &substr.to_lowercase())
-                    .map(|i| i as i64 + pos)
-                    .unwrap_or(0)
-            }),
+        find_str(&s[offset..].to_lowercase(), &substr.to_lowercase()).map_or(0, |i| i as i64 + pos),
     ))
 }
 
@@ -1136,30 +1149,82 @@ mod tests {
     fn test_locate_2_args_utf8() {
         let cases = vec![
             // normal cases
-            (Some("bar"), Some("foobarbar"), Some(4i64)),
-            (Some("xbar"), Some("foobar"), Some(0i64)),
-            (Some(""), Some("foobar"), Some(1i64)),
-            (Some("foobar"), Some(""), Some(0i64)),
-            (Some(""), Some(""), Some(1i64)),
-            (Some("好世"), Some("你好世界"), Some(2i64)),
-            (Some("界面"), Some("你好世界"), Some(0i64)),
-            (Some("b"), Some("中a英b文"), Some(4i64)),
-            (Some("BaR"), Some("foobArbar"), Some(4i64)),
+            (
+                Some(b"bar".to_vec()),
+                Some(b"foobarbar".to_vec()),
+                Some(4i64),
+            ),
+            (Some(b"xbar".to_vec()), Some(b"foobar".to_vec()), Some(0i64)),
+            (Some(b"".to_vec()), Some(b"foobar".to_vec()), Some(1i64)),
+            (Some(b"foobar".to_vec()), Some(b"".to_vec()), Some(0i64)),
+            (Some(b"".to_vec()), Some(b"".to_vec()), Some(1i64)),
+            (
+                Some("好世".as_bytes().to_vec()),
+                Some("你好世界".as_bytes().to_vec()),
+                Some(2i64),
+            ),
+            (
+                Some("界面".as_bytes().to_vec()),
+                Some("你好世界".as_bytes().to_vec()),
+                Some(0i64),
+            ),
+            (
+                Some(b"b".to_vec()),
+                Some("中a英b文".as_bytes().to_vec()),
+                Some(4i64),
+            ),
+            (
+                Some(b"BaR".to_vec()),
+                Some(b"foobArbar".to_vec()),
+                Some(4i64),
+            ),
             // null cases
-            (None, Some(""), None),
-            (None, Some("foobar"), None),
-            (Some(""), None, None),
-            (Some("foobar"), None, None),
+            (None, Some(b"".to_vec()), None),
+            (None, Some(b"foobar".to_vec()), None),
+            (Some(b"".to_vec()), None, None),
+            (Some(b"foobar".to_vec()), None, None),
             (None, None, None),
+            // invalid cases: use invalid value to sign error result
+            (
+                Some(b"bar".to_vec()),
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(-1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"foo".to_vec()),
+                Some(-1i64),
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(-1i64),
+            ),
+            (None, Some(vec![0x00, 0x9f, 0x92, 0x96]), None),
+            (None, Some(b"Hello\xF0\x90\x80World".to_vec()), None),
+            (Some(vec![0x00, 0x9f, 0x92, 0x96]), None, None),
+            (Some(b"Hello\xF0\x90\x80World".to_vec()), None, None),
         ];
 
         for (substr, s, exp) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(substr.map(|substr| substr.as_bytes().to_vec()))
-                .push_param(s.map(|s| s.as_bytes().to_vec()))
+            match RpnFnScalarEvaluator::new()
+                .push_param(substr.map(|substr| substr))
+                .push_param(s.map(|s| s))
                 .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
-                .unwrap();
-            assert_eq!(output, exp);
+            {
+                Ok(output) => assert_eq!(output, exp),
+                Err(_) => assert_eq!(exp.unwrap(), -1i64),
+            };
         }
     }
 
@@ -1167,36 +1232,133 @@ mod tests {
     fn test_locate_3_args_utf8() {
         let cases = vec![
             // normal case
-            (Some("bar"), Some("foobarbar"), Some(5), Some(7)),
-            (Some("xbar"), Some("foobar"), Some(1), Some(0)),
-            (Some(""), Some("foobar"), Some(2), Some(2)),
-            (Some("foobar"), Some(""), Some(1), Some(0)),
-            (Some(""), Some(""), Some(2), Some(0)),
-            (Some("A"), Some("大A写的A"), Some(0), Some(0)),
-            (Some("A"), Some("大A写的A"), Some(-1), Some(0)),
-            (Some("A"), Some("大A写的A"), Some(1), Some(2)),
-            (Some("A"), Some("大A写的A"), Some(2), Some(2)),
-            (Some("A"), Some("大A写的A"), Some(3), Some(5)),
-            (Some("bAr"), Some("foobarBaR"), Some(5), Some(7)),
-            (Some(""), Some("aa"), Some(2), Some(2)),
-            (Some(""), Some("aa"), Some(3), Some(3)),
-            (Some(""), Some("aa"), Some(4), Some(0)),
+            (
+                Some(b"bar".to_vec()),
+                Some(b"foobarbar".to_vec()),
+                Some(5),
+                Some(7),
+            ),
+            (
+                Some(b"xbar".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(1),
+                Some(0),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(2),
+                Some(2),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"".to_vec()),
+                Some(1),
+                Some(0),
+            ),
+            (Some(b"".to_vec()), Some(b"".to_vec()), Some(2), Some(0)),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(0),
+                Some(0),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(-1),
+                Some(0),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(1),
+                Some(2),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(2),
+                Some(2),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(3),
+                Some(5),
+            ),
+            (
+                Some(b"bAr".to_vec()),
+                Some(b"foobarBaR".to_vec()),
+                Some(5),
+                Some(7),
+            ),
+            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(2), Some(2)),
+            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(3), Some(3)),
+            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(4), Some(0)),
             // null case
             (None, None, Some(1), None),
-            (Some(""), None, Some(1), None),
-            (None, Some(""), Some(1), None),
-            (Some("foo"), None, Some(-1), None),
-            (None, Some("bar"), Some(0), None),
+            (Some(b"".to_vec()), None, Some(1), None),
+            (None, Some(b"".to_vec()), Some(1), None),
+            (Some(b"foo".to_vec()), None, Some(-1), None),
+            (None, Some(b"bar".to_vec()), Some(0), None),
+            // invalid cases: use invalid value to sign error result
+            (
+                Some(b"bar".to_vec()),
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(1),
+                Some(-1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(2),
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"foo".to_vec()),
+                Some(3),
+                Some(-1i64),
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(4),
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(5),
+                Some(-1i64),
+            ),
+            (None, Some(vec![0x00, 0x9f, 0x92, 0x96]), Some(6), None),
+            (
+                None,
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(7),
+                None,
+            ),
+            (Some(vec![0x00, 0x9f, 0x92, 0x96]), None, Some(8), None),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                None,
+                Some(9),
+                None,
+            ),
         ];
 
         for (substr, s, pos, exp) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(substr.map(|substr| substr.as_bytes().to_vec()))
-                .push_param(s.map(|s| s.as_bytes().to_vec()))
+            match RpnFnScalarEvaluator::new()
+                .push_param(substr.map(|substr| substr))
+                .push_param(s.map(|s| s))
                 .push_param(pos)
                 .evaluate(ScalarFuncSig::Locate3ArgsUtf8)
-                .unwrap();
-            assert_eq!(output, exp);
+            {
+                Ok(output) => assert_eq!(output, exp),
+                Err(_) => assert_eq!(exp.unwrap(), -1i64),
+            }
         }
     }
 
