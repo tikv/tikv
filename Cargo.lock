@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#126d29044c79747c56191cd18f43ced5c02dae2e"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#0805136a9d94f09c911f3159d1b9d0dac83e7cbd"
 dependencies = [
  "cc",
  "cmake",
@@ -1984,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#126d29044c79747c56191cd18f43ced5c02dae2e"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#0805136a9d94f09c911f3159d1b9d0dac83e7cbd"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2004,7 +2004,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#126d29044c79747c56191cd18f43ced5c02dae2e"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#0805136a9d94f09c911f3159d1b9d0dac83e7cbd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3419,7 +3419,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#126d29044c79747c56191cd18f43ced5c02dae2e"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=limiterv3#0805136a9d94f09c911f3159d1b9d0dac83e7cbd"
 dependencies = [
  "libc",
  "librocksdb_sys",
