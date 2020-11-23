@@ -1910,7 +1910,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto.git?branch=batch-get-async-commit#4ea030e045749a8b9dc4d4c6189652d6f7aed79f"
+source = "git+https://github.com/pingcap/kvproto.git#2f1a3bc78fc900dc5f9d0914828cf8cc8c25a63d"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
