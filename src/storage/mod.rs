@@ -5742,14 +5742,15 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // T3 checks T2, which would push max_ts to 10
+        // T3 checks T2, which rolls back key2 and pushes max_ts to 10
+        // use a large timestamp to make the lock expire so key2 will be rolled back.
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     key2.clone(),
                     10.into(),
-                    8.into(),
-                    8.into(),
+                    ((1 << 18) + 8).into(),
+                    ((1 << 18) + 8).into(),
                     true,
                     Default::default(),
                 ),
@@ -5758,21 +5759,6 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // T3 rolls back T2 (key2)
-        // Note: in real world, the previous check_txn_status could already rollback key2. 
-        // In this test since all physical time is 0 => lock is not expired. So we use an explicit command to rollback key2.
-        storage
-            .sched_txn_command(
-                commands::ResolveLockLite::new(
-                    10.into(),
-                    0.into(),
-                    vec![key2.clone()],
-                    Default::default(),
-                ),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
         must_unlocked(&engine, k2);
         must_written(&engine, k2, 10, 10, WriteType::Rollback);
 
@@ -5790,7 +5776,7 @@ mod tests {
                     3.into(),
                     2,
                     0.into(),
-                    100.into(),
+                    (1 << 19).into(),
                     Some(vec![k2.to_vec()]),
                     false,
                     Default::default(),
