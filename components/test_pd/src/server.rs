@@ -436,21 +436,21 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         unimplemented!()
     }
 
-    fn get_dc_locations(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: GetDcLocationsRequest,
-        _sink: UnarySink<GetDcLocationsResponse>,
-    ) {
-        unimplemented!()
-    }
-
     fn split_regions(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: SplitRegionsRequest,
-        _sink: UnarySink<SplitRegionsResponse>,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::SplitRegionsRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
     ) {
-        unimplemented!()
+        todo!()
+    }
+
+    fn get_dc_locations(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::GetDcLocationsRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationsResponse>,
+    ) {
+        todo!()
     }
 }
