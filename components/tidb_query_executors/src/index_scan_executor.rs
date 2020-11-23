@@ -422,7 +422,7 @@ impl IndexScanExecutorImpl {
         }
 
         // Split the value.
-        let (remaining, tail) = value[1..].split_at(value.len() - tail_len);
+        let (remaining, tail) = value[1..].split_at(value.len() - 1 - tail_len);
         let (common_handle_bytes, remaining) =
             Self::split_common_handle_from_index_value(remaining)?;
         let (partition_id_bytes, restore_values) = if remaining
