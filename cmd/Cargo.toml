@@ -40,6 +40,8 @@ prost-codec = [
   "cdc/prost-codec",
   "raft_log_engine/prost-codec"
 ]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [lib]
 name = "cmd"
@@ -65,7 +67,7 @@ error_code = { path = "../components/error_code" }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }
-grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../components/keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -74,7 +76,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../components/log_wrappers" }
 nix = "0.11"
 pd_client = { path = "../components/pd_client" }
-prometheus = { version = "0.8", features = ["nightly", "push"] }
+prometheus = { version = "0.10", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -84,16 +86,17 @@ rand = "0.7"
 security = { path = "../components/security" }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv = { path = "../", default-features = false }
 tikv_alloc = { path = "../components/tikv_alloc" }
 tikv_util = { path = "../components/tikv_util" }
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
-[dependencies.yatp]
-git = "https://github.com/tikv/yatp.git"
+[build-dependencies]
+time = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

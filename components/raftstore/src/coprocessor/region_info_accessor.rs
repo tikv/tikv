@@ -1,9 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use super::metrics::*;
@@ -16,8 +16,7 @@ use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;
-use tikv_util::timer::Timer;
-use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -84,6 +83,11 @@ pub enum RegionInfoQuery {
         region_id: u64,
         callback: Callback<Option<RegionInfo>>,
     },
+    GetRegionsInRange {
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        callback: Callback<Vec<Region>>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -98,6 +102,14 @@ impl Display for RegionInfoQuery {
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
             }
+            RegionInfoQuery::GetRegionsInRange {
+                start_key, end_key, ..
+            } => write!(
+                f,
+                "GetRegionsInRange(start_key: {}, end_key: {})",
+                hex::encode_upper(start_key),
+                hex::encode_upper(end_key)
+            ),
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
@@ -361,6 +373,23 @@ impl RegionCollector {
         callback(self.regions.get(&region_id).cloned());
     }
 
+    pub fn handle_get_regions_in_range(
+        &self,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        callback: Callback<Vec<Region>>,
+    ) {
+        let mut regions = vec![];
+        for (_, region_id) in self
+            .region_ranges
+            .range((Included(start_key), Included(end_key)))
+        {
+            let region_info = &self.regions[region_id];
+            regions.push(region_info.region.clone());
+        }
+        callback(regions);
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
@@ -419,6 +448,13 @@ impl Runnable for RegionCollector {
             } => {
                 self.handle_find_region_by_id(region_id, callback);
             }
+            RegionInfoQuery::GetRegionsInRange {
+                start_key,
+                end_key,
+                callback,
+            } => {
+                self.handle_get_regions_in_range(start_key, end_key, callback);
+            }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
                     .unwrap();
@@ -430,9 +466,7 @@ impl Runnable for RegionCollector {
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl RunnableWithTimer for RegionCollector {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         let mut count = 0;
         let mut leader = 0;
         for r in self.regions.values() {
@@ -447,14 +481,15 @@ impl RunnableWithTimer for RegionCollector {
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    }
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(METRICS_FLUSH_INTERVAL)
     }
 }
 
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 
@@ -462,32 +497,16 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
-        let worker = WorkerBuilder::new("region-collector-worker").create();
-        let scheduler = worker.scheduler();
-
+    pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: &Worker) -> Self {
+        let scheduler = worker.start_with_timer("region-collector-worker", RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
-        Self {
-            worker: Arc::new(Mutex::new(worker)),
-            scheduler,
-        }
-    }
-
-    /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
-    pub fn start(&self) {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        self.worker
-            .lock()
-            .unwrap()
-            .start_with_timer(RegionCollector::new(), timer)
-            .unwrap();
+        Self { scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
-        self.worker.lock().unwrap().stop().unwrap().join().unwrap();
+        self.scheduler.stop();
     }
 
     /// Gets all content from the collection. Only used for testing.
@@ -512,6 +531,10 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
         _reigon_id: u64,
         _callback: Callback<Option<RegionInfo>>,
     ) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
 }
@@ -539,6 +562,30 @@ impl RegionInfoProvider for RegionInfoAccessor {
         self.scheduler
             .schedule(msg)
             .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+    }
+
+    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetRegionsInRange {
+            start_key: start_key.to_vec(),
+            end_key: end_key.to_vec(),
+            callback: Box::new(move |regions| {
+                if let Err(e) = tx.send(regions) {
+                    warn!("failed to send get_regions_in_range result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_regions_in_range result from region collector: {:?}",
+                        e
+                    )
+                })
+            })
     }
 }
 

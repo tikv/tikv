@@ -284,8 +284,8 @@ mod tests {
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
         let mut cfs_excepted: Vec<&str> = excepted.clone();
-        cfs_existed.sort();
-        cfs_excepted.sort();
+        cfs_existed.sort_unstable();
+        cfs_excepted.sort_unstable();
         assert_eq!(cfs_existed, cfs_excepted);
     }
 

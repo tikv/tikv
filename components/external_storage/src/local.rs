@@ -85,9 +85,7 @@ impl ExternalStorage for LocalStorage {
         let tmp_path = self.tmp_path(Path::new(name));
         let mut tmp_f = AllowStdIo::new(File::create(&tmp_path)?);
         block_on(copy(reader, &mut tmp_f))?;
-        let tmp_f = tmp_f.into_inner();
-        tmp_f.metadata()?.permissions().set_readonly(true);
-        tmp_f.sync_all()?;
+        tmp_f.into_inner().sync_all()?;
         debug!("save file to local storage";
             "name" => %name, "base" => %self.base.display());
         fs::rename(tmp_path, self.base.join(name))?;

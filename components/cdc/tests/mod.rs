@@ -19,7 +19,7 @@ use security::*;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::Worker;
+use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
@@ -59,7 +59,7 @@ pub fn new_event_feed(
 
 pub struct TestSuite {
     pub cluster: Cluster<ServerCluster>,
-    pub endpoints: HashMap<u64, Worker<Task>>,
+    pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
@@ -85,7 +85,7 @@ impl TestSuite {
         // Hack! node id are generated from 1..count+1.
         for id in 1..=count as u64 {
             // Create and run cdc endpoints.
-            let worker = Worker::new(format!("cdc-{}", id));
+            let worker = LazyWorker::new(format!("cdc-{}", id));
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
@@ -126,7 +126,7 @@ impl TestSuite {
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
-            worker.start(cdc_endpoint).unwrap();
+            worker.start(cdc_endpoint);
         }
 
         TestSuite {
@@ -142,7 +142,7 @@ impl TestSuite {
 
     pub fn stop(mut self) {
         for (_, mut worker) in self.endpoints {
-            worker.stop().unwrap().join().unwrap();
+            worker.stop();
         }
         self.cluster.shutdown();
     }

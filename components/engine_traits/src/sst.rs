@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_defs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;
@@ -62,7 +61,7 @@ where
     fn set_db(self, db: &E) -> Self;
 
     /// Set CF for the builder. The builder may need some config from the CF.
-    fn set_cf(self, cf: CfName) -> Self;
+    fn set_cf(self, cf: &str) -> Self;
 
     /// Set it to true, the builder builds a in-memory SST builder.
     fn set_in_memory(self, in_memory: bool) -> Self;

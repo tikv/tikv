@@ -426,4 +426,31 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn sync_max_ts(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: SyncMaxTsRequest,
+        _sink: UnarySink<SyncMaxTsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn split_regions(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::SplitRegionsRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
+    ) {
+        todo!()
+    }
+
+    fn get_dc_locations(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::GetDcLocationsRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationsResponse>,
+    ) {
+        todo!()
+    }
 }

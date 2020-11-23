@@ -239,6 +239,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
                 return;
             }
             let mut s = stream::iter(iter.unwrap())
+                .map_err(|e| box_err!(e))
                 .map_err(|e| error_to_grpc_error("scan_mvcc", e))
                 .map_ok(|(key, mvcc_info)| {
                     let mut resp = ScanMvccResponse::default();

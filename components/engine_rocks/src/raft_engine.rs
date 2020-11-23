@@ -3,7 +3,7 @@ use crate::{RocksEngine, RocksWriteBatch};
 use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
 use engine_traits::{
     Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, MAX_DELETE_BATCH_COUNT,
+    CF_DEFAULT,
 };
 use kvproto::raft_serverpb::RaftLocalState;
 use protobuf::Message;
@@ -11,6 +11,9 @@ use raft::eraftpb::Entry;
 
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
+// FIXME: RaftEngine should probably be implemented generically
+// for all KvEngines, but is currently implemented separately for
+// every engine.
 impl RaftEngine for RocksEngine {
     type LogBatch = RocksWriteBatch;
 
@@ -131,7 +134,7 @@ impl RaftEngine for RocksEngine {
         &self,
         raft_group_id: u64,
         state: &RaftLocalState,
-        batch: &mut RocksWriteBatch,
+        batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
         let seek_key = keys::raft_log_key(raft_group_id, 0);
@@ -186,7 +189,7 @@ impl RaftEngine for RocksEngine {
         for idx in from..to {
             let key = keys::raft_log_key(raft_group_id, idx);
             raft_wb.delete(&key)?;
-            if raft_wb.count() >= MAX_DELETE_BATCH_COUNT {
+            if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
                 self.write(&raft_wb)?;
                 raft_wb.clear();
             }
@@ -210,6 +213,7 @@ impl RaftEngine for RocksEngine {
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
+
     fn reset_statistics(&self) {
         KvEngine::reset_statistics(self)
     }

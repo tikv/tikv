@@ -1,13 +1,131 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::util;
+use crate::import::RocksIngestExternalFileOptions;
+use crate::sst::RocksSstWriterBuilder;
+use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFNamesExt, IterOptions, Iterable, Iterator, MiscExt, Mutable, Range, Result, WriteBatchExt,
-    ALL_CFS, CF_LOCK, MAX_DELETE_BATCH_COUNT,
+    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
+    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
+
+pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
+
+impl RocksEngine {
+    fn is_titan(&self) -> bool {
+        self.as_inner().is_titan()
+    }
+
+    // We store all data which would be deleted in memory at first because the data of region will never be larger than
+    // max-region-size.
+    fn delete_all_in_range_cf_by_ingest(
+        &self,
+        cf: &str,
+        sst_path: String,
+        ranges: &[Range],
+    ) -> Result<()> {
+        let mut ranges = ranges.to_owned();
+        ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
+        let max_end_key = ranges
+            .iter()
+            .fold(ranges[0].end_key, |x, y| std::cmp::max(x, y.end_key));
+        let start = KeyBuilder::from_slice(ranges[0].start_key, 0, 0);
+        let end = KeyBuilder::from_slice(max_end_key, 0, 0);
+        let mut opts = IterOptions::new(Some(start), Some(end), false);
+        if self.is_titan() {
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
+            // to avoid referring to missing blob files.
+            opts.set_key_only(true);
+        }
+
+        let mut writer_wrapper: Option<RocksSstWriter> = None;
+        let mut data: Vec<Vec<u8>> = vec![];
+        let mut last_end_key: Option<Vec<u8>> = None;
+        for r in ranges {
+            // There may be a range overlap with next range
+            if last_end_key
+                .as_ref()
+                .map_or(false, |key| key.as_slice() > r.start_key)
+            {
+                self.delete_all_in_range_cf_by_key(cf, &r)?;
+                continue;
+            }
+            last_end_key = Some(r.end_key.to_owned());
+
+            let mut it = self.iterator_cf_opt(cf, opts.clone())?;
+            let mut it_valid = it.seek(r.start_key.into())?;
+            while it_valid {
+                if it.key() >= r.end_key {
+                    break;
+                }
+                if let Some(writer) = writer_wrapper.as_mut() {
+                    writer.delete(it.key())?;
+                } else {
+                    data.push(it.key().to_vec());
+                }
+                if data.len() > MAX_DELETE_COUNT_BY_KEY {
+                    let builder = RocksSstWriterBuilder::new().set_db(self).set_cf(cf);
+                    let mut writer = builder.build(sst_path.as_str())?;
+                    for key in data.iter() {
+                        writer.delete(key)?;
+                    }
+                    data.clear();
+                    writer_wrapper = Some(writer);
+                }
+                it_valid = it.next()?;
+            }
+        }
+
+        if let Some(writer) = writer_wrapper {
+            writer.finish()?;
+            let mut opt = RocksIngestExternalFileOptions::new();
+            opt.move_files(true);
+            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
+        } else {
+            let mut wb = self.write_batch();
+            for key in data.iter() {
+                wb.delete_cf(cf, key)?;
+                if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
+                    self.write(&wb)?;
+                    wb.clear();
+                }
+            }
+            if wb.count() > 0 {
+                self.write(&wb)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_all_in_range_cf_by_key(&self, cf: &str, range: &Range) -> Result<()> {
+        let start = KeyBuilder::from_slice(range.start_key, 0, 0);
+        let end = KeyBuilder::from_slice(range.end_key, 0, 0);
+        let mut opts = IterOptions::new(Some(start), Some(end), false);
+        if self.is_titan() {
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
+            // to avoid referring to missing blob files.
+            opts.set_key_only(true);
+        }
+        let mut it = self.iterator_cf_opt(cf, opts)?;
+        let mut it_valid = it.seek(range.start_key.into())?;
+        let mut wb = self.write_batch();
+        while it_valid {
+            wb.delete_cf(cf, it.key())?;
+            if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
+                self.write(&wb)?;
+                wb.clear();
+            }
+            it_valid = it.next()?;
+        }
+        if wb.count() > 0 {
+            self.write(&wb)?;
+        }
+        self.sync_wal()?;
+        Ok(())
+    }
+}
 
 impl MiscExt for RocksEngine {
     fn flush(&self, sync: bool) -> Result<()> {
@@ -19,71 +137,56 @@ impl MiscExt for RocksEngine {
         Ok(self.as_inner().flush_cf(handle, sync)?)
     }
 
-    fn delete_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()> {
-        let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self
-            .as_inner()
-            .delete_files_in_range_cf(handle, start_key, end_key, include_end)?)
-    }
-
-    fn delete_blob_files_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        include_end: bool,
-    ) -> Result<()> {
-        if self.as_inner().is_titan() {
-            let handle = util::get_cf_handle(self.as_inner(), cf)?;
-            self.as_inner().delete_blob_files_in_range_cf(
-                handle,
-                start_key,
-                end_key,
-                include_end,
-            )?;
+    fn delete_ranges_cf(&self, cf: &str, strategy: DeleteStrategy, ranges: &[Range]) -> Result<()> {
+        if ranges.is_empty() {
+            return Ok(());
         }
-
-        Ok(())
-    }
-
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()> {
-        let mut wb = self.write_batch();
-        if use_delete_range && cf != CF_LOCK {
-            wb.delete_range_cf(cf, start_key, end_key)?;
-        } else {
-            let start = KeyBuilder::from_slice(start_key, 0, 0);
-            let end = KeyBuilder::from_slice(end_key, 0, 0);
-            let mut opts = IterOptions::new(Some(start), Some(end), false);
-            if self.as_inner().is_titan() {
-                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-                // to avoid referring to missing blob files.
-                opts.set_key_only(true);
-            }
-            let mut it = self.iterator_cf_opt(cf, opts)?;
-            let mut it_valid = it.seek(start_key.into())?;
-            while it_valid {
-                wb.delete_cf(cf, it.key())?;
-                if wb.count() >= MAX_DELETE_BATCH_COUNT {
-                    self.write(&wb)?;
-                    wb.clear();
+        match strategy {
+            DeleteStrategy::DeleteFiles => {
+                let handle = util::get_cf_handle(self.as_inner(), cf)?;
+                for r in ranges {
+                    if r.start_key >= r.end_key {
+                        continue;
+                    }
+                    self.as_inner().delete_files_in_range_cf(
+                        handle,
+                        r.start_key,
+                        r.end_key,
+                        false,
+                    )?;
                 }
-                it_valid = it.next()?;
             }
-        }
-        if wb.count() > 0 {
-            self.write(&wb)?;
+            DeleteStrategy::DeleteBlobs => {
+                let handle = util::get_cf_handle(self.as_inner(), cf)?;
+                if self.is_titan() {
+                    for r in ranges {
+                        if r.start_key >= r.end_key {
+                            continue;
+                        }
+                        self.as_inner().delete_blob_files_in_range_cf(
+                            handle,
+                            r.start_key,
+                            r.end_key,
+                            false,
+                        )?;
+                    }
+                }
+            }
+            DeleteStrategy::DeleteByRange => {
+                let mut wb = self.write_batch();
+                for r in ranges.iter() {
+                    wb.delete_range_cf(cf, r.start_key, r.end_key)?;
+                }
+                self.write(&wb)?;
+            }
+            DeleteStrategy::DeleteByKey => {
+                for r in ranges {
+                    self.delete_all_in_range_cf_by_key(cf, &r)?;
+                }
+            }
+            DeleteStrategy::DeleteByWriter { sst_path } => {
+                self.delete_all_in_range_cf_by_ingest(cf, sst_path, ranges)?;
+            }
         }
         Ok(())
     }
@@ -195,6 +298,34 @@ impl MiscExt for RocksEngine {
             s => s,
         }
     }
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
+    }
+
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
+        Ok(crate::properties::get_range_entries_and_versions(
+            self, cf, start, end,
+        ))
+    }
+
+    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_num_files_at_level(
+            self.as_inner(),
+            &handle,
+            level,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -208,7 +339,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use engine_traits::ALL_CFS;
+    use engine_traits::{DeleteStrategy, ALL_CFS};
     use engine_traits::{Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt};
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
@@ -224,7 +355,11 @@ mod tests {
         }
     }
 
-    fn test_delete_all_in_range(use_delete_range: bool) {
+    fn test_delete_all_in_range(
+        strategy: DeleteStrategy,
+        origin_keys: &Vec<Vec<u8>>,
+        ranges: &[Range],
+    ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
             .tempdir()
@@ -241,24 +376,19 @@ mod tests {
 
         let mut wb = db.write_batch();
         let ts: u8 = 12;
-        let keys: Vec<_> = vec![
-            b"k1".to_vec(),
-            b"k2".to_vec(),
-            b"k3".to_vec(),
-            b"k4".to_vec(),
-        ]
-        .into_iter()
-        .map(|mut k| {
-            k.append(&mut vec![ts; 8]);
-            k
-        })
-        .collect();
+        let keys: Vec<_> = origin_keys
+            .iter()
+            .map(|k| {
+                let mut k2 = k.clone();
+                k2.append(&mut vec![ts; 8]);
+                k2
+            })
+            .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
             kvs.push((key.as_slice(), b"value"));
         }
-        let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
             for cf in ALL_CFS {
                 wb.put_cf(cf, k, v).unwrap();
@@ -267,22 +397,113 @@ mod tests {
         db.write(&wb).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        // Delete all in ["k2", "k4").
-        let start = b"k2";
-        let end = b"k4";
-        db.delete_all_in_range(start, end, use_delete_range)
-            .unwrap();
+        // Delete all in ranges.
+        db.delete_all_in_range(strategy, ranges).unwrap();
+
+        let mut kvs_left: Vec<_> = kvs;
+        for r in ranges {
+            kvs_left = kvs_left
+                .into_iter()
+                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
+                .collect();
+        }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
     #[test]
     fn test_delete_all_in_range_use_delete_range() {
-        test_delete_all_in_range(true);
+        let data = vec![
+            b"k0".to_vec(),
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"k3".to_vec(),
+            b"k4".to_vec(),
+        ];
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
     }
 
     #[test]
-    fn test_delete_all_in_range_not_use_delete_range() {
-        test_delete_all_in_range(false);
+    fn test_delete_all_in_range_by_key() {
+        let data = vec![
+            b"k0".to_vec(),
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"k3".to_vec(),
+            b"k4".to_vec(),
+        ];
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
+    }
+
+    #[test]
+    fn test_delete_all_in_range_by_writer() {
+        let path = Builder::new()
+            .prefix("test_delete_all_in_range_by_writer")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path();
+        let sst_path = path_str.join("tmp_file").to_str().unwrap().to_owned();
+        let mut data = vec![];
+        for i in 1000..5000 {
+            data.push(i.to_string().as_bytes().to_vec());
+        }
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByWriter { sst_path },
+            &data,
+            &[
+                Range::new(&data[2], &data[499]),
+                Range::new(&data[502], &data[999]),
+                Range::new(&data[1002], &data[1999]),
+                Range::new(&data[1499], &data[2499]),
+                Range::new(&data[2502], &data[3999]),
+                Range::new(&data[3002], &data[3499]),
+            ],
+        );
     }
 
     #[test]
@@ -320,8 +541,10 @@ mod tests {
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_all_files_in_range(b"k2", b"k4").unwrap();
-        db.delete_blob_files_in_range(b"k2", b"k4").unwrap();
+        db.delete_all_in_range(DeleteStrategy::DeleteFiles, &[Range::new(b"k2", b"k4")])
+            .unwrap();
+        db.delete_all_in_range(DeleteStrategy::DeleteBlobs, &[Range::new(b"k2", b"k4")])
+            .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -366,8 +589,11 @@ mod tests {
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        db.delete_all_in_range(b"kabcdefg2", b"kabcdefg4", true)
-            .unwrap();
+        db.delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &[Range::new(b"kabcdefg2", b"kabcdefg4")],
+        )
+        .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
     }
 }

@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
+
 /// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
 pub const UNSPECIFIED_FSP: i8 = -1;
 /// `MAX_FSP` is the maximum digit of fractional seconds part.
@@ -25,13 +26,17 @@ pub mod binary_literal;
 pub mod charset;
 pub mod decimal;
 pub mod duration;
+pub mod enums;
 pub mod json;
+pub mod set;
 pub mod time;
 
 pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode};
 pub use self::duration::{Duration, DurationDecoder, DurationEncoder};
+pub use self::enums::{Enum, EnumRef};
 pub use self::json::{
     parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonType,
     ModifyType, PathExpression,
 };
+pub use self::set::{Set, SetRef};
 pub use self::time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz};

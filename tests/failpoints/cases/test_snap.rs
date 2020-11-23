@@ -201,7 +201,7 @@ fn test_node_request_snapshot_on_split() {
     cluster.split_region(
         &region,
         b"k1",
-        Callback::Write(Box::new(move |_| {
+        Callback::write(Box::new(move |_| {
             split_tx.send(()).unwrap();
         })),
     );

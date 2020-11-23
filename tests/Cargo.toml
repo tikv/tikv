@@ -45,7 +45,7 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec"]
+default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
@@ -74,8 +74,11 @@ prost-codec = [
   "cdc/prost-codec",
 ]
 jemalloc = ["tikv/jemalloc"]
+mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 fail = "0.4"
@@ -86,7 +89,7 @@ configuration = { path = "../components/configuration" }
 encryption = { path = "../components/encryption" }
 cdc = { path = "../components/cdc" }
 futures = "0.3"
-grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../components/pd_client" }
@@ -96,20 +99,17 @@ raft = { version = "0.6.0-alpha", default-features = false }
 raftstore = { path = "../components/raftstore" }
 rand = "0.7.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 tidb_query_datatype = { path = "../components/tidb_query_datatype" }
 tidb_query_common = { path = "../components/tidb_query_common" }
-tidb_query_normal_expr = { path = "../components/tidb_query_normal_expr" }
-tidb_query_normal_executors = { path = "../components/tidb_query_normal_executors" }
-tidb_query_vec_aggr = { path = "../components/tidb_query_vec_aggr" }
-tidb_query_vec_executors = { path = "../components/tidb_query_vec_executors" }
-tidb_query_vec_expr = { path = "../components/tidb_query_vec_expr" }
+tidb_query_aggr = { path = "../components/tidb_query_aggr" }
+tidb_query_executors = { path = "../components/tidb_query_executors" }
+tidb_query_expr = { path = "../components/tidb_query_expr" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-tokio-threadpool = "0.1.13"
-toml = "0.4"
+toml = "0.5"
 txn_types = { path = "../components/txn_types" }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 time = "0.1"

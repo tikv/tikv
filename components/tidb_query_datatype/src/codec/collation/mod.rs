@@ -1,9 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod unicode_ci_data;
-mod utf8mb4;
-
-pub use self::utf8mb4::*;
+mod charset;
+mod collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -13,6 +11,7 @@ use std::ops::Deref;
 use codec::prelude::*;
 
 use crate::codec::Result;
+use collator::*;
 
 pub macro match_template_collator($t:tt, $($tail:tt)*) {
     match_template::match_template! {
@@ -22,6 +21,7 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
             Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
             Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
             Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+            Latin1Bin => CollatorLatin1Bin,
         ],
         $($tail)*
     }
@@ -31,21 +31,6 @@ pub trait Charset {
     type Char: Copy + Into<u32>;
 
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
-}
-
-pub struct CharsetBinary;
-
-impl Charset for CharsetBinary {
-    type Char = u8;
-
-    #[inline]
-    fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
-        if data.is_empty() {
-            None
-        } else {
-            Some((data[0], 1))
-        }
-    }
 }
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
@@ -70,36 +55,6 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     ///
     /// WARN: `sort_hash(str) != hash(sort_key(str))`.
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()>;
-}
-
-/// Collator for binary collation without padding.
-#[derive(Debug)]
-pub struct CollatorBinary;
-
-impl Collator for CollatorBinary {
-    type Charset = CharsetBinary;
-
-    #[inline]
-    fn validate(_bstr: &[u8]) -> Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        writer.write_bytes(bstr)?;
-        Ok(bstr.len())
-    }
-
-    #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        Ok(a.cmp(b))
-    }
-
-    #[inline]
-    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        bstr.hash(state);
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -160,7 +115,7 @@ where
     pub fn map_option_owned(inner: Option<T>) -> Result<Option<Self>> {
         if let Some(inner) = inner {
             C::validate(inner.as_ref())?;
-            return Self::new(inner).map(|x| Some(x));
+            return Self::new(inner).map(Some);
         }
         Ok(None)
     }

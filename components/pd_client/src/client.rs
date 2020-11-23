@@ -12,7 +12,7 @@ use futures::future::{self, FutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{StreamExt, TryStreamExt};
 
-use grpcio::{CallOption, EnvBuilder, Result as GrpcResult, WriteFlags};
+use grpcio::{CallOption, EnvBuilder, Environment, Result as GrpcResult, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
@@ -36,13 +36,19 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(CQ_COUNT)
-                .name_prefix(thd_name!(CLIENT_PREFIX))
-                .build(),
-        );
+    pub fn new(
+        cfg: &Config,
+        shared_env: Option<Arc<Environment>>,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Result<RpcClient> {
+        let env = shared_env.unwrap_or_else(|| {
+            Arc::new(
+                EnvBuilder::new()
+                    .cq_count(CQ_COUNT)
+                    .name_prefix(thd_name!(CLIENT_PREFIX))
+                    .build(),
+            )
+        });
 
         // -1 means the max.
         let retries = match cfg.retry_max_count {
@@ -341,6 +347,43 @@ impl PdClient for RpcClient {
                 check_resp_header(resp.get_header())?;
                 if resp.has_region() {
                     Ok(Some(resp.take_region()))
+                } else {
+                    Ok(None)
+                }
+            }) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
+            let handler = client
+                .rl()
+                .client_stub
+                .get_region_by_id_async_opt(&req, Self::call_option())
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                });
+            Box::pin(async move {
+                let mut resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_region_by_id"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                if resp.has_region() {
+                    Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
                 }

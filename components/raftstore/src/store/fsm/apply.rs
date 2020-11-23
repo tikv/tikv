@@ -18,7 +18,9 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, WriteBatch};
+use engine_traits::{
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -1480,44 +1482,33 @@ where
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
+            let range = vec![EngineRange::new(&start_key, &end_key)];
+            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+                panic!(
+                    "{} failed to delete {:?} in ranges [{}, {}): {:?}",
+                    self.tag,
+                    strategy,
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    e
+                )
+            };
             engine
-                .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete files in range [{}, {}): {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
+            let strategy = if use_delete_range {
+                DeleteStrategy::DeleteByRange
+            } else {
+                DeleteStrategy::DeleteByKey
+            };
             // Delete all remaining keys.
             engine
-                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        cf,
-                        e
-                    );
-                });
+                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .unwrap_or_else(move |e| fail_f(e, strategy));
             engine
-                .delete_blob_files_in_range_cf(
-                    cf, &start_key, &end_key, /* include_end */ false,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete blob files in range [{}, {}): {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+                .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -2316,6 +2307,7 @@ where
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         {
+            fail_point!("apply_before_commit_merge");
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
@@ -2447,6 +2439,8 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!("apply_before_rollback_merge");
+
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         let region_state_key = keys::region_state_key(self.region_id());
         let state: RegionLocalState = match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
@@ -2755,6 +2749,7 @@ where
     pub cb: Callback<S>,
     /// `renew_lease_time` contains the last time when a peer starts to renew lease.
     pub renew_lease_time: Option<Timespec>,
+    pub must_pass_epoch_check: bool,
 }
 
 pub struct Destroy {
@@ -3572,8 +3567,8 @@ impl<EK: KvEngine, W> Builder<EK, W>
 where
     W: WriteBatch<EK>,
 {
-    pub fn new<T, C, ER: RaftEngine>(
-        builder: &RaftPollerBuilder<EK, ER, T, C>,
+    pub fn new<T, ER: RaftEngine>(
+        builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
     ) -> Builder<EK, W> {
@@ -3779,7 +3774,7 @@ mod tests {
     use crate::store::msg::WriteResponse;
     use crate::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::store::util::{new_learner_peer, new_peer};
-    use engine_rocks::{util::new_engine, RocksEngine, RocksSnapshot, RocksWriteBatch};
+    use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
@@ -3794,7 +3789,7 @@ mod tests {
 
     use super::*;
 
-    pub fn create_tmp_engine(path: &str) -> (TempDir, RocksEngine) {
+    pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let engine = new_engine(
             path.path().join("db").to_str().unwrap(),
@@ -3887,9 +3882,10 @@ mod tests {
         assert_eq!(should_write_to_engine(&cmd), true);
     }
 
-    fn validate<F>(router: &ApplyRouter<RocksEngine>, region_id: u64, validate: F)
+    fn validate<F, E>(router: &ApplyRouter<E>, region_id: u64, validate: F)
     where
-        F: FnOnce(&ApplyDelegate<RocksEngine>) + Send + 'static,
+        F: FnOnce(&ApplyDelegate<E>) + Send + 'static,
+        E: KvEngine,
     {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule_task(
@@ -3897,7 +3893,7 @@ mod tests {
             Msg::Validate(
                 region_id,
                 Box::new(move |delegate: *const u8| {
-                    let delegate = unsafe { &*(delegate as *const ApplyDelegate<RocksEngine>) };
+                    let delegate = unsafe { &*(delegate as *const ApplyDelegate<E>) };
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
@@ -3907,11 +3903,10 @@ mod tests {
     }
 
     // Make sure msgs are handled in the same batch.
-    fn batch_messages(
-        router: &ApplyRouter<RocksEngine>,
-        region_id: u64,
-        msgs: Vec<Msg<RocksEngine>>,
-    ) {
+    fn batch_messages<E>(router: &ApplyRouter<E>, region_id: u64, msgs: Vec<Msg<E>>)
+    where
+        E: KvEngine,
+    {
         let (notify1, wait1) = mpsc::channel();
         let (notify2, wait2) = mpsc::channel();
         router.schedule_task(
@@ -3933,9 +3928,12 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<RocksEngine>>,
-    ) -> ApplyRes<RocksSnapshot> {
+    fn fetch_apply_res<E>(
+        receiver: &::std::sync::mpsc::Receiver<PeerMsg<E>>,
+    ) -> ApplyRes<E::Snapshot>
+    where
+        E: KvEngine,
+    {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -3957,6 +3955,7 @@ mod tests {
             term,
             cb,
             renew_lease_time: None,
+            must_pass_epoch_check: false,
         }
     }
 
@@ -3988,14 +3987,14 @@ mod tests {
         let sender = Box::new(TestNotifier { tx });
         let (_tmp, engine) = create_tmp_engine("apply-basic");
         let (_dir, importer) = create_tmp_importer("apply-basic");
-        let (region_scheduler, snapshot_rx) = dummy_scheduler();
+        let (region_scheduler, mut snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
-            coprocessor_host: CoprocessorHost::<RocksEngine>::default(),
+            coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
             importer,
             region_scheduler,
             sender,
@@ -4029,7 +4028,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -4057,7 +4056,7 @@ mod tests {
                 false,
                 4,
                 4,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
             ),
@@ -4145,7 +4144,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
         );
@@ -4179,7 +4178,7 @@ mod tests {
             false,
             idx,
             term,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 tx.send(resp.response).unwrap();
             })),
         )
@@ -4315,7 +4314,10 @@ mod tests {
         }
     }
 
-    impl CmdObserver<RocksEngine> for ApplyObserver {
+    impl<E> CmdObserver<E> for ApplyObserver
+    where
+        E: KvEngine,
+    {
         fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
             self.cmd_batches
                 .borrow_mut()
@@ -4330,7 +4332,7 @@ mod tests {
                 .push(observe_id, region_id, cmd);
         }
 
-        fn on_flush_apply(&self, _: RocksEngine) {
+        fn on_flush_apply(&self, _: E) {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
@@ -4347,7 +4349,7 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (import_dir, importer) = create_tmp_importer("test-delegate");
         let obs = ApplyObserver::default();
-        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
         host.registry
             .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
@@ -4357,7 +4359,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -4636,7 +4638,7 @@ mod tests {
                         false,
                         10,
                         3,
-                        Callback::Write(Box::new(move |resp: WriteResponse| {
+                        Callback::write(Box::new(move |resp: WriteResponse| {
                             // Sleep until yield timeout.
                             thread::sleep(Duration::from_millis(500));
                             capture_tx_clone.send(resp.response).unwrap();
@@ -4661,7 +4663,7 @@ mod tests {
         assert_eq!(apply_res.applied_index_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
-        let write_batch_max_keys = <RocksEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
+        let write_batch_max_keys = <KvTestEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
 
         let mut props = vec![];
         let mut entries = vec![];
@@ -4702,7 +4704,7 @@ mod tests {
     fn test_cmd_observer() {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
-        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
@@ -4715,7 +4717,7 @@ mod tests {
         let cfg = Config::default();
         let (router, mut system) = create_apply_batch_system(&cfg);
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
             tag: "test-store".to_owned(),
             cfg: Arc::new(VersionTrack::new(cfg)),
             sender,
@@ -4787,7 +4789,7 @@ mod tests {
                     region_id: 1,
                     enabled: enabled.clone(),
                 },
-                cb: Callback::Read(Box::new(|resp: ReadResponse<RocksSnapshot>| {
+                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -4938,13 +4940,19 @@ mod tests {
         req
     }
 
-    struct SplitResultChecker<'a> {
-        engine: RocksEngine,
+    struct SplitResultChecker<'a, E>
+    where
+        E: KvEngine,
+    {
+        engine: E,
         origin_peers: &'a [metapb::Peer],
         epoch: Rc<RefCell<RegionEpoch>>,
     }
 
-    impl<'a> SplitResultChecker<'a> {
+    impl<'a, E> SplitResultChecker<'a, E>
+    where
+        E: KvEngine,
+    {
         fn check(&self, start: &[u8], end: &[u8], id: u64, children: &[u64], check_initial: bool) {
             let key = keys::region_state_key(id);
             let state: RegionLocalState = self.engine.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
@@ -5004,7 +5012,7 @@ mod tests {
         reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Box::new(TestNotifier { tx });
-        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
         let mut obs = ApplyObserver::default();
         let (sink, cmdbatch_rx) = mpsc::channel();
         obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
@@ -5014,7 +5022,7 @@ mod tests {
         let cfg = Arc::new(VersionTrack::new(Config::default()));
         let (router, mut system) = create_apply_batch_system(&cfg.value());
         let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
-        let builder = super::Builder::<RocksEngine, RocksWriteBatch> {
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
             tag: "test-store".to_owned(),
             cfg,
             sender,
@@ -5052,7 +5060,7 @@ mod tests {
         let (capture_tx, capture_rx) = mpsc::channel();
         let epoch = Rc::new(RefCell::new(reg.region.get_region_epoch().to_owned()));
         let epoch_ = epoch.clone();
-        let mut exec_split = |router: &ApplyRouter<RocksEngine>, reqs| {
+        let mut exec_split = |router: &ApplyRouter<KvTestEngine>, reqs| {
             let epoch = epoch_.borrow();
             let split = EntryBuilder::new(index_id, 1)
                 .split(reqs)
@@ -5222,7 +5230,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
         });
         res.unwrap_err();
     }
@@ -5230,7 +5238,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<RocksSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd dtor.
         });

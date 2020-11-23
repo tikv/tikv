@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use std::fs;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -118,7 +118,7 @@ impl From<OptionReadableSize> for ConfigValue {
 impl Into<OptionReadableSize> for ConfigValue {
     fn into(self) -> OptionReadableSize {
         if let ConfigValue::OptionSize(s) = self {
-            OptionReadableSize(s.map(|v| ReadableSize(v)))
+            OptionReadableSize(s.map(ReadableSize))
         } else {
             panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
         }
@@ -473,7 +473,12 @@ pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let path = Path::new(path);
+    let mut path = match path.canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
+        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
+    };
     if !sub_path.is_empty() {
         path = path.join(Path::new(sub_path));
     }
@@ -922,13 +927,15 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
-pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+///
+/// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
+pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
     // Try to validate "IPv4:Port" and "[IPv6]:Port".
-    if SocketAddrV4::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV4::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
-    if SocketAddrV6::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV6::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
 
     let parts: Vec<&str> = addr
@@ -958,7 +965,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Err(ConfigError::Address(format!("invalid addr: {:?}", e)));
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Default)]
@@ -1356,7 +1363,7 @@ mod tests {
         );
 
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_err());
+        assert!(canonicalize_path(&path2).is_ok());
         ensure_dir_exist(&path2).unwrap();
         let res_path2 = canonicalize_path(&path2).unwrap();
         assert_eq!(
@@ -1434,6 +1441,20 @@ mod tests {
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
+
+        let table = vec![
+            ("0.0.0.0:8080", true),
+            ("[::0]:8080", true),
+            ("127.0.0.1:8080", false),
+            ("[::1]:8080", false),
+            ("localhost:8080", false),
+            ("pingcap.com:8080", false),
+            ("funnydomain:8080", false),
+        ];
+
+        for (addr, is_unspecified) in table {
+            assert_eq!(check_addr(addr).unwrap(), is_unspecified);
         }
     }
 

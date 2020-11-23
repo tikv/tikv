@@ -4,7 +4,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use rocksdb::{DBOptions, TitanDBOptions};
+use engine_rocks::raw::{DBOptions, TitanDBOptions};
 use tempfile::Builder;
 
 use engine_rocks::util::{self as rocks_util, RocksCFOptions};

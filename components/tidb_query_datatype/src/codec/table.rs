@@ -412,7 +412,7 @@ impl RowColsDict {
 pub fn cut_row(
     data: Vec<u8>,
     col_ids: &HashSet<i64>,
-    cols: Arc<Vec<ColumnInfo>>,
+    cols: Arc<[ColumnInfo]>,
 ) -> Result<RowColsDict> {
     if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
         return Ok(RowColsDict::new(HashMap::default(), data));
@@ -444,7 +444,7 @@ fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
 }
 
 /// Cuts a non-empty row in row format v2 and encodes into v1 format.
-fn cut_row_v2(data: Vec<u8>, cols: Arc<Vec<ColumnInfo>>) -> Result<RowColsDict> {
+fn cut_row_v2(data: Vec<u8>, cols: Arc<[ColumnInfo]>) -> Result<RowColsDict> {
     use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
     use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
 

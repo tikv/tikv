@@ -378,12 +378,25 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
             let _ = tx.send(resp.response);
         }))
     } else {
-        Callback::Write(Box::new(move |resp: WriteResponse| {
+        Callback::write(Box::new(move |resp: WriteResponse| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
     };
     (cb, rx)
+}
+
+pub fn make_cb_ext(
+    cmd: &RaftCmdRequest,
+    proposed: Option<ExtCallback>,
+    committed: Option<ExtCallback>,
+) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
+    let (cb, receiver) = make_cb(cmd);
+    if let Callback::Write { cb, .. } = cb {
+        (Callback::write_ext(cb, proposed, committed), receiver)
+    } else {
+        (cb, receiver)
+    }
 }
 
 // Issue a read request on the specified peer.
@@ -551,7 +564,7 @@ pub fn create_test_engine(
     let key_manager =
         DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
-            .map(|key_manager| Arc::new(key_manager));
+            .map(Arc::new);
 
     let env = get_env(key_manager.clone(), None).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
@@ -577,7 +590,7 @@ pub fn create_test_engine(
         ));
     }
 
-    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache, None);
 
     let engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
@@ -589,7 +602,7 @@ pub fn create_test_engine(
     let mut raft_db_opt = cfg.raftdb.build_opt();
     raft_db_opt.set_env(env);
 
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache, None);
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );

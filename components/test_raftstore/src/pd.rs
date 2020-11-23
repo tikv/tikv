@@ -1285,6 +1285,23 @@ impl PdClient for TestPdClient {
         }
     }
 
+    fn get_region_leader_by_id(
+        &self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        let cluster = self.cluster.rl();
+        match cluster.get_region_by_id(region_id) {
+            Ok(resp) => {
+                let leader = cluster.leaders.get(&region_id).cloned().unwrap_or_default();
+                Box::pin(ok(resp.map(|r| (r, leader))))
+            }
+            Err(e) => Box::pin(err(e)),
+        }
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())
@@ -1478,7 +1495,16 @@ impl PdClient for TestPdClient {
     }
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
-        fail_point!("test_raftstore_get_tso");
+        fail_point!("test_raftstore_get_tso", |t| {
+            let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
+            Box::pin(async move {
+                let _ = GLOBAL_TIMER_HANDLE
+                    .delay(Instant::now() + duration)
+                    .compat()
+                    .await;
+                Err(box_err!("get tso fail"))
+            })
+        });
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
             return Box::pin(err(pd_client::errors::Error::Grpc(
                 grpcio::Error::RpcFailure(grpcio::RpcStatus::new(

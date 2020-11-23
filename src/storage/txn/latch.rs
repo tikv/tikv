@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
+use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
@@ -123,7 +124,7 @@ impl Lock {
 /// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
-    slots: Vec<Mutex<Latch>>,
+    slots: Vec<CachePadded<Mutex<Latch>>>,
     size: usize,
 }
 
@@ -134,7 +135,7 @@ impl Latches {
     pub fn new(size: usize) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
-        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
+        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new()).into()));
         Latches { slots, size }
     }
 
@@ -146,7 +147,7 @@ impl Latches {
     {
         // prevent from deadlock, so we sort and deduplicate the index
         let mut hashes: Vec<u64> = keys.into_iter().map(|x| self.calc_slot(x)).collect();
-        hashes.sort();
+        hashes.sort_unstable();
         hashes.dedup();
         Lock::new(hashes)
     }

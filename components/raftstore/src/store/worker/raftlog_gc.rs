@@ -8,7 +8,6 @@ use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 use tikv_util::time::Duration;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const MAX_GC_REGION_BATCH: usize = 128;
@@ -135,12 +134,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: CasualRouter<EK>> Runner<EK, ER, R> {
             }
         }
     }
-
-    pub fn new_timer(&self) -> Timer<()> {
-        let mut timer = Timer::new(1);
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
-        timer
-    }
 }
 
 impl<EK, ER, R> Runnable for Runner<EK, ER, R>
@@ -170,18 +163,19 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK>,
 {
-    type TimeoutTask = ();
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         self.flush();
-        timer.add_task(COMPACT_LOG_INTERVAL, ());
+    }
+
+    fn get_interval(&self) -> Duration {
+        COMPACT_LOG_INTERVAL
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::util::new_engine;
-    use engine_traits::{Engines, KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -191,8 +185,11 @@ mod tests {
         let dir = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
         let path_raft = dir.path().join("raft");
         let path_kv = dir.path().join("kv");
-        let raft_db = new_engine(path_kv.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
-        let kv_db = new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let raft_db =
+            engine_test::raft::new_engine(path_kv.to_str().unwrap(), None, CF_DEFAULT, None)
+                .unwrap();
+        let kv_db =
+            engine_test::kv::new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();

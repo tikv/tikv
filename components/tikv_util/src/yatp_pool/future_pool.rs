@@ -169,8 +169,11 @@ impl std::error::Error for Full {
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
     use std::thread;
     use std::time::Duration;
 
@@ -221,18 +224,27 @@ mod tests {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
 
         let (tx, rx) = mpsc::sync_channel(1000);
+        let rx = Arc::new(Mutex::new(rx));
         let ticker = SequenceTicker::new(move || {
             let seq = tick_sequence.fetch_add(1, Ordering::SeqCst);
             tx.send(seq).unwrap();
         });
 
         let pool = Builder::new(ticker).thread_count(1, 1).build_future_pool();
+        let try_recv_tick = || {
+            let rx = rx.clone();
+            block_on(
+                pool.spawn_handle(async move { rx.lock().unwrap().try_recv() })
+                    .unwrap(),
+            )
+            .unwrap()
+        };
 
-        assert!(rx.try_recv().is_err());
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted because long enough time has elapsed since pool is created
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert!(rx.try_recv().is_err());
+        assert!(try_recv_tick().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
@@ -240,29 +252,29 @@ mod tests {
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
 
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
-        assert!(rx.try_recv().is_err());
+        assert!(try_recv_tick().is_err());
 
         // Even if long enough time has elapsed, tick is not emitted until next task arrives
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(rx.try_recv().is_err());
+        assert!(try_recv_tick().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 0);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(try_recv_tick().unwrap(), 0);
+        assert!(try_recv_tick().is_err());
 
         // Tick is not emitted if there is no task
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(rx.try_recv().is_err());
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 1);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(try_recv_tick().unwrap(), 1);
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
-        assert_eq!(rx.recv_timeout(Duration::from_micros(50)).unwrap(), 2);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(try_recv_tick().unwrap(), 2);
+        assert!(try_recv_tick().is_err());
     }
 
     #[test]

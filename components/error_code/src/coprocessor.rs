@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV-Coprocessor-",
+    "KV:Coprocessor:",
 
     LOCKED => ("Locked", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),

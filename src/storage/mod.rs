@@ -45,11 +45,13 @@ pub mod txn;
 mod read_pool;
 mod types;
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
+        TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
@@ -71,9 +73,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{
-    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
-};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -120,8 +120,6 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     concurrency_manager: ConcurrencyManager,
 
-    enable_async_commit: bool,
-
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -147,7 +145,6 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
-            enable_async_commit: self.enable_async_commit,
         }
     }
 }
@@ -192,7 +189,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         read_pool: ReadPoolHandle,
         lock_mgr: L,
         concurrency_manager: ConcurrencyManager,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -202,7 +199,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
             pipelined_pessimistic_lock,
-            config.enable_async_commit,
+            config.enable_async_apply_prewrite,
         );
 
         info!("Storage started.");
@@ -214,7 +211,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
-            enable_async_commit: config.enable_async_commit,
         })
     }
 
@@ -230,10 +226,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get a snapshot of `engine`.
     fn snapshot(
         engine: &E,
-        read_id: Option<ThreadReadId>,
-        ctx: &Context,
+        ctx: SnapContext<'_>,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        kv::snapshot(engine, read_id, ctx)
+        kv::snapshot(engine, ctx)
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -259,11 +254,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         key: Key,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<Option<Value>>> {
+    ) -> impl Future<Output = Result<(Option<Value>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -283,22 +277,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        iter::once(&key),
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                }
-
+                let snap_ctx = prepare_snap_ctx(
+                    &ctx,
+                    iter::once(&key),
+                    start_ts,
+                    &bypass_locks,
+                    &concurrency_manager,
+                )?;
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -325,7 +316,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
 
-                    result
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -343,11 +334,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn batch_get_command(
         &self,
         requests: Vec<GetRequest>,
-    ) -> impl Future<Output = Result<Vec<Result<Option<Vec<u8>>>>>> {
+    ) -> impl Future<Output = Result<Vec<Result<(Option<Vec<u8>>, Statistics, PerfStatisticsDelta)>>>>
+    {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
         let res =
             self.read_pool.spawn_handle(
@@ -376,23 +367,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let fill_cache = !ctx.get_not_fill_cache();
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
-                        if enable_async_commit {
-                            // Update max_ts and check the in-memory lock table before getting the snapshot
-                            if let Err(e) = async_commit_check_keys(
-                                &concurrency_manager,
-                                iter::once(&key),
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                &bypass_locks,
-                            ) {
+
+                        let snap_ctx = match prepare_snap_ctx(
+                            &ctx,
+                            iter::once(&key),
+                            start_ts,
+                            &bypass_locks,
+                            &concurrency_manager,
+                        ) {
+                            Ok(mut snap_ctx) => {
+                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx
+                            }
+                            Err(e) => {
                                 req_snaps.push(Err(e));
                                 continue;
                             }
-                        }
+                        };
 
-                        let snap = Self::with_tls_engine(|engine| {
-                            Self::snapshot(engine, read_id.clone(), &ctx)
-                        });
+                        let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                         req_snaps.push(Ok((
                             snap,
                             key,
@@ -416,7 +409,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ) = match req_snap {
                             Ok(req_snap) => req_snap,
                             Err(e) => {
-                                results.push(Err(e.into()));
+                                results.push(Err(e));
                                 continue;
                             }
                         };
@@ -430,12 +423,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     .build()
                                 {
                                     Ok(mut point_getter) => {
+                                        let perf_statistics = PerfStatisticsInstant::new();
                                         let v = point_getter.get(&key);
                                         let stat = point_getter.take_statistics();
                                         metrics::tls_collect_read_flow(region_id, &stat);
                                         statistics.add(&stat);
-                                        results
-                                            .push(v.map_err(|e| Error::from(txn::Error::from(e))));
+                                        results.push(
+                                            v.map_err(|e| Error::from(txn::Error::from(e)))
+                                                .map(|v| (v, stat, perf_statistics.delta())),
+                                        );
                                     }
                                     Err(e) => results.push(Err(Error::from(txn::Error::from(e)))),
                                 }
@@ -468,11 +464,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, Statistics, PerfStatisticsDelta)>> {
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -494,23 +489,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        &keys,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                }
-
+                let snap_ctx =
+                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
-
                     let mut statistics = Statistics::default();
+                    let perf_statistics = PerfStatisticsInstant::new();
                     let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
@@ -549,7 +535,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     SCHED_HISTOGRAM_VEC_STATIC
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
-                    result
+
+                    Ok((result?, statistics, perf_statistics.delta()))
                 }
             },
             priority,
@@ -581,7 +568,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
-        let enable_async_commit = self.enable_async_commit;
         let concurrency_manager = self.concurrency_manager.clone();
 
         let res = self.read_pool.spawn_handle(
@@ -611,25 +597,42 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                if enable_async_commit {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_ts(start_ts);
-                    if ctx.get_isolation_level() == IsolationLevel::Si {
-                        concurrency_manager
-                            .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    &key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            })
-                            .map_err(mvcc::Error::from)?;
-                    }
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    concurrency_manager
+                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
+                        })
+                        .map_err(mvcc::Error::from)?;
                 }
 
+                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                    let mut key_range = KeyRange::default();
+                    key_range.set_start_key(start_key.as_encoded().to_vec());
+                    if let Some(end_key) = &end_key {
+                        key_range.set_end_key(end_key.as_encoded().to_vec());
+                    }
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        read_id: None,
+                        start_ts,
+                        key_ranges: vec![key_range],
+                    }
+                } else {
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    }
+                };
+
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -802,8 +805,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
@@ -858,9 +865,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let mut results = Vec::default();
                 let mut snaps = vec![];
                 for req in gets {
-                    let snap = Self::with_tls_engine(|engine| {
-                        Self::snapshot(engine, read_id.clone(), req.get_context())
-                    });
+                    let snap_ctx = SnapContext {
+                        pb_ctx: req.get_context(),
+                        read_id: read_id.clone(),
+                        ..Default::default()
+                    };
+                    let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     snaps.push((req, snap));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -923,8 +933,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
@@ -1229,9 +1243,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .inc();
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
-
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now_coarse();
 
@@ -1344,9 +1361,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     .get(priority_tag)
                     .inc();
                 let command_duration = tikv_util::time::Instant::now_coarse();
-
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
                 let snapshot =
-                    Self::with_tls_engine(|engine| Self::snapshot(engine, None, &ctx)).await?;
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
@@ -1422,49 +1442,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .await?
         }
     }
-
-    /// Update max_ts with the start_ts and check the given range for locks
-    /// which blocks the reading.
-    pub fn check_memory_locks_in_ranges(
-        &self,
-        mut ctx: Context,
-        start_ts: TimeStamp,
-        ranges: Vec<KeyRange>,
-    ) -> impl Future<Output = Result<Option<LockInfo>>> {
-        let concurrency_manager = self.concurrency_manager.clone();
-        self.read_pool
-            .spawn_handle(
-                async move {
-                    concurrency_manager.update_max_ts(start_ts);
-                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                    for range in &ranges {
-                        let start_key = Key::from_raw_maybe_unbounded(range.get_start_key());
-                        let end_key = Key::from_raw_maybe_unbounded(range.get_end_key());
-                        let res = concurrency_manager.read_range_check(
-                            start_key.as_ref(),
-                            end_key.as_ref(),
-                            |key, lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            },
-                        );
-                        if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) =
-                            res
-                        {
-                            return Some(lock);
-                        }
-                    }
-                    None
-                },
-                CommandPri::Normal,
-                thread_rng().next_u64(),
-            )
-            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -1475,25 +1452,53 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-fn async_commit_check_keys<'a>(
+fn prepare_snap_ctx<'a>(
+    pb_ctx: &'a Context,
+    keys: impl IntoIterator<Item = &'a Key> + Clone,
+    start_ts: TimeStamp,
+    bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
-    keys: impl IntoIterator<Item = &'a Key>,
-    ts: TimeStamp,
-    isolation_level: IsolationLevel,
-    bypass_locks: &TsSet,
-) -> Result<()> {
-    concurrency_manager.update_max_ts(ts);
+) -> Result<SnapContext<'a>> {
+    // Update max_ts and check the in-memory lock table before getting the snapshot
+    concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
+    let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
-        for key in keys {
+        for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, ts, bypass_locks)
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
                 })
                 .map_err(mvcc::Error::from)?;
         }
     }
-    Ok(())
+
+    let mut snap_ctx = SnapContext {
+        pb_ctx,
+        start_ts,
+        ..Default::default()
+    };
+    if need_check_locks_in_replica_read(pb_ctx) {
+        snap_ctx.key_ranges = keys
+            .into_iter()
+            .map(|k| point_key_range(k.clone()))
+            .collect();
+    }
+    Ok(snap_ctx)
+}
+
+pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
+    ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+}
+
+fn point_key_range(key: Key) -> KeyRange {
+    let mut end_key = key.as_encoded().to_vec();
+    end_key.push(0);
+    let end_key = Key::from_encoded(end_key);
+    let mut key_range = KeyRange::default();
+    key_range.set_start_key(key.into_encoded());
+    key_range.set_end_key(end_key.into_encoded());
+    key_range
 }
 
 /// A builder to build a temporary `Storage<E>`.
@@ -1503,22 +1508,18 @@ fn async_commit_check_keys<'a>(
 pub struct TestStorageBuilder<E: Engine, L: LockManager> {
     engine: E,
     config: Config,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<atomic::AtomicBool>,
     lock_mgr: L,
 }
 
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager) -> Self {
-        // Enable async commit in tests by default
-        let config = Config {
-            enable_async_commit: true,
-            ..Default::default()
-        };
+        let config = Config::default();
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1526,15 +1527,11 @@ impl TestStorageBuilder<RocksEngine, DummyLockManager> {
 
 impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
     pub fn from_engine_and_lock_mgr(engine: E, lock_mgr: L) -> Self {
-        // Enable async commit in tests by default
-        let config = Config {
-            enable_async_commit: true,
-            ..Default::default()
-        };
+        let config = Config::default();
         Self {
             engine,
             config,
-            pipelined_pessimistic_lock: false,
+            pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
         }
     }
@@ -1547,8 +1544,14 @@ impl<E: Engine, L: LockManager> TestStorageBuilder<E, L> {
         self
     }
 
-    pub fn set_pipelined_pessimistic_lock(mut self, enabled: bool) -> Self {
-        self.pipelined_pessimistic_lock = enabled;
+    pub fn set_pipelined_pessimistic_lock(self, enabled: bool) -> Self {
+        self.pipelined_pessimistic_lock
+            .store(enabled, atomic::Ordering::Relaxed);
+        self
+    }
+
+    pub fn set_async_apply_prewrite(mut self, enabled: bool) -> Self {
+        self.config.enable_async_apply_prewrite = enabled;
         self
     }
 
@@ -1578,16 +1581,16 @@ pub mod test_util {
         sync::mpsc::{channel, Sender},
     };
 
-    pub fn expect_none(x: Result<Option<Value>>) {
-        assert_eq!(x.unwrap(), None);
+    pub fn expect_none(x: Option<Value>) {
+        assert_eq!(x, None);
     }
 
-    pub fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
-        assert_eq!(x.unwrap().unwrap(), v);
+    pub fn expect_value(v: Vec<u8>, x: Option<Value>) {
+        assert_eq!(x.unwrap(), v);
     }
 
-    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
-        let x: Vec<Option<KvPair>> = x.unwrap().into_iter().map(Result::ok).collect();
+    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Vec<Result<KvPair>>) {
+        let x: Vec<Option<KvPair>> = x.into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
@@ -1744,11 +1747,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -1781,14 +1784,16 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
     }
 
@@ -1918,7 +1923,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -1932,7 +1938,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -1946,7 +1953,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -1960,7 +1968,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with limit
         expect_multi_values(
@@ -1974,7 +1983,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -1988,7 +1998,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         storage
@@ -2023,7 +2034,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2041,7 +2053,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with sample step
         expect_multi_values(
@@ -2058,7 +2071,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with sample step
         expect_multi_values(
@@ -2075,7 +2089,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with sample step and limit
         expect_multi_values(
@@ -2089,7 +2104,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with sample step and limit
         expect_multi_values(
@@ -2103,7 +2119,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2120,7 +2137,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2137,7 +2155,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Forward with limit
@@ -2155,7 +2174,8 @@ mod tests {
                 5.into(),
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2172,7 +2192,8 @@ mod tests {
                 5.into(),
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 
@@ -2188,10 +2209,10 @@ mod tests {
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
             ];
             RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
         }
@@ -2230,7 +2251,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2244,7 +2266,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2258,7 +2281,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2272,7 +2296,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with limit
         expect_multi_values(
@@ -2286,7 +2311,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2300,7 +2326,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         storage
@@ -2335,7 +2362,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward
         expect_multi_values(
@@ -2353,7 +2381,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         // Forward with bound
         expect_multi_values(
@@ -2367,7 +2396,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with bound
         expect_multi_values(
@@ -2381,7 +2411,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Forward with limit
@@ -2396,7 +2427,8 @@ mod tests {
                 5.into(),
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         // Backward with limit
         expect_multi_values(
@@ -2410,7 +2442,8 @@ mod tests {
                 5.into(),
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 
@@ -2441,7 +2474,9 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"c"), Key::from_raw(b"d")],
                 2.into(),
-            )),
+            ))
+            .unwrap()
+            .0,
         );
         storage
             .sched_txn_command(
@@ -2474,7 +2509,9 @@ mod tests {
                     Key::from_raw(b"b"),
                 ],
                 5.into(),
-            )),
+            ))
+            .unwrap()
+            .0,
         );
     }
 
@@ -2520,7 +2557,7 @@ mod tests {
             },
             x.remove(0),
         );
-        assert_eq!(x.remove(0).unwrap(), None);
+        assert_eq!(x.remove(0).unwrap().0, None);
         storage
             .sched_txn_command(
                 commands::Commit::new(
@@ -2546,6 +2583,7 @@ mod tests {
         .unwrap()
         .into_iter()
         .map(|x| x.unwrap())
+        .map(|(x, _, _)| x)
         .collect();
         assert_eq!(
             x,
@@ -2612,11 +2650,15 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 120.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"101".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 120.into()))
+                .unwrap()
+                .0,
         );
         storage
             .sched_txn_command(
@@ -2645,14 +2687,14 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command::<()>(
-                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
+                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2712,11 +2754,11 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         assert_eq!(cm.max_ts(), 100.into());
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            105.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 105.into()))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -2770,11 +2812,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            ts(230, 0),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), ts(230, 0)))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -2785,7 +2827,11 @@ mod tests {
         let (tx, rx) = channel();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
@@ -2811,12 +2857,18 @@ mod tests {
         rx.recv().unwrap();
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
-        expect_none(block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into())));
+        expect_none(
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
     }
 
@@ -2829,11 +2881,11 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = channel();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            100.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()))
+                .unwrap()
+                .0,
+        );
         storage
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
@@ -2868,7 +2920,9 @@ mod tests {
         ctx.set_priority(CommandPri::High);
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(ctx, Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
         // Command Get with high priority not block by command Pause.
         assert_eq!(rx.recv().unwrap(), 3);
@@ -2914,15 +2968,21 @@ mod tests {
         rx.recv().unwrap();
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+                .unwrap()
+                .0,
         );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
         );
 
         // Delete range [x, z)
@@ -2936,19 +2996,21 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"x"),
-            101.into(),
-        )));
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"y"),
-            101.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"x"), 101.into()))
+                .unwrap()
+                .0,
+        );
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"y"), 101.into()))
+                .unwrap()
+                .0,
+        );
         expect_value(
             b"100".to_vec(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into())),
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
         );
 
         storage
@@ -2961,11 +3023,11 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        expect_none(block_on(storage.get(
-            Context::default(),
-            Key::from_raw(b"z"),
-            101.into(),
-        )));
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"z"), 101.into()))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -2998,7 +3060,7 @@ mod tests {
 
         expect_value(
             b"004".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
         );
 
         // Delete ["d", "e")
@@ -3016,16 +3078,14 @@ mod tests {
         // Assert key "d" has gone
         expect_value(
             b"003".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"d".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
         expect_value(
             b"005".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
         );
 
         // Delete ["aa", "ab")
@@ -3043,11 +3103,11 @@ mod tests {
         // Assert nothing happened
         expect_value(
             b"001".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
         );
         expect_value(
             b"002".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
         );
 
         // Delete all
@@ -3064,11 +3124,10 @@ mod tests {
 
         // Assert now no key remains
         for kv in &test_data {
-            expect_none(block_on(storage.raw_get(
-                Context::default(),
-                "".to_string(),
-                kv.0.to_vec(),
-            )));
+            expect_none(
+                block_on(storage.raw_get(Context::default(), "".to_string(), kv.0.to_vec()))
+                    .unwrap(),
+            );
         }
 
         rx.recv().unwrap();
@@ -3104,7 +3163,7 @@ mod tests {
         for (key, val) in test_data {
             expect_value(
                 val,
-                block_on(storage.raw_get(Context::default(), "".to_string(), key)),
+                block_on(storage.raw_get(Context::default(), "".to_string(), key)).unwrap(),
             );
         }
     }
@@ -3143,7 +3202,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
     }
 
@@ -3228,7 +3287,7 @@ mod tests {
             .collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
 
         // Delete ["b", "d"]
@@ -3245,25 +3304,21 @@ mod tests {
         // Assert "b" and "d" are gone
         expect_value(
             b"aa".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"a".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"b".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"b".to_vec())).unwrap(),
+        );
         expect_value(
             b"cc".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"c".to_vec())).unwrap(),
         );
-        expect_none(block_on(storage.raw_get(
-            Context::default(),
-            "".to_string(),
-            b"d".to_vec(),
-        )));
+        expect_none(
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"d".to_vec())).unwrap(),
+        );
         expect_value(
             b"ee".to_vec(),
-            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())),
+            block_on(storage.raw_get(Context::default(), "".to_string(), b"e".to_vec())).unwrap(),
         );
 
         // Delete ["a", "c", "e"]
@@ -3279,11 +3334,7 @@ mod tests {
 
         // Assert no key remains
         for (k, _) in test_data {
-            expect_none(block_on(storage.raw_get(
-                Context::default(),
-                "".to_string(),
-                k,
-            )));
+            expect_none(block_on(storage.raw_get(Context::default(), "".to_string(), k)).unwrap());
         }
     }
 
@@ -3343,7 +3394,8 @@ mod tests {
                 20,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         results = results.split_off(10);
         expect_multi_values(
@@ -3356,7 +3408,8 @@ mod tests {
                 20,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let mut results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3373,7 +3426,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         results = results.split_off(10);
         expect_multi_values(
@@ -3386,7 +3440,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3404,7 +3459,8 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3423,7 +3479,8 @@ mod tests {
                 5,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Scan with end_key
@@ -3444,7 +3501,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .clone()
@@ -3463,7 +3521,8 @@ mod tests {
                 20,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         // Reverse scan with end_key
@@ -3485,7 +3544,8 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
         let results: Vec<Option<KvPair>> = test_data
             .into_iter()
@@ -3503,11 +3563,11 @@ mod tests {
                 20,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         // End key tests. Confirm that lower/upper bound works correctly.
-        let ctx = Context::default();
         let results = vec![
             (b"c1".to_vec(), b"cc11".to_vec()),
             (b"c2".to_vec(), b"cc22".to_vec()),
@@ -3522,8 +3582,11 @@ mod tests {
         expect_multi_values(
             results.clone().collect(),
             block_on(async {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    SnapContext::default(),
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
                     &snapshot,
                     &"".to_string(),
@@ -3533,13 +3596,17 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
-            }),
+            })
+            .unwrap(),
         );
         expect_multi_values(
             results.rev().collect(),
             block_on(async move {
-                let snapshot =
-                    <Storage<RocksEngine, DummyLockManager>>::snapshot(&engine, None, &ctx).await?;
+                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
+                    &engine,
+                    SnapContext::default(),
+                )
+                .await?;
                 <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                     &snapshot,
                     &"".to_string(),
@@ -3549,7 +3616,8 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
-            }),
+            })
+            .unwrap(),
         );
     }
 
@@ -3697,7 +3765,7 @@ mod tests {
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
-            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)),
+            block_on(storage.raw_batch_get(Context::default(), "".to_string(), keys)).unwrap(),
         );
 
         let results = vec![
@@ -3732,7 +3800,8 @@ mod tests {
                 5,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3759,7 +3828,8 @@ mod tests {
                 5,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3782,7 +3852,8 @@ mod tests {
                 3,
                 false,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3805,7 +3876,8 @@ mod tests {
                 3,
                 true,
                 false,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3841,7 +3913,8 @@ mod tests {
                 5,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3869,7 +3942,8 @@ mod tests {
                 2,
                 false,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
 
         let results = vec![
@@ -3905,7 +3979,8 @@ mod tests {
                 5,
                 true,
                 true,
-            )),
+            ))
+            .unwrap(),
         );
     }
 
@@ -3945,7 +4020,9 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4369,7 +4446,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -4428,7 +4505,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -4521,7 +4598,9 @@ mod tests {
                     false,
                     3,
                     ts(10, 1),
+                    TimeStamp::default(),
                     Some(vec![b"k1".to_vec(), b"k2".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4652,7 +4731,9 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4724,7 +4805,9 @@ mod tests {
                     false,
                     2,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4840,7 +4923,9 @@ mod tests {
                     10.into(),
                     1,
                     TimeStamp::zero(),
+                    TimeStamp::default(),
                     None,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -5511,7 +5596,9 @@ mod tests {
                     false,
                     3,
                     TimeStamp::default(),
+                    TimeStamp::default(),
                     Some(vec![b"a".to_vec(), b"b".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -5553,7 +5640,9 @@ mod tests {
                     400.into(),
                     2,
                     401.into(),
+                    TimeStamp::default(),
                     Some(vec![b"e".to_vec()]),
+                    false,
                     Context::default(),
                 ),
                 Box::new(move |res| {

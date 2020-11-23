@@ -1,11 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_rocks::properties::MvccProperties;
-use engine_rocks::RocksTablePropertiesCollection;
-use engine_traits::{IterOptions, TableProperties, TablePropertiesCollection};
-use engine_traits::{CF_LOCK, CF_WRITE};
+use engine_traits::{IterOptions, MvccProperties};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -76,7 +74,13 @@ pub struct MvccReader<S: Snapshot> {
     lock_cursor: Option<Cursor<S::Iter>>,
     pub write_cursor: Option<Cursor<S::Iter>>,
 
+    /// None means following operations are performed on a single user key, i.e.,
+    /// different versions of the same key. It can use prefix seek to speed up reads
+    /// from the write-cf.
     scan_mode: Option<ScanMode>,
+    // Records the current key for prefix seek. Will Reset the write cursor when switching to another key.
+    current_key: Option<Key>,
+
     key_only: bool,
 
     fill_cache: bool,
@@ -97,6 +101,7 @@ impl<S: Snapshot> MvccReader<S> {
             lock_cursor: None,
             write_cursor: None,
             scan_mode,
+            current_key: None,
             isolation_level,
             key_only: false,
             fill_cache,
@@ -112,10 +117,6 @@ impl<S: Snapshot> MvccReader<S> {
         self.statistics = Statistics::default();
     }
 
-    pub fn set_key_only(&mut self, key_only: bool) {
-        self.key_only = key_only;
-    }
-
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         assert_eq!(write.write_type, WriteType::Put);
         if self.key_only {
@@ -124,9 +125,8 @@ impl<S: Snapshot> MvccReader<S> {
         if let Some(val) = write.short_value {
             return Ok(val);
         }
-        if self.scan_mode.is_some() && self.data_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, self.fill_cache);
-            self.data_cursor = Some(self.snapshot.iter(iter_opt, self.get_scan_mode(true))?);
+        if self.scan_mode.is_some() {
+            self.create_data_cursor()?;
         }
 
         let k = key.clone().append_ts(write.start_ts);
@@ -149,12 +149,8 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
-        if self.scan_mode.is_some() && self.lock_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
+        if self.scan_mode.is_some() {
+            self.create_lock_cursor()?;
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
@@ -182,23 +178,13 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
-        if self.scan_mode.is_some() {
-            if self.write_cursor.is_none() {
-                let iter_opt = IterOptions::new(None, None, self.fill_cache);
-                let iter = self
-                    .snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
-                self.write_cursor = Some(iter);
-            }
-        } else {
-            // use prefix bloom filter
-            let iter_opt = IterOptions::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true);
-            let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
-            self.write_cursor = Some(iter);
+        // When it switches to another key in prefix seek mode, creates a new cursor for it
+        // because the current position of the cursor is seldom around `key`.
+        if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
+            self.current_key = Some(key.clone());
+            self.write_cursor.take();
         }
-
+        self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
         if !ok {
@@ -298,31 +284,35 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
-            self.data_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+                .fill_cache(self.fill_cache)
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.data_cursor = Some(cursor);
         }
         Ok(())
     }
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
-            self.write_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+                .fill_cache(self.fill_cache)
+                // Only use prefix seek in non-scan mode.
+                .prefix_seek(self.scan_mode.is_none())
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.write_cursor = Some(cursor);
         }
         Ok(())
     }
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOptions::new(None, None, true);
-            let iter = self
-                .snapshot
-                .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
-            self.lock_cursor = Some(iter);
+            let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
+                .fill_cache(self.fill_cache)
+                .scan_mode(self.get_scan_mode(true))
+                .build()?;
+            self.lock_cursor = Some(cursor);
         }
         Ok(())
     }
@@ -440,20 +430,11 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(
-    safe_point: TimeStamp,
-    ratio_threshold: f64,
-    write_properties: &RocksTablePropertiesCollection,
-) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
     }
-
-    let props = match get_mvcc_properties(safe_point, write_properties) {
-        Some(v) => v,
-        None => return true,
-    };
 
     // No data older than safe_point to GC.
     if props.min_ts > safe_point {
@@ -476,29 +457,6 @@ pub fn check_need_gc(
     props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
 }
 
-fn get_mvcc_properties(
-    safe_point: TimeStamp,
-    collection: &RocksTablePropertiesCollection,
-) -> Option<MvccProperties> {
-    if collection.is_empty() {
-        return None;
-    }
-    // Aggregate MVCC properties.
-    let mut props = MvccProperties::new();
-    for (_, v) in collection.iter() {
-        let mvcc = match MvccProperties::decode(&v.user_collected_properties()) {
-            Ok(v) => v,
-            Err(_) => return None,
-        };
-        // Filter out properties after safe_point.
-        if mvcc.min_ts > safe_point {
-            continue;
-        }
-        props.add(&mvcc);
-    }
-    Some(props)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,14 +464,16 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
-    use crate::storage::txn::{commit, prewrite};
+    use crate::storage::txn::{
+        acquire_pessimistic_lock, cleanup, commit, pessimistic_prewrite, prewrite,
+    };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, TablePropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -579,7 +539,19 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            prewrite(&mut txn, m, pk, &None, false, 0, 0, TimeStamp::default()).unwrap();
+            prewrite(
+                &mut txn,
+                m,
+                pk,
+                &None,
+                false,
+                0,
+                0,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                false,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -595,7 +567,8 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            txn.pessimistic_prewrite(
+            pessimistic_prewrite(
+                &mut txn,
                 m,
                 pk,
                 &None,
@@ -603,6 +576,7 @@ mod tests {
                 0,
                 TimeStamp::default(),
                 0,
+                TimeStamp::default(),
                 TimeStamp::default(),
                 false,
             )
@@ -622,8 +596,17 @@ mod tests {
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
             let mut txn = MvccTxn::new(snap, start_ts.into(), true, cm);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts, false, TimeStamp::zero())
-                .unwrap();
+            acquire_pessimistic_lock(
+                &mut txn,
+                k,
+                pk,
+                false,
+                0,
+                for_update_ts,
+                false,
+                TimeStamp::zero(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -649,7 +632,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
-            txn.rollback(Key::from_raw(pk)).unwrap();
+            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), false).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -660,8 +643,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
             txn.collapse_rollback(false);
-            txn.cleanup(Key::from_raw(pk), TimeStamp::zero(), true)
-                .unwrap();
+            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), true).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -761,13 +743,13 @@ mod tests {
 
         let start = keys::data_key(region.get_start_key());
         let end = keys::data_end_key(region.get_end_key());
-        let collection = db
+        let props = db
             .c()
-            .get_range_properties_cf(CF_WRITE, &start, &end)
-            .unwrap();
-        assert_eq!(check_need_gc(safe_point, 1.0, &collection), need_gc);
-
-        get_mvcc_properties(safe_point, &collection)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
+        if let Some(props) = props.as_ref() {
+            assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
+        }
+        props
     }
 
     #[test]
@@ -1099,14 +1081,17 @@ mod tests {
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_old = reader.get_statistics().write.seek;
+        let next_old = reader.get_statistics().write.next;
         assert!(!reader
             .get_txn_commit_record(&key, 30.into())
             .unwrap()
             .exist());
         let seek_new = reader.get_statistics().write.seek;
+        let next_new = reader.get_statistics().write.next;
 
         // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
-        assert_eq!(seek_new - seek_old, 3);
+        assert_eq!(seek_new - seek_old, 1);
+        assert_eq!(next_new - next_old, 2);
     }
 
     #[test]
@@ -1135,6 +1120,7 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 2.into())
             .unwrap()
@@ -1193,6 +1179,8 @@ mod tests {
             write,
             Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
         );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
         let (commit_ts, write) = reader.seek_write(&k, 25.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 25.into());
@@ -1200,10 +1188,14 @@ mod tests {
             write,
             Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
         );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
         let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 20.into());
         assert_eq!(write, Write::new(WriteType::Lock, 10.into(), None));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 1);
 
         let (commit_ts, write) = reader.seek_write(&k, 19.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 17.into());
@@ -1211,14 +1203,21 @@ mod tests {
             write,
             Write::new(WriteType::Put, 15.into(), Some(v.to_vec()))
         );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 2);
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
         assert_eq!(write, Write::new_rollback(3.into(), false));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 5);
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
         assert_eq!(write, Write::new_rollback(7.into(), false));
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 6);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());
@@ -1226,8 +1225,14 @@ mod tests {
             write,
             Write::new(WriteType::Put, 1.into(), Some(v.to_vec()))
         );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 7);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 9);
+        assert_eq!(reader.get_statistics().write.prev, 3);
 
         // Test seek_write should not see the next key.
         let (k2, v2) = (b"k2", b"v2");
@@ -1247,8 +1252,13 @@ mod tests {
             write,
             Write::new(WriteType::Put, 1.into(), Some(v2.to_vec()))
         );
+        assert_eq!(reader.get_statistics().write.seek, 1);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
+        // Should seek for another key.
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
+        assert_eq!(reader.get_statistics().write.seek, 2);
+        assert_eq!(reader.get_statistics().write.next, 0);
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
@@ -1569,9 +1579,10 @@ mod tests {
                 Some(short_value.to_vec())
             );
             assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+
+            assert!(reader.get(&key, 11.into(), false).is_err());
+            assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
         }
-        assert!(reader.get(&key, 11.into(), false).is_err());
-        assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
 
         // Commit the long value
         engine.commit(k, 10, 11);

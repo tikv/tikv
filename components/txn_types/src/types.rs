@@ -295,17 +295,11 @@ impl Mutation {
     }
 
     pub fn should_not_exists(&self) -> bool {
-        match self {
-            Mutation::Insert(_) | Mutation::CheckNotExists(_) => true,
-            _ => false,
-        }
+        matches!(self, Mutation::Insert(_) | Mutation::CheckNotExists(_))
     }
 
     pub fn should_not_write(&self) -> bool {
-        match self {
-            Mutation::CheckNotExists(_) => true,
-            _ => false,
-        }
+        matches!(self, Mutation::CheckNotExists(_))
     }
 }
 

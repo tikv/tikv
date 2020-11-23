@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -26,8 +26,7 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::FutureWorker;
-use tikv_util::worker::Worker;
+use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -40,7 +39,7 @@ pub fn create_raft_storage<S>(
     read_pool: ReadPoolHandle,
     lock_mgr: LockManager,
     concurrency_manager: ConcurrencyManager,
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter<RocksEngine> + LocalReadRouter<RocksEngine> + 'static,
@@ -67,6 +66,7 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
+    bg_worker: Option<Worker>,
 }
 
 impl<C, ER> Node<C, ER>
@@ -81,6 +81,7 @@ where
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
+        bg_worker: Option<Worker>,
     ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -126,6 +127,7 @@ where
             system,
             has_started: false,
             state,
+            bg_worker,
         }
     }
 
@@ -142,7 +144,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -184,7 +186,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
             auto_split_controller,
             concurrency_manager,
         )?;
@@ -296,12 +298,10 @@ where
     ) -> Result<Option<metapb::Region>> {
         if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
+        } else if self.check_cluster_bootstrapped()? {
+            Ok(None)
         } else {
-            if self.check_cluster_bootstrapped()? {
-                Ok(None)
-            } else {
-                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
-            }
+            self.prepare_bootstrap_cluster(engines, store_id).map(Some)
         }
     }
 
@@ -377,7 +377,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<RocksEngine>,
         importer: Arc<SSTImporter>,
-        split_check_worker: Worker<SplitCheckTask>,
+        split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()>
@@ -393,6 +393,12 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
+        let background_worker = if let Some(worker) = self.bg_worker.as_ref() {
+            worker.clone()
+        } else {
+            // only for test
+            WorkerBuilder::new("background").create()
+        };
         self.system.spawn(
             store,
             cfg,
@@ -404,7 +410,8 @@ where
             store_meta,
             coprocessor_host,
             importer,
-            split_check_worker,
+            split_check_scheduler,
+            background_worker,
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
@@ -420,6 +427,9 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
+        if let Some(worker) = self.bg_worker.take() {
+            worker.stop();
+        }
         self.stop_store(store_id)
     }
 }

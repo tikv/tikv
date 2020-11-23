@@ -1,17 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-/// A boolean vector, which consolidates 8 booleans into 1 u8 to save space.
+/// A boolean vector, which consolidates 64 booleans into 1 u64 to save space.
 ///
 /// `BitVec` is mainly used to implement bitmap in ChunkedVec.
 #[derive(Debug, PartialEq, Clone)]
 pub struct BitVec {
-    data: Vec<u8>,
+    data: Vec<u64>,
     length: usize,
 }
-
+const BITS: usize = 64;
 impl BitVec {
     fn upper_bound(size: usize) -> usize {
-        (size + 7) >> 3
+        (size + BITS - 1) >> 6
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
@@ -23,18 +23,24 @@ impl BitVec {
 
     #[inline]
     pub fn push(&mut self, value: bool) {
-        let idx = self.length >> 3;
+        let idx = self.length >> 6;
         if idx >= self.data.len() {
             self.data.push(0);
         }
+
+        let mask = (1 as u64) << (self.length & (BITS - 1));
         self.length += 1;
-        self.replace(self.length - 1, value);
+        if value {
+            self.data[idx] |= mask;
+        } else {
+            self.data[idx] &= !mask;
+        }
     }
 
     pub fn replace(&mut self, idx: usize, value: bool) {
         assert!(idx < self.length);
-        let mask = (1 << (idx & 7)) as u8;
-        let pos = idx >> 3;
+        let mask = (1 as u64) << (idx & (BITS - 1));
+        let pos = idx >> 6;
         if value {
             self.data[pos] |= mask;
         } else {
@@ -58,7 +64,7 @@ impl BitVec {
     }
 
     pub fn capacity(&self) -> usize {
-        self.data.len() << 3
+        self.data.len() << 6
     }
 
     pub fn append(&mut self, other: &mut Self) {
@@ -71,15 +77,15 @@ impl BitVec {
     #[inline]
     pub fn get(&self, idx: usize) -> bool {
         assert!(idx < self.length);
-        let mask = (1 << (idx & 7)) as u8;
-        let pos = idx >> 3;
+        let mask = (1 as u64) << (idx & (BITS - 1));
+        let pos = idx >> 6;
         (self.data[pos] & mask) != 0
     }
 }
 
 pub struct BitAndIterator<'a> {
     vecs: &'a [&'a BitVec],
-    or: u8,
+    or: u64,
     cnt: usize,
     output_rows: usize,
 }
@@ -107,9 +113,9 @@ impl<'a> Iterator for BitAndIterator<'a> {
         if self.cnt == self.output_rows {
             return None;
         }
-        if self.cnt % 8 == 0 {
-            let mut result: u8 = 0xff;
-            let idx = self.cnt / 8;
+        if self.cnt % BITS == 0 {
+            let mut result: u64 = 0xffffffffffffffff;
+            let idx = self.cnt / BITS;
             for i in self.vecs {
                 result &= i.data[idx];
             }
