@@ -7,12 +7,17 @@ use tidb_query_datatype::expr::EvalContext;
 use crate::RpnFnCallExtra;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::mysql::duration::{
+    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_SECOND_PART, NANOS_PER_SEC,
+};
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
 use tidb_query_datatype::codec::mysql::{Duration, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::FieldTypeFlag;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -219,92 +224,76 @@ pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<
     Ok(Some(ret))
 }
 
+#[rpn_fn(capture = [extra,args])]
+#[inline]
 pub fn make_time(
-    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    args: &[crate::RpnStackNode<'_>],
     hour: &Int,
     minute: &Int,
     second: &Real,
-    fsp: i8,
-    isunsinged: bool,
 ) -> Result<Option<Duration>> {
-    let mut hour = *hour;
-    let mut minute = *minute;
     if second.is_nan() {
         return Ok(None);
     }
-    let mut second = second.into_inner();
-
-    if minute < 0 || minute >= 60 || second < 0.0 || second >= 60.0 {
+    let minutei64 = *minute;
+    let secondi64 = second.into_inner().trunc() as i64;
+    if minutei64 < 0
+        || secondi64 < 0
+        || minutei64 > (MAX_MINUTE_PART as i64)
+        || secondi64 > (MAX_SECOND_PART as i64)
+    {
         return Ok(None);
     }
-    let mut overflow = false;
-    if hour < 0 && isunsinged {
-        hour = 838;
-        overflow = true;
-    }
-    if hour < -838 {
-        hour = -838;
-        overflow = true;
-    } else if hour > 838 {
-        hour = 838;
-        overflow = true;
-    }
+    let mut minute = minutei64 as u32;
+    let mut nanosecond = (second.into_inner().fract() * (NANOS_PER_SEC as f64)) as u32;
+    let mut second = second.into_inner().trunc() as u32;
 
-    if (hour == -838 || hour == 838) && minute == 59 && second > 59.0 {
-        second = 59.0;
+    let is_unsigned = match args[0] {
+        crate::RpnStackNode::Scalar { field_type, .. } => field_type,
+        crate::RpnStackNode::Vector { field_type, .. } => field_type,
+    }
+    .as_accessor()
+    .flag()
+    .contains(FieldTypeFlag::UNSIGNED);
+    let mut overflow = false;
+    let mut houri64 = *hour;
+    let mut neg = houri64 < 0;
+    if neg && is_unsigned {
+        houri64 = MAX_HOUR_PART as i64;
+        overflow = true;
+        neg = false;
+    }
+    if houri64 > MAX_HOUR_PART as i64 || houri64 < -(MAX_HOUR_PART as i64) {
+        houri64 = MAX_HOUR_PART as i64;
+        overflow = true;
+    }
+    let hour = houri64.abs() as u32;
+
+    if hour == MAX_HOUR_PART
+        && minute == MAX_MINUTE_PART
+        && second == MAX_SECOND_PART
+        && nanosecond > 0
+    {
+        nanosecond = 0;
     }
 
     if overflow {
-        minute = 59;
-        second = 59.0;
+        minute = MAX_MINUTE_PART;
+        second = MAX_SECOND_PART;
+        nanosecond = 0;
     }
-
-    match Duration::parse(
-        ctx,
-        format!("{:02}:{:02}:{}", hour, minute, second).as_bytes(),
-        fsp,
+    match Duration::new_from_parts(
+        neg,
+        hour,
+        minute,
+        second,
+        nanosecond,
+        extra.ret_field_type.get_decimal() as i8,
     ) {
-        Ok(t) => Ok(Some(t)),
-        Err(e) => Err(e.into()),
+        Ok(duration) => Ok(Some(duration)),
+        Err(err) => Err(err.into()),
     }
-}
-
-#[rpn_fn(capture = [ctx,extra])]
-#[inline]
-pub fn make_time_signed(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    hour: &Int,
-    minute: &Int,
-    second: &Real,
-) -> Result<Option<Duration>> {
-    make_time(
-        ctx,
-        hour,
-        minute,
-        second,
-        extra.ret_field_type.get_decimal() as i8,
-        false,
-    )
-}
-
-#[rpn_fn(capture = [ctx,extra])]
-#[inline]
-pub fn make_time_unsigned(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    hour: &Int,
-    minute: &Int,
-    second: &Real,
-) -> Result<Option<Duration>> {
-    make_time(
-        ctx,
-        hour,
-        minute,
-        second,
-        extra.ret_field_type.get_decimal() as i8,
-        true,
-    )
 }
 
 #[rpn_fn(nullable)]
@@ -1415,11 +1404,15 @@ mod tests {
             (0, 1, 59.1, "00:01:59.1"),
             (837, 59, 59.1, "837:59:59.1"),
             (838, 59, 59.1, "838:59:59"),
+            (838, 58, 59.1, "838:58:59.1"),
+            (838, 0, 59.1, "838:00:59.1"),
             (-838, 59, 59.1, "-838:59:59"),
             (1000, 1, 1.0, "838:59:59"),
             (-1000, 1, 1.23, "-838:59:59"),
             (1000, 59, 1.0, "838:59:59"),
             (1000, 1, 59.1, "838:59:59"),
+            (i64::MIN, 0, 1.0, "-838:59:59"),
+            (i64::MAX, 0, 0.0, "838:59:59"),
         ];
         let mut ctx = EvalContext::default();
         for (hour, minute, second, ans) in cases {
@@ -1445,6 +1438,7 @@ mod tests {
             (12, 15, -30.0),
             (12, 15, 60.0),
             (12, 60, 0.0),
+            (i64::MAX, i64::MAX, f64::MAX),
         ];
         for (hour, minute, second) in none_case {
             for fsp in 0..MAX_FSP {
