@@ -1248,7 +1248,12 @@ fn future_batch_get<E: Engine, L: LockManager>(
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {
-                    resp.set_error(extract_key_error(&e));
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
                 }
             }
         }
