@@ -13,11 +13,8 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
-<<<<<<< HEAD
 use txn_types::TxnExtra;
-=======
 use std::borrow::Cow;
->>>>>>> 618b347a2... raftstore: trace split command source (#8896)
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -215,12 +212,8 @@ pub enum CasualMessage<E: KvEngine> {
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-<<<<<<< HEAD
         callback: Callback<E>,
-=======
-        callback: Callback<EK::Snapshot>,
         source: Cow<'static, str>,
->>>>>>> 618b347a2... raftstore: trace split command source (#8896)
     },
 
     /// Hash result of ComputeHash command.

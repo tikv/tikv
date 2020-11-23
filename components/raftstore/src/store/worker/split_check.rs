@@ -324,21 +324,11 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
     }
 }
 
-<<<<<<< HEAD
 fn new_split_region(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
-) -> CasualMessage<RocksEngine> {
-=======
-fn new_split_region<E>(
-    region_epoch: RegionEpoch,
-    split_keys: Vec<Vec<u8>>,
     source: &'static str,
-) -> CasualMessage<E>
-where
-    E: KvEngine,
-{
->>>>>>> 618b347a2... raftstore: trace split command source (#8896)
+) -> CasualMessage<RocksEngine> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,

@@ -2866,12 +2866,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-<<<<<<< HEAD
         cb: Callback<RocksEngine>,
-=======
-        cb: Callback<EK::Snapshot>,
         source: &str,
->>>>>>> 618b347a2... raftstore: trace split command source (#8896)
     ) {
         info!(
             "on split";

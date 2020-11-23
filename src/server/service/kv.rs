@@ -661,12 +661,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let req = CasualMessage::SplitRegion {
             region_epoch: req.take_context().take_region_epoch(),
             split_keys,
-<<<<<<< HEAD
             callback: Callback::Write(cb),
-=======
-            callback: Callback::write(cb),
             source: ctx.peer().into(),
->>>>>>> 618b347a2... raftstore: trace split command source (#8896)
         };
 
         if let Err(e) = self.ch.casual_send(region_id, req) {
