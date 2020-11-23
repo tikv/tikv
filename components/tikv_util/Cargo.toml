@@ -58,6 +58,7 @@ procfs = "0.7"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
+branch = "tikv-4.0"
 
 [dev-dependencies]
 futures-cpupool = "0.1"

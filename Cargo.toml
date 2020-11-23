@@ -162,6 +162,7 @@ rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
+branch = "tikv-4.0"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
