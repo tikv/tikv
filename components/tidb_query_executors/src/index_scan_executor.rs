@@ -1393,7 +1393,7 @@ mod tests {
             },
             {
                 let mut ci = ColumnInfo::default();
-                ci.set_column_id(table::EXTRA_PID_COL_ID);
+                ci.set_column_id(table::EXTRA_PARTITION_ID_COL_ID);
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci
             },
