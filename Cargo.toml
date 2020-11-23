@@ -67,6 +67,7 @@ backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
+cache-size = "0.5"
 chrono = "0.4"
 codec = { path = "components/codec" }
 configuration = { path = "components/configuration" }
@@ -108,6 +109,7 @@ mime = "0.3.13"
 more-asserts = "0.1"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
+num_cpus = "1"
 pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
@@ -130,7 +132,7 @@ slog_derive = "0.2"
 parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
-sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
+sysinfo = "0.14"
 tempfile = "3.0"
 tidb_query = { path = "components/tidb_query" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
@@ -152,6 +154,7 @@ txn_types = { path = "components/txn_types" }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 vlog = "0.1.4"
+walkdir = "2"
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
