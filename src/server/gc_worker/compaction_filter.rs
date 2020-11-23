@@ -20,7 +20,7 @@ use engine_traits::{
     CF_WRITE,
 };
 use pd_client::ClusterVersion;
-use prometheus::*;
+use prometheus::{local::*, *};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{GcConfig, GcWorkerConfigManager};
@@ -193,6 +193,8 @@ struct WriteCompactionFilter {
     total_versions: usize,
     total_filtered: usize,
     total_deleted: usize,
+    versions_hist: LocalHistogram,
+    filtered_hist: LocalHistogram,
 }
 
 impl WriteCompactionFilter {
@@ -224,6 +226,8 @@ impl WriteCompactionFilter {
             total_versions: 0,
             total_filtered: 0,
             total_deleted: 0,
+            versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
+            filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
         };
 
         if filter.handle_mvcc_deletes {
@@ -371,12 +375,12 @@ impl WriteCompactionFilter {
 
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
-            MVCC_VERSIONS_HISTOGRAM.observe(self.versions as f64);
+            self.versions_hist.observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.filtered as f64);
+            self.filtered_hist.observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
         }
@@ -498,7 +502,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
 }
 
 fn too_many_delete_marks(props: &MvccProperties) -> bool {
-    props.num_deletes as f64 / props.num_versions as f64 > 0.1
+    props.num_deletes as f64 / props.num_versions as f64 > 0.2
 }
 
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
