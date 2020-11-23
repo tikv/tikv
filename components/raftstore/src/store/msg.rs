@@ -13,6 +13,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use std::borrow::Cow;
 use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -212,6 +213,7 @@ pub enum CasualMessage<E: KvEngine> {
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
         callback: Callback<E>,
+        source: Cow<'static, str>,
     },
 
     /// Hash result of ComputeHash command.
@@ -236,6 +238,7 @@ pub enum CasualMessage<E: KvEngine> {
     HalfSplitRegion {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
+        source: &'static str,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -267,10 +270,15 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+            CasualMessage::SplitRegion {
+                ref split_keys,
+                source,
+                ..
+            } => write!(
                 fmt,
-                "Split region with {}",
-                KeysInfoFormatter(split_keys.iter())
+                "Split region with {} from {}",
+                KeysInfoFormatter(split_keys.iter()),
+                source,
             ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
@@ -281,7 +289,9 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
-            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            CasualMessage::HalfSplitRegion { source, .. } => {
+                write!(fmt, "Half Split from {}", source)
+            }
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",
