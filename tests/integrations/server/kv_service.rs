@@ -1174,7 +1174,5 @@ fn test_batch_get_memory_lock() {
     req.set_keys(vec![b"unlocked".to_vec(), raw_key.clone()].into());
     req.version = 50;
     let resp = client.kv_batch_get(&req).unwrap();
-    // do not return any pair when encountering a memory lock
-    assert!(resp.pairs.is_empty());
     assert_eq!(resp.get_error().get_locked(), &lock.into_lock_info(raw_key));
 }
