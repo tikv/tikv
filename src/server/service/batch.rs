@@ -261,6 +261,7 @@ impl ReadBatcher {
     }
 }
 
+<<<<<<< HEAD
 impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
     fn filter(
         &mut self,
@@ -273,6 +274,44 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
             {
                 self.add_get(request_id, req);
                 true
+=======
+fn future_batch_get_command<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    requests: Vec<u64>,
+    gets: Vec<GetRequest>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+) {
+    let begin_instant = Instant::now_coarse();
+    let ret = storage.batch_get_command(gets);
+    let f = async move {
+        match ret.await {
+            Ok(ret) => {
+                for (v, req) in ret.into_iter().zip(requests) {
+                    let mut resp = GetResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        match v {
+                            Ok((val, statistics, perf_statistics_delta)) => {
+                                let scan_detail_v2 =
+                                    resp.mut_exec_details_v2().mut_scan_detail_v2();
+                                statistics.write_scan_detail(scan_detail_v2);
+                                perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                                match val {
+                                    Some(val) => resp.set_value(val),
+                                    None => resp.set_not_found(true),
+                                }
+                            }
+                            Err(e) => resp.set_error(extract_key_error(&e)),
+                        }
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+>>>>>>> e711daa1a... misc: Update KvProto (#9008)
             }
             batch_commands_request::request::Cmd::RawGet(req)
                 if Self::is_batchable_context(req.get_context()) =>

@@ -914,7 +914,104 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 "request" => "batch_commands",
                 "err" => ?e
             );
+<<<<<<< HEAD
         }));
+=======
+        })
+        .map(|_| ());
+
+        ctx.spawn(send_task);
+    }
+
+    fn ver_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerGetRequest,
+        _sink: UnarySink<VerGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_get(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchGetRequest,
+        _sink: UnarySink<VerBatchGetResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerMutRequest,
+        _sink: UnarySink<VerMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_batch_mut(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerBatchMutRequest,
+        _sink: UnarySink<VerBatchMutResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_scan(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerScanRequest,
+        _sink: UnarySink<VerScanResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn ver_delete_range(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: VerDeleteRangeRequest,
+        _sink: UnarySink<VerDeleteRangeResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn batch_coprocessor(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: BatchRequest,
+        _sink: ServerStreamingSink<BatchResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
+    ) {
+        unimplemented!()
+>>>>>>> e711daa1a... misc: Update KvProto (#9008)
     }
 }
 
@@ -1055,6 +1152,7 @@ fn future_get<E: Engine, L: LockManager>(
         })
 }
 
+<<<<<<< HEAD
 pub fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
@@ -1100,6 +1198,22 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
                 for req in requests {
                     if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
+=======
+    async move {
+        let v = v.await;
+        let mut resp = GetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((val, statistics, perf_statistics_delta)) => {
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    match val {
+                        Some(val) => resp.set_value(val),
+                        None => resp.set_not_found(true),
+>>>>>>> e711daa1a... misc: Update KvProto (#9008)
                     }
                 }
             }
@@ -1169,8 +1283,17 @@ fn future_gc<E: Engine>(
         let mut resp = GcResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
+<<<<<<< HEAD
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+=======
+        } else {
+            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
+            let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+            statistics.write_scan_detail(scan_detail_v2);
+            perf_statistics_delta.write_scan_detail(scan_detail_v2);
+            resp.set_pairs(val.into());
+>>>>>>> e711daa1a... misc: Update KvProto (#9008)
         }
         resp
     })
