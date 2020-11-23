@@ -86,6 +86,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
+branch = "tikv-4.0"
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
