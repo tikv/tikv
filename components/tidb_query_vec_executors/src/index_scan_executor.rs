@@ -57,10 +57,13 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
         // real). We accept this kind of request for compatibility considerations, but will be
         // forbidden soon.
-        let decode_partition_id = columns_info
-            .last()
-            .map_or(false, |ci| ci.get_column_id() == table::EXTRA_PID_COL_ID);
-        let pid_column_cnt = if decode_partition_id { 1 } else { 0 };
+        //
+        // Note 4: When process global indexes, an extra partition ID column with column ID
+        // `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton
+        // handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
+        let pid_column_cnt = columns_info.last().map_or(0, |ci| {
+            (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
+        });
         let is_int_handle = columns_info
             .get(columns_info.len() - 1 - pid_column_cnt)
             .map_or(false, |ci| ci.get_pk_handle());
@@ -100,7 +103,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             schema,
             columns_id_without_handle,
             decode_handle_strategy,
-            decode_partition_id,
+            pid_column_cnt,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -170,8 +173,8 @@ struct IndexScanExecutorImpl {
     /// Handle will be always placed in the last column.
     decode_handle_strategy: DecodeHandleStrategy,
 
-    /// Whether need to decode partition id.
-    decode_partition_id: bool,
+    /// Number of partition ID columns, now it can only be 0 or 1.
+    pid_column_cnt: usize,
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -206,14 +209,13 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 ));
             }
             DecodeCommonHandle => {
-                let pid_column_cnt: usize = self.decode_partition_id.into();
-                for _ in self.columns_id_without_handle.len()..columns_len - pid_column_cnt {
+                for _ in self.columns_id_without_handle.len()..columns_len - self.pid_column_cnt {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
             }
         }
 
-        if self.decode_partition_id {
+        if self.pid_column_cnt > 0 {
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
                 scan_rows,
                 EvalType::Int,
@@ -224,18 +226,17 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         LazyBatchColumnVec::from(columns)
     }
 
-    // Value layout:
+    // Value layout: (see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing)
     // +--New Encoding (with restore data, or common handle, or index is global)
     // |
-    // |  Layout: TailLen | Options      | Padding      | [IntHandle] | [UntouchedFlag]
-    // |  Length:   1     | len(options) | len(padding) |    8        |     1
+    // |  Layout: TailLen | Options      | Padding      | [IntHandle]
+    // |  Length:   1     | len(options) | len(padding) |    8
     // |
     // |  TailLen:       len(padding) + len(IntHandle) + len(UntouchedFlag)
     // |  Options:       Encode some value for new features, such as common handle, new collations or global index.
     // |                 See below for more information.
     // |  Padding:       Ensure length of value always >= 10. (or >= 11 if UntouchedFlag exists.)
     // |  IntHandle:     Only exists when table use int handles and index is unique.
-    // |  UntouchedFlag: Only exists when index is untouched.
     // |
     // |  Layout of Options:
     // |
@@ -249,11 +250,10 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // |
     // +--Old Encoding (without restore data, integer handle, local)
     //
-    //    Layout: [Handle] | [UntouchedFlag]
-    //    Length:   8      |     1
+    //    Layout: [Handle]
+    //    Length:   8
     //
     //    Handle:        Only exists in unique index.
-    //    UntouchedFlag: Only exists when index is untouched.
     //
     //    If neither Handle nor UntouchedFlag exists, value will be one single byte '0' (i.e. []byte{'0'}).
     //    Length of value <= 9, use to distinguish from the new encoding.
@@ -408,7 +408,8 @@ impl IndexScanExecutorImpl {
         }
     }
 
-    // Process new layout index values in an extensible way.
+    // Process new layout index values in an extensible way,
+    // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     fn process_kv_general(
         &mut self,
         mut key_payload: &[u8],
@@ -421,14 +422,19 @@ impl IndexScanExecutorImpl {
         }
 
         // Split the value.
-        let remaining = &value[1..value.len() - tail_len];
-        let tail = &value[value.len() - tail_len..];
+        let (remaining, tail) = value[1..].split_at(value.len() - tail_len);
         let (common_handle_bytes, remaining) =
             Self::split_common_handle_from_index_value(remaining)?;
         let (partition_id_bytes, restore_values) = if remaining
             .get(0)
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
+            if remaining.len() < 9 {
+                return Err(other_err!(
+                    "Remaining len {} is too short to decode partition ID",
+                    remaining.len()
+                ));
+            }
             remaining[1..].split_at(8)
         } else {
             remaining.split_at(0)
@@ -479,11 +485,7 @@ impl IndexScanExecutorImpl {
                 } else {
                     // This is a unique index value, we should extract the int handle from the value.
                     let mut handle = common_handle_bytes;
-                    let end_index = if self.decode_partition_id {
-                        columns.columns_len() - 1
-                    } else {
-                        columns.columns_len()
-                    };
+                    let end_index = columns.columns_len() - self.pid_column_cnt;
                     Self::extract_columns_from_datum_format(
                         &mut handle,
                         &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -492,7 +494,7 @@ impl IndexScanExecutorImpl {
             }
         }
 
-        if self.decode_partition_id {
+        if self.pid_column_cnt > 0 {
             // If need partition id, append partition id to the last column.
             let pid = NumberCodec::decode_i64(partition_id_bytes);
             let idx = columns.columns_len() - 1;
