@@ -7,8 +7,8 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query_common::storage::Range;
-use tidb_query_vec_executors::runner::MAX_TIME_SLICE;
-use tidb_query_vec_expr::BATCH_MAX_SIZE;
+use tidb_query_expr::BATCH_MAX_SIZE;
+use tidb_query_executors::runner::MAX_TIME_SLICE;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
 
