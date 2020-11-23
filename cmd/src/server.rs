@@ -680,6 +680,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
+        initial_metric(&self.config.metric);
+
         self.servers = Some(Servers {
             lock_mgr,
             server,
