@@ -873,7 +873,7 @@
 
 ## Enable pipelined pessimistic lock, only effect when processing perssimistic transactions
 ## Enabled this will improve performance, but slightly increase the transcation failure rate
-# pipelined = true
+# pipelined = false
 
 [gc]
 ## The number of keys to GC in one batch.
