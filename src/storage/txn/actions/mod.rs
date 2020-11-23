@@ -6,6 +6,8 @@
 //! for archiving a certain target
 
 pub mod commit;
+pub mod prewrite;
+pub mod shared;
 
 #[cfg(test)]
 pub mod tests {

@@ -506,7 +506,7 @@ mod tests {
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
-    use crate::storage::txn::commit;
+    use crate::storage::txn::{commit, prewrite};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
@@ -579,8 +579,7 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            txn.prewrite(m, pk, &None, false, 0, 0, TimeStamp::default())
-                .unwrap();
+            prewrite(&mut txn, m, pk, &None, false, 0, 0, TimeStamp::default()).unwrap();
             self.write(txn.into_modifies());
         }
 

@@ -24931,7 +24931,7 @@
         "options": [],
         "query": "label_values(tikv_storage_command_total, type)",
         "refresh": 1,
-        "regex": "prewrite|commit|rollback",
+        "regex": "",
         "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",

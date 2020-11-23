@@ -90,7 +90,7 @@ fn test_server_catching_api_error() {
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     let mut ctx = Context::default();
@@ -150,7 +150,7 @@ fn test_raftkv_early_error_report() {
         let leader = region.get_peers()[0].clone();
         let mut ctx = Context::default();
         let channel = ChannelBuilder::new(env.clone())
-            .connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+            .connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
         let client = TikvClient::new(channel);
         ctx.set_region_id(region.get_id());
         ctx.set_region_epoch(region.get_region_epoch().clone());

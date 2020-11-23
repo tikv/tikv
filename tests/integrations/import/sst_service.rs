@@ -21,6 +21,18 @@ use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
+macro_rules! assert_to_string_contains {
+    ($e:expr, $substr:expr) => {{
+        let msg = $e.to_string();
+        assert!(
+            msg.contains($substr),
+            "msg: {}; expr: {}",
+            msg,
+            stringify!($e)
+        );
+    }};
+}
+
 fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
@@ -46,7 +58,7 @@ fn new_cluster_and_tikv_import_client(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(node))
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(node))
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch);
@@ -64,11 +76,14 @@ fn test_upload_sst() {
 
     // Mismatch crc32
     let meta = new_sst_meta(0, length);
-    assert!(send_upload_sst(&import, &meta, &data).is_err());
+    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "crc32");
 
     // Mismatch length
     let meta = new_sst_meta(crc32, 0);
-    assert!(send_upload_sst(&import, &meta, &data).is_err());
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "length"
+    );
 
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
@@ -76,7 +91,10 @@ fn test_upload_sst() {
     send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can't upload the same uuid file again.
-    assert!(send_upload_sst(&import, &meta, &data).is_err());
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 }
 
 #[test]
@@ -130,11 +148,14 @@ fn test_ingest_sst() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
     // Can't upload the same file again.
-    assert!(send_upload_sst(&import, &meta, &data).is_err());
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp.get_error());
 }
 
 #[test]
@@ -237,7 +258,10 @@ fn test_cleanup_sst() {
     send_upload_sst(&import, &meta, &data).unwrap();
 
     // Can not upload the same file when it exists.
-    assert!(send_upload_sst(&import, &meta, &data).is_err());
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "FileExists"
+    );
 
     // The uploaded SST should be deleted if the region split.
     let region = cluster.get_region(&[]);
@@ -259,7 +283,7 @@ fn test_cleanup_sst() {
     // The uploaded SST should be deleted if the region merged.
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
     let res = block_on(cluster.pd_client.get_region_by_id(left.get_id()));
-    assert!(res.unwrap().is_none());
+    assert_eq!(res.unwrap(), None);
 
     check_sst_deleted(&import, &meta, &data);
 }
@@ -310,9 +334,11 @@ fn send_upload_sst(
         .collect();
     let (mut tx, rx) = client.upload().unwrap();
     let mut stream = stream::iter(reqs);
-    block_on(tx.send_all(&mut stream)).unwrap();
-    block_on(tx.close()).unwrap();
-    block_on(rx)
+    block_on(async move {
+        tx.send_all(&mut stream).await?;
+        tx.close().await?;
+        rx.await
+    })
 }
 
 fn send_write_sst(
@@ -346,9 +372,11 @@ fn send_write_sst(
 
     let (mut tx, rx) = client.write().unwrap();
     let mut stream = stream::iter(reqs);
-    block_on(tx.send_all(&mut stream)).unwrap();
-    block_on(tx.close()).unwrap();
-    block_on(rx)
+    block_on(async move {
+        tx.send_all(&mut stream).await?;
+        tx.close().await?;
+        rx.await
+    })
 }
 
 fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {

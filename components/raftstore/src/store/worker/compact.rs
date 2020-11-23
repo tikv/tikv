@@ -41,9 +41,12 @@ impl Display for Task {
                 .field("cf_name", cf_name)
                 .field(
                     "start_key",
-                    &start_key.as_ref().map(|k| hex::encode_upper(k)),
+                    &start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
                 )
-                .field("end_key", &end_key.as_ref().map(|k| hex::encode_upper(k)))
+                .field(
+                    "end_key",
+                    &end_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+                )
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -56,8 +59,8 @@ impl Display for Task {
                 .field(
                     "ranges",
                     &(
-                        ranges.first().as_ref().map(|k| hex::encode_upper(k)),
-                        ranges.last().as_ref().map(|k| hex::encode_upper(k)),
+                        ranges.first().as_ref().map(|k| log_wrappers::Value::key(k)),
+                        ranges.last().as_ref().map(|k| log_wrappers::Value::key(k)),
                     ),
                 )
                 .field("tombstones_num_threshold", &tombstones_num_threshold)
@@ -110,8 +113,8 @@ where
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
-            "range_start" => start_key.map(::log_wrappers::Key),
-            "range_end" => end_key.map(::log_wrappers::Key),
+            "range_start" => start_key.map(::log_wrappers::Value::key),
+            "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
@@ -155,8 +158,8 @@ where
                             if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
                                 error!(
                                     "compact range failed";
-                                    "range_start" => log_wrappers::Key(&start),
-                                    "range_end" => log_wrappers::Key(&end),
+                                    "range_start" => log_wrappers::Value::key(&start),
+                                    "range_end" => log_wrappers::Value::key(&end),
                                     "cf" => cf,
                                     "err" => %e,
                                 );

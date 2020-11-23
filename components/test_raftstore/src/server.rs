@@ -41,14 +41,13 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
-use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::LockManager;
-use tikv::server::resolve::{self, Task as ResolveTask};
+use tikv::server::resolve::{self, StoreAddrResolver, Task as ResolveTask};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
-    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
-    ServerTransport,
+    create_raft_storage, ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
+    Server, ServerTransport,
 };
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
@@ -62,6 +61,40 @@ type SimulateServerTransport =
     SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
+
+#[derive(Default, Clone)]
+pub struct AddressMap {
+    addrs: Arc<Mutex<HashMap<u64, String>>>,
+}
+
+impl AddressMap {
+    pub fn get(&self, store_id: u64) -> Option<String> {
+        let addrs = self.addrs.lock().unwrap();
+        addrs.get(&store_id).cloned()
+    }
+
+    pub fn insert(&mut self, store_id: u64, addr: String) {
+        self.addrs.lock().unwrap().insert(store_id, addr);
+    }
+}
+
+impl StoreAddrResolver for AddressMap {
+    fn resolve(
+        &self,
+        store_id: u64,
+        cb: Box<dyn FnOnce(ServerResult<String>) + Send>,
+    ) -> ServerResult<()> {
+        let addr = self.get(store_id);
+        match addr {
+            Some(addr) => cb(Ok(addr)),
+            None => cb(Err(box_err!(
+                "unable to find address for store {}",
+                store_id
+            ))),
+        }
+        Ok(())
+    }
+}
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine>,
@@ -79,7 +112,7 @@ type CopHooks = Vec<Box<dyn Fn(&mut CoprocessorHost<RocksEngine>)>>;
 
 pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
-    addrs: HashMap<u64, String>,
+    addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SSTImporter>>,
@@ -87,7 +120,7 @@ pub struct ServerCluster {
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<RaftStoreBlackHole>,
+    raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
 }
 
@@ -100,17 +133,21 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
-        let raft_client = RaftClient::new(
+        let map = AddressMap::default();
+        // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
+        let worker = Worker::new("snap-worker");
+        let conn_builder = ConnectionBuilder::new(
             env,
-            Arc::new(Config::default()),
+            Arc::default(),
             security_mgr,
+            map.clone(),
             RaftStoreBlackHole,
-            Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            None,
+            worker.scheduler(),
         );
+        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
-            addrs: HashMap::default(),
+            addrs: map,
             pd_client,
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
@@ -123,8 +160,8 @@ impl ServerCluster {
         }
     }
 
-    pub fn get_addr(&self, node_id: u64) -> &str {
-        &self.addrs[&node_id]
+    pub fn get_addr(&self, node_id: u64) -> String {
+        self.addrs.get(node_id).unwrap()
     }
 
     pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
@@ -169,8 +206,8 @@ impl Simulator for ServerCluster {
 
         // Now we cache the store address, so here we should re-use last
         // listening address for the same store.
-        if let Some(addr) = self.addrs.get(&node_id) {
-            cfg.server.addr = addr.clone();
+        if let Some(addr) = self.addrs.get(node_id) {
+            cfg.server.addr = addr;
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -453,9 +490,7 @@ impl Simulator for ServerCluster {
     }
 
     fn send_raft_msg(&mut self, raft_msg: raft_serverpb::RaftMessage) -> Result<()> {
-        let store_id = raft_msg.get_to_peer().get_store_id();
-        let addr = self.get_addr(store_id).to_owned();
-        self.raft_client.send(store_id, &addr, raft_msg).unwrap();
+        self.raft_client.send(raft_msg).unwrap();
         self.raft_client.flush();
         Ok(())
     }
@@ -530,7 +565,7 @@ pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, 
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
@@ -541,7 +576,7 @@ pub fn must_new_cluster_and_debug_client() -> (Cluster<ServerCluster>, DebugClie
 
     let env = Arc::new(Environment::new(1));
     let channel =
-        ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())

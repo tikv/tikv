@@ -19,10 +19,9 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 hyper = "0.13.3"
 hyper-tls = "0.4.1"
 rand = "0.7"
-rusoto_core = "0.44.0"
-rusoto_s3 = "0.44.0"
+rusoto_core = "0.45.0"
+rusoto_s3 = "0.45.0"
 rusoto_util = { path = "../rusoto_util" }
-serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
@@ -34,6 +33,7 @@ url = "2.0"
 
 [dev-dependencies]
 structopt = "0.3"
-rusoto_mock = "0.44.0"
+rusoto_mock = "0.45.0"
 tempfile = "3.1"
 rust-ini = "0.14.0"
+matches = "0.1.8"

@@ -50,7 +50,7 @@ pub trait ReadExecutor<E: KvEngine> {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         cf,
                         e
                     )
@@ -60,7 +60,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 panic!(
                     "[region {}] failed to get {}: {:?}",
                     region.get_id(),
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     e
                 )
             })

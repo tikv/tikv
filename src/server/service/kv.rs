@@ -30,12 +30,14 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
+use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{Callback, CasualMessage};
+use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
@@ -123,17 +125,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             enable_req_batch,
             security_mgr,
         }
-    }
-
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map(|_| ()));
     }
 }
 
@@ -722,7 +713,17 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         };
 
         if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+            // Retrun region error instead a gRPC error.
+            let mut resp = SplitRegionResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
 
@@ -799,9 +800,20 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
         let (cb, f) = paired_future_callback();
 
-        // We must deal with all requests which acquire read-quorum in raftstore-thread, so just send it as an command.
+        // We must deal with all requests which acquire read-quorum in raftstore-thread,
+        // so just send it as an command.
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
+            // Retrun region error instead a gRPC error.
+            let mut resp = ReadIndexResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
             return;
         }
 
@@ -1623,7 +1635,7 @@ txn_command_future!(future_cleanup, CleanupRequest, CleanupResponse, (v, resp) {
 txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResponse, (v, resp) {
     match v {
         Ok(txn_status) => {
-            if let TxnStatus::Uncommitted { lock } = txn_status {
+            if let TxnStatus::Uncommitted { lock, .. } = txn_status {
                 resp.set_lock_ttl(lock.ttl);
             } else {
                 unreachable!();
@@ -1633,7 +1645,6 @@ txn_command_future!(future_txn_heart_beat, TxnHeartBeatRequest, TxnHeartBeatResp
     }
 });
 txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStatusResponse,
-    (req) let caller_start_ts = req.get_caller_start_ts().into();
     (v, resp) {
         match v {
             Ok(txn_status) => match txn_status {
@@ -1643,12 +1654,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                 TxnStatus::Committed { commit_ts } => {
                     resp.set_commit_version(commit_ts.into_inner())
                 }
-                TxnStatus::Uncommitted { lock } => {
-                    // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                    // Even though the min_commit_ts is not pushed, the point get can ingore the lock
-                    // next time because it's not committed. So we pretend it has been pushed.
-                    // Also note that min_commit_ts of async commit locks are never pushed.
-                    if !lock.use_async_commit && (lock.min_commit_ts > caller_start_ts || caller_start_ts.is_max()) {
+                TxnStatus::Uncommitted { lock, min_commit_ts_pushed } => {
+                    if min_commit_ts_pushed {
                         resp.set_action(Action::MinCommitTsPushed);
                     }
                     resp.set_lock_ttl(lock.ttl);
@@ -1732,6 +1739,18 @@ impl BatchCollector<BatchCommandsResponse, (u64, batch_commands_response::Respon
         v.mut_responses().push(e.1);
         None
     }
+}
+
+fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
+    if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
+        // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
+        let mut region_error = RegionError::default();
+        let mut region_not_found = RegionNotFound::default();
+        region_not_found.region_id = region_id;
+        region_error.set_region_not_found(region_not_found);
+        return region_error;
+    }
+    e.into()
 }
 
 #[cfg(test)]

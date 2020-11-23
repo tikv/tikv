@@ -11,11 +11,11 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb;
+use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest, RaftCmdResponse,
-    TransferLeaderRequest, TransferLeaderResponse,
+    AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, RaftCmdRequest,
+    RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -38,7 +38,6 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
-use crate::store::util::is_learner;
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
 use crate::{Error, Result};
@@ -58,8 +57,8 @@ use super::peer_storage::{
 use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{
-    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, Lease, LeaseState,
-    ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+    self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
+    Lease, LeaseState, ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
 
@@ -2101,92 +2100,109 @@ where
         self.proposals.push(p);
     }
 
-    /// Validate the `ConfChange` request and check whether it's safe to
-    /// propose the specified conf change request.
+    // TODO: set higher election priority of voter/incoming voter than demoting voter
+    /// Validate the `ConfChange` requests and check whether it's safe to
+    /// propose these conf change requests.
     /// It's safe iff at least the quorum of the Raft group is still healthy
-    /// right after that conf change is applied.
-    /// Define the total number of nodes in current Raft cluster to be `total`.
-    /// To ensure the above safety, if the cmd is
-    /// 1. A `AddNode` request
-    ///    Then at least '(total + 1)/2 + 1' nodes need to be up to date for now.
-    /// 2. A `RemoveNode` request
-    ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
-    ///    need to be up to date for now. If 'allow_remove_leader' is false then
-    ///    the peer to be removed should not be the leader.
+    /// right after all conf change is applied.
+    /// If 'allow_remove_leader' is false then the peer to be removed should
+    /// not be the leader.
     fn check_conf_change<T, C>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T, C>,
-        cc: &eraftpb::ConfChange,
-        cmd: &RaftCmdRequest,
+        change_peers: &[ChangePeerRequest],
+        cc: &impl ConfChangeI,
     ) -> Result<()> {
-        let change_peer = apply::get_change_peer_cmd(cmd).unwrap();
-        let change_type = change_peer.get_change_type();
-        let peer = change_peer.get_peer();
+        // Check whether current joint state can handle this request
+        let mut after_progress = self.check_joint_state(cc)?;
+        let current_progress = self.raft_group.status().progress.unwrap().clone();
+        let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
-        // Check the request itself is valid or not.
-        match (change_type, is_learner(peer)) {
-            (ConfChangeType::AddNode, true) | (ConfChangeType::AddLearnerNode, false) => {
-                warn!(
-                    "invalid conf change request";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "request" => ?change_peer,
-                );
-                return Err(box_err!("{} invalid conf change request", self.tag));
-            }
-            _ => {}
+        // Leaving joint state, skip check
+        if kind == ConfChangeKind::LeaveJoint {
+            return Ok(());
         }
 
-        if change_type == ConfChangeType::RemoveNode
-            && !ctx.cfg.allow_remove_leader
-            && peer.get_id() == self.peer_id()
+        // Check whether this request is valid
+        let mut check_dup = HashSet::default();
+        let mut only_learner_change = true;
+        let current_voter = current_progress.conf().voters().ids();
+        for cp in change_peers.iter() {
+            let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+            match (change_type, peer.get_role()) {
+                (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
+                    return Err(box_err!(
+                        "{} invalid conf change request: {:?}, can not remove voter directly",
+                        self.tag,
+                        cp
+                    ));
+                }
+                (ConfChangeType::RemoveNode, _)
+                | (ConfChangeType::AddNode, PeerRole::Voter)
+                | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
+                _ => {
+                    return Err(box_err!(
+                        "{} invalid conf change request: {:?}",
+                        self.tag,
+                        cp
+                    ));
+                }
+            }
+
+            if !check_dup.insert(peer.get_id()) {
+                return Err(box_err!(
+                    "{} invalid conf change request, have multiple commands for the same peer {}",
+                    self.tag,
+                    peer.get_id()
+                ));
+            }
+
+            if peer.get_id() == self.peer_id()
+                && (change_type == ConfChangeType::RemoveNode
+                    // In Joint confchange, the leader is allowed to be DemotingVoter
+                    || (kind == ConfChangeKind::Simple
+                        && change_type == ConfChangeType::AddLearnerNode))
+                && !ctx.cfg.allow_remove_leader
+            {
+                return Err(box_err!(
+                    "{} ignore remove leader or demote leader",
+                    self.tag
+                ));
+            }
+
+            if current_voter.contains(peer.get_id()) || change_type == ConfChangeType::AddNode {
+                only_learner_change = false;
+            }
+        }
+
+        // Multiple changes that only effect learner will not product `IncommingVoter` or `DemotingVoter`
+        // after apply, but raftstore layer and PD rely on these roles to detect joint state
+        if kind != ConfChangeKind::Simple && only_learner_change {
+            return Err(box_err!(
+                "{} invalid conf change request, multiple changes that only effect learner",
+                self.tag
+            ));
+        }
+
+        let promoted_commit_index = after_progress.maximal_committed_index().0;
+        if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
+            || promoted_commit_index >= self.get_store().truncated_index()
         {
-            warn!(
-                "rejects remove leader request";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "request" => ?change_peer,
-            );
-            return Err(box_err!("{} ignore remove leader", self.tag));
+            return Ok(());
         }
-
-        let before_progress = {
-            let pr = self.raft_group.status().progress.unwrap().clone();
-            if pr.is_singleton() {
-                // It's always safe if there is only one node in the cluster.
-                return Ok(());
-            }
-            pr
-        };
-
-        let (after_progress, promoted_commit_index) = {
-            let mut pr = self.check_joint_state(cc)?;
-            let idx = pr.maximal_committed_index().0;
-            if idx >= self.get_store().truncated_index() {
-                return Ok(());
-            }
-            (pr, idx)
-        };
 
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["conf_change", "reject_unsafe"])
             .inc();
 
-        info!(
-            "rejects unsafe conf change request";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "request" => ?change_peer,
-            "before" => ?before_progress.conf().to_conf_state(),
-            "after" => ?after_progress.conf().to_conf_state(),
-            "truncated_index" => self.get_store().truncated_index(),
-            "promoted_commit_index" => promoted_commit_index,
-        );
         // Waking it up to replicate logs to candidate.
         self.should_wake_up = true;
         Err(box_err!(
-            "unsafe to perform conf change {:?}, truncated index {}, promoted commit index {}",
-            change_peer,
+            "{} unsafe to perform conf change {:?}, before: {:?}, after: {:?}, truncated index {}, promoted commit index {}",
+            self.tag,
+            change_peers,
+            current_progress.conf().to_conf_state(),
+            after_progress.conf().to_conf_state(),
             self.get_store().truncated_index(),
             promoted_commit_index
         ))
@@ -2532,7 +2548,9 @@ where
             if entry.index > min_matched {
                 entry_size += entry.get_data().len();
             }
-            if entry.get_entry_type() == EntryType::EntryConfChange {
+            if entry.get_entry_type() == EntryType::EntryConfChange
+                || entry.get_entry_type() == EntryType::EntryConfChangeV2
+            {
                 return Err(box_err!(
                     "{} log gap contains conf change, skip merging.",
                     self.tag
@@ -2827,29 +2845,47 @@ where
             return Ok(Either::Right(index));
         }
 
-        let cc = {
-            let data = req.write_to_bytes()?;
-            let change_peer = apply::get_change_peer_cmd(req).unwrap();
-            let mut cc = eraftpb::ConfChange::default();
-            cc.set_change_type(change_peer.get_change_type());
-            cc.set_node_id(change_peer.get_peer().get_id());
-            cc.set_context(data);
-            cc
+        let data = req.write_to_bytes()?;
+        let admin = req.get_admin_request();
+        let res = if admin.has_change_peer() {
+            self.propose_conf_change_internal(ctx, admin.get_change_peer(), data)
+        } else if admin.has_change_peer_v2() {
+            self.propose_conf_change_internal(ctx, admin.get_change_peer_v2(), data)
+        } else {
+            unreachable!()
         };
+        if let Err(ref e) = res {
+            warn!("failed to propose confchange"; "error" => ?e);
+        }
+        res.map(Either::Left)
+    }
 
-        self.check_conf_change(ctx, &cc, req)?;
+    // Fails in such cases:
+    // 1. A pending conf change has not been applied yet;
+    // 2. Removing the leader is not allowed in the configuration;
+    // 3. The conf change makes the raft group not healthy;
+    // 4. The conf change is dropped by raft group internally.
+    fn propose_conf_change_internal<T, C, CP: ChangePeerI>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T, C>,
+        change_peer: CP,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        let data_size = data.len();
+        let cc = change_peer.to_confchange(data);
+        let changes = change_peer.get_change_peers();
+
+        self.check_conf_change(ctx, changes.as_ref(), &cc)?;
 
         ctx.raft_metrics.propose.conf_change += 1;
-
         // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(cc.get_context().len() as f64);
-
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "change_type" => ?cc.get_change_type(),
-            "change_peer" => cc.get_node_id(),
+            "changes" => ?changes.as_ref(),
+            "kind" => ?ConfChangeKind::confchange_kind(changes.as_ref().len()),
         );
 
         let propose_index = self.next_proposal_index();
@@ -2861,7 +2897,7 @@ where
             return Err(Error::NotLeader(self.region_id, None));
         }
 
-        Ok(Either::Left(propose_index))
+        Ok(propose_index)
     }
 
     fn handle_read<T, C>(
@@ -3249,7 +3285,7 @@ pub trait RequestInspector {
     /// handle the request.
     fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.has_admin_request() {
-            if apply::get_change_peer_cmd(req).is_some() {
+            if apply::is_conf_change_cmd(req) {
                 return Ok(RequestPolicy::ProposeConfChange);
             }
             if get_transfer_leader_cmd(req).is_some() {
@@ -3552,6 +3588,11 @@ mod tests {
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeConfChange));
         admin_req.clear_change_peer();
+
+        admin_req.set_change_peer_v2(raft_cmdpb::ChangePeerV2Request::default());
+        req.set_admin_request(admin_req.clone());
+        table.push((req.clone(), RequestPolicy::ProposeConfChange));
+        admin_req.clear_change_peer_v2();
 
         admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::default());
         req.set_admin_request(admin_req.clone());

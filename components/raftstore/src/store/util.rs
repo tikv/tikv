@@ -48,7 +48,7 @@ pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
-    peer.set_role(metapb::PeerRole::Voter);
+    peer.set_role(PeerRole::Voter);
     peer
 }
 
@@ -57,7 +57,7 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     let mut peer = metapb::Peer::default();
     peer.set_store_id(store_id);
     peer.set_id(peer_id);
-    peer.set_role(metapb::PeerRole::Learner);
+    peer.set_role(PeerRole::Learner);
     peer
 }
 
@@ -681,7 +681,7 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 }
 
 pub fn is_learner(peer: &metapb::Peer) -> bool {
-    peer.get_role() == metapb::PeerRole::Learner
+    peer.get_role() == PeerRole::Learner
 }
 
 pub struct KeysInfoFormatter<
@@ -702,13 +702,13 @@ impl<
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", hex::encode_upper(it.next().unwrap())),
+            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                hex::encode_upper(it.next().unwrap()),
-                hex::encode_upper(it.next_back().unwrap())
+                log_wrappers::Value::key(it.next().unwrap()),
+                log_wrappers::Value::key(it.next_back().unwrap())
             ),
         }
     }

@@ -34,6 +34,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "encryption/prost-codec",
   "tikv_util/prost-codec",
+  "log_wrappers/prost-codec"
 ]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
@@ -49,6 +50,7 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
   "encryption/protobuf-codec",
   "tikv_util/protobuf-codec",
+  "log_wrappers/protobuf-codec"
 ]
 testexport = ["raftstore/testexport"]
 
@@ -102,7 +104,7 @@ libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
 mime = "0.3.13"
-more-asserts = "0.1"
+more-asserts = "0.2"
 murmur3 = "0.5.1"
 nom = { version = "5.1.0", default-features = false, features = ["std"] }
 num_cpus = "1"
@@ -158,7 +160,6 @@ vlog = "0.1.4"
 walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 
-
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"
 rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6"
@@ -177,7 +178,7 @@ zipf = "6.1.0"
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
 raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master", default-features = false }
-protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
+protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "b67d432c1b74350b38a5d96ddf885ac6c3ff46f5" }
 prometheus = { git = "https://github.com/tikv/rust-prometheus.git", rev = "fd122caa03de8e7e5e4fae9372583aebf19e39f6" }
 

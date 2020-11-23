@@ -2186,24 +2186,22 @@ impl TiKvConfig {
                 .to_owned();
         }
 
-        if !self.raft_engine.enable {
-            let default_raftdb_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
-            if self.raft_store.raftdb_path.is_empty() {
-                self.raft_store.raftdb_path = default_raftdb_path;
-            } else if self.raft_store.raftdb_path != default_raftdb_path {
-                self.raft_store.raftdb_path =
-                    config::canonicalize_path(&self.raft_store.raftdb_path)?;
-            }
-        } else {
-            let default_er_path =
-                config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
-            if self.raft_engine.config.dir.is_empty() {
-                self.raft_engine.config.dir = default_er_path;
-            } else if self.raft_engine.config.dir != default_er_path {
-                self.raft_engine.config.dir =
-                    config::canonicalize_path(&self.raft_engine.config.dir)?;
-            }
+        let default_raftdb_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft")?;
+        if self.raft_store.raftdb_path.is_empty() {
+            self.raft_store.raftdb_path = default_raftdb_path;
+        } else if self.raft_store.raftdb_path != default_raftdb_path
+            && RocksEngine::exists(&self.raft_store.raftdb_path)
+        {
+            self.raft_store.raftdb_path = config::canonicalize_path(&self.raft_store.raftdb_path)?;
+        }
+
+        let default_er_path = config::canonicalize_sub_path(&self.storage.data_dir, "raft-engine")?;
+        if self.raft_engine.config.dir.is_empty() {
+            self.raft_engine.config.dir = default_er_path;
+        } else if self.raft_engine.config.dir != default_er_path
+            && RaftLogEngine::exists(&self.raft_engine.config.dir)
+        {
+            self.raft_engine.config.dir = config::canonicalize_path(&self.raft_engine.config.dir)?;
         }
 
         let kv_db_path =
@@ -2216,23 +2214,24 @@ impl TiKvConfig {
             if RocksEngine::exists(&kv_db_path)
                 && !RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb exist, buf raftdb not exist".into());
+                return Err("default rocksdb exist, but raftdb not exist".into());
             }
             if !RocksEngine::exists(&kv_db_path)
                 && RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb not exist, buf raftdb exist".into());
+                return Err("default rocksdb not exist, but raftdb exist".into());
             }
         } else {
             if RocksEngine::exists(&kv_db_path)
                 && !RaftLogEngine::exists(&self.raft_engine.config.dir)
+                && !RocksEngine::exists(&self.raft_store.raftdb_path)
             {
-                return Err("default rocksdb exist, buf raft engine not exist".into());
+                return Err("default rocksdb exist, but raftdb and raft engine not exist".into());
             }
             if !RocksEngine::exists(&kv_db_path)
                 && RaftLogEngine::exists(&self.raft_engine.config.dir)
             {
-                return Err("default rocksdb not exist, buf raft engine exist".into());
+                return Err("default rocksdb not exist, but raft engine exist".into());
             }
         }
 

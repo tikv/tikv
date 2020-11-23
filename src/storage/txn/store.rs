@@ -590,7 +590,7 @@ mod tests {
         TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use crate::storage::txn::commit;
+    use crate::storage::txn::{commit, prewrite};
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
@@ -638,7 +638,8 @@ mod tests {
                 let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true, cm);
                 for key in &self.keys {
                     let key = key.as_bytes();
-                    txn.prewrite(
+                    prewrite(
+                        &mut txn,
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &None,

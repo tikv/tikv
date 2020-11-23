@@ -262,7 +262,7 @@ impl TestSuite {
     pub fn get_tikv_client(&mut self, region_id: u64) -> &TikvClient {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
-        let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
+        let addr = self.cluster.sim.rl().get_addr(store_id);
         let env = self.env.clone();
         self.tikv_cli
             .entry(leader.get_store_id())
@@ -275,7 +275,7 @@ impl TestSuite {
     pub fn get_region_cdc_client(&mut self, region_id: u64) -> &ChangeDataClient {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
-        let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
+        let addr = self.cluster.sim.rl().get_addr(store_id);
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
             let channel = ChannelBuilder::new(env)
@@ -286,7 +286,7 @@ impl TestSuite {
     }
 
     pub fn get_store_cdc_client(&mut self, store_id: u64) -> &ChangeDataClient {
-        let addr = self.cluster.sim.rl().get_addr(store_id).to_owned();
+        let addr = self.cluster.sim.rl().get_addr(store_id);
         let env = self.env.clone();
         self.cdc_cli.entry(store_id).or_insert_with(|| {
             let channel = ChannelBuilder::new(env).connect(&addr);

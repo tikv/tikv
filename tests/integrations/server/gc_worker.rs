@@ -78,7 +78,7 @@ fn test_applied_lock_collector() {
     let mut clients = HashMap::default();
     for node_id in cluster.get_node_ids() {
         let channel =
-            ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(node_id));
+            ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(node_id));
         let client = TikvClient::new(channel);
         clients.insert(node_id, client);
     }
@@ -167,7 +167,7 @@ fn test_applied_lock_collector() {
     // Add a new store and register lock observer.
     let store_id = cluster.add_new_engine();
     let channel =
-        ChannelBuilder::new(Arc::clone(&env)).connect(cluster.sim.rl().get_addr(store_id));
+        ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(store_id));
     let client = TikvClient::new(channel);
     must_register_lock_observer(&client, safe_point);
 

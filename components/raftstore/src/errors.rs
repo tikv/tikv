@@ -50,10 +50,10 @@ quick_error! {
         }
         KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
             display("key {} is not in region key range [{}, {}) for region {}",
-                    hex::encode_upper(key),
-                    hex::encode_upper(region.get_start_key()),
-                    hex::encode_upper(region.get_end_key()),
-                    region.get_id())
+                log_wrappers::Value::key(key),
+                log_wrappers::Value::key(region.get_start_key()),
+                log_wrappers::Value::key(region.get_end_key()),
+                region.get_id())
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()

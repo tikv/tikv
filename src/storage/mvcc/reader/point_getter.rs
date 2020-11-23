@@ -332,9 +332,7 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
-    use engine_rocks::RocksSnapshot;
     use kvproto::kvrpcpb::Context;
-    use std::sync::Arc;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
@@ -718,10 +716,10 @@ mod tests {
         must_get_err(&mut getter, b"foo2");
         must_get_none(&mut getter, b"foo3");
 
-        fn new_omit_value_single_point_getter(
-            snapshot: Arc<RocksSnapshot>,
-            ts: TimeStamp,
-        ) -> PointGetter<Arc<RocksSnapshot>> {
+        fn new_omit_value_single_point_getter<S>(snapshot: S, ts: TimeStamp) -> PointGetter<S>
+        where
+            S: Snapshot,
+        {
             PointGetterBuilder::new(snapshot, ts)
                 .isolation_level(IsolationLevel::Si)
                 .omit_value(true)

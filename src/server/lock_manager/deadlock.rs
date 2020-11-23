@@ -10,7 +10,7 @@ use crate::storage::lock_manager::Lock;
 use engine_rocks::RocksEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::TryStreamExt;
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
@@ -757,47 +757,43 @@ where
         }
 
         let inner = Rc::clone(&self.inner);
-        let mut s = stream.map_err(Error::Grpc).filter_map(move |item| {
-            if let Ok(mut req) = item {
-                // It's possible the leader changes after registering this handler.
-                let mut inner = inner.borrow_mut();
-                if inner.role != Role::Leader {
-                    ERROR_COUNTER_METRICS.not_leader.inc();
-                    return future::ready(Some(Err(Error::Other(box_err!("leader changed")))));
-                }
-                let WaitForEntry {
-                    txn,
-                    wait_for_txn,
-                    key_hash,
-                    ..
-                } = req.get_entry();
-                let detect_table = &mut inner.detect_table;
-                let res = match req.get_tp() {
-                    DeadlockRequestType::Detect => {
-                        if let Some(deadlock_key_hash) =
-                            detect_table.detect(txn.into(), wait_for_txn.into(), *key_hash)
-                        {
-                            let mut resp = DeadlockResponse::default();
-                            resp.set_entry(req.take_entry());
-                            resp.set_deadlock_key_hash(deadlock_key_hash);
-                            Some(Ok((resp, WriteFlags::default())))
-                        } else {
-                            None
-                        }
-                    }
-                    DeadlockRequestType::CleanUpWaitFor => {
-                        detect_table.clean_up_wait_for(txn.into(), wait_for_txn.into(), *key_hash);
-                        None
-                    }
-                    DeadlockRequestType::CleanUp => {
-                        detect_table.clean_up(txn.into());
-                        None
-                    }
-                };
-                future::ready(res)
-            } else {
-                future::ready(None)
+        let mut s = stream.map_err(Error::Grpc).try_filter_map(move |mut req| {
+            // It's possible the leader changes after registering this handler.
+            let mut inner = inner.borrow_mut();
+            if inner.role != Role::Leader {
+                ERROR_COUNTER_METRICS.not_leader.inc();
+                return future::ready(Err(Error::Other(box_err!("leader changed"))));
             }
+            let WaitForEntry {
+                txn,
+                wait_for_txn,
+                key_hash,
+                ..
+            } = req.get_entry();
+            let detect_table = &mut inner.detect_table;
+            let res = match req.get_tp() {
+                DeadlockRequestType::Detect => {
+                    if let Some(deadlock_key_hash) =
+                        detect_table.detect(txn.into(), wait_for_txn.into(), *key_hash)
+                    {
+                        let mut resp = DeadlockResponse::default();
+                        resp.set_entry(req.take_entry());
+                        resp.set_deadlock_key_hash(deadlock_key_hash);
+                        Some((resp, WriteFlags::default()))
+                    } else {
+                        None
+                    }
+                }
+                DeadlockRequestType::CleanUpWaitFor => {
+                    detect_table.clean_up_wait_for(txn.into(), wait_for_txn.into(), *key_hash);
+                    None
+                }
+                DeadlockRequestType::CleanUp => {
+                    detect_table.clean_up(txn.into());
+                    None
+                }
+            };
+            future::ok(res)
         });
         let send_task = async move {
             let mut sink = sink.sink_map_err(Error::from);
@@ -805,7 +801,7 @@ where
             sink.close().await?;
             Result::Ok(())
         }
-        .map(|_| ());
+        .map_err(|e| warn!("deadlock detect rpc stream disconnected"; "error" => ?e));
         spawn_local(send_task);
     }
 

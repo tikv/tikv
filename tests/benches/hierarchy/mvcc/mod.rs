@@ -6,7 +6,7 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
-use tikv::storage::txn::commit;
+use tikv::storage::txn::{commit, prewrite};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -33,7 +33,8 @@ where
     )
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
-        txn.prewrite(
+        prewrite(
+            &mut txn,
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
             &None,
@@ -72,8 +73,17 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                txn.prewrite(mutation, &primary, &None, false, 0, 0, TimeStamp::default())
-                    .unwrap();
+                prewrite(
+                    &mut txn,
+                    mutation,
+                    &primary,
+                    &None,
+                    false,
+                    0,
+                    0,
+                    TimeStamp::default(),
+                )
+                .unwrap();
             }
         },
         BatchSize::SmallInput,

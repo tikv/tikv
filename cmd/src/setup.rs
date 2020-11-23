@@ -208,6 +208,11 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
         }
     };
+
+    // Set redact_info_log.
+    let redact_info_log = config.security.redact_info_log.unwrap_or(false);
+    log_wrappers::set_redact_info_log(redact_info_log);
+
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
 
