@@ -230,6 +230,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(1),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -478,6 +479,7 @@ fn test_serde_custom_tikv_config() {
         wal_size_limit: ReadableSize::kb(12),
         max_total_wal_size: ReadableSize::gb(1),
         max_background_jobs: 12,
+        max_background_flushes: 4,
         max_manifest_file_size: ReadableSize::mb(12),
         create_if_missing: false,
         max_open_files: 12_345,
@@ -585,6 +587,7 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
+            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };

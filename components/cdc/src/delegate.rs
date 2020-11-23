@@ -13,12 +13,12 @@ use kvproto::cdcpb::{
         row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
         LogType as EventLogType, Row as EventRow,
     },
-    DuplicateRequest, Error as EventError, Event,
+    Compatibility, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
 };
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::cdcpb::{
-    DuplicateRequest, Error as EventError, Event, EventEntries, EventLogType, EventRow,
-    EventRowOpType, Event_oneof_event,
+    Compatibility, DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event,
+    EventEntries, EventLogType, EventRow, EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -108,14 +108,23 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
-        if self
-            .sink
-            .as_ref()
-            .unwrap()
-            .send(CdcEvent::Event(event))
-            .is_err()
-        {
-            error!("send event failed"; "downstream" => %self.peer);
+        if self.sink.is_none() {
+            info!("drop event, no sink";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+            return;
+        }
+        let sink = self.sink.as_ref().unwrap();
+        if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
+            match e {
+                crossbeam::channel::TrySendError::Disconnected(_) => {
+                    debug!("send event failed, disconnected";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                }
+                crossbeam::channel::TrySendError::Full(_) => {
+                    info!("send event failed, full";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                }
+            }
         }
     }
 
@@ -138,9 +147,19 @@ impl Downstream {
     pub fn sink_duplicate_error(&self, region_id: u64) {
         let mut change_data_event = Event::default();
         let mut cdc_err = EventError::default();
-        let mut err = DuplicateRequest::default();
+        let mut err = ErrorDuplicateRequest::default();
         err.set_region_id(region_id);
         cdc_err.set_duplicate_request(err);
+        change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
+        change_data_event.region_id = region_id;
+        self.sink_event(change_data_event);
+    }
+
+    // TODO: merge it into Delegate::error_event.
+    pub fn sink_compatibility_error(&self, region_id: u64, compat: Compatibility) {
+        let mut change_data_event = Event::default();
+        let mut cdc_err = EventError::default();
+        cdc_err.set_compatibility(compat);
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = region_id;
         self.sink_event(change_data_event);
@@ -247,6 +266,10 @@ impl Delegate {
             self.pending.as_mut().unwrap().downstreams.push(downstream);
         }
         true
+    }
+
+    pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
+        self.downstreams.iter().find(|d| d.id == downstream_id)
     }
 
     pub fn downstreams(&self) -> &Vec<Downstream> {
@@ -807,7 +830,7 @@ mod tests {
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             } else {
                 panic!("unknown event")
@@ -941,7 +964,7 @@ mod tests {
                     Event_oneof_event::Entries(entries) => {
                         assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
                     }
-                    _ => panic!("unknown event"),
+                    other => panic!("unknown event {:?}", other),
                 }
             }
         };
