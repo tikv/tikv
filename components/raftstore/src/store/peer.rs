@@ -38,9 +38,10 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
-use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    SplitCheckTask,
 };
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
@@ -3094,7 +3095,7 @@ where
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        let task = PdTask::Heartbeat {
+        let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -3102,15 +3103,47 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.approximate_size,
-            approximate_keys: self.approximate_keys,
+            approximate_size: self.approximate_size.unwrap_or_default(),
+            approximate_keys: self.approximate_keys.unwrap_or_default(),
             replication_status: self.region_replication_status(),
+        });
+        if self.approximate_size.is_some() && self.approximate_keys.is_some() {
+            if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                error!(
+                    "failed to notify pd";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "err" => ?e,
+                );
+            }
+            return;
+        }
+
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let scheduler = ctx.pd_scheduler.clone();
+        let split_check_task = SplitCheckTask::GetRegionApproximateSize {
+            region: self.region().clone(),
+            cb: Box::new(move |size: u64, keys: u64| {
+                if let PdTask::Heartbeat(mut h) = task {
+                    h.approximate_size = size;
+                    h.approximate_keys = keys;
+                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
+                        error!(
+                            "failed to notify pd";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "err" => ?e,
+                        );
+                    }
+                }
+            }),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
             error!(
                 "failed to notify pd";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
+                "region_id" => region_id,
+                "peer_id" => peer_id,
                 "err" => ?e,
             );
         }
