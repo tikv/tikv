@@ -3576,7 +3576,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "sha2",
- "time 0.2.22",
+ "time 0.2.23",
  "tokio 0.2.13",
 ]
 
@@ -4767,9 +4767,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.22"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55b7151c9065e80917fbf285d9a5d1432f60db41d170ccafc749a136b41a93af"
+checksum = "bcdaeea317915d59b2b4cd3b5efcd156c309108664277793f5351700c02ce98b"
 dependencies = [
  "const_fn",
  "libc",
