@@ -226,12 +226,12 @@ where
                 region.get_id(),
                 KeysInfoFormatter(split_keys.iter())
             ),
-            Task::Heartbeat(ref h)  => write!(
+            Task::Heartbeat(ref hb_task)  => write!(
                 f,
                 "heartbeat for region {:?}, leader {}, replication status {:?}",
-                h.region,
-                h.peer.get_id(),
-                h.replication_status
+                hb_task.region,
+                hb_task.peer.get_id(),
+                hb_task.replication_status
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
