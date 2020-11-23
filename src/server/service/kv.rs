@@ -994,27 +994,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn dispatch_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: DispatchTaskRequest,
-        _: UnarySink<DispatchTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn cancel_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: CancelTaskRequest,
-        _: UnarySink<CancelTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn establish_mpp_connection(
         &mut self,
-        _: RpcContext<'_>,
-        _: EstablishMppConnectionRequest,
-        _: ServerStreamingSink<MppDataPacket>,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
     }
@@ -1185,8 +1185,9 @@ fn future_get<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
-                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
-                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1243,8 +1244,9 @@ fn future_batch_get<E: Engine, L: LockManager>(
             match v {
                 Ok((kv_res, statistics, perf_statistics_delta)) => {
                     let pairs = map_kv_pairs(kv_res);
-                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
-                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {

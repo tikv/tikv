@@ -5,9 +5,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 
 use crate::storage::{
-    kv::{
-        self, Error as EngineError, ErrorInner as EngineErrorInner,
-    },
+    kv::{self, Error as EngineError, ErrorInner as EngineErrorInner},
     mvcc::{self, Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     Result,
