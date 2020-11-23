@@ -387,7 +387,7 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn split_common_handle_from_index_value<'a>(value: &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
+    fn split_common_handle_from_index_value(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
             .get(0)
             .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
