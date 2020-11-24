@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -472,9 +472,10 @@ where
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
-    /// Whether there is a pending heartbeat_pd task. It's possible that a heartbeat_pd
-    /// task is blocked by GetRegionApproximateSize.
-    pub pending_heartbeat_pd: Arc<AtomicBool>,
+    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
+    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
+    /// task run when there are more than 1 pending tasks.
+    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -567,7 +568,7 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
-            pending_heartbeat_pd: Arc::new(AtomicBool::new(false)),
+            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -3105,9 +3106,6 @@ where
     }
 
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        if self.pending_heartbeat_pd.load(Ordering::SeqCst) {
-            return;
-        }
         let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
@@ -3135,10 +3133,11 @@ where
         let region_id = self.region_id;
         let peer_id = self.peer.get_id();
         let scheduler = ctx.pd_scheduler.clone();
-        let pending_heartbeat_pd = self.pending_heartbeat_pd.clone();
-        pending_heartbeat_pd.store(true, Ordering::SeqCst);
-        let split_check_task = SplitCheckTask::GetRegionApproximateSize {
+        self.pending_pd_heartbeat_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
             region: self.region().clone(),
+            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
             cb: Box::new(move |size: u64, keys: u64| {
                 if let PdTask::Heartbeat(mut h) = task {
                     h.approximate_size = size;
@@ -3152,7 +3151,6 @@ where
                         );
                     }
                 }
-                pending_heartbeat_pd.store(false, Ordering::SeqCst);
             }),
         };
         if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
@@ -3162,7 +3160,8 @@ where
                 "peer_id" => peer_id,
                 "err" => ?e,
             );
-            self.pending_heartbeat_pd.store(false, Ordering::SeqCst);
+            self.pending_pd_heartbeat_tasks
+                .fetch_sub(1, Ordering::SeqCst);
         }
     }
 

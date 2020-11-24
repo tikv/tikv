@@ -4,6 +4,8 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
@@ -132,8 +134,9 @@ pub enum Task {
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
-    GetRegionApproximateSize {
+    GetRegionApproximateSizeAndKeys {
         region: Region,
+        pending_tasks: Arc<AtomicU64>,
         cb: Box<dyn FnOnce(u64, u64) + Send>,
     },
 }
@@ -162,7 +165,7 @@ impl Display for Task {
             Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
-            Task::GetRegionApproximateSize { region, .. } => write!(
+            Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
                 f,
                 "[split check worker] Get region approximate size for region {}",
                 region.get_id()
@@ -345,7 +348,14 @@ where
             Task::ChangeConfig(c) => self.change_cfg(c),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(&self.cfg),
-            Task::GetRegionApproximateSize { region, cb } => {
+            Task::GetRegionApproximateSizeAndKeys {
+                region,
+                pending_tasks,
+                cb,
+            } => {
+                if pending_tasks.fetch_sub(1, AtomicOrdering::SeqCst) > 1 {
+                    return;
+                }
                 let size =
                     get_region_approximate_size(&self.engine, &region, 0).unwrap_or_default();
                 let keys =
