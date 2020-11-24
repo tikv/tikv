@@ -1,11 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Instant;
+
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+<<<<<<< HEAD
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
+=======
+use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
+use tidb_query_common::storage::Range;
+use tidb_query_executors::runner::MAX_TIME_SLICE;
+use tidb_query_expr::BATCH_MAX_SIZE;
+>>>>>>> eb82614fc... copr: allow checksum request to be rescheduled (#9094)
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
+use yatp::task::future::reschedule;
 
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
@@ -68,7 +78,18 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while let Some((k, v)) = self.scanner.next()? {
+            row_count += 1;
+            if row_count >= BATCH_MAX_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }
