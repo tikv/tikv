@@ -202,7 +202,7 @@ impl CGroup {
         Self { path }
     }
 
-    pub fn read_line(&self, param: &str) -> io::Result<String> {
+    fn read_line(&self, param: &str) -> io::Result<String> {
         let f = File::open(Path::new(&self.path).join(param))?;
         let mut reader = BufReader::new(f);
 
