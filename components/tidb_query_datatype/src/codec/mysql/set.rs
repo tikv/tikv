@@ -100,6 +100,12 @@ impl<'a> SetRef<'a> {
     pub fn new(data: &'a BufferVec, value: u64) -> Self {
         Self { data, value }
     }
+    pub fn to_owned(self) -> Set {
+        Set {
+            data: Arc::new(self.data.clone()),
+            value: self.value,
+        }
+    }
     pub fn is_set(&self, idx: usize) -> bool {
         self.value & (1 << idx) != 0
     }
