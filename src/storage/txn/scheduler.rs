@@ -177,8 +177,6 @@ struct SchedulerInner<L: LockManager> {
     running_write_bytes: AtomicUsize,
 
     lock_mgr: Option<L>,
-
-    pipelined_pessimistic_lock: bool,
 }
 
 #[inline]
@@ -276,7 +274,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        pipelined_pessimistic_lock: bool,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -299,7 +296,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
-            pipelined_pessimistic_lock,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -325,12 +321,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             engine: None,
             inner: Arc::clone(&self.inner),
         };
-        Executor::new(
-            scheduler,
-            pool,
-            self.inner.lock_mgr.clone(),
-            self.inner.pipelined_pessimistic_lock,
-        )
+        Executor::new(scheduler, pool, self.inner.lock_mgr.clone())
     }
 
     /// Releases all the latches held by a command.
