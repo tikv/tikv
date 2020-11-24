@@ -5,6 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::expr::EvalContext;
 
 use crate::RpnFnCallExtra;
+use std::convert::TryInto;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::duration::{
@@ -17,7 +18,6 @@ use tidb_query_datatype::codec::mysql::{Duration, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
 use tidb_query_datatype::FieldTypeAccessor;
-use tidb_query_datatype::FieldTypeFlag;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -224,7 +224,7 @@ pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<
     Ok(Some(ret))
 }
 
-#[rpn_fn(capture = [extra,args])]
+#[rpn_fn(capture = [extra, args])]
 #[inline]
 pub fn make_time(
     extra: &RpnFnCallExtra,
@@ -233,59 +233,42 @@ pub fn make_time(
     minute: &Int,
     second: &Real,
 ) -> Result<Option<Duration>> {
-    if second.is_nan() {
-        return Ok(None);
-    }
-    let minutei64 = *minute;
-    let secondi64 = second.into_inner().trunc() as i64;
-    if minutei64 < 0
-        || secondi64 < 0
-        || minutei64 > (MAX_MINUTE_PART as i64)
-        || secondi64 > (MAX_SECOND_PART as i64)
+    let (is_negative, mut hour) = if args[0].field_type().is_unsigned() {
+        (false, *hour as u64)
+    } else {
+        (hour.is_negative(), hour.wrapping_abs() as u64)
+    };
+
+    // Filter out the number that is negative or greater than MAX_MINUTE_PART.
+    let mut minute: u32 = match (*minute).try_into().ok().filter(|m| *m <= MAX_MINUTE_PART) {
+        Some(minute) => minute,
+        None => return Ok(None),
+    };
+
+    let mut nanosecond = (second.fract().abs() * NANOS_PER_SEC as f64) as u32;
+
+    // Filter out the number that is negative or greater than MAX_SECOND_PART.
+    let mut second: u32 = match (second.trunc() as i64)
+        .try_into()
+        .ok()
+        .filter(|s| *s <= MAX_SECOND_PART)
     {
-        return Ok(None);
-    }
-    let mut minute = minutei64 as u32;
-    let mut nanosecond = (second.into_inner().fract() * (NANOS_PER_SEC as f64)) as u32;
-    let mut second = second.into_inner().trunc() as u32;
+        Some(second) => second,
+        None => return Ok(None),
+    };
 
-    let is_unsigned = match args[0] {
-        crate::RpnStackNode::Scalar { field_type, .. } => field_type,
-        crate::RpnStackNode::Vector { field_type, .. } => field_type,
-    }
-    .as_accessor()
-    .flag()
-    .contains(FieldTypeFlag::UNSIGNED);
-    let mut overflow = false;
-    let mut houri64 = *hour;
-    let mut neg = houri64 < 0;
-    if neg && is_unsigned {
-        houri64 = MAX_HOUR_PART as i64;
-        overflow = true;
-        neg = false;
-    }
-    if houri64 > MAX_HOUR_PART as i64 || houri64 < -(MAX_HOUR_PART as i64) {
-        houri64 = MAX_HOUR_PART as i64;
-        overflow = true;
-    }
-    let hour = houri64.abs() as u32;
-
-    if hour == MAX_HOUR_PART
-        && minute == MAX_MINUTE_PART
-        && second == MAX_SECOND_PART
-        && nanosecond > 0
-    {
-        nanosecond = 0;
-    }
-
-    if overflow {
+    let is_overflow = (hour, minute, second, nanosecond)
+        > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
+    if is_overflow {
+        hour = MAX_HOUR_PART as _;
         minute = MAX_MINUTE_PART;
         second = MAX_SECOND_PART;
         nanosecond = 0;
     }
+
     match Duration::new_from_parts(
-        neg,
-        hour,
+        is_negative,
+        hour as _,
         minute,
         second,
         nanosecond,
