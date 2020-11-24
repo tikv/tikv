@@ -373,7 +373,11 @@ impl BatchRaftCmdRequestBuilder {
                 }),
                 proposed_cb,
             );
-            return Some(RaftCommand::new(req, cb));
+            return Some(RaftCommand::with_txn_extra(
+                req,
+                cb,
+                std::mem::take(&mut self.txn_extra),
+            ));
         }
         None
     }
