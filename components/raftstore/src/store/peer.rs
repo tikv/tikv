@@ -3099,6 +3099,11 @@ where
         Some(status)
     }
 
+    fn is_region_size_or_keys_none(&self) -> bool {
+        fail_point!("region_size_or_keys_none", |_| true);
+        self.approximate_size.is_none() || self.approximate_keys.is_none()
+    }
+
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         if self.pending_heartbeat_pd.load(Ordering::SeqCst) {
             return;
@@ -3115,7 +3120,7 @@ where
             approximate_keys: self.approximate_keys.unwrap_or_default(),
             replication_status: self.region_replication_status(),
         });
-        if self.approximate_size.is_some() && self.approximate_keys.is_some() {
+        if !self.is_region_size_or_keys_none() {
             if let Err(e) = ctx.pd_scheduler.schedule(task) {
                 error!(
                     "failed to notify pd";
