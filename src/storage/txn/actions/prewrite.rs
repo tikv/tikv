@@ -4,6 +4,7 @@ use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, LockType, MvccTxn, Result as MvccResult,
 };
+use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::txn::actions::shared::prewrite_key_value;
 use crate::storage::Snapshot;
 use txn_types::{Key, Mutation, TimeStamp, WriteType};
@@ -94,7 +95,7 @@ pub fn prewrite<S: Snapshot>(
             }
             // Should check it when no lock exists, otherwise it can report error when there is
             // a lock belonging to a committed transaction which deletes the key.
-            txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+            check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
             prev_write = Some(write);
         }
     }
