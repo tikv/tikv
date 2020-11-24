@@ -2361,10 +2361,10 @@ where
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("{} can not read index due to split", self.tag));
+            return Err(Error::ReadIndexNotReady("can not read index due to split", self.region_id));
         }
         if self.is_merging() {
-            return Err(box_err!("{} can not read index due to merge", self.tag));
+            return Err(Error::ReadIndexNotReady("can not read index due to merge", self.region_id));
         }
         Ok(())
     }
@@ -2690,10 +2690,7 @@ where
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!(
-                "{} peer in merging mode, can't do proposal.",
-                self.tag
-            ));
+            return Err(Error::ProposalInMergingMode(self.region_id));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2871,10 +2868,7 @@ where
         req: &RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!(
-                "{} peer in merging mode, can't do proposal.",
-                self.tag
-            ));
+            return Err(Error::ProposalInMergingMode(self.region_id));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(

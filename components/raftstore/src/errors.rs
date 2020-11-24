@@ -191,6 +191,15 @@ impl From<Error> for errorpb::Error {
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
+            Error::ReadIndexNotReady(reason, region_id) => {
+                errorpb.mut_read_index_not_ready().set_reason(reason);
+                errorpb
+                    .mut_read_index_not_ready()
+                    .set_region_id(region_id);
+            }
+            Error::ProposalInMergingMode(region_id) => {
+                errorpb.mut_proposal_in_merging_mode().set_region_id(region_id);
+            }
             Error::Transport(reason) if reason == DiscardReason::Full => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
