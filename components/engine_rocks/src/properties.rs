@@ -400,6 +400,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
+/// Can only be used for write CF.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -506,6 +507,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
+/// Can only be used for write CF.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 

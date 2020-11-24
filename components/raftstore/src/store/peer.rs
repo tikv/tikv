@@ -819,12 +819,12 @@ where
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
-            // Only recent active peer is considered, so that an isolated follower
-            // won't waste leader's resource.
-            if *id == self.peer.get_id() || !pr.recent_active {
+            // Even a recent inactive node is also considered. If we put leader into sleep,
+            // followers or learners may not sync its logs for a long time and become unavailable.
+            // We choose availability instead of performance in this case.
+            if *id == self.peer.get_id() {
                 continue;
             }
-            // Keep replicating data to active followers.
             if pr.matched != last_index {
                 return res;
             }
@@ -3768,10 +3768,15 @@ mod tests {
     #[test]
     fn test_cmd_epoch_checker() {
         use engine_test::kv::KvTestSnapshot;
+        use std::sync::mpsc;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
             request
+        }
+        fn new_cb() -> (Callback<KvTestSnapshot>, mpsc::Receiver<()>) {
+            let (tx, rx) = mpsc::channel();
+            (Callback::write(Box::new(move |_| tx.send(()).unwrap())), rx)
         }
 
         let region = metapb::Region::default();
@@ -3843,5 +3848,33 @@ mod tests {
         assert_eq!(epoch_checker.term, 11);
         // Should be empty
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+
+        // Test attaching multiple callbacks.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
+        let mut rxs = vec![];
+        for _ in 0..3 {
+            let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
+            rxs.push(rx);
+        }
+        epoch_checker.advance_apply(7, 12, &region);
+        for rx in rxs {
+            rx.try_recv().unwrap();
+        }
+
+        // Should invoke callbacks when term is increased.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(8, cb);
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
+        rx.try_recv().unwrap();
+
+        // Should invoke callbacks when it's dropped.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(9, cb);
+        drop(epoch_checker);
+        rx.try_recv().unwrap();
     }
 }
