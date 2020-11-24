@@ -64,7 +64,7 @@ pub struct Endpoint<E: Engine> {
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 
-    slow_log_threshold: f64,
+    slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
 }
@@ -108,7 +108,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
-            slow_log_threshold: cfg.end_point_slow_log_threshold,
+            slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
         }
     }

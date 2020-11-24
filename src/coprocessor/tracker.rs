@@ -56,7 +56,7 @@ pub struct Tracker {
     total_process_time: Duration,
     total_storage_stats: Statistics,
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
-    slow_log_threshold: f64,
+    slow_log_threshold: Duration,
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
@@ -66,7 +66,7 @@ impl Tracker {
     /// Initialize the tracker. Normally it is called outside future pool's factory context,
     /// because the future pool might be full and we need to wait it. This kind of wait time
     /// has to be recorded.
-    pub fn new(req_ctx: ReqContext, slow_log_threshold: f64) -> Tracker {
+    pub fn new(req_ctx: ReqContext, slow_log_threshold: Duration) -> Tracker {
         let now = Instant::now_coarse();
         Tracker {
             request_begin_at: now,
@@ -208,7 +208,7 @@ impl Tracker {
 
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
-        if time::duration_to_sec(self.req_lifetime) > self.slow_log_threshold {
+        if self.req_lifetime > self.slow_log_threshold {
             let first_range = self.req_ctx.ranges.first();
             let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
