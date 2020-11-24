@@ -511,7 +511,7 @@ max-write-bytes-per-sec = "10MB"
 [pessimistic-txn]
 enabled = false
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatible
+wake-up-delay-duration = 100 # test backward compatibility
 pipelined = true
 
 [cdc]

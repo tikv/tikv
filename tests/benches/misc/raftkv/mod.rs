@@ -55,7 +55,7 @@ impl SyncBenchRouter {
                     txn_extra_op: TxnExtraOp::Noop,
                 })
             }
-            Callback::Write(cb) => {
+            Callback::Write { cb, .. } => {
                 let mut resp = Response::default();
                 let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
                 resp.set_cmd_type(cmd_type);

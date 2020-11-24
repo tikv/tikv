@@ -352,12 +352,24 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksEngine>, mpsc::Receiver<R
             let _ = tx.send(resp.response);
         }))
     } else {
-        Callback::Write(Box::new(move |resp: WriteResponse| {
+        Callback::write(Box::new(move |resp: WriteResponse| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
     };
     (cb, rx)
+}
+
+pub fn make_cb_ext(
+    cmd: &RaftCmdRequest,
+    proposed: Option<ExtCallback>,
+) -> (Callback<RocksEngine>, mpsc::Receiver<RaftCmdResponse>) {
+    let (cb, receiver) = make_cb(cmd);
+    if let Callback::Write { cb, .. } = cb {
+        (Callback::write_ext(cb, proposed), receiver)
+    } else {
+        (cb, receiver)
+    }
 }
 
 // Issue a read request on the specified peer.
