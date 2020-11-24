@@ -14,4 +14,5 @@ pub mod commit;
 pub mod pessimistic_prewrite;
 pub mod prewrite;
 
+pub mod check_data_constraint;
 pub mod tests;
