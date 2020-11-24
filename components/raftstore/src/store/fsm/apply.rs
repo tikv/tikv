@@ -610,7 +610,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_opt(cmd: &RaftCmdRequest) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -930,7 +930,7 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_opt(&cmd) || apply_ctx.kv_wb().should_write_opt() {
+            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
@@ -3855,7 +3855,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_opt(&cmd), true);
+        assert_eq!(should_write_to_engine(&cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -3864,12 +3864,12 @@ mod tests {
     }
 
     #[test]
-    fn test_should_write_opt() {
+    fn test_should_write_to_engine() {
         // ComputeHash command
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_opt(&req), true);
+        assert_eq!(should_write_to_engine(&req), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -3877,7 +3877,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_opt(&cmd), true);
+        assert_eq!(should_write_to_engine(&cmd), true);
     }
 
     fn validate<F, E>(router: &ApplyRouter<E>, region_id: u64, validate: F)

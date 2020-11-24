@@ -43,7 +43,7 @@ impl Mutable for PanicWriteBatch {
     fn is_empty(&self) -> bool {
         panic!()
     }
-    fn should_write_opt(&self) -> bool {
+    fn should_write_to_engine(&self) -> bool {
         panic!()
     }
 

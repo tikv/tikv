@@ -21,7 +21,7 @@ pub trait Mutable: Send {
     fn data_size(&self) -> usize;
     fn count(&self) -> usize;
     fn is_empty(&self) -> bool;
-    fn should_write_opt(&self) -> bool;
+    fn should_write_to_engine(&self) -> bool;
 
     fn clear(&mut self);
     fn set_save_point(&mut self);
