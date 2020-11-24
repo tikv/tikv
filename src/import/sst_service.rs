@@ -286,6 +286,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             return;
         }
 
+<<<<<<< HEAD
         ctx.spawn(
             future
                 .map_err(Error::from)
@@ -297,6 +298,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                             resp.set_error(header.take_error());
                         }
                         future::ok(resp)
+=======
+        let ctx_task = async move {
+            let res = future.await.map_err(Error::from);
+            let res = match res {
+                Ok(mut res) => {
+                    let mut resp = IngestResponse::default();
+                    let mut header = res.response.take_header();
+                    if header.has_error() {
+                        pb_error_inc(label, header.get_error());
+                        resp.set_error(header.take_error());
+>>>>>>> eb2160b42... sst_importer: add metrics for import error (#9078)
                     }
                     Err(e) => future::err(e),
                 })
@@ -443,4 +455,29 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             ),
         )
     }
+}
+
+// add error statistics from pb error response
+fn pb_error_inc(type_: &str, e: &errorpb::Error) {
+    let label = if e.has_not_leader() {
+        "not_leader"
+    } else if e.has_store_not_match() {
+        "store_not_match"
+    } else if e.has_region_not_found() {
+        "region_not_found"
+    } else if e.has_key_not_in_region() {
+        "key_not_in_range"
+    } else if e.has_epoch_not_match() {
+        "epoch_not_match"
+    } else if e.has_server_is_busy() {
+        "server_is_busy"
+    } else if e.has_stale_command() {
+        "stale_command"
+    } else if e.has_raft_entry_too_large() {
+        "raft_entry_too_large"
+    } else {
+        "unknown"
+    };
+
+    IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }

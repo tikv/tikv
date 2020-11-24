@@ -22,7 +22,7 @@ macro_rules! send_rpc_response {
                 IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "error"])
                     .observe($timer.elapsed_secs());
-                error_inc(&e);
+                error_inc($label, &e);
                 $sink.fail(make_rpc_error(e))
             }
         };
