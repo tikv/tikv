@@ -46,7 +46,6 @@ pub fn new_test_key_manager(
         &previous_master_key,
         method.unwrap_or(EncryptionMethod::Aes256Ctr),
         Duration::from_secs(60),
-        2,
         tmp.path().as_os_str().to_str().unwrap(),
     );
     (tmp, manager)
