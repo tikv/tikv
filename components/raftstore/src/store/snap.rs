@@ -60,6 +60,7 @@ pub const SNAPSHOT_VERSION: u64 = 2;
 const SNAP_GEN_PREFIX: &str = "gen";
 /// Name prefix for the received snapshot file.
 const SNAP_REV_PREFIX: &str = "rev";
+const DEL_RANGE_PREFIX: &str = "del_range";
 
 const TMP_FILE_SUFFIX: &str = ".tmp";
 const SST_FILE_SUFFIX: &str = ".sst";
@@ -1100,6 +1101,7 @@ struct SnapManagerCore {
     registry: Arc<RwLock<HashMap<SnapKey, Vec<SnapEntry>>>>,
     limiter: Limiter,
     snap_size: Arc<AtomicU64>,
+    temp_sst_id: Arc<AtomicU64>,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1180,6 +1182,11 @@ impl SnapManager {
                     None => return None,
                     Some(n) => n,
                 };
+                if name.starts_with(DEL_RANGE_PREFIX) {
+                    // This is a temp file to store delete keys and ingest them into Engine.
+                    return None;
+                }
+
                 let is_sending = name.starts_with(SNAP_GEN_PREFIX);
                 let numbers: Vec<u64> = name.split('.').next().map_or_else(
                     || vec![],
@@ -1208,6 +1215,16 @@ impl SnapManager {
         v.sort();
         v.dedup();
         Ok(v)
+    }
+
+    pub fn get_temp_path_for_ingest(&self) -> String {
+        let sst_id = self.core.temp_sst_id.fetch_add(1, Ordering::SeqCst);
+        let filename = format!(
+            "{}_{}{}{}",
+            DEL_RANGE_PREFIX, sst_id, SST_FILE_SUFFIX, TMP_FILE_SUFFIX
+        );
+        let path = PathBuf::from(&self.core.base).join(&filename);
+        path.to_str().unwrap().to_string()
     }
 
     #[inline]
@@ -1498,6 +1515,7 @@ impl SnapManagerBuilder {
                 registry: Arc::new(RwLock::new(map![])),
                 limiter,
                 snap_size: Arc::new(AtomicU64::new(0)),
+                temp_sst_id: Arc::new(AtomicU64::new(0)),
                 encryption_key_manager: self.key_manager,
             },
             router,
@@ -1519,8 +1537,11 @@ pub mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, DBOptions, Env, DB};
     use engine::Engines;
-    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{Iterable, Peekable, SyncMutable};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot, RocksSstWriterBuilder};
+    use engine_traits::{
+        ExternalSstFileInfo, Iterable, Peekable, SstWriter, SstWriterBuilder, SyncMutable,
+    };
+
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1530,6 +1551,7 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
+    use tikv_util::file as file_util;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -1685,6 +1707,7 @@ pub mod tests {
             registry: Arc::new(RwLock::new(map![])),
             limiter: Limiter::new(INFINITY),
             snap_size: Arc::new(AtomicU64::new(0)),
+            temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
         }
     }
@@ -2392,5 +2415,36 @@ pub mod tests {
                 snap_size * cmp::min(max_snap_count, (i + 2) as u64)
             );
         }
+    }
+
+    #[test]
+    fn test_snap_temp_file_delete() {
+        let src_temp_dir = Builder::new()
+            .prefix("test_snap_temp_file_delete_snap")
+            .tempdir()
+            .unwrap();
+        let mgr_path = src_temp_dir.path().to_str().unwrap();
+        let src_mgr = SnapManager::new(mgr_path.to_owned(), None);
+        src_mgr.init().unwrap();
+        let kv_temp_dir = Builder::new()
+            .prefix("test_snap_temp_file_delete_kv")
+            .tempdir()
+            .unwrap();
+        let db = open_test_db(&kv_temp_dir.path(), None, None).unwrap();
+        let engine = RocksEngine::from_db(db);
+        let sst_path = src_mgr.get_temp_path_for_ingest();
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_db(&engine)
+            .build(&sst_path)
+            .unwrap();
+        writer.put(b"a", b"a").unwrap();
+        let r = writer.finish().unwrap();
+        assert!(file_util::file_exists(&sst_path));
+        assert_eq!(r.file_path().to_str().unwrap(), sst_path.as_str());
+        drop(src_mgr);
+        let src_mgr = SnapManager::new(mgr_path.to_owned(), None);
+        src_mgr.init().unwrap();
+        // The sst_path will be deleted by SnapManager because it is a temp filet.
+        assert!(!file_util::file_exists(&sst_path));
     }
 }
