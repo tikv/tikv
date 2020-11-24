@@ -286,29 +286,18 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             return;
         }
 
-<<<<<<< HEAD
         ctx.spawn(
             future
                 .map_err(Error::from)
-                .then(|res| match res {
+                .then(move |res| match res {
                     Ok(mut res) => {
                         let mut resp = IngestResponse::default();
                         let mut header = res.response.take_header();
                         if header.has_error() {
+                            pb_error_inc(label, header.get_error());
                             resp.set_error(header.take_error());
                         }
                         future::ok(resp)
-=======
-        let ctx_task = async move {
-            let res = future.await.map_err(Error::from);
-            let res = match res {
-                Ok(mut res) => {
-                    let mut resp = IngestResponse::default();
-                    let mut header = res.response.take_header();
-                    if header.has_error() {
-                        pb_error_inc(label, header.get_error());
-                        resp.set_error(header.take_error());
->>>>>>> eb2160b42... sst_importer: add metrics for import error (#9078)
                     }
                     Err(e) => future::err(e),
                 })
