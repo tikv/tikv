@@ -1282,38 +1282,29 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub mod test_util {
     use super::*;
 
-    use crate::storage::{
-        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
-        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
-    };
-    use futures03::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+    use crate::storage::txn::commands;
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
     };
-    use tikv_util::collections::HashMap;
-    use tikv_util::config::ReadableSize;
-    use txn_types::Mutation;
 
-    fn expect_none(x: Result<Option<Value>>) {
+    pub fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
     }
 
-    fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
+    pub fn expect_value(v: Vec<u8>, x: Result<Option<Value>>) {
         assert_eq!(x.unwrap().unwrap(), v);
     }
 
-    fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
+    pub fn expect_multi_values(v: Vec<Option<KvPair>>, x: Result<Vec<Result<KvPair>>>) {
         let x: Vec<Option<KvPair>> = x.unwrap().into_iter().map(Result::ok).collect();
         assert_eq!(x, v);
     }
 
-    fn expect_error<T, F>(err_matcher: F, x: Result<T>)
+    pub fn expect_error<T, F>(err_matcher: F, x: Result<T>)
     where
         F: FnOnce(Error) + Send + 'static,
     {
@@ -1323,14 +1314,14 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
+    pub fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
             done.send(id).unwrap();
         })
     }
 
-    fn expect_fail_callback<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
+    pub fn expect_fail_callback<T, F>(done: Sender<i32>, id: i32, err_matcher: F) -> Callback<T>
     where
         F: FnOnce(Error) + Send + 'static,
     {
@@ -1340,7 +1331,7 @@ mod tests {
         })
     }
 
-    fn expect_too_busy_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
+    pub fn expect_too_busy_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
@@ -1353,7 +1344,7 @@ mod tests {
         })
     }
 
-    fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
+    pub fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
         done: Sender<i32>,
         id: i32,
         value: T,
@@ -1363,6 +1354,76 @@ mod tests {
             done.send(id).unwrap();
         })
     }
+
+    pub fn expect_pessimistic_lock_res_callback(
+        done: Sender<i32>,
+        pessimistic_lock_res: PessimisticLockRes,
+    ) -> Callback<Result<PessimisticLockRes>> {
+        Box::new(move |res: Result<Result<PessimisticLockRes>>| {
+            assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
+            done.send(0).unwrap();
+        })
+    }
+
+    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
+    pub fn new_acquire_pessimistic_lock_command(
+        keys: Vec<(Key, bool)>,
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        return_values: bool,
+    ) -> PessimisticLockCommand {
+        let primary = keys[0].0.clone().to_raw().unwrap();
+        let for_update_ts: TimeStamp = for_update_ts.into();
+        commands::AcquirePessimisticLock::new(
+            keys,
+            primary,
+            start_ts.into(),
+            3000,
+            false,
+            for_update_ts,
+            None,
+            return_values,
+            for_update_ts.next(),
+            Context::default(),
+        )
+    }
+
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager>(
+        storage: &Storage<E, L>,
+        key: Key,
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PessimisticRollback::new(
+                    vec![key],
+                    start_ts.into(),
+                    for_update_ts.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{test_util::*, *};
+
+    use crate::storage::{
+        kv::{Error as EngineError, ErrorInner as EngineErrorInner},
+        txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
+    };
+    use futures03::executor::block_on;
+    use kvproto::kvrpcpb::{CommandPri, LockInfo};
+    use std::sync::mpsc::{channel, Sender};
+    use tikv_util::collections::HashMap;
+    use tikv_util::config::ReadableSize;
+    use txn_types::Mutation;
 
     #[test]
     fn test_get_put() {

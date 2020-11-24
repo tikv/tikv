@@ -160,7 +160,7 @@ fn test_serde_custom_tikv_config() {
         split_region_check_tick_interval: ReadableDuration::secs(12),
         region_split_check_diff: ReadableSize::mb(6),
         region_compact_check_interval: ReadableDuration::secs(12),
-        clean_stale_peer_delay: ReadableDuration::secs(13),
+        clean_stale_peer_delay: ReadableDuration::minutes(11),
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
@@ -290,7 +290,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -334,7 +334,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -392,7 +392,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -450,7 +450,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
@@ -536,7 +536,7 @@ fn test_serde_custom_tikv_config() {
             disable_auto_compactions: true,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             titan: titan_cf_config,
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -587,7 +587,6 @@ fn test_serde_custom_tikv_config() {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };

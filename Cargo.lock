@@ -450,7 +450,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
- "fail",
+ "fail 0.3.0",
  "failure",
  "futures 0.1.29",
  "grpcio",
@@ -557,6 +557,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloudabi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4344512281c643ae7638bbabc3af17a11307803ec8f0fcad9fae512a8bf36467"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -656,9 +665,9 @@ dependencies = [
 
 [[package]]
 name = "const-random"
-version = "0.1.6"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b641a8c9867e341f3295564203b1c250eb8ce6cb6126e007941f78c4d2ed7fe"
+checksum = "47715816826addf701caff29a519860e7e49de0d0b1584f3418ae7a676d75324"
 dependencies = [
  "const-random-macro",
  "proc-macro-hack",
@@ -666,12 +675,12 @@ dependencies = [
 
 [[package]]
 name = "const-random-macro"
-version = "0.1.6"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c750ec12b83377637110d5a57f5ae08e895b06c4b16e2bdbf1a94ef717428c59"
+checksum = "25e4c606eb459dd29f7c57b2e0879f2b6f14ee130918c2b78ccb58a9624e6c7a"
 dependencies = [
+ "getrandom",
  "proc-macro-hack",
- "rand 0.7.3",
 ]
 
 [[package]]
@@ -962,9 +971,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "3.7.0"
+version = "3.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "010ef3f25ed5bb93505a3238d19957622190268640526aab07174c66ccf5d611"
+checksum = "0f260e2fc850179ef410018660006951c1b55b79e8087e87111a2c388994b9b5"
 dependencies = [
  "ahash",
  "cfg-if 0.1.10",
@@ -1144,10 +1153,11 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
- "fail",
+ "fail 0.3.0",
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "num_cpus",
  "prometheus",
  "rand 0.7.3",
  "rocksdb",
@@ -1252,6 +1262,17 @@ dependencies = [
  "lazy_static",
  "log",
  "rand 0.6.5",
+]
+
+[[package]]
+name = "fail"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3c61c59fdc91f5dbc3ea31ee8623122ce80057058be560654c5d410d181a6"
+dependencies = [
+ "lazy_static",
+ "log",
+ "rand 0.7.3",
 ]
 
 [[package]]
@@ -1539,7 +1560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
 dependencies = [
  "typenum",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -1831,6 +1852,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "instant"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb1fc4429a33e1f80d41dc9fea4d108a88bec1de8053878898ae448a0b52f613"
+dependencies = [
+ "cfg-if 1.0.0",
+]
+
+[[package]]
 name = "into_other"
 version = "0.0.1"
 dependencies = [
@@ -1947,9 +1977,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.66"
+version = "0.2.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
+checksum = "4d58d1b70b004888f764dfbf6a26a3b0342a1632d33968e4a179d8011c760614"
 
 [[package]]
 name = "libflate"
@@ -2378,6 +2408,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f26e041cd983acbc087e30fcba770380cfa352d0e392e175b2344ebaf7ea0602"
+dependencies = [
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "num"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2464,9 +2503,9 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.11.1"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76dac5ed2a876980778b8b85f75a71b6cbf0db0b1232ee12f826bccb00d09d72"
+checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
 dependencies = [
  "hermit-abi",
  "libc",
@@ -2568,7 +2607,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b876b1b9e7ac6e1a74a6da34d25c42e17e8862aa409cbbbdcfc8d86c6f3bc62b"
 dependencies = [
  "cfg-if 0.1.10",
- "cloudabi",
+ "cloudabi 0.0.3",
  "libc",
  "redox_syscall",
  "rustc_version",
@@ -2583,10 +2622,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7582838484df45743c8434fbff785e8edf260c28748353d44bc0da32e0ceabf1"
 dependencies = [
  "cfg-if 0.1.10",
- "cloudabi",
+ "cloudabi 0.0.3",
  "libc",
  "redox_syscall",
- "smallvec 1.1.0",
+ "smallvec 1.4.2",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c361aa727dd08437f2f1447be8b59a33b0edd15e0fcee698f935613d9efbca9b"
+dependencies = [
+ "cfg-if 0.1.10",
+ "cloudabi 0.1.0",
+ "instant",
+ "libc",
+ "redox_syscall",
+ "smallvec 1.4.2",
  "winapi 0.3.8",
 ]
 
@@ -2623,7 +2677,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "fail",
+ "fail 0.3.0",
  "futures 0.1.29",
  "futures 0.3.7",
  "grpcio",
@@ -2791,7 +2845,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -2804,7 +2858,7 @@ dependencies = [
  "quote",
  "syn",
  "syn-mid",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -3055,7 +3109,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.3.0",
  "fs2",
  "futures 0.1.29",
  "futures-executor",
@@ -3225,7 +3279,7 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b75f676a1e053fc562eafbb47838d67c84801e38fc1ba459e8f180deabd5071"
 dependencies = [
- "cloudabi",
+ "cloudabi 0.0.3",
  "fuchsia-cprng",
  "libc",
  "rand_core 0.4.2",
@@ -3576,7 +3630,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "sha2",
- "time 0.2.22",
+ "time 0.2.23",
  "tokio 0.2.13",
 ]
 
@@ -3949,9 +4003,9 @@ checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
 
 [[package]]
 name = "smallvec"
-version = "1.1.0"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
+checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
 
 [[package]]
 name = "snappy-sys"
@@ -4162,17 +4216,16 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.9.6"
-source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#762badf918f1e0b36fce032f9f81274d79fdff7d"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d070254b7172eee9eb3990bea8f72aeabfe1226c40bf71a52e4fe75777812e9a"
 dependencies = [
- "cache-size",
  "cfg-if 0.1.10",
  "doc-comment",
  "libc",
- "num_cpus",
- "pnet_datalink",
+ "ntapi",
+ "once_cell",
  "rayon",
- "walkdir",
  "winapi 0.3.8",
 ]
 
@@ -4287,7 +4340,7 @@ dependencies = [
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
- "fail",
+ "fail 0.3.0",
  "futures 0.1.29",
  "grpcio",
  "kvproto",
@@ -4359,7 +4412,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "fail",
+ "fail 0.3.0",
  "grpcio",
  "kvproto",
  "rand 0.7.3",
@@ -4391,7 +4444,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "external_storage",
- "fail",
+ "fail 0.3.0",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
@@ -4512,7 +4565,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "smallvec 1.1.0",
+ "smallvec 1.4.2",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_datatype",
@@ -4557,6 +4610,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "cache-size",
  "chrono",
  "codec",
  "configuration",
@@ -4570,7 +4624,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.3.0",
  "failure",
  "fs2",
  "futures 0.1.29",
@@ -4597,6 +4651,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
+ "num_cpus",
  "openssl",
  "panic_hook",
  "parking_lot 0.10.0",
@@ -4647,6 +4702,7 @@ dependencies = [
  "url",
  "uuid",
  "vlog",
+ "walkdir",
  "yatp",
  "zipf",
 ]
@@ -4712,7 +4768,7 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail",
+ "fail 0.3.0",
  "fs2",
  "futures 0.1.29",
  "futures 0.3.7",
@@ -4723,6 +4779,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "num_cpus",
  "openssl",
  "panic_hook",
  "procfs",
@@ -4767,16 +4824,16 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.22"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55b7151c9065e80917fbf285d9a5d1432f60db41d170ccafc749a136b41a93af"
+checksum = "bcdaeea317915d59b2b4cd3b5efcd156c309108664277793f5351700c02ce98b"
 dependencies = [
  "const_fn",
  "libc",
  "standback",
  "stdweb",
  "time-macros",
- "version_check 0.9.1",
+ "version_check 0.9.2",
  "winapi 0.3.8",
 ]
 
@@ -5193,7 +5250,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5479532badd04e128284890390c1e876ef7a993d0570b3597ae43dfa1d59afa4"
 dependencies = [
- "smallvec 1.1.0",
+ "smallvec 1.4.2",
 ]
 
 [[package]]
@@ -5284,9 +5341,9 @@ checksum = "914b1a6776c4c929a602fafd8bc742e06365d4bcbe48c30f9cca5824f70dc9dd"
 
 [[package]]
 name = "version_check"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "078775d0255232fb988e6fccf26ddc9d1ac274299aaedcedce21c6f72cc533ce"
+checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
 
 [[package]]
 name = "vlog"
@@ -5501,14 +5558,15 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git#3894a861643b6ba384aaad352bbaed9717f66838"
+source = "git+https://github.com/tikv/yatp.git?branch=tikv-4.0#8d739275048c5979f623d20d8044ee214261b9a3"
 dependencies = [
+ "const-random-macro",
  "crossbeam-deque 0.7.1",
  "dashmap",
- "fail",
+ "fail 0.4.0",
  "lazy_static",
  "num_cpus",
- "parking_lot_core 0.7.0",
+ "parking_lot_core 0.8.0",
  "prometheus",
  "rand 0.7.3",
 ]

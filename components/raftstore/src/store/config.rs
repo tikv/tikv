@@ -82,6 +82,8 @@ pub struct Config {
     pub region_compact_check_interval: ReadableDuration,
     // delay time before deleting a stale peer
     #[config(hidden)]
+    #[config(skip)]
+    #[serde(skip_serializing)]
     pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
@@ -541,9 +543,6 @@ impl Config {
             .with_label_values(&["region_compact_check_interval"])
             .set(self.region_compact_check_interval.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["clean_stale_peer_delay"])
-            .set(self.clean_stale_peer_delay.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);
         CONFIG_RAFTSTORE_GAUGE
@@ -645,6 +644,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_regions"])
+            .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_timeout"])
+            .set(self.hibernate_timeout.0.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

@@ -236,7 +236,7 @@ impl<L: LockManager> SchedulerInner<L> {
         self.task_contexts[id_index(cid)]
             .lock()
             .get_mut(&cid)
-            .map(|tctx| tctx.cb.take().unwrap())
+            .and_then(|tctx| tctx.cb.take())
     }
 
     fn too_busy(&self) -> bool {
