@@ -25,7 +25,6 @@ pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
     EncryptionConfig {
         data_encryption_method: EncryptionMethod::Aes256Ctr,
         data_key_rotation_period: ReadableDuration::days(7),
-        file_rewrite_threshold: 100000,
         master_key: master_key_cfg.clone(),
         previous_master_key: master_key_cfg,
     }
