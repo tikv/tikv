@@ -240,7 +240,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
@@ -298,7 +298,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -340,7 +340,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -382,7 +382,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -457,7 +457,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
-force-consistency-checks = false
+force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 

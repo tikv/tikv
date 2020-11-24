@@ -538,12 +538,12 @@ impl Peer {
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
-            // Only recent active peer is considerred, so that an isolated follower
-            // won't cause a waste of leader's resource.
-            if *id == self.peer.get_id() || !pr.recent_active {
+            // Even a recent inactive node is also considered. If we put leader into sleep,
+            // followers or learners may not sync its logs for a long time and become unavailable.
+            // We choose availability instead of performance in this case.
+            if *id == self.peer.get_id() {
                 continue;
             }
-            // Keep replicating data to active followers.
             if pr.matched != last_index {
                 return res;
             }

@@ -235,3 +235,50 @@ fn test_transfer_leader_delay() {
     }
     panic!("failed to request after 3 seconds");
 }
+
+/// If a learner is isolated before split and then catch up logs by snapshot, then the
+/// range for split learner will be missing on the node until leader is waken.
+#[test]
+fn test_split_delay() {
+    let mut cluster = new_server_cluster(0, 4);
+    configure_for_hibernate(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 20;
+    cluster.pd_client.disable_default_operator();
+    cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(1, new_peer(3, 3));
+
+    cluster.pd_client.must_add_peer(1, new_learner_peer(4, 4));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+
+    // Suppose there is only one way partition.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 4).direction(Direction::Recv),
+    ));
+    let idx = cluster.truncated_state(1, 1).get_index();
+    // Trigger a log compaction.
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    }
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k3");
+    let timer = Instant::now();
+    loop {
+        if cluster.truncated_state(1, 1).get_index() > idx {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+        if timer.elapsed() > Duration::from_secs(3) {
+            panic!("log is not compact after 3 seconds");
+        }
+    }
+    // Wait till leader peer goes to sleep again.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 2
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+}
