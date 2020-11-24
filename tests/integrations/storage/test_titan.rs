@@ -13,7 +13,9 @@ use engine::rocks::{IngestExternalFileOptions, Writable};
 use engine::Engines;
 use engine_rocks::RocksEngine;
 use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
-use engine_traits::{MiscExt, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Range, SstWriter, SstWriterBuilder, ALL_CFS, CF_DEFAULT, CF_WRITE,
+};
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
 use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
@@ -302,26 +304,34 @@ fn test_delete_files_in_range_for_titan() {
     engines
         .kv
         .c()
-        .delete_all_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
+        .delete_all_in_range(
+            DeleteStrategy::DeleteFiles,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
     engines
         .kv
         .c()
         .delete_all_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
-            false,
+            DeleteStrategy::DeleteByKey,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
     engines
         .kv
         .c()
-        .delete_blob_files_in_range(
-            &data_key(Key::from_raw(b"a").as_encoded()),
-            &data_key(Key::from_raw(b"b").as_encoded()),
+        .delete_all_in_range(
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(
+                &data_key(Key::from_raw(b"a").as_encoded()),
+                &data_key(Key::from_raw(b"b").as_encoded()),
+            )],
         )
         .unwrap();
 
