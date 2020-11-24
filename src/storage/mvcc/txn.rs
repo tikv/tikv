@@ -253,7 +253,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
+    pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
@@ -328,29 +328,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
         lock.rollback_ts.push(self.start_ts);
         self.put_lock(key.clone(), &lock);
-    }
-
-    /// Checks the existence of the key according to `should_not_exist`.
-    /// If not, returns an `AlreadyExist` error.
-    pub(crate) fn check_data_constraint(
-        &mut self,
-        should_not_exist: bool,
-        write: &Write,
-        write_commit_ts: TimeStamp,
-        key: &Key,
-    ) -> Result<()> {
-        if !should_not_exist || write.write_type == WriteType::Delete {
-            return Ok(());
-        }
-
-        // The current key exists under any of the following conditions:
-        // 1.The current write type is `PUT`
-        // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts.prev())? {
-            return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
-        }
-
-        Ok(())
     }
 
     // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
