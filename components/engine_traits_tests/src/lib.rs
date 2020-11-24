@@ -951,6 +951,20 @@ mod write_batch {
     use std::panic::{self, AssertUnwindSafe};
 
     #[test]
+    fn write_batch_none_no_commit() {
+        let db = default_engine();
+        let wb = db.engine.write_batch();
+        drop(wb);
+    }
+
+    #[test]
+    fn write_batch_none() {
+        let db = default_engine();
+        let wb = db.engine.write_batch();
+        wb.write().unwrap();
+    }
+
+    #[test]
     fn write_batch_put() {
         let db = default_engine();
 
@@ -1230,6 +1244,44 @@ mod write_batch {
         assert!(db.engine.get_value(b"d").unwrap().is_none());
         assert!(db.engine.get_value(b"e").unwrap().is_some());
         assert!(db.engine.get_value(b"f").unwrap().is_none());
+    }
+
+    #[test]
+    fn write_batch_is_empty() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        assert!(wb.is_empty());
+        wb.put(b"a", b"").unwrap();
+        assert!(!wb.is_empty());
+        wb.write().unwrap();
+        assert!(!wb.is_empty());
+    }
+
+    #[test]
+    fn write_batch_count() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        assert_eq!(wb.count(), 0);
+        wb.put(b"a", b"").unwrap();
+        assert_eq!(wb.count(), 1);
+        wb.write().unwrap();
+        assert_eq!(wb.count(), 1);
+    }
+
+    #[test]
+    fn write_batch_clear() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"").unwrap();
+        wb.put(b"b", b"").unwrap();
+        wb.clear();
+        assert!(wb.is_empty());
+        assert_eq!(wb.count(), 0);
+        wb.write().unwrap();
+        assert!(db.engine.get_value(b"a").unwrap().is_none());
     }
 }
 
