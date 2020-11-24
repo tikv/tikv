@@ -1202,8 +1202,7 @@ mod write_batch {
     }
 
     #[test]
-    #[ignore]
-    fn write_batch_delete_range_cf_backward_range_uncommitted() {
+    fn write_batch_delete_range_cf_backward_range_partial_commit() {
         let db = default_engine();
 
         db.engine.put(b"a", b"").unwrap();
@@ -1213,8 +1212,14 @@ mod write_batch {
            
         let mut wb = db.engine.write_batch();
 
+        // Everything in the write batch before the panic
+        // due to bad range is going to end up committed.
+        wb.put(b"e", b"").unwrap();
         wb.delete(b"d").unwrap();
         wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
+        wb.put(b"f", b"").unwrap();
+        wb.delete(b"a").unwrap();
+
         assert!(panic::catch_unwind(AssertUnwindSafe(|| {
             wb.write().unwrap();
         })).is_err());
@@ -1222,7 +1227,9 @@ mod write_batch {
         assert!(db.engine.get_value(b"a").unwrap().is_some());
         assert!(db.engine.get_value(b"b").unwrap().is_some());
         assert!(db.engine.get_value(b"c").unwrap().is_some());
-        assert!(db.engine.get_value(b"d").unwrap().is_some());
+        assert!(db.engine.get_value(b"d").unwrap().is_none());
+        assert!(db.engine.get_value(b"e").unwrap().is_some());
+        assert!(db.engine.get_value(b"f").unwrap().is_none());
     }
 }
 
