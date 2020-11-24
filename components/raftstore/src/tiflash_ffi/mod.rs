@@ -423,17 +423,11 @@ impl WriteCmds {
         WriteCmds::default()
     }
 
-    pub fn push(&mut self, key: &[u8], val: &[u8], cmd_type: WriteCmdType, cf: &str) {
-        self.keys.push(BaseBuffView {
-            data: key.as_ptr(),
-            len: key.len() as u64,
-        });
-        self.vals.push(BaseBuffView {
-            data: val.as_ptr(),
-            len: val.len() as u64,
-        });
+    pub fn push(&mut self, key: &[u8], val: &[u8], cmd_type: WriteCmdType, cf: WriteCmdCf) {
+        self.keys.push(key.into());
+        self.vals.push(val.into());
         self.cmd_type.push(cmd_type.into());
-        self.cf.push(name_to_cf(cf).into());
+        self.cf.push(cf.into());
     }
 
     pub fn len(&self) -> usize {
@@ -456,14 +450,8 @@ pub fn gen_snap_kv_data_view(snap: &SnapshotKV) -> SnapshotKVView {
     let mut vals = Vec::<BaseBuffView>::with_capacity(snap.len());
 
     for (k, v) in snap {
-        keys.push(BaseBuffView {
-            data: k.as_ptr(),
-            len: k.len() as u64,
-        });
-        vals.push(BaseBuffView {
-            data: v.as_ptr(),
-            len: v.len() as u64,
-        });
+        keys.push(k.as_slice().into());
+        vals.push(v.as_slice().into());
     }
 
     (keys, vals)
@@ -541,15 +529,6 @@ impl From<&[u8]> for BaseBuffView {
         Self {
             data: s.as_ptr(),
             len: s.len() as u64,
-        }
-    }
-}
-
-impl Default for BaseBuffView {
-    fn default() -> Self {
-        Self {
-            data: std::ptr::null(),
-            len: 0,
         }
     }
 }
@@ -802,11 +781,7 @@ impl TiFlashServerHelper {
     }
 
     fn gen_cpp_string(&self, buff: &[u8]) -> TiFlashRawString {
-        (self.gen_cpp_string)(BaseBuffView {
-            data: buff.as_ptr(),
-            len: buff.len() as u64,
-        })
-        .into_raw()
+        (self.gen_cpp_string)(buff.into()).into_raw()
     }
 
     fn gen_batch_read_index_res(&self, cap: u64) -> *const u8 {

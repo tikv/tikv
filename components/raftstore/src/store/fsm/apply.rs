@@ -902,11 +902,6 @@ where
         }
     }
 
-    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
-        self.metrics.written_bytes += apply_ctx.delta_bytes();
-        self.metrics.written_keys += apply_ctx.delta_keys();
-    }
-
     fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
@@ -1401,21 +1396,26 @@ where
             match cmd_type {
                 CmdType::Put => {
                     let put = req.get_put();
-                    cmds.push(
-                        put.get_key(),
-                        put.get_value(),
-                        WriteCmdType::Put,
-                        put.get_cf(),
-                    );
+                    let cf = crate::tiflash_ffi::name_to_cf(put.get_cf());
+                    let (key, value) = (put.get_key(), put.get_value());
+                    if cf != WriteCmdCf::Lock {
+                        self.metrics.size_diff_hint += key.len() as i64 + value.len() as i64;
+                        self.metrics.written_bytes += key.len() as u64 + value.len() as u64;
+                        self.metrics.written_keys += 1;
+                    }
+                    cmds.push(key, value, WriteCmdType::Put, cf);
                 }
                 CmdType::Delete => {
                     let del = req.get_delete();
-                    cmds.push(
-                        del.get_key(),
-                        NONE_STR.as_ref(),
-                        WriteCmdType::Del,
-                        del.get_cf(),
-                    );
+                    let cf = crate::tiflash_ffi::name_to_cf(del.get_cf());
+                    let key = del.get_key();
+                    if cf != WriteCmdCf::Lock {
+                        self.metrics.size_diff_hint -= key.len() as i64;
+                        self.metrics.delete_keys_hint += 1;
+                        self.metrics.written_bytes += key.len() as u64;
+                        self.metrics.written_keys += 1;
+                    }
+                    cmds.push(key, NONE_STR.as_ref(), WriteCmdType::Del, cf);
                 }
                 CmdType::IngestSst => {
                     ssts.push(req.get_ingest_sst().get_sst().clone());
