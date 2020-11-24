@@ -42,18 +42,18 @@ pub fn must_prewrite_put_impl<E: Engine>(
         CommitKind::TwoPc
     };
     prewrite(
-        TransactionProperties {
+        &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
             commit_kind,
             primary: pk,
             txn_size,
+            lock_ttl,
+            min_commit_ts,
         },
         &mut txn,
         mutation,
         &secondary_keys,
-        lock_ttl,
-        min_commit_ts,
         is_pessimistic_lock,
     )
     .unwrap();
@@ -239,18 +239,18 @@ fn must_prewrite_put_err_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
-        TransactionProperties {
+        &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
             commit_kind: CommitKind::TwoPc,
             primary: pk,
             txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
         },
         &mut txn,
         mutation,
         &None,
-        0,
-        TimeStamp::default(),
         is_pessimistic_lock,
     )
     .unwrap_err()
@@ -308,18 +308,18 @@ fn must_prewrite_delete_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
-        TransactionProperties {
+        &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
             commit_kind: CommitKind::TwoPc,
             primary: pk,
             txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
         },
         &mut txn,
         mutation,
         &None,
-        0,
-        TimeStamp::default(),
         is_pessimistic_lock,
     )
     .unwrap();
@@ -371,18 +371,18 @@ fn must_prewrite_lock_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
-        TransactionProperties {
+        &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
             commit_kind: CommitKind::TwoPc,
             primary: pk,
             txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
         },
         &mut txn,
         mutation,
         &None,
-        0,
-        TimeStamp::default(),
         is_pessimistic_lock,
     )
     .unwrap();
@@ -408,18 +408,18 @@ pub fn must_prewrite_lock_err<E: Engine>(
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
     assert!(prewrite(
-        TransactionProperties {
+        &TransactionProperties {
             start_ts: ts,
             kind: TransactionKind::Optimistic(false),
             commit_kind: CommitKind::TwoPc,
             primary: pk,
             txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
         },
         &mut txn,
         Mutation::Lock(Key::from_raw(key)),
         &None,
-        0,
-        TimeStamp::default(),
         false,
     )
     .is_err());
