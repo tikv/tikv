@@ -31,7 +31,7 @@ const BATCH_GROW_FACTOR: usize = 2;
 
 /// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
 /// can run without being yielded.
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+pub const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check

@@ -5,15 +5,9 @@ use std::time::Instant;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-<<<<<<< HEAD
+use tidb_query::batch::runner::{BATCH_MAX_SIZE, MAX_TIME_SLICE};
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
-=======
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tidb_query_executors::runner::MAX_TIME_SLICE;
-use tidb_query_expr::BATCH_MAX_SIZE;
->>>>>>> eb82614fc... copr: allow checksum request to be rescheduled (#9094)
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
 
