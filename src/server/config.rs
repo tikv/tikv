@@ -133,7 +133,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
+        let background_thread_count = std::cmp::min(4, cpu_num as usize);
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
