@@ -82,6 +82,8 @@ pub struct Config {
     pub region_compact_check_interval: ReadableDuration,
     // delay time before deleting a stale peer
     #[config(hidden)]
+    #[config(skip)]
+    #[serde(skip_serializing)]
     pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
@@ -540,9 +542,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_interval"])
             .set(self.region_compact_check_interval.as_secs() as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["clean_stale_peer_delay"])
-            .set(self.clean_stale_peer_delay.as_secs() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);
