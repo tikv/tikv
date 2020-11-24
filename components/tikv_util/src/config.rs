@@ -927,13 +927,15 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
-pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+///
+/// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
+pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
     // Try to validate "IPv4:Port" and "[IPv6]:Port".
-    if SocketAddrV4::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV4::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
-    if SocketAddrV6::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV6::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
 
     let parts: Vec<&str> = addr
@@ -963,7 +965,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Err(ConfigError::Address(format!("invalid addr: {:?}", e)));
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Default)]
@@ -1439,6 +1441,20 @@ mod tests {
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
+
+        let table = vec![
+            ("0.0.0.0:8080", true),
+            ("[::0]:8080", true),
+            ("127.0.0.1:8080", false),
+            ("[::1]:8080", false),
+            ("localhost:8080", false),
+            ("pingcap.com:8080", false),
+            ("funnydomain:8080", false),
+        ];
+
+        for (addr, is_unspecified) in table {
+            assert_eq!(check_addr(addr).unwrap(), is_unspecified);
         }
     }
 

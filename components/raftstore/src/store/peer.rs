@@ -14,8 +14,8 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest, RaftCmdRequest,
-    RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+    RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -39,7 +39,9 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, GlobalReplicationState, PdTask, ReadResponse};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
@@ -817,12 +819,12 @@ where
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
-            // Only recent active peer is considered, so that an isolated follower
-            // won't waste leader's resource.
-            if *id == self.peer.get_id() || !pr.recent_active {
+            // Even a recent inactive node is also considered. If we put leader into sleep,
+            // followers or learners may not sync its logs for a long time and become unavailable.
+            // We choose availability instead of performance in this case.
+            if *id == self.peer.get_id() {
                 continue;
             }
-            // Keep replicating data to active followers.
             if pr.matched != last_index {
                 return res;
             }
@@ -1026,28 +1028,33 @@ where
             // As another role know we're not missing.
             self.leader_missing_time.take();
         }
-        // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
-        // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        let committed = self.raft_group.raft.raft_log.committed;
-        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
-        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
-            // If the leader hasn't committed any entries in its term, it can't response read only
-            // requests. Please also take a look at raft-rs.
-            let state = self.inspect_lease();
-            if let LeaseState::Valid = state {
-                let mut resp = eraftpb::Message::default();
-                resp.set_msg_type(MessageType::MsgReadIndexResp);
-                resp.term = self.term();
-                resp.to = m.from;
-                resp.index = self.get_store().committed_index();
-                resp.set_entries(m.take_entries());
+        if msg_type == MessageType::MsgReadIndex {
+            ctx.coprocessor_host.on_step_read_index(&mut m);
 
-                self.pending_messages.push(resp);
-                return Ok(());
+            // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
+            // request directly, rather than send a heartbeat to check quorum.
+            let committed = self.raft_group.raft.raft_log.committed;
+            let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+            if expected_term == self.raft_group.raft.term {
+                // If the leader hasn't committed any entries in its term, it can't response read only
+                // requests. Please also take a look at raft-rs.
+                let state = self.inspect_lease();
+                if let LeaseState::Valid = state {
+                    let mut resp = eraftpb::Message::default();
+                    resp.set_msg_type(MessageType::MsgReadIndexResp);
+                    resp.term = self.term();
+                    resp.to = m.from;
+                    resp.index = self.get_store().committed_index();
+                    resp.set_entries(m.take_entries());
+
+                    self.pending_messages.push(resp);
+                    return Ok(());
+                }
+                self.should_wake_up = state == LeaseState::Expired;
             }
-            self.should_wake_up = state == LeaseState::Expired;
         }
+
         if msg_type == MessageType::MsgTransferLeader {
             self.execute_transfer_leader(ctx, &m);
             return Ok(());
@@ -1786,6 +1793,19 @@ where
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         for (req, cb, mut read_index) in read.cmds.drain(..) {
+            // leader reports key is locked
+            if let Some(locked) = read.locked.take() {
+                let mut response = raft_cmdpb::Response::default();
+                response.mut_read_index().set_locked(*locked);
+                let mut cmd_resp = RaftCmdResponse::default();
+                cmd_resp.mut_responses().push(response);
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+                continue;
+            }
             if !replica_read {
                 if read_index.is_none() {
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
@@ -1810,6 +1830,12 @@ where
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
         while let Some(mut read) = self.pending_reads.pop_front() {
+            // addition_request indicates an ongoing lock checking. We must wait until lock checking finished.
+            if read.addition_request.is_some() {
+                self.pending_reads.push_front(read);
+                break;
+            }
+
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
@@ -1830,8 +1856,8 @@ where
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
-            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-            (uuid, state.index)
+            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
         });
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
@@ -2359,7 +2385,12 @@ where
 
         let read = self.pending_reads.back_mut().unwrap();
         debug_assert!(read.read_index.is_none());
-        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                read.id,
+                read.addition_request.as_deref(),
+                None,
+            ));
         debug!(
             "request to get a read index";
             "request_id" => ?read.id,
@@ -2376,7 +2407,7 @@ where
     fn read_index<T: Transport>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
@@ -2457,8 +2488,19 @@ where
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         self.bcast_wake_up_time = None;
+
         let id = Uuid::new_v4();
-        self.raft_group.read_index(id.as_bytes().to_vec());
+        let request = req
+            .mut_requests()
+            .get_mut(0)
+            .filter(|req| req.has_read_index())
+            .map(|req| req.take_read_index());
+        self.raft_group
+            .read_index(ReadIndexContext::fields_to_bytes(
+                id,
+                request.as_ref(),
+                None,
+            ));
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2472,7 +2514,8 @@ where
             return false;
         }
 
-        let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        let mut read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        read.addition_request = request.map(Box::new);
         self.pending_reads.push_back(read, self.is_leader());
         self.should_wake_up = true;
 
@@ -3725,10 +3768,15 @@ mod tests {
     #[test]
     fn test_cmd_epoch_checker() {
         use engine_test::kv::KvTestSnapshot;
+        use std::sync::mpsc;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
             let mut request = RaftCmdRequest::default();
             request.mut_admin_request().set_cmd_type(cmd_type);
             request
+        }
+        fn new_cb() -> (Callback<KvTestSnapshot>, mpsc::Receiver<()>) {
+            let (tx, rx) = mpsc::channel();
+            (Callback::write(Box::new(move |_| tx.send(()).unwrap())), rx)
         }
 
         let region = metapb::Region::default();
@@ -3800,5 +3848,33 @@ mod tests {
         assert_eq!(epoch_checker.term, 11);
         // Should be empty
         assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+
+        // Test attaching multiple callbacks.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
+        let mut rxs = vec![];
+        for _ in 0..3 {
+            let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
+            rxs.push(rx);
+        }
+        epoch_checker.advance_apply(7, 12, &region);
+        for rx in rxs {
+            rx.try_recv().unwrap();
+        }
+
+        // Should invoke callbacks when term is increased.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(8, cb);
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
+        rx.try_recv().unwrap();
+
+        // Should invoke callbacks when it's dropped.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(9, cb);
+        drop(epoch_checker);
+        rx.try_recv().unwrap();
     }
 }

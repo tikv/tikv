@@ -57,7 +57,7 @@ lazy_static! {
     pub static ref IMPORTER_ERROR_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_import_error_counter",
         "Total number of importer errors",
-        &["error"]
+        &["type", "error"]
     )
     .unwrap();
 }

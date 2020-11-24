@@ -435,7 +435,7 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let exec_details = tracker.get_exec_details();
+        let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
         let mut resp = match result {
@@ -446,6 +446,7 @@ impl<E: Engine> Endpoint<E> {
             Err(e) => make_error_response(e),
         };
         resp.set_exec_details(exec_details);
+        resp.set_exec_details_v2(exec_details_v2);
         Ok(resp)
     }
 
@@ -557,12 +558,13 @@ impl<E: Engine> Endpoint<E> {
                     result
                 };
 
-                let exec_details = tracker.get_item_exec_details();
+                let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
 
                 match result {
                     Err(e) => {
                         let mut resp = make_error_response(e);
                         resp.set_exec_details(exec_details);
+                        resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
                         break;
                     },
@@ -570,6 +572,7 @@ impl<E: Engine> Endpoint<E> {
                     Ok((Some(mut resp), finished)) => {
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
+                        resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
                         if finished {
                             break;
@@ -1308,7 +1311,7 @@ mod tests {
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
-        req_with_exec_detail.context.set_handle_time(true);
+        req_with_exec_detail.context.set_record_time_stat(true);
 
         {
             let mut wait_time: i64 = 0;
@@ -1345,19 +1348,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             wait_time += PAYLOAD_SMALL - SNAPSHOT_DURATION_MS;
@@ -1366,19 +1377,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
@@ -1418,11 +1437,15 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
@@ -1430,11 +1453,15 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
@@ -1489,19 +1516,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             wait_time += PAYLOAD_LARGE - SNAPSHOT_DURATION_MS;
@@ -1513,23 +1548,29 @@ mod tests {
             assert_ge!(
                 resp[0]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
                 resp[0]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[0]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[0]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
@@ -1537,23 +1578,29 @@ mod tests {
             assert_ge!(
                 resp[1]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
                 resp[1]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[1]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[1]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
