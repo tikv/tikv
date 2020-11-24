@@ -947,6 +947,7 @@ mod read_consistency {
 mod write_batch {
     use super::{default_engine};
     use engine_traits::{Mutable, Peekable, WriteBatchExt, SyncMutable, WriteBatch};
+    use engine_traits::CF_DEFAULT;
 
     #[test]
     fn write_batch_put() {
@@ -1023,6 +1024,28 @@ mod write_batch {
 
         assert_eq!(db.engine.get_value(b"a").unwrap().unwrap(), b"aa");
         assert_eq!(db.engine.get_value(b"b").unwrap().unwrap(), b"bb");
+    }
+
+    #[test]
+    fn write_batch_delete_range_cf_basic() {
+        let db = default_engine();
+
+        db.engine.put(b"a", b"").unwrap();
+        db.engine.put(b"b", b"").unwrap();
+        db.engine.put(b"c", b"").unwrap();
+        db.engine.put(b"d", b"").unwrap();
+        db.engine.put(b"e", b"").unwrap();
+           
+        let mut wb = db.engine.write_batch();
+
+        wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+        wb.write().unwrap();
+
+        assert!(db.engine.get_value(b"a").unwrap().is_some());
+        assert!(db.engine.get_value(b"b").unwrap().is_none());
+        assert!(db.engine.get_value(b"c").unwrap().is_none());
+        assert!(db.engine.get_value(b"d").unwrap().is_none());
+        assert!(db.engine.get_value(b"e").unwrap().is_some());
     }
 }
 
