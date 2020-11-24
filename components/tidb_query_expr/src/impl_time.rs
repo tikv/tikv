@@ -161,7 +161,10 @@ pub fn add_datetime_and_duration(
         Some(res) => res,
         None => {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} + {})", datetime, duration),
+                ))
                 .map(|_| Ok(None))?
         }
     };
@@ -182,7 +185,10 @@ pub fn sub_datetime_and_duration(
         Some(res) => res,
         None => {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(datetime))
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} + {})", datetime, duration),
+                ))
                 .map(|_| Ok(None))?
         }
     };
