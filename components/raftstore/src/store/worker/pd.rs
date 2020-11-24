@@ -664,9 +664,8 @@ where
         stats.set_used_size(fs_stats.used_size);
         stats.set_capacity(capacity);
         stats.set_available(available);
-        stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
-        stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
-        stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
+
+        // TODO: report `bytes_written`, `keys_written`, `bytes_read`, `keys_read` to PD
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -674,8 +673,8 @@ where
         self.store_stat.last_report_ts = UnixSecs::now();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
-        self.store_stat.region_bytes_read.clear();
-        self.store_stat.region_keys_read.clear();
+        self.store_stat.region_bytes_read.flush();
+        self.store_stat.region_keys_read.flush();
 
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["capacity"])
