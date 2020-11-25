@@ -36,7 +36,6 @@ use raftstore::store::{
 };
 use raftstore::Result;
 use security::SecurityManager;
-use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
@@ -50,6 +49,10 @@ use tikv::server::{
     Server, ServerTransport,
 };
 use tikv::storage;
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    server::raftkv::ReplicaReadLockChecker,
+};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
@@ -211,6 +214,8 @@ impl Simulator for ServerCluster {
         // listening address for the same store.
         if let Some(addr) = self.addrs.get(node_id) {
             cfg.server.addr = addr;
+        } else {
+            cfg.server.addr = format!("127.0.0.1:{}", test_util::alloc_port());
         }
 
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
@@ -263,6 +268,8 @@ impl Simulator for ServerCluster {
             lock_mgr.get_pipelined(),
         )?;
         self.storages.insert(node_id, raft_engine);
+
+        ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.

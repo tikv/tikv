@@ -52,6 +52,7 @@ use tikv::{
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
+    server::raftkv::ReplicaReadLockChecker,
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -528,6 +529,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             lock_mgr.get_pipelined(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+
+        ReplicaReadLockChecker::new(self.concurrency_manager.clone())
+            .register(self.coprocessor_host.as_mut().unwrap());
 
         // Create snapshot manager, server.
         let snap_path = self

@@ -150,7 +150,7 @@ impl<'a> AsMySQLBool for Option<SetRef<'a>> {
 
 pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
     match_template::match_template! {
-        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json],
+        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
         $($tail)*
     }
 }
@@ -275,6 +275,8 @@ impl_evaluable_ret! { Bytes, ChunkedVecBytes }
 impl_evaluable_ret! { DateTime, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Duration, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Json, ChunkedVecJson }
+impl_evaluable_ret! { Enum, ChunkedVecEnum }
+impl_evaluable_ret! { Set, ChunkedVecSet }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
@@ -447,54 +449,73 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
 }
 
 impl<'a> EvaluableRef<'a> for EnumRef<'a> {
-    const EVAL_TYPE: EvalType = EvalType::Int;
-    type EvaluableType = Int;
+    const EVAL_TYPE: EvalType = EvalType::Enum;
+    type EvaluableType = Enum;
     type ChunkedType = &'a ChunkedVecEnum;
 
-    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
-        unimplemented!()
+    #[inline]
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
+            _ => unimplemented!(),
+        }
     }
-
-    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
-        unimplemented!()
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Enum(x) => x,
+            _ => unimplemented!(),
+        }
     }
-
-    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
-        unimplemented!()
+    #[inline]
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecEnum {
+        match v {
+            VectorValue::Enum(x) => x,
+            _ => unimplemented!(),
+        }
     }
-
+    #[inline]
     fn to_owned_value(self) -> Self::EvaluableType {
-        unimplemented!()
+        self.to_owned()
     }
-
-    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
-        unimplemented!()
+    #[inline]
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+        value.as_ref()
     }
 }
 
 impl<'a> EvaluableRef<'a> for SetRef<'a> {
-    const EVAL_TYPE: EvalType = EvalType::Int;
-    type EvaluableType = Int;
+    const EVAL_TYPE: EvalType = EvalType::Set;
+    type EvaluableType = Set;
     type ChunkedType = &'a ChunkedVecSet;
-
-    fn borrow_scalar_value(_v: &'a ScalarValue) -> Option<Self> {
-        unimplemented!()
+    #[inline]
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
+            _ => unimplemented!(),
+        }
     }
-
-    fn borrow_scalar_value_ref(_v: ScalarValueRef<'a>) -> Option<Self> {
-        unimplemented!()
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Set(x) => x,
+            _ => unimplemented!(),
+        }
     }
-
-    fn borrow_vector_value(_v: &'a VectorValue) -> Self::ChunkedType {
-        unimplemented!()
+    #[inline]
+    fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
+        match v {
+            VectorValue::Set(x) => x,
+            _ => unimplemented!(),
+        }
     }
-
+    #[inline]
     fn to_owned_value(self) -> Self::EvaluableType {
-        unimplemented!()
+        self.to_owned()
     }
-
-    fn from_owned_value(_value: &'a Self::EvaluableType) -> Self {
-        unimplemented!()
+    #[inline]
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+        value.as_ref()
     }
 }
 

@@ -173,10 +173,10 @@
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
-## The working thread count of the background pool, which include the endpoint of cdc and br, split-check,
+## The working thread count of the background pool, which include the endpoint of and br, split-check,
 ## region thread and other thread of delay-insensitive tasks.
-## The default value is min(4, LOGICAL_CPU_NUM / 8).
-# background-thread-count = 4
+## The default value is 2 if the number of CPU cores is less than 16, otherwise 3.
+# background-thread-count = 2
 
 ## If handle time is larger than the threshold, it will print slow log in endpoint.
 ## The default value is 1s.
