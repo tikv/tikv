@@ -48,6 +48,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
 
+        info!("**** new TableScanExecutorImpl"; "columns" => ?columns_info, "key_ranges" => ?key_ranges, "handle_indices" => ?handle_indices, "column_id_index" => ?column_id_index);
+
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -68,8 +70,6 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // Note: if two PK handles are given, we will only preserve the *last* one. Also if two
             // columns with the same column id are given, we will only preserve the *last* one.
         }
-
-        info!("**** new TableScanExecutorImpl"; "columns" => ?columns_info, "key_ranges" => ?key_ranges, "handle_indices" => ?handle_indices, "column_id_index" => ?column_id_index);
 
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
