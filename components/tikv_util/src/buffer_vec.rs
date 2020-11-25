@@ -291,7 +291,7 @@ impl<'a> Extend<&'a u8> for BufferVec {
     }
 }
 
-pub struct WithConcatExtend<'a>(&'a mut BufferVec);
+pub struct WithConcatExtend<'a>(pub &'a mut BufferVec);
 
 impl<'a> WithConcatExtend<'a> {
     fn init(b: &'a mut BufferVec) -> Self {

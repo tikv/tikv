@@ -205,6 +205,7 @@ impl TableScanExecutorImpl {
 
     fn process_v2(
         &mut self,
+        key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
         decoded_columns: &mut usize,
@@ -322,7 +323,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             // Do nothing
         } else {
             match value[0] {
-                row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
+                row::v2::CODEC_VERSION => self.process_v2(key, value, columns, &mut decoded_columns)?,
                 _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
             }
         }
