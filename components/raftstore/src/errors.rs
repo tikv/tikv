@@ -255,6 +255,8 @@ impl From<prost::DecodeError> for Error {
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
+            Error::ProposalInMergingMode(_) => error_code::raftstore::PROPOSAL_IN_MERGING_MODE,
+            Error::ReadIndexNotReady(_, _) => error_code::raftstore::READ_INDEX_NOT_READY,
             Error::RaftEntryTooLarge(_, _) => error_code::raftstore::ENTRY_TOO_LARGE,
             Error::StoreNotMatch(_, _) => error_code::raftstore::STORE_NOT_MATCH,
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
