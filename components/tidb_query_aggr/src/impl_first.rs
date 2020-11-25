@@ -60,6 +60,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
                 EvalType::TT => Ok(Box::new(AggrFnFirst::<&'static TT>::new())),
                 EvalType::Json => Ok(Box::new(AggrFnFirst::<JsonRef<'static>>::new())),
                 EvalType::Bytes => Ok(Box::new(AggrFnFirst::<BytesRef<'static>>::new())),
+                EvalType::Enum => Ok(Box::new(AggrFnFirst::<EnumRef<'static>>::new())),
+                EvalType::Set => Ok(Box::new(AggrFnFirst::<SetRef<'static>>::new())),
             }
         }
     }

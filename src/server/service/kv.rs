@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_kv_pairs_and_statistics, extract_region_error,
+        extract_region_error, map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -994,27 +994,27 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn dispatch_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: DispatchTaskRequest,
-        _: UnarySink<DispatchTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn cancel_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: CancelTaskRequest,
-        _: UnarySink<CancelTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn establish_mpp_connection(
         &mut self,
-        _: RpcContext<'_>,
-        _: EstablishMppConnectionRequest,
-        _: ServerStreamingSink<MppDataPacket>,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
     }
@@ -1185,8 +1185,9 @@ fn future_get<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
-                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
-                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1240,10 +1241,23 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
-            statistics.write_scan_detail(resp.mut_scan_detail_v2());
-            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
-            resp.set_pairs(val.into());
+            match v {
+                Ok((kv_res, statistics, perf_statistics_delta)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }

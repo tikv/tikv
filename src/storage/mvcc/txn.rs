@@ -1,10 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{
-    metrics::*, reader::MvccReader, reader::TxnCommitRecord, ErrorInner, Result,
-};
-use crate::storage::types::TxnStatus;
+use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -51,7 +48,7 @@ pub enum MissingLockAction {
 }
 
 impl MissingLockAction {
-    pub(crate) fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
+    pub fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
         if protect_rollback {
             MissingLockAction::ProtectedRollback
         } else {
@@ -59,7 +56,7 @@ impl MissingLockAction {
         }
     }
 
-    pub(crate) fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
+    pub fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
         if rollback_if_not_exist {
             MissingLockAction::ProtectedRollback
         } else {
@@ -67,7 +64,7 @@ impl MissingLockAction {
         }
     }
 
-    fn construct_write(&self, ts: TimeStamp, overlapped_write: Option<Write>) -> Option<Write> {
+    pub fn construct_write(&self, ts: TimeStamp, overlapped_write: Option<Write>) -> Option<Write> {
         match self {
             MissingLockAction::Rollback => make_rollback(ts, false, overlapped_write),
             MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlapped_write),
@@ -256,7 +253,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
+    pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
@@ -333,29 +330,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.put_lock(key.clone(), &lock);
     }
 
-    /// Checks the existence of the key according to `should_not_exist`.
-    /// If not, returns an `AlreadyExist` error.
-    pub(crate) fn check_data_constraint(
-        &mut self,
-        should_not_exist: bool,
-        write: &Write,
-        write_commit_ts: TimeStamp,
-        key: &Key,
-    ) -> Result<()> {
-        if !should_not_exist || write.write_type == WriteType::Delete {
-            return Ok(());
-        }
-
-        // The current key exists under any of the following conditions:
-        // 1.The current write type is `PUT`
-        // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts.prev())? {
-            return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
-        }
-
-        Ok(())
-    }
-
     // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
     // The corresponding secondary index keys are not locked until pessimistic prewrite.
     // It's possible that lock conflict occurs on them, but the isolation is
@@ -408,62 +382,6 @@ impl<S: Snapshot> MvccTxn<S> {
             .pipelined_acquire_pessimistic_lock_amend_success
             .inc();
         Ok(())
-    }
-
-    pub(crate) fn check_txn_status_missing_lock(
-        &mut self,
-        primary_key: Key,
-        mismatch_lock: Option<Lock>,
-        action: MissingLockAction,
-    ) -> Result<TxnStatus> {
-        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
-
-        match self
-            .reader
-            .get_txn_commit_record(&primary_key, self.start_ts)?
-        {
-            TxnCommitRecord::SingleRecord { commit_ts, write } => {
-                if write.write_type == WriteType::Rollback {
-                    Ok(TxnStatus::RolledBack)
-                } else {
-                    Ok(TxnStatus::committed(commit_ts))
-                }
-            }
-            TxnCommitRecord::OverlappedRollback { .. } => Ok(TxnStatus::RolledBack),
-            TxnCommitRecord::None { overlapped_write } => {
-                if MissingLockAction::ReturnError == action {
-                    return Err(ErrorInner::TxnNotFound {
-                        start_ts: self.start_ts,
-                        key: primary_key.into_raw()?,
-                    }
-                    .into());
-                }
-
-                let ts = self.start_ts;
-
-                // collapse previous rollback if exist.
-                if self.collapse_rollback {
-                    self.collapse_prev_rollback(primary_key.clone())?;
-                }
-
-                if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
-                    self.mark_rollback_on_mismatching_lock(
-                        &primary_key,
-                        l,
-                        action == MissingLockAction::ProtectedRollback,
-                    );
-                }
-
-                // Insert a Rollback to Write CF in case that a stale prewrite
-                // command is received after a cleanup command.
-                if let Some(write) = action.construct_write(ts, overlapped_write) {
-                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
-                }
-                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
-                Ok(TxnStatus::LockNotExist)
-            }
-        }
     }
 
     pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
@@ -666,13 +584,16 @@ pub(crate) fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) 
 mod tests {
     use super::*;
 
-    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
     use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
     use crate::storage::SecondaryLocksStatus;
+    use crate::storage::{
+        kv::{Engine, RocksEngine, TestEngineBuilder},
+        TxnStatus,
+    };
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
@@ -1118,13 +1039,13 @@ mod tests {
     fn test_gc_with_compaction_filter() {
         use crate::server::gc_worker::gc_by_compact;
 
-        test_gc_imp(b"k1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
+        test_gc_imp(b"zk1", b"v1", b"v2", b"v3", b"v4", gc_by_compact);
 
         let v1 = "x".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v2 = "y".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v3 = "z".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         let v4 = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
-        test_gc_imp(b"k2", &v1, &v2, &v3, &v4, gc_by_compact);
+        test_gc_imp(b"zk2", &v1, &v2, &v3, &v4, gc_by_compact);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {

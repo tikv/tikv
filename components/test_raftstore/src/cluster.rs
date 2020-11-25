@@ -1269,7 +1269,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
@@ -1277,13 +1277,29 @@ impl<T: Simulator> Cluster<T> {
         let source_region = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
-        let req = new_admin_request(
+        new_admin_request(
             source_region.get_id(),
             source_region.get_region_epoch(),
             prepare_merge,
-        );
-        self.call_command_on_leader(req, Duration::from_secs(5))
-            .unwrap()
+        )
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, cb: Callback<RocksSnapshot>) {
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)
+            .unwrap();
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {
