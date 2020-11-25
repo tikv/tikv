@@ -1405,12 +1405,6 @@ mod tests {
         }
 
         let total_cpu_usages = sum_record_pairs(&store_stat.lock().unwrap().store_cpu_usages);
-        if total_cpu_usages < 90 {
-            panic!(
-                "the total usage must be heavy than 90, but got {}",
-                total_cpu_usages
-            );
-        }
         assert!(total_cpu_usages > 90);
 
         pd_worker.stop();
