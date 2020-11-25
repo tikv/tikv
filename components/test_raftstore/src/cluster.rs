@@ -1399,7 +1399,7 @@ impl<T: Simulator> Cluster<T> {
             &router,
             region_id,
             CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
-                let idx = peer.raft_committed_index();
+                let idx = peer.raft_commit_index();
                 peer.raft_request_snapshot(idx);
                 debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
                 request_tx.send(idx).unwrap();

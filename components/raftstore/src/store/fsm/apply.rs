@@ -936,6 +936,10 @@ where
         // TOOD(cdc): should we observe empty cmd, aka leader change?
 
         self.apply_state.set_applied_index(index);
+        self.apply_state.set_last_commit_index(0);
+        self.apply_state.set_commit_index(index);
+        self.apply_state.set_commit_term(term);
+
         self.applied_index_term = term;
         assert!(term > 0);
 
@@ -1132,7 +1136,11 @@ where
         }
 
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
+
         exec_ctx.apply_state.set_applied_index(index);
+        exec_ctx.apply_state.set_last_commit_index(0);
+        exec_ctx.apply_state.set_commit_index(index);
+        exec_ctx.apply_state.set_commit_term(term);
 
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
@@ -2646,9 +2654,6 @@ where
     pub region_id: u64,
     pub term: u64,
     pub entries: Vec<Entry>,
-    pub last_committed_index: u64,
-    pub committed_index: u64,
-    pub committed_term: u64,
     pub cbs: Vec<Proposal<S>>,
     entries_mem_size: i64,
     entries_count: i64,
@@ -2660,9 +2665,6 @@ impl<S: Snapshot> Apply<S> {
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
-        last_committed_index: u64,
-        committed_index: u64,
-        committed_term: u64,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
         let entries_mem_size =
@@ -2675,9 +2677,6 @@ impl<S: Snapshot> Apply<S> {
             region_id,
             term,
             entries,
-            last_committed_index,
-            committed_index,
-            committed_term,
             cbs,
             entries_mem_size,
             entries_count,
@@ -2765,25 +2764,15 @@ pub struct CatchUpLogs {
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
-    commit_index: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
 }
 
 impl GenSnapTask {
-    pub fn new(
-        region_id: u64,
-        commit_index: u64,
-        snap_notifier: SyncSender<RaftSnapshot>,
-    ) -> GenSnapTask {
+    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
         GenSnapTask {
             region_id,
-            commit_index,
             snap_notifier,
         }
-    }
-
-    pub fn commit_index(&self) -> u64 {
-        self.commit_index
     }
 
     pub fn generate_and_schedule_snapshot<EK>(
@@ -2814,7 +2803,6 @@ impl Debug for GenSnapTask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GenSnapTask")
             .field("region_id", &self.region_id)
-            .field("commit_index", &self.commit_index)
             .finish()
     }
 }
@@ -3038,27 +3026,6 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
-        let prev_state = (
-            self.delegate.apply_state.get_last_commit_index(),
-            self.delegate.apply_state.get_commit_index(),
-            self.delegate.apply_state.get_commit_term(),
-        );
-        let cur_state = (
-            apply.last_committed_index,
-            apply.committed_index,
-            apply.committed_term,
-        );
-        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 || prev_state.2 > cur_state.2 {
-            panic!(
-                "{} commit state jump backward {:?} -> {:?}",
-                self.delegate.tag, prev_state, cur_state
-            );
-        }
-        // The apply state may not be written to disk if entries is empty,
-        // which seems OK.
-        self.delegate.apply_state.set_last_commit_index(cur_state.0);
-        self.delegate.apply_state.set_commit_index(cur_state.1);
-        self.delegate.apply_state.set_commit_term(cur_state.2);
 
         self.append_proposal(apply.cbs.drain(..));
         self.delegate
@@ -3217,7 +3184,6 @@ where
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
-        assert!(snap_task.commit_index() <= applied_index);
         let mut need_sync = apply_ctx
             .apply_res
             .iter()
@@ -3502,6 +3468,11 @@ where
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
             None
         });
+        fail_point!(
+            "before_handle_normal_1003",
+            normal.delegate.id() == 1003,
+            |_| { None }
+        );
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
@@ -3952,21 +3923,9 @@ mod tests {
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
-        last_committed_index: u64,
-        committed_term: u64,
-        committed_index: u64,
         cbs: Vec<Proposal<S>>,
     ) -> Apply<S> {
-        Apply::new(
-            peer_id,
-            region_id,
-            term,
-            entries,
-            last_committed_index,
-            committed_index,
-            committed_term,
-            cbs,
-        )
+        Apply::new(peer_id, region_id, term, entries, cbs)
     }
 
     #[test]
@@ -4022,16 +3981,7 @@ mod tests {
         );
         router.schedule_task(
             1,
-            Msg::apply(apply(
-                1,
-                1,
-                0,
-                vec![new_entry(0, 1, true)],
-                1,
-                0,
-                1,
-                vec![p],
-            )),
+            Msg::apply(apply(1, 1, 0, vec![new_entry(0, 1, true)], vec![p])),
         );
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -4052,7 +4002,7 @@ mod tests {
         ];
         router.schedule_task(
             2,
-            Msg::apply(apply(1, 2, 11, vec![new_entry(5, 4, true)], 3, 5, 4, pops)),
+            Msg::apply(apply(1, 2, 11, vec![new_entry(5, 4, true)], pops)),
         );
         // proposal with not commit entry should be ignore
         validate(&router, 2, move |delegate| {
@@ -4068,17 +4018,8 @@ mod tests {
             &router,
             2,
             vec![
-                Msg::apply(apply(
-                    1,
-                    2,
-                    11,
-                    vec![new_entry(5, 5, false)],
-                    5,
-                    5,
-                    5,
-                    vec![],
-                )),
-                Msg::Snapshot(GenSnapTask::new(2, 0, snap_tx)),
+                Msg::apply(apply(1, 2, 11, vec![new_entry(5, 5, false)], vec![])),
+                Msg::Snapshot(GenSnapTask::new(2, snap_tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
@@ -4138,16 +4079,7 @@ mod tests {
         );
         router.schedule_task(
             2,
-            Msg::apply(apply(
-                1,
-                1,
-                0,
-                vec![new_entry(0, 1, true)],
-                1,
-                0,
-                1,
-                vec![p],
-            )),
+            Msg::apply(apply(1, 1, 0, vec![new_entry(0, 1, true)], vec![p])),
         );
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -4386,9 +4318,6 @@ mod tests {
                 1,
                 1,
                 vec![put_entry],
-                0,
-                1,
-                1,
                 vec![cb(1, 1, capture_tx.clone())],
             )),
         );
@@ -4411,10 +4340,7 @@ mod tests {
             .put_cf(CF_LOCK, b"k1", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(
-            1,
-            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
@@ -4440,9 +4366,6 @@ mod tests {
                 1,
                 2,
                 vec![put_entry],
-                2,
-                2,
-                3,
                 vec![cb(3, 2, capture_tx.clone())],
             )),
         );
@@ -4464,9 +4387,6 @@ mod tests {
                 1,
                 2,
                 vec![put_entry],
-                3,
-                2,
-                4,
                 vec![cb(4, 2, capture_tx.clone())],
             )),
         );
@@ -4491,9 +4411,6 @@ mod tests {
                 1,
                 3,
                 vec![put_entry],
-                4,
-                3,
-                5,
                 vec![cb(5, 2, capture_tx.clone()), cb(5, 3, capture_tx.clone())],
             )),
         );
@@ -4516,9 +4433,6 @@ mod tests {
                 1,
                 3,
                 vec![delete_entry],
-                5,
-                3,
-                6,
                 vec![cb(6, 3, capture_tx.clone())],
             )),
         );
@@ -4537,9 +4451,6 @@ mod tests {
                 1,
                 3,
                 vec![delete_range_entry],
-                6,
-                3,
-                7,
                 vec![cb(7, 3, capture_tx.clone())],
             )),
         );
@@ -4561,9 +4472,6 @@ mod tests {
                 1,
                 3,
                 vec![delete_range_entry],
-                7,
-                3,
-                8,
                 vec![cb(8, 3, capture_tx.clone())],
             )),
         );
@@ -4617,9 +4525,6 @@ mod tests {
                 1,
                 3,
                 entries,
-                8,
-                3,
-                11,
                 vec![
                     cb(9, 3, capture_tx.clone()),
                     proposal(
@@ -4663,19 +4568,7 @@ mod tests {
             entries.push(put_entry);
             props.push(cb(i as u64 + 12, 3, capture_tx.clone()));
         }
-        router.schedule_task(
-            1,
-            Msg::apply(apply(
-                peer_id,
-                1,
-                3,
-                entries,
-                11,
-                3,
-                write_batch_max_keys as u64 + 11,
-                props,
-            )),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 3, entries, props)));
         for _ in 0..write_batch_max_keys {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
@@ -4737,10 +4630,7 @@ mod tests {
             .put(b"k3", b"v1")
             .epoch(1, 3)
             .build();
-        router.schedule_task(
-            1,
-            Msg::apply(apply(peer_id, 1, 1, vec![put_entry], 0, 1, 1, vec![])),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
         // It must receive nothing because no region registered.
         cmdbatch_rx
@@ -4761,10 +4651,7 @@ mod tests {
             .put(b"k0", b"v0")
             .epoch(1, 3)
             .build();
-        router.schedule_task(
-            1,
-            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
         let observe_id = ObserveID::new();
@@ -4800,9 +4687,6 @@ mod tests {
                 1,
                 2,
                 vec![put_entry],
-                2,
-                2,
-                3,
                 vec![cb(3, 2, capture_tx)],
             )),
         );
@@ -4823,16 +4707,7 @@ mod tests {
             .build();
         router.schedule_task(
             1,
-            Msg::apply(apply(
-                peer_id,
-                1,
-                2,
-                vec![put_entry1, put_entry2],
-                3,
-                2,
-                5,
-                vec![],
-            )),
+            Msg::apply(apply(peer_id, 1, 2, vec![put_entry1, put_entry2], vec![])),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
@@ -4843,10 +4718,7 @@ mod tests {
             .put(b"k2", b"v2")
             .epoch(1, 3)
             .build();
-        router.schedule_task(
-            1,
-            Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 5, 2, 6, vec![])),
-        );
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         // Must not receive new cmd.
         cmdbatch_rx
             .recv_timeout(Duration::from_millis(100))
@@ -5061,9 +4933,6 @@ mod tests {
                     1,
                     1,
                     vec![split],
-                    index_id - 1,
-                    1,
-                    index_id,
                     vec![cb(index_id, 1, capture_tx.clone())],
                 )),
             );

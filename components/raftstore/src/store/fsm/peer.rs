@@ -101,7 +101,6 @@ where
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
@@ -186,7 +185,6 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -229,7 +227,6 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -474,6 +471,7 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
+            self.fsm.has_ready |= self.fsm.peer.check_new_persisted();
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -656,9 +654,11 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
-        // Apply committed entries more quickly.
-        if self.fsm.peer.raft_group.store().committed_index()
+        // Apply committed entries more quickly
+        // Or if it's a singleton, it will become leader latter.
+        if self.fsm.peer.raft_group.store().commit_index()
             > self.fsm.peer.raft_group.store().applied_index()
+            || self.fsm.peer.raft_group.raft.prs().is_singleton()
         {
             self.fsm.has_ready = true;
         }
@@ -898,62 +898,39 @@ where
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(mut r) = res {
+        if let Some(r) = res {
             self.on_role_changed(&r.0);
-            if !r.0.entries().is_empty() {
+            if r.1.has_new_entries {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
-            }
-            if self.ctx.cfg.early_apply {
-                self.handle_raft_ready_apply(&mut r.0, &r.1);
             }
             self.ctx.ready_res.push(r);
         }
     }
 
-    #[inline]
-    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
-        self.fsm.early_apply = ready
-            .committed_entries
-            .as_ref()
-            .and_then(|e| e.last())
-            .map_or(false, |e| {
-                self.fsm.peer.can_early_apply(e.get_term(), e.get_index())
-            });
-        if !self.fsm.early_apply {
-            return;
-        }
+    pub fn post_raft_ready_append(
+        &mut self,
+        ready: Ready,
+        invoke_ctx: InvokeContext,
+        current_ts: Option<i64>,
+    ) {
+        let is_merging = self.fsm.peer.pending_merge_state.is_some();
+        let res = self.fsm.peer.post_raft_ready_append(self.ctx, invoke_ctx);
         self.fsm
             .peer
-            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
-    }
-
-    pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
-        let is_merging = self.fsm.peer.pending_merge_state.is_some();
-        if !self.fsm.early_apply {
-            self.fsm
-                .peer
-                .handle_raft_ready_apply(self.ctx, &mut ready, &invoke_ctx);
-        }
-        let res = self
-            .fsm
-            .peer
-            .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_advance(ready);
-        let mut has_snapshot = false;
+            .handle_raft_ready_advance(self.ctx, ready, current_ts);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
-            has_snapshot = true;
+            if is_merging {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(0, None);
+            }
             self.register_raft_base_tick();
         }
         if self.fsm.peer.leader_unreachable {
             self.fsm.group_state = GroupState::Chaos;
             self.register_raft_base_tick();
             self.fsm.peer.leader_unreachable = false;
-        }
-        if is_merging && has_snapshot {
-            // After applying a snapshot, merge is rollbacked implicitly.
-            self.on_ready_rollback_merge(0, None);
         }
     }
 
@@ -1750,7 +1727,7 @@ where
             };
             // Use `unwrap` is ok because the StoreMeta lock is held and these source peers still
             // exist in regions and region_ranges map.
-            // It depends on the implementation of `destroy_peer`
+            // It depends on the implementation of `destroy_peer`.
             self.ctx
                 .router
                 .force_send(
@@ -1851,6 +1828,12 @@ where
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        self.ctx
+            .sync_policy
+            .metrics
+            .sync_events
+            .on_peer_destroy_sync();
+
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
