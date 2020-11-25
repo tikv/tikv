@@ -178,9 +178,9 @@
 ## The default value is min(4, LOGICAL_CPU_NUM / 8).
 # background-thread-count = 4
 
-## If handle time is larger than the threshold, it will print slow log in end point.
+## If handle time is larger than the threshold, it will print slow log in endpoint.
 ## The default value is 1s.
-# end_point_slow_log_threshold = "1s"
+# end-point-slow-log-threshold = "1s"
 
 [storage]
 ## The path to RocksDB directory.
