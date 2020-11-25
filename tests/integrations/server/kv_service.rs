@@ -1146,3 +1146,33 @@ fn test_txn_heart_beat() {
         }
     );
 }
+
+#[test]
+fn test_batch_get_memory_lock() {
+    let (cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let raw_key = b"key".to_vec();
+    let key = Key::from_raw(&raw_key);
+    let guard = block_on(cm.lock_key(&key));
+    let lock = Lock::new(
+        LockType::Put,
+        b"key".to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    )
+    .use_async_commit(vec![]);
+    guard.with_lock(|l| {
+        *l = Some(lock.clone());
+    });
+
+    let mut req = BatchGetRequest::default();
+    req.set_context(ctx);
+    req.set_keys(vec![b"unlocked".to_vec(), raw_key.clone()].into());
+    req.version = 50;
+    let resp = client.kv_batch_get(&req).unwrap();
+    assert_eq!(resp.get_error().get_locked(), &lock.into_lock_info(raw_key));
+}

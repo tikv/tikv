@@ -7,6 +7,7 @@ mod test_coprocessor;
 mod test_early_apply;
 mod test_gc_worker;
 mod test_import_service;
+mod test_kv_service;
 mod test_merge;
 mod test_pd_client;
 mod test_pending_peers;
