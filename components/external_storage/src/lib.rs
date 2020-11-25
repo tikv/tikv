@@ -191,10 +191,21 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::Builder;
 
     #[test]
     fn test_create_storage() {
-        let backend = make_local_backend(Path::new("/tmp/a"));
+        let temp_dir = Builder::new().tempdir().unwrap();
+        let path = temp_dir.path();
+        let backend = make_local_backend(&path.join("not_exist"));
+        match create_storage(&backend) {
+            Ok(_) => panic!("must be NotFound error"),
+            Err(e) => {
+                assert_eq!(e.kind(), io::ErrorKind::NotFound);
+            }
+        }
+
+        let backend = make_local_backend(path);
         create_storage(&backend).unwrap();
 
         let backend = make_noop_backend();
