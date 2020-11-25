@@ -946,6 +946,7 @@ mod read_consistency {
 
 mod write_batch {
     use super::{default_engine};
+    use engine_test::kv::KvTestEngine;
     use engine_traits::{Mutable, Peekable, WriteBatchExt, SyncMutable, WriteBatch};
     use engine_traits::CF_DEFAULT;
     use std::panic::{self, AssertUnwindSafe};
@@ -1283,6 +1284,94 @@ mod write_batch {
         wb.write().unwrap();
         assert!(db.engine.get_value(b"a").unwrap().is_none());
     }
+
+    #[test]
+    fn cap_zero() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch_with_cap(0);
+        wb.put(b"a", b"").unwrap();
+        wb.put(b"b", b"").unwrap();
+        wb.put(b"c", b"").unwrap();
+        wb.put(b"d", b"").unwrap();
+        wb.put(b"e", b"").unwrap();
+        wb.put(b"f", b"").unwrap();
+        wb.write().unwrap();
+        assert!(db.engine.get_value(b"a").unwrap().is_some());
+        assert!(db.engine.get_value(b"f").unwrap().is_some());
+    }
+
+    /// Write batch capacity seems to just be a suggestions
+    #[test]
+    fn cap_two() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch_with_cap(2);
+        wb.put(b"a", b"").unwrap();
+        wb.put(b"b", b"").unwrap();
+        wb.put(b"c", b"").unwrap();
+        wb.put(b"d", b"").unwrap();
+        wb.put(b"e", b"").unwrap();
+        wb.put(b"f", b"").unwrap();
+        wb.write().unwrap();
+        assert!(db.engine.get_value(b"a").unwrap().is_some());
+        assert!(db.engine.get_value(b"f").unwrap().is_some());
+    }
+
+    // We should write when count is greater than WRITE_BATCH_MAX_KEYS
+    #[test]
+    fn should_write_to_engine() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch_with_cap(2);
+        let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
+
+        let mut key = vec![];
+        loop {
+            key.push(b'a');
+            wb.put(&key, b"").unwrap();
+            if key.len() <= max_keys {
+                assert!(!wb.should_write_to_engine());
+            }
+            if key.len() == max_keys + 1 {
+                assert!(wb.should_write_to_engine());
+                wb.write().unwrap();
+                break;
+            }
+        }
+    }
+
+    // But there kind of aren't consequences for making huge write batches
+    #[test]
+    fn should_write_to_engine_but_whatever() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch_with_cap(2);
+        let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
+
+        let mut key = vec![];
+        loop {
+            key.push(b'a');
+            wb.put(&key, b"").unwrap();
+            if key.len() <= max_keys {
+                assert!(!wb.should_write_to_engine());
+            }
+            if key.len() > max_keys {
+                assert!(wb.should_write_to_engine());
+            }
+            if key.len() == max_keys * 2 {
+                assert!(wb.should_write_to_engine());
+                wb.write().unwrap();
+                break;
+            }
+        }
+
+        let mut key = vec![];
+        loop {
+            key.push(b'a');
+            assert!(db.engine.get_value(&key).unwrap().is_some());
+            if key.len() == max_keys * 2 {
+                break;
+            }
+        }
+    }
+
 }
 
 mod misc {
