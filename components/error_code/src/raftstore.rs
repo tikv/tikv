@@ -6,7 +6,7 @@ use kvproto::errorpb;
 define_error_codes!(
     "KV:Raftstore:",
 
-    PROPOSAL_IN_MERGING_MODE => ("ProposalInMergingMode", ""),
+    PROPOSAL_IN_MERGING_MODE => ("ProposalInMergingMode", "", ""),
     READ_INDEX_NOT_READY => ("ReadIndexNotReady", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
