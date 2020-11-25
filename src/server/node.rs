@@ -39,12 +39,11 @@ pub fn create_raft_storage<S>(
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
     lock_mgr: Option<LockManager>,
-    pipelined_pessimistic_lock: bool,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr, pipelined_pessimistic_lock)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
     Ok(store)
 }
 
