@@ -4,15 +4,21 @@ use regex::Regex;
 
 use tidb_query_codegen::rpn_fn;
 
+use crate::RpnFnCallExtra;
+use std::convert::TryInto;
 use tidb_query_common::Result;
 
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::mysql::duration::{
+    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_SECOND_PART, NANOS_PER_SEC,
+};
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
-use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
+use tidb_query_datatype::codec::mysql::{Duration, TimeType, MAX_FSP};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::{EvalContext, SqlMode};
+use tidb_query_datatype::FieldTypeAccessor;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -190,7 +196,7 @@ pub fn add_string_and_duration(
         }
         false => {
             let s = std::str::from_utf8(arg0).unwrap();
-            let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
+            let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
                 Ok(arg0) => arg0,
                 Err(_) => return Ok(writer.write(None)),
             };
@@ -241,7 +247,7 @@ pub fn sub_string_and_duration(
         }
         false => {
             let s = std::str::from_utf8(arg0).unwrap();
-            let arg0 = match Time::parse_datetime(ctx, s, MAX_FSP, true) {
+            let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
                 Ok(arg0) => arg0,
                 Err(_) => return Ok(writer.write(None)),
             };
@@ -262,30 +268,52 @@ pub fn sub_string_and_duration(
     };
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn from_days(ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<Time>> {
-    arg.cloned().map_or(Ok(None), |daynr: Int| {
-        let time = Time::from_days(ctx, daynr as u32)?;
-        Ok(Some(time))
-    })
+pub fn add_datetime_and_duration(
+    ctx: &mut EvalContext,
+    datetime: &DateTime,
+    duration: &Duration,
+) -> Result<Option<DateTime>> {
+    let mut res = match datetime.checked_add(ctx, *duration) {
+        Some(res) => res,
+        None => return Ok(None),
+    };
+    if res.set_time_type(TimeType::DateTime).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(res))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn make_date(
+pub fn sub_datetime_and_duration(
     ctx: &mut EvalContext,
-    year: Option<&Int>,
-    day: Option<&Int>,
-) -> Result<Option<Time>> {
-    if year.is_none() {
+    datetime: &DateTime,
+    duration: &Duration,
+) -> Result<Option<DateTime>> {
+    let mut res = match datetime.checked_sub(ctx, *duration) {
+        Some(res) => res,
+        None => return Ok(None),
+    };
+    if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
     }
-    if day.is_none() {
-        return Ok(None);
-    }
-    let mut year = *year.unwrap();
-    let mut day = *day.unwrap();
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
+    let time = DateTime::from_days(ctx, *arg as u32)?;
+    Ok(Some(time))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<DateTime>> {
+    let mut year = *year;
+    let mut day = *day;
     if day <= 0 || year < 0 || year > 9999 || day > 366 * 9999 {
         return Ok(None);
     }
@@ -301,11 +329,66 @@ pub fn make_date(
     let leap = d4 - d100 + d400;
     day = day + leap + year * 365 + 365;
     let days = day as u32;
-    let ret = Time::from_days(ctx, days)?;
+    let ret = DateTime::from_days(ctx, days)?;
     if ret.year() > 9999 || ret.is_zero() {
         return Ok(None);
     }
     Ok(Some(ret))
+}
+
+#[rpn_fn(capture = [extra, args])]
+#[inline]
+pub fn make_time(
+    extra: &RpnFnCallExtra,
+    args: &[crate::RpnStackNode<'_>],
+    hour: &Int,
+    minute: &Int,
+    second: &Real,
+) -> Result<Option<Duration>> {
+    let (is_negative, mut hour) = if args[0].field_type().is_unsigned() {
+        (false, *hour as u64)
+    } else {
+        (hour.is_negative(), hour.wrapping_abs() as u64)
+    };
+
+    // Filter out the number that is negative or greater than MAX_MINUTE_PART.
+    let mut minute: u32 = match (*minute).try_into().ok().filter(|m| *m <= MAX_MINUTE_PART) {
+        Some(minute) => minute,
+        None => return Ok(None),
+    };
+
+    let mut nanosecond = (second.fract().abs() * NANOS_PER_SEC as f64) as u32;
+
+    // Filter out the number that is negative or greater than MAX_SECOND_PART.
+    let mut second: u32 = match (second.trunc() as i64)
+        .try_into()
+        .ok()
+        .filter(|s| *s <= MAX_SECOND_PART)
+    {
+        Some(second) => second,
+        None => return Ok(None),
+    };
+
+    let is_overflow = (hour, minute, second, nanosecond)
+        > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
+    if is_overflow {
+        hour = MAX_HOUR_PART as _;
+        minute = MAX_MINUTE_PART;
+        second = MAX_SECOND_PART;
+        nanosecond = 0;
+    }
+
+    match Duration::new_from_parts(
+        is_negative,
+        hour as _,
+        minute,
+        second,
+        nanosecond,
+        extra.ret_field_type.get_decimal() as i8,
+    ) {
+        Ok(duration) => Ok(Some(duration)),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[rpn_fn(nullable)]
@@ -439,13 +522,9 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>> {
-    if t.is_none() {
-        return Ok(None);
-    }
-    let t = t.as_ref().unwrap();
+pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     if t.month() == 0 {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
@@ -453,12 +532,30 @@ pub fn last_day(ctx: &mut EvalContext, t: Option<&Time>) -> Result<Option<Time>>
     }
     if t.day() == 0 {
         let one_day = Duration::parse(ctx, b"1 00:00:00", 6).unwrap();
-        let adjusted_t: Time = t.checked_add(ctx, one_day).unwrap();
+        let adjusted_t: DateTime = t.checked_add(ctx, one_day).unwrap();
         return Ok(adjusted_t.last_date_of_month());
     }
     Ok(t.last_date_of_month())
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn add_duration_and_duration(
+    ctx: &mut EvalContext,
+    duration1: &Duration,
+    duration2: &Duration,
+) -> Result<Option<Duration>> {
+    let res = duration1.checked_add(*duration2);
+    let res = match res {
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(duration1, duration2))
+                .map(|_| Ok(None))?
+        }
+        Some(res) => res,
+    };
+    Ok(Some(res))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,10 +563,36 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::types::test_util::RpnFnScalarEvaluator;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
     use tidb_query_datatype::FieldTypeTp;
 
+    #[test]
+    fn test_add_duration_and_duration() {
+        let cases = vec![
+            (Some("00:01:01"), Some("00:01:01"), Some("00:02:02")),
+            (Some("11:59:59"), Some("00:00:01"), Some("12:00:00")),
+            (Some("23:59:59"), Some("00:00:01"), Some("24:00:00")),
+            (Some("23:59:59"), Some("00:00:02"), Some("24:00:01")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration1, duration2, exp) in cases {
+            let expected =
+                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
+            let duration1 =
+                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
+            let duration2 =
+                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration1)
+                .push_param(duration2)
+                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
     #[test]
     fn test_date_format() {
         use std::sync::Arc;
@@ -826,6 +949,7 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
+
     #[test]
     fn test_add_sub_string_and_duration() {
         let cases = vec![
@@ -926,6 +1050,131 @@ mod tests {
                 .evaluate(ScalarFuncSig::SubStringAndDuration)
                 .unwrap();
             assert_eq!(sub_output, arg_str);
+        }
+    }
+
+    #[test]
+    fn test_add_datetime_and_duration() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+            // normal cases
+            (
+                Some("2018-01-01"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01 11:30:45.123456"),
+            ),
+            (
+                Some("2018-02-28 23:00:00"),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456"),
+            ),
+            (
+                Some("2016-02-28 23:00:00"),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02 00:30:30"),
+            ),
+            (
+                Some("2019-01-01 01:00:00"),
+                Some("-01:01:00"),
+                Some("2018-12-31 23:59:00"),
+            ),
+        ];
+        for (arg1, arg2, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let arg2 =
+                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::AddDatetimeAndDuration)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_sub_datetime_and_duration() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None, true),
+            (None, Some("11:30:45.123456"), None, true),
+            (Some("2019-01-01 01:00:00"), None, None, true),
+            // normal cases
+            (
+                Some("2018-01-01"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01 11:30:45.123456"),
+                false,
+            ),
+            (
+                Some("2018-02-28 23:00:00"),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456"),
+                false,
+            ),
+            (
+                Some("2016-02-28 23:00:00"),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30"),
+                false,
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30"),
+                false,
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("1 01:30:30"),
+                Some("2019-01-02 00:30:30"),
+                false,
+            ),
+            (
+                Some("2019-01-01 01:00:00"),
+                Some("-01:01:00"),
+                Some("2018-12-31 23:59:00"),
+                false,
+            ),
+        ];
+        for (arg1, arg2, exp, null_case) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg1 =
+                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+            let arg2 =
+                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            if null_case {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(arg1)
+                    .push_param(arg2)
+                    .evaluate(ScalarFuncSig::SubDatetimeAndDuration)
+                    .unwrap();
+                assert_eq!(output, exp);
+            } else {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(exp)
+                    .push_param(arg2)
+                    .evaluate(ScalarFuncSig::SubDatetimeAndDuration)
+                    .unwrap();
+                assert_eq!(output, arg1);
+            }
         }
     }
 
@@ -1356,5 +1605,103 @@ mod tests {
             .evaluate::<Time>(ScalarFuncSig::LastDay)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_make_time() {
+        let cases = vec![
+            (12 as i64, 15 as i64, 30 as f64, "12:15:30"),
+            (25, 15, 30.0, "25:15:30"),
+            (-25, 15, 30 as f64, "-25:15:30"),
+            (12, 15, 30.1, "12:15:30.1"),
+            (12, 15, 30.2, "12:15:30.2"),
+            (12, 15, 30.3000001, "12:15:30.3"),
+            (12, 15, 30.0000005, "12:15:30.000001"),
+            (0, 0, 0.0, "00:00:00"),
+            (0, 1, 59.1, "00:01:59.1"),
+            (837, 59, 59.1, "837:59:59.1"),
+            (838, 59, 59.1, "838:59:59"),
+            (838, 58, 59.1, "838:58:59.1"),
+            (838, 0, 59.1, "838:00:59.1"),
+            (-838, 59, 59.1, "-838:59:59"),
+            (1000, 1, 1.0, "838:59:59"),
+            (-1000, 1, 1.23, "-838:59:59"),
+            (1000, 59, 1.0, "838:59:59"),
+            (1000, 1, 59.1, "838:59:59"),
+            (i64::MIN, 0, 1.0, "-838:59:59"),
+            (i64::MAX, 0, 0.0, "838:59:59"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (hour, minute, second, ans) in cases {
+            for fsp in 0..MAX_FSP {
+                let ans_val = Some(Duration::parse(&mut ctx, ans.as_bytes(), fsp).unwrap());
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, ans_val);
+            }
+        }
+        let none_case = vec![
+            (12 as i64, -15 as i64, 30 as f64),
+            (12, 15, -30.0),
+            (12, 15, 60.0),
+            (12, 60, 0.0),
+            (i64::MAX, i64::MAX, f64::MAX),
+        ];
+        for (hour, minute, second) in none_case {
+            for fsp in 0..MAX_FSP {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, None);
+            }
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(None::<i64>)
+                .push_param(None::<i64>)
+                .push_param(None::<Real>)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal(MAX_FSP as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                .unwrap();
+            assert_eq!(output, None);
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<f64>(1.0))
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal((MAX_FSP + 1) as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime);
+            assert!(output.is_err());
+        }
     }
 }

@@ -584,6 +584,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::ToSeconds => to_seconds_fn_meta(),
+        ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
+        ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
@@ -598,6 +600,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
         ScalarFuncSig::LastDay => last_day_fn_meta(),
+        ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
+        ScalarFuncSig::MakeTime => make_time_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

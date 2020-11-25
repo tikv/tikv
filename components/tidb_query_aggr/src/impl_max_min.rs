@@ -93,7 +93,9 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             match eval_type {
                 EvalType::TT => Ok(Box::new(AggFnExtremum::<&'static TT, T>::new())),
                 EvalType::Json => Ok(Box::new(AggFnExtremum::<BytesRef<'static>, T>::new())),
-                EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new()))
+                EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new())),
+                EvalType::Enum => Ok(Box::new(AggFnExtremum::<EnumRef<'static>, T>::new())),
+                EvalType::Set => Ok(Box::new(AggFnExtremum::<SetRef<'static>, T>::new())),
             }
         }
     }
