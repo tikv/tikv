@@ -1666,12 +1666,9 @@ const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
-        let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut concurrency = (cpu_num * 0.8) as usize;
-        concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
-            max_thread_count: concurrency,
+            max_thread_count: UNIFIED_READPOOL_MIN_CONCURRENCY,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
         }

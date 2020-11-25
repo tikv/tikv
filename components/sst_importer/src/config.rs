@@ -19,7 +19,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            num_threads: 8,
+            num_threads: 4,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
         }
