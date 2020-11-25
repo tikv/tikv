@@ -4,6 +4,7 @@ use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, LockType, MvccTxn, Result as MvccResult,
 };
+use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::txn::actions::shared::prewrite_key_value;
 use crate::storage::Snapshot;
 use txn_types::{Key, Mutation, TimeStamp, WriteType};
@@ -25,6 +26,7 @@ pub fn prewrite<S: Snapshot>(
     let should_not_exist = mutation.should_not_exists();
     let should_not_write = mutation.should_not_write();
     let mutation_type = mutation.mutation_type();
+    let mut fallback_from_async_commit = false;
     let (key, value) = mutation.into_key_value();
 
     fail_point!("prewrite", |err| Err(
@@ -45,14 +47,20 @@ pub fn prewrite<S: Snapshot>(
             }
             .into());
         }
-        // Duplicated command. No need to overwrite the lock and data.
-        MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-        return Ok(lock.min_commit_ts);
+        // Allow to overwrite the primary lock to fallback from async commit.
+        if lock.use_async_commit && secondary_keys.is_none() {
+            info!("fallback from async commit"; "start_ts" => txn.start_ts);
+            fallback_from_async_commit = true;
+        } else {
+            // Duplicated command. No need to overwrite the lock and data.
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+            return Ok(lock.min_commit_ts);
+        }
     }
 
     let mut prev_write = None;
     // Check whether there is a newer version.
-    if !skip_constraint_check {
+    if !skip_constraint_check && !fallback_from_async_commit {
         if let Some((commit_ts, write)) = txn.reader.seek_write(&key, TimeStamp::max())? {
             // Abort on writes after our start timestamp ...
             // If exists a commit version whose commit timestamp is larger than current start
@@ -87,7 +95,7 @@ pub fn prewrite<S: Snapshot>(
             }
             // Should check it when no lock exists, otherwise it can report error when there is
             // a lock belonging to a committed transaction which deletes the key.
-            txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+            check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
             prev_write = Some(write);
         }
     }
@@ -95,7 +103,9 @@ pub fn prewrite<S: Snapshot>(
         return Ok(TimeStamp::zero());
     }
 
-    txn.check_extra_op(&key, mutation_type, prev_write)?;
+    if !fallback_from_async_commit {
+        txn.check_extra_op(&key, mutation_type, prev_write)?;
+    }
     prewrite_key_value(
         txn,
         key,
@@ -110,6 +120,7 @@ pub fn prewrite<S: Snapshot>(
         max_commit_ts,
         try_one_pc,
         false,
+        fallback_from_async_commit,
     )
 }
 
@@ -254,5 +265,29 @@ pub mod tests {
             true,
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_fallback_from_async_commit() {
+        use super::super::tests::*;
+        use crate::storage::mvcc::MvccReader;
+        use kvproto::kvrpcpb::IsolationLevel;
+
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put_async_commit(&engine, b"k", b"v", b"k", &Some(vec![vec![1]]), 10, 20);
+        must_prewrite_put(&engine, b"k", b"v", b"k", 10);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
+        assert!(!lock.use_async_commit);
+        assert!(lock.secondaries.is_empty());
+
+        // deny overwrites with async commit prewrit
+        must_prewrite_put_async_commit(&engine, b"k", b"v", b"k", &Some(vec![vec![1]]), 10, 20);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
+        assert!(!lock.use_async_commit);
+        assert!(lock.secondaries.is_empty());
     }
 }

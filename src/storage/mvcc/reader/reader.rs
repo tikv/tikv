@@ -430,7 +430,7 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: MvccProperties) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
@@ -747,7 +747,7 @@ mod tests {
             .c()
             .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
         if let Some(props) = props.as_ref() {
-            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
+            assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
         }
         props
     }
