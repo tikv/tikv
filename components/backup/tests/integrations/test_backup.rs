@@ -23,11 +23,7 @@ use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
-<<<<<<< HEAD
-=======
-use pd_client::PdClient;
 use rand::Rng;
->>>>>>> 229cdc7b9... storage: remove local storage create directory (#9062)
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};

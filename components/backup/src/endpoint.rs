@@ -856,12 +856,7 @@ pub mod tests {
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
-<<<<<<< HEAD
-    use rand;
-    use std::thread;
-=======
-    use rand::Rng;
->>>>>>> 229cdc7b9... storage: remove local storage create directory (#9062)
+    use rand::{self, Rng};
     use tempfile::TempDir;
     use tikv::storage::mvcc::tests::*;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
@@ -949,8 +944,6 @@ pub mod tests {
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
     }
-<<<<<<< HEAD
-=======
 
     fn make_unique_dir(path: &Path) -> PathBuf {
         let uid: u64 = rand::thread_rng().gen();
@@ -991,7 +984,6 @@ pub mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
     }
 
->>>>>>> 229cdc7b9... storage: remove local storage create directory (#9062)
     #[test]
     fn test_seek_range() {
         let (_tmp, endpoint) = new_endpoint();
