@@ -79,11 +79,19 @@ pub trait LockManager: Clone + Send + 'static {
     fn has_waiter(&self) -> bool {
         true
     }
+
+    /// Returns whether pipelined pessimistic locking is enabled.
+    /// It's the function of `Storage`, not `LockManager`. Put it here for convenience.
+    fn pipelined(&self) -> bool {
+        false
+    }
 }
 
 // For test
-#[derive(Clone)]
-pub struct DummyLockManager;
+#[derive(Clone, Default)]
+pub struct DummyLockManager {
+    pub pipelined: bool,
+}
 
 impl LockManager for DummyLockManager {
     fn wait_for(
@@ -104,5 +112,9 @@ impl LockManager for DummyLockManager {
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {
+    }
+
+    fn pipelined(&self) -> bool {
+        self.pipelined
     }
 }

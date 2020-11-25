@@ -190,13 +190,12 @@ impl Simulator for ServerCluster {
             .start_observe_lock_apply(&mut coprocessor_host)
             .unwrap();
 
-        let mut lock_mgr = LockManager::new();
+        let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             Some(lock_mgr.clone()),
-            false,
         )?;
         self.storages.insert(node_id, raft_engine);
 
