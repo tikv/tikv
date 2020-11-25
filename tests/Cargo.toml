@@ -129,6 +129,7 @@ keys = { path = "../components/keys" }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }
 security = { path = "../components/security" }
+sst_importer = {path = "../components/sst_importer" }
 tipb_helper = { path = "../components/tipb_helper" }
 tidb_query_datatype = { path = "../components/tidb_query_datatype" }
 test_util = { path = "../components/test_util" }

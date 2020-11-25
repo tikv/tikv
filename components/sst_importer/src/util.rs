@@ -10,7 +10,6 @@ use encryption::DataKeyManager;
 use engine_traits::EncryptionKeyManager;
 
 use super::Result;
-use std::path::PathBuf;
 
 /// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files` option.
