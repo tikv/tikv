@@ -198,7 +198,9 @@ impl From<Error> for errorpb::Error {
                 errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
             Error::ReadIndexNotReady(reason, region_id) => {
-                errorpb.mut_read_index_not_ready().set_reason(reason.to_string());
+                errorpb
+                    .mut_read_index_not_ready()
+                    .set_reason(reason.to_string());
                 errorpb.mut_read_index_not_ready().set_region_id(region_id);
             }
             Error::ProposalInMergingMode(region_id) => {
