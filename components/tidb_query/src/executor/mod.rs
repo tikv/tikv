@@ -175,30 +175,37 @@ impl OriginCols {
     pub fn get_binary(&self, ctx: &mut EvalContext, output_offsets: &[u32]) -> Result<Vec<u8>> {
         // TODO capacity is not enough
         let mut values = Vec::with_capacity(self.data.value.len());
+        info!("***** OriginCols.get_binary invoked"; "self" => ?self);
         for offset in output_offsets {
             let col = &self.cols[*offset as usize];
             let col_id = col.get_column_id();
+            info!("***** OriginCols.get_binary loop"; "handle" => self.handle, "col" => ?col, "data_item" => ?self.data.get(col_id).map(|v|hex::encode_upper(v)));
             match self.data.get(col_id) {
-                Some(value) => values.extend_from_slice(value),
+                Some(value) => {
+                    info!("***** OriginCols.get_binary: Some(value)"; "handle" => self.handle, "col_id" => col_id, "value" => hex::encode_upper(value));
+                    values.extend_from_slice(value);
+                }
                 None if col.get_pk_handle() => {
                     let pk = util::get_pk(col, self.handle);
+                    info!("***** OriginCols.get_binary: None if col.get_pk_handle()"; "handle" => self.handle, "col_id" => col_id, "pk" => %pk);
                     box_try!(values.write_datum(ctx, &[pk], false));
                 }
                 None if col.has_default_val() => {
+                    info!("***** OriginCols.get_binary: None if col.has_default_val()"; "handle" => self.handle, "col_id" => col_id, "default" => hex::encode_upper(col.get_default_val()));
                     values.extend_from_slice(col.get_default_val());
                 }
                 None if col.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL) => {
-                    return Err(other_err!(
-                        "column {} of {} is missing",
-                        col_id,
-                        self.handle
-                    ));
+                    let err = other_err!("column {} of {} is missing", col_id, self.handle);
+                    info!("***** OriginCols.get_binary: None if col.as_accessor().flag().contains(FieldTypeFlag::NOT_NULL)"; "handle" => self.handle, "col_id" => col_id, "err" => ?err);
+                    return Err(err);
                 }
                 None => {
+                    info!("***** OriginCols.get_binary: None"; "handle" => self.handle, "col_id" => col_id);
                     box_try!(values.write_datum(ctx, &[Datum::Null], false));
                 }
             }
         }
+        info!("***** OriginCols.get_binary returned value"; "self" => ?self, "value" => hex::encode_upper(&values));
         Ok(values)
     }
 
