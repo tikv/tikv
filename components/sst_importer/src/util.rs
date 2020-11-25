@@ -10,6 +10,7 @@ use encryption::DataKeyManager;
 use engine_traits::EncryptionKeyManager;
 
 use super::Result;
+use std::path::PathBuf;
 
 /// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files` option.
@@ -33,10 +34,12 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     let clone = clone.as_ref().to_str().unwrap();
 
     if Path::new(clone).exists() {
-        if let Some(key_manager) = encryption_key_manager {
-            key_manager.delete_file(clone)?;
-        }
         fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+    // always try to remove the file from key manager because the clean up in rocksdb is not atomic,
+    // thus the file may be deleted but key in key manager is not.
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.delete_file(clone)?;
     }
 
     #[cfg(unix)]
@@ -50,11 +53,14 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         // RocksDB must not have this file, we can make a hard link.
         fs::hard_link(path, clone)
             .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
+        File::open(clone)?.sync_all()?;
     } else {
         // RocksDB may have this file, we should make a copy.
         copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
+    // sync clone dir
+    File::open(Path::new(clone).parent().unwrap())?.sync_all()?;
     if let Some(key_manager) = encryption_key_manager {
         key_manager.link_file(path, clone)?;
     }
