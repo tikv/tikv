@@ -374,6 +374,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             final_min_commit_ts,
             rows,
             context.async_apply_prewrite,
+            context.lock_mgr,
         ))
     }
 
@@ -434,7 +435,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 secondaries = &self.secondary_keys;
             }
 
-            let prewrite_result = prewrite(&props, txn, m, secondaries, is_pessimistic_lock);
+            let prewrite_result = prewrite(txn, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
                 Ok(ts) => {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
@@ -463,6 +464,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
+        lock_manager: &impl LockManager,
     ) -> WriteResult {
         let async_commit_ts = if self.secondary_keys.is_some() {
             final_min_commit_ts
@@ -480,6 +482,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                         &mut txn,
                         final_min_commit_ts,
                         rows,
+                        lock_manager,
                     ),
                 },
             };
@@ -631,6 +634,7 @@ fn one_pc_commit_ts(
     txn: &mut MvccTxn<impl Snapshot>,
     final_min_commit_ts: TimeStamp,
     rows: usize,
+    lock_manager: &impl LockManager,
 ) -> TimeStamp {
     if try_one_pc {
         assert_eq!(txn.locks_for_1pc.len(), rows);
@@ -638,7 +642,9 @@ fn one_pc_commit_ts(
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
         let released_locks = handle_1pc_locks(txn, final_min_commit_ts);
-        assert!(released_locks.is_empty());
+        if !released_locks.is_empty() {
+            released_locks.wake_up(lock_manager);
+        }
         final_min_commit_ts
     } else {
         assert!(txn.locks_for_1pc.is_empty());

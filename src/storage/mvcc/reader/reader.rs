@@ -465,7 +465,8 @@ mod tests {
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
     use crate::storage::txn::{
-        acquire_pessimistic_lock, cleanup, commit, gc, pessimistic_prewrite, prewrite,
+        acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
+        TransactionProperties,
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -541,14 +542,17 @@ mod tests {
 
             prewrite(
                 &mut txn,
+                &TransactionProperties {
+                    start_ts: start_ts,
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: pk,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                },
                 m,
-                pk,
                 &None,
-                false,
-                0,
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
                 false,
             )
             .unwrap();
@@ -567,18 +571,20 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            pessimistic_prewrite(
+            prewrite(
                 &mut txn,
+                &TransactionProperties {
+                    start_ts: start_ts,
+                    kind: TransactionKind::Pessimistic(TimeStamp::default()),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: pk,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                },
                 m,
-                pk,
                 &None,
                 true,
-                0,
-                TimeStamp::default(),
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
-                false,
             )
             .unwrap();
             self.write(txn.into_modifies());

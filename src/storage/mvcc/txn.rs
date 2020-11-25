@@ -460,7 +460,10 @@ mod tests {
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
-    use crate::storage::txn::{acquire_pessimistic_lock, commit, pessimistic_prewrite, prewrite};
+    use crate::storage::txn::{
+        acquire_pessimistic_lock, commit, prewrite, CommitKind, TransactionKind,
+        TransactionProperties,
+    };
     use crate::storage::SecondaryLocksStatus;
     use crate::storage::{
         kv::{Engine, TestEngineBuilder},
@@ -906,14 +909,17 @@ mod tests {
 
         prewrite(
             &mut txn,
+            &TransactionProperties {
+                start_ts: 10.into(),
+                kind: TransactionKind::Optimistic(false),
+                commit_kind: CommitKind::TwoPc,
+                primary: pk,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            },
             Mutation::Put((key.clone(), v.to_vec())),
-            pk,
             &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
             false,
         )
         .unwrap();
@@ -952,33 +958,39 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
         assert!(prewrite(
             &mut txn,
+            &TransactionProperties {
+                start_ts: 5.into(),
+                kind: TransactionKind::Optimistic(false),
+                commit_kind: CommitKind::TwoPc,
+                primary: key,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            },
             Mutation::Put((Key::from_raw(key), value.to_vec())),
-            key,
             &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
             false,
         )
         .is_err());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
-        assert!(prewrite(
+        prewrite(
             &mut txn,
+            &TransactionProperties {
+                start_ts: 5.into(),
+                kind: TransactionKind::Optimistic(true),
+                commit_kind: CommitKind::TwoPc,
+                primary: key,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            },
             Mutation::Put((Key::from_raw(key), value.to_vec())),
-            key,
             &None,
-            true,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
             false,
         )
-        .is_ok());
+        .unwrap();
     }
 
     #[test]
@@ -1444,31 +1456,36 @@ mod tests {
                 write(WriteData::from_modifies(txn.into_modifies()));
                 txn = new_txn(start_ts.into(), cm.clone());
                 txn.extra_op = ExtraOp::ReadOldValue;
-                pessimistic_prewrite(
+                prewrite(
                     &mut txn,
+                    &TransactionProperties {
+                        start_ts: start_ts.into(),
+                        kind: TransactionKind::Pessimistic(TimeStamp::default()),
+                        commit_kind: CommitKind::TwoPc,
+                        primary: b"key",
+                        txn_size: 0,
+                        lock_ttl: 0,
+                        min_commit_ts: TimeStamp::zero(),
+                    },
                     mutation,
-                    b"key",
                     &None,
                     true,
-                    0,
-                    start_ts.into(),
-                    0,
-                    TimeStamp::zero(),
-                    TimeStamp::zero(),
-                    false,
                 )
                 .unwrap();
             } else {
                 prewrite(
                     &mut txn,
+                    &TransactionProperties {
+                        start_ts: start_ts.into(),
+                        kind: TransactionKind::Optimistic(false),
+                        commit_kind: CommitKind::TwoPc,
+                        primary: b"key",
+                        txn_size: 0,
+                        lock_ttl: 0,
+                        min_commit_ts: TimeStamp::zero(),
+                    },
                     mutation,
-                    b"key",
                     &None,
-                    false,
-                    0,
-                    0,
-                    TimeStamp::default(),
-                    TimeStamp::default(),
                     false,
                 )
                 .unwrap();
@@ -1507,14 +1524,17 @@ mod tests {
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = prewrite(
                 &mut txn,
+                &TransactionProperties {
+                    start_ts: TimeStamp::new(2),
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::Async(TimeStamp::zero()),
+                    primary: b"key",
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::zero(),
+                },
                 mutation,
-                b"key",
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
-                false,
-                0,
-                4,
-                TimeStamp::zero(),
-                TimeStamp::zero(),
                 false,
             )
             .unwrap();
@@ -1558,18 +1578,20 @@ mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = pessimistic_prewrite(
+            let min_commit_ts = prewrite(
                 &mut txn,
+                &TransactionProperties {
+                    start_ts: TimeStamp::new(2),
+                    kind: TransactionKind::Pessimistic(4.into()),
+                    commit_kind: CommitKind::Async(TimeStamp::zero()),
+                    primary: b"key",
+                    txn_size: 4,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::zero(),
+                },
                 mutation,
-                b"key",
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 true,
-                0,
-                4.into(),
-                4,
-                TimeStamp::zero(),
-                TimeStamp::zero(),
-                false,
             )
             .unwrap();
             let modifies = txn.into_modifies();
@@ -1611,18 +1633,20 @@ mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        let min_commit_ts = pessimistic_prewrite(
+        let min_commit_ts = prewrite(
             &mut txn,
+            &TransactionProperties {
+                start_ts: TimeStamp::new(2),
+                kind: TransactionKind::Pessimistic(4.into()),
+                commit_kind: CommitKind::Async(TimeStamp::zero()),
+                primary: b"key",
+                txn_size: 4,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::zero(),
+            },
             mutation,
-            b"key",
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             true,
-            0,
-            4.into(),
-            4,
-            TimeStamp::zero(),
-            TimeStamp::zero(),
-            false,
         )
         .unwrap();
         assert_eq!(min_commit_ts.into_inner(), 100);

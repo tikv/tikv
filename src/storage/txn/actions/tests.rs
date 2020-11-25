@@ -42,6 +42,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
         CommitKind::TwoPc
     };
     prewrite(
+        &mut txn,
         &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
@@ -51,7 +52,6 @@ pub fn must_prewrite_put_impl<E: Engine>(
             lock_ttl,
             min_commit_ts,
         },
-        &mut txn,
         mutation,
         &secondary_keys,
         is_pessimistic_lock,
@@ -239,6 +239,7 @@ fn must_prewrite_put_err_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
+        &mut txn,
         &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
@@ -248,7 +249,6 @@ fn must_prewrite_put_err_impl<E: Engine>(
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
         },
-        &mut txn,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -308,6 +308,7 @@ fn must_prewrite_delete_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
+        &mut txn,
         &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
@@ -317,7 +318,6 @@ fn must_prewrite_delete_impl<E: Engine>(
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
         },
-        &mut txn,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -371,6 +371,7 @@ fn must_prewrite_lock_impl<E: Engine>(
         TransactionKind::Pessimistic(for_update_ts)
     };
     prewrite(
+        &mut txn,
         &TransactionProperties {
             start_ts: ts,
             kind: txn_kind,
@@ -380,7 +381,6 @@ fn must_prewrite_lock_impl<E: Engine>(
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
         },
-        &mut txn,
         mutation,
         &None,
         is_pessimistic_lock,
@@ -408,6 +408,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
     assert!(prewrite(
+        &mut txn,
         &TransactionProperties {
             start_ts: ts,
             kind: TransactionKind::Optimistic(false),
@@ -417,7 +418,6 @@ pub fn must_prewrite_lock_err<E: Engine>(
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
         },
-        &mut txn,
         Mutation::Lock(Key::from_raw(key)),
         &None,
         false,

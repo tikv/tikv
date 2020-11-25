@@ -18,8 +18,8 @@ use txn_types::{is_short_value, Key, Mutation, MutationType, TimeStamp, Value, W
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
-    txn_props: &TransactionProperties,
     txn: &mut MvccTxn<S>,
+    txn_props: &TransactionProperties,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
@@ -39,6 +39,10 @@ pub fn prewrite<S: Snapshot>(
         }
         None => LockStatus::None,
     };
+
+    if let LockStatus::Locked(ts) = lock_status {
+        return Ok(ts);
+    }
 
     let prev_write =
         if !mutation.skip_constraint_check() && !lock_status.fallback_from_async_commit() {
@@ -102,7 +106,9 @@ impl<'a> TransactionProperties<'a> {
 #[derive(Clone, Debug)]
 pub enum CommitKind {
     TwoPc,
+    /// max_commit_ts
     OnePc(TimeStamp),
+    /// max_commit_ts
     Async(TimeStamp),
 }
 
@@ -499,8 +505,8 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
-            &optimistic_txn_props(pk, ts),
             &mut txn,
+            &optimistic_txn_props(pk, ts),
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             &None,
             false,
@@ -521,8 +527,8 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
-            &optimistic_txn_props(pk, ts),
             &mut txn,
+            &optimistic_txn_props(pk, ts),
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
             false,
@@ -540,8 +546,8 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &Some(vec![b"k2".to_vec()]),
             false,
@@ -551,8 +557,8 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &Some(vec![]),
             false,
@@ -568,11 +574,10 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
-        let props = optimistic_1pc_props(b"k1", 10.into(), 50.into(), 2);
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
-            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &None,
             false,
@@ -582,9 +587,8 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
-            &optimistic_async_props(b"k1", 10.into(), 50.into(), 1),
-            true,
             &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, true),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &None,
             false,
@@ -628,6 +632,7 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
         prewrite(
+            &mut txn,
             &TransactionProperties {
                 start_ts: ts,
                 kind: TransactionKind::Pessimistic(TimeStamp::default()),
@@ -637,7 +642,6 @@ pub mod tests {
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
             },
-            &mut txn,
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
             false,
@@ -658,8 +662,9 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
+            &mut txn,
             &TransactionProperties {
-                start_ts: ts,
+                start_ts: 10.into(),
                 kind: TransactionKind::Pessimistic(20.into()),
                 commit_kind: CommitKind::Async(50.into()),
                 primary: b"k1",
@@ -667,7 +672,6 @@ pub mod tests {
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
             },
-            &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &Some(vec![b"k2".to_vec()]),
             true,
@@ -677,8 +681,9 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
+            &mut txn,
             &TransactionProperties {
-                start_ts: ts,
+                start_ts: 10.into(),
                 kind: TransactionKind::Pessimistic(20.into()),
                 commit_kind: CommitKind::Async(50.into()),
                 primary: b"k1",
@@ -686,7 +691,6 @@ pub mod tests {
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
             },
-            &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &Some(vec![]),
             true,
@@ -707,8 +711,9 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm.clone());
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
+            &mut txn,
             &TransactionProperties {
-                start_ts: ts,
+                start_ts: 10.into(),
                 kind: TransactionKind::Pessimistic(20.into()),
                 commit_kind: CommitKind::OnePc(50.into()),
                 primary: b"k1",
@@ -716,7 +721,6 @@ pub mod tests {
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
             },
-            &mut txn,
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
             &None,
             true,
@@ -726,8 +730,9 @@ pub mod tests {
         cm.update_max_ts(60.into());
         // calculated commit_ts = 61 > 50, ok
         prewrite(
+            &mut txn,
             &TransactionProperties {
-                start_ts: ts,
+                start_ts: 10.into(),
                 kind: TransactionKind::Pessimistic(20.into()),
                 commit_kind: CommitKind::OnePc(50.into()),
                 primary: b"k1",
@@ -735,7 +740,6 @@ pub mod tests {
                 lock_ttl: 2000,
                 min_commit_ts: 10.into(),
             },
-            &mut txn,
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
             &None,
             true,
