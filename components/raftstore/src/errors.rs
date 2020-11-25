@@ -36,7 +36,7 @@ quick_error! {
         ProposalInMergingMode(region_id: u64) {
             display("{} peer in merging mode, can't do proposal", region_id)
         }
-        ReadIndexNotReady(reason: String, region_id: u64) {
+        ReadIndexNotReady(reason: &'static str, region_id: u64) {
             display("read index not ready, reason {}, region {}", reason, region_id)
         }
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
@@ -198,7 +198,7 @@ impl From<Error> for errorpb::Error {
                 errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
             Error::ReadIndexNotReady(reason, region_id) => {
-                errorpb.mut_read_index_not_ready().set_reason(reason);
+                errorpb.mut_read_index_not_ready().set_reason(reason.to_string());
                 errorpb.mut_read_index_not_ready().set_region_id(region_id);
             }
             Error::ProposalInMergingMode(region_id) => {

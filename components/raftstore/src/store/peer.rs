@@ -2362,13 +2362,13 @@ where
         // See more in ready_to_handle_read().
         if self.is_splitting() {
             return Err(Error::ReadIndexNotReady(
-                "can not read index due to split".to_string(),
+                "can not read index due to split",
                 self.region_id,
             ));
         }
         if self.is_merging() {
             return Err(Error::ReadIndexNotReady(
-                "can not read index due to merge".to_string(),
+                "can not read index due to merge",
                 self.region_id,
             ));
         }
