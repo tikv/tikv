@@ -1089,6 +1089,26 @@ mod write_batch {
     }
 
     #[test]
+    fn write_batch_delete_range_cf_after_put() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"").unwrap();
+        wb.put(b"b", b"").unwrap();
+        wb.put(b"c", b"").unwrap();
+        wb.put(b"d", b"").unwrap();
+        wb.put(b"e", b"").unwrap();
+        wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
+        wb.write().unwrap();
+
+        assert!(db.engine.get_value(b"a").unwrap().is_some());
+        assert!(db.engine.get_value(b"b").unwrap().is_none());
+        assert!(db.engine.get_value(b"c").unwrap().is_none());
+        assert!(db.engine.get_value(b"d").unwrap().is_none());
+        assert!(db.engine.get_value(b"e").unwrap().is_some());
+    }
+
+    #[test]
     fn write_batch_delete_range_cf_none() {
         let db = default_engine();
 
