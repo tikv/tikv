@@ -64,6 +64,8 @@ pub struct Endpoint<E: Engine> {
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 
+    slow_log_threshold: Duration,
+
     _phantom: PhantomData<E>,
 }
 
@@ -106,6 +108,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
         }
     }
@@ -459,7 +462,7 @@ impl<E: Engine> Endpoint<E> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         let res = self
             .read_pool
@@ -593,7 +596,7 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         self.read_pool
             .spawn(
