@@ -32,7 +32,7 @@ extern crate failure;
 extern crate num_derive;
 #[macro_use]
 extern crate static_assertions;
-#[macro_use(error, debug, warn)]
+#[macro_use(error, debug, warn, info)]
 extern crate slog_global;
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;
