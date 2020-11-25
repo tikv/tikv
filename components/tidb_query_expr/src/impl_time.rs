@@ -153,20 +153,10 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn date_diff(
-    ctx: &mut EvalContext,
+    _ctx: &mut EvalContext,
     from_time: &DateTime,
     to_time: &DateTime,
 ) -> Result<Option<Int>> {
-    if from_time.invalid_zero() {
-        return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(from_time))
-            .map(|_| Ok(None))?;
-    }
-    if to_time.invalid_zero() {
-        return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(to_time))
-            .map(|_| Ok(None))?;
-    }
     Ok(from_time.date_diff(*to_time))
 }
 
