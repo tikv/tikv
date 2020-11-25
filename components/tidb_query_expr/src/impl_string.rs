@@ -4,6 +4,7 @@ use std::{iter, str};
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
+use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
 
@@ -58,12 +59,12 @@ fn find_str(text: &str, pattern: &str) -> Option<usize> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_2_args_utf8(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    let substr = match str::from_utf8(substr) {
+pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
+    let substr = match String::from_utf8(C::sort_key(substr)?) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match str::from_utf8(s) {
+    let s = match String::from_utf8(C::sort_key(s)?) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
@@ -74,15 +75,19 @@ pub fn locate_2_args_utf8(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> 
 
 #[rpn_fn]
 #[inline]
-pub fn locate_3_args_utf8(substr: BytesRef, s: BytesRef, pos: &Int) -> Result<Option<i64>> {
+pub fn locate_3_args_utf8<C: Collator>(
+    substr: BytesRef,
+    s: BytesRef,
+    pos: &Int,
+) -> Result<Option<i64>> {
     if *pos < 1 {
         return Ok(Some(0));
     }
-    let substr = match str::from_utf8(substr) {
+    let substr = match String::from_utf8(C::sort_key(substr)?) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match str::from_utf8(s) {
+    let s = match String::from_utf8(C::sort_key(s)?) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
@@ -870,6 +875,8 @@ mod tests {
     use super::*;
 
     use std::{f64, i64};
+
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tipb::ScalarFuncSig;
 
     use crate::types::test_util::RpnFnScalarEvaluator;
@@ -1218,6 +1225,12 @@ mod tests {
 
         for (substr, s, exp) in cases {
             match RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .build(),
+                )
                 .push_param(substr.map(|substr| substr))
                 .push_param(s.map(|s| s))
                 .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
@@ -1351,6 +1364,12 @@ mod tests {
 
         for (substr, s, pos, exp) in cases {
             match RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(Collation::Utf8Mb4Bin)
+                        .build(),
+                )
                 .push_param(substr.map(|substr| substr))
                 .push_param(s.map(|s| s))
                 .push_param(pos)
