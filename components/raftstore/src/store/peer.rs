@@ -573,7 +573,7 @@ impl Peer {
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
     pub fn maybe_destroy<T, C>(
         &mut self,
-        ctx: &PollContext<EK, ER, T, C>,
+        ctx: &PollContext<T, C>,
     ) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(

@@ -2586,7 +2586,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // Destroy apply fsm at first
                 self.ctx.apply_router.schedule_task(
                     self.fsm.region_id(),
-                    ApplyTask::destroy(self.fsm.region_id(), true, true),
+                    ApplyTask::destroy(self.fsm.region_id(), true),
                 );
             }
             MergeResultKind::FromTargetSnapshotStep2 => {
