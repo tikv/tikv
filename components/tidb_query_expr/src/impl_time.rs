@@ -4,14 +4,20 @@ use tidb_query_codegen::rpn_fn;
 
 use tidb_query_datatype::expr::EvalContext;
 
+use crate::RpnFnCallExtra;
+use std::convert::TryInto;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::codec::mysql::duration::{
+    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_SECOND_PART, NANOS_PER_SEC,
+};
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
 use tidb_query_datatype::codec::mysql::time::{WeekdayExtension, MONTH_NAMES};
 use tidb_query_datatype::codec::mysql::{Duration, TimeType};
 use tidb_query_datatype::codec::Error;
 use tidb_query_datatype::expr::SqlMode;
+use tidb_query_datatype::FieldTypeAccessor;
 
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
@@ -232,6 +238,61 @@ pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<
     Ok(Some(ret))
 }
 
+#[rpn_fn(capture = [extra, args])]
+#[inline]
+pub fn make_time(
+    extra: &RpnFnCallExtra,
+    args: &[crate::RpnStackNode<'_>],
+    hour: &Int,
+    minute: &Int,
+    second: &Real,
+) -> Result<Option<Duration>> {
+    let (is_negative, mut hour) = if args[0].field_type().is_unsigned() {
+        (false, *hour as u64)
+    } else {
+        (hour.is_negative(), hour.wrapping_abs() as u64)
+    };
+
+    // Filter out the number that is negative or greater than MAX_MINUTE_PART.
+    let mut minute: u32 = match (*minute).try_into().ok().filter(|m| *m <= MAX_MINUTE_PART) {
+        Some(minute) => minute,
+        None => return Ok(None),
+    };
+
+    let mut nanosecond = (second.fract().abs() * NANOS_PER_SEC as f64) as u32;
+
+    // Filter out the number that is negative or greater than MAX_SECOND_PART.
+    let mut second: u32 = match (second.trunc() as i64)
+        .try_into()
+        .ok()
+        .filter(|s| *s <= MAX_SECOND_PART)
+    {
+        Some(second) => second,
+        None => return Ok(None),
+    };
+
+    let is_overflow = (hour, minute, second, nanosecond)
+        > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
+    if is_overflow {
+        hour = MAX_HOUR_PART as _;
+        minute = MAX_MINUTE_PART;
+        second = MAX_SECOND_PART;
+        nanosecond = 0;
+    }
+
+    match Duration::new_from_parts(
+        is_negative,
+        hour as _,
+        minute,
+        second,
+        nanosecond,
+        extra.ret_field_type.get_decimal() as i8,
+    ) {
+        Ok(duration) => Ok(Some(duration)),
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[rpn_fn(nullable)]
 #[inline]
 pub fn month(t: Option<&DateTime>) -> Result<Option<Int>> {
@@ -408,6 +469,7 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::types::test_util::RpnFnScalarEvaluator;
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
     use tidb_query_datatype::FieldTypeTp;
@@ -1327,5 +1389,103 @@ mod tests {
             .evaluate::<Time>(ScalarFuncSig::LastDay)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_make_time() {
+        let cases = vec![
+            (12 as i64, 15 as i64, 30 as f64, "12:15:30"),
+            (25, 15, 30.0, "25:15:30"),
+            (-25, 15, 30 as f64, "-25:15:30"),
+            (12, 15, 30.1, "12:15:30.1"),
+            (12, 15, 30.2, "12:15:30.2"),
+            (12, 15, 30.3000001, "12:15:30.3"),
+            (12, 15, 30.0000005, "12:15:30.000001"),
+            (0, 0, 0.0, "00:00:00"),
+            (0, 1, 59.1, "00:01:59.1"),
+            (837, 59, 59.1, "837:59:59.1"),
+            (838, 59, 59.1, "838:59:59"),
+            (838, 58, 59.1, "838:58:59.1"),
+            (838, 0, 59.1, "838:00:59.1"),
+            (-838, 59, 59.1, "-838:59:59"),
+            (1000, 1, 1.0, "838:59:59"),
+            (-1000, 1, 1.23, "-838:59:59"),
+            (1000, 59, 1.0, "838:59:59"),
+            (1000, 1, 59.1, "838:59:59"),
+            (i64::MIN, 0, 1.0, "-838:59:59"),
+            (i64::MAX, 0, 0.0, "838:59:59"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (hour, minute, second, ans) in cases {
+            for fsp in 0..MAX_FSP {
+                let ans_val = Some(Duration::parse(&mut ctx, ans.as_bytes(), fsp).unwrap());
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, ans_val);
+            }
+        }
+        let none_case = vec![
+            (12 as i64, -15 as i64, 30 as f64),
+            (12, 15, -30.0),
+            (12, 15, 60.0),
+            (12, 60, 0.0),
+            (i64::MAX, i64::MAX, f64::MAX),
+        ];
+        for (hour, minute, second) in none_case {
+            for fsp in 0..MAX_FSP {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(Some(hour))
+                    .push_param(Some(minute))
+                    .push_param(Some(Real::new(second).unwrap()))
+                    .return_field_type(
+                        FieldTypeBuilder::new()
+                            .tp(FieldTypeTp::Duration)
+                            .decimal(fsp as isize)
+                            .build(),
+                    )
+                    .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                    .unwrap();
+                assert_eq!(output, None);
+            }
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(None::<i64>)
+                .push_param(None::<i64>)
+                .push_param(None::<Real>)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal(MAX_FSP as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime)
+                .unwrap();
+            assert_eq!(output, None);
+        }
+        {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<i64>(1))
+                .push_param(Some::<f64>(1.0))
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Duration)
+                        .decimal((MAX_FSP + 1) as isize)
+                        .build(),
+                )
+                .evaluate::<Duration>(ScalarFuncSig::MakeTime);
+            assert!(output.is_err());
+        }
     }
 }
