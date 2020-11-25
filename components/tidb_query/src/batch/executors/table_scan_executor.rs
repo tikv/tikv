@@ -69,6 +69,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             // columns with the same column id are given, we will only preserve the *last* one.
         }
 
+        info!("**** new TableScanExecutorImpl"; "columns" => ?columns_info, "key_ranges" => ?key_ranges, "handle_indices" => ?handle_indices, "column_id_index" => ?column_id_index);
+
         let imp = TableScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
@@ -156,6 +158,7 @@ impl TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
         decoded_columns: &mut usize,
     ) -> Result<()> {
+        info!("***** process_v1 invoked"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(value));
         use crate::codec::datum;
         use codec::prelude::NumberDecoder;
         // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
@@ -178,6 +181,7 @@ impl TableScanExecutorImpl {
             if let Some(index) = some_index {
                 let index = *index;
                 if !self.is_column_filled[index] {
+                    info!("**** process_v1 fill data item"; "key" => hex::encode_upper(key), "column_id" => column_id, "val" => hex::encode_upper(val));
                     columns[index].mut_raw().push(val);
                     *decoded_columns += 1;
                     self.is_column_filled[index] = true;
@@ -195,6 +199,7 @@ impl TableScanExecutorImpl {
             }
             remaining = new_remaining;
         }
+        info!("***** process_v1 finished"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(value));
         Ok(())
     }
 
@@ -204,6 +209,7 @@ impl TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
         decoded_columns: &mut usize,
     ) -> Result<()> {
+        info!("***** process_v2 invoked"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(value));
         use crate::codec::datum;
         use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
 
@@ -215,14 +221,18 @@ impl TableScanExecutorImpl {
                     .write_v2_as_datum(&row.values()[start..offset], &self.schema[*idx])?;
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
+                info!("***** process_v2 handle non null item"; "key" => hex::encode_upper(key), "col_id" => col_id, "val" => hex::encode_upper(&row.values()[start..offset]), "current_res" => ?buffer_to_write.0);
             } else if row.search_in_null_ids(*col_id) {
                 columns[*idx].mut_raw().push(datum::DATUM_DATA_NULL);
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
+                info!("***** process_v2 handle null item"; "key" => hex::encode_upper(key), "col_id" => col_id, "current_res" => ?buffer_to_write.0);
             } else {
+                info!("***** process_v2 handle missing item"; "key" => hex::encode_upper(key), "col_id" => col_id);
                 // This column is missing. It will be filled with default values later.
             }
         }
+        info!("***** process_v2 finished"; "key" => hex::encode_upper(key), "value" => hex::encode_upper(value));
         Ok(())
     }
 }
@@ -321,6 +331,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         // columns in same length.
         for i in 0..columns_len {
             if !self.is_column_filled[i] {
+                info!("***** fill missing column for key"; "key" => hex::encode_upper(key), "col_idx" => i);
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
@@ -340,6 +351,8 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                         i
                     ));
                 };
+
+                info!("***** filled missing column with default value"; "key" => hex::encode_upper(key), "col_idx" => i, "value" => hex::encode_upper(default_value));
 
                 columns[i].mut_raw().push(default_value);
             } else {
