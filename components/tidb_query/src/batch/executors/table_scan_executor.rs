@@ -227,7 +227,7 @@ impl TableScanExecutorImpl {
                 columns[*idx].mut_raw().push(datum::DATUM_DATA_NULL);
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
-                info!("***** process_v2 handle null item"; "key" => hex::encode_upper(key), "col_id" => col_id, "current_res" => ?buffer_to_write.0);
+                info!("***** process_v2 handle null item"; "key" => hex::encode_upper(key), "col_id" => col_id, "current_res" => ?columns[*idx].raw());
             } else {
                 info!("***** process_v2 handle missing item"; "key" => hex::encode_upper(key), "col_id" => col_id);
                 // This column is missing. It will be filled with default values later.
