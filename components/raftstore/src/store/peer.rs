@@ -3133,8 +3133,6 @@ where
         let region_id = self.region_id;
         let peer_id = self.peer.get_id();
         let scheduler = ctx.pd_scheduler.clone();
-        self.pending_pd_heartbeat_tasks
-            .fetch_add(1, Ordering::SeqCst);
         let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
             region: self.region().clone(),
             pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
@@ -3153,6 +3151,8 @@ where
                 }
             }),
         };
+        self.pending_pd_heartbeat_tasks
+            .fetch_add(1, Ordering::SeqCst);
         if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
             error!(
                 "failed to notify pd";
