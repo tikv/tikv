@@ -31,12 +31,19 @@ pub mod sys_quota {
         }
 
         pub fn cpu_cores_quota(&self) -> f64 {
-            let cpu_num = num_cpus::get() as f64;
-            let quota = match self.cgroup.cpu_cores_quota() {
-                Some(cgroup_quota) if cgroup_quota > 0.0 && cgroup_quota < cpu_num => cgroup_quota,
-                _ => cpu_num,
-            };
-            super::limit_cpu_cores_quota_by_env_var(quota)
+            let mut cpu_num = num_cpus::get() as f64;
+            let cpuset_cores = self.cgroup.cpuset_cores().len() as f64;
+            let cpu_quota = self.cgroup.cpu_cores_quota().unwrap_or(0.);
+
+            if cpuset_cores != 0. {
+                cpu_num = cpu_num.min(cpuset_cores);
+            }
+
+            if cpu_quota != 0. {
+                cpu_num = cpu_num.min(cpu_quota);
+            }
+
+            super::limit_cpu_cores_quota_by_env_var(cpu_num)
         }
 
         pub fn memory_limit_in_bytes(&self) -> u64 {

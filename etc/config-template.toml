@@ -178,6 +178,10 @@
 ## The default value is 2 if the number of CPU cores is less than 16, otherwise 3.
 # background-thread-count = 2
 
+## If handle time is larger than the threshold, it will print slow log in endpoint.
+## The default value is 1s.
+# end-point-slow-log-threshold = "1s"
+
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
