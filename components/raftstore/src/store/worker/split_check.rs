@@ -167,7 +167,7 @@ impl Display for Task {
             Task::Validate(_) => write!(f, "[split check worker] Validate config"),
             Task::GetRegionApproximateSizeAndKeys { region, .. } => write!(
                 f,
-                "[split check worker] Get region approximate size for region {}",
+                "[split check worker] Get region approximate size and keys for region {}",
                 region.get_id()
             ),
         }
