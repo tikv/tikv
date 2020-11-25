@@ -10,7 +10,9 @@ use test_sst_importer::*;
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
 mod util;
-use self::util::{check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde};
+use self::util::{
+    check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
+};
 
 // Opening sst writer involves IO operation, it may block threads for a while.
 // Test if download sst works when opening sst writer is blocked.
@@ -61,11 +63,7 @@ fn test_download_sst_blocking_sst_writer() {
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 
-fn upload_sst(
-    import: &ImportSstClient,
-    meta: &SstMeta,
-    data: &[u8],
-) -> Result<UploadResponse> {
+fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<UploadResponse> {
     let mut r1 = UploadRequest::default();
     r1.set_meta(meta.clone());
     let mut r2 = UploadRequest::default();
