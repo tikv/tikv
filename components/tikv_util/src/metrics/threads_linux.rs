@@ -128,7 +128,10 @@ impl Collector for ThreadsCollector {
                 let past = cpu_total.get();
                 if let Ok(cpus) = pid::cpu_count() {
                     let total = total.max(0.0).min((cpus as f64).mul(100.0));
-                    cpu_total.inc_by(total.sub(past));
+                    let delta = total - past;
+                    if delta > 0.0 {
+                        cpu_total.inc_by(delta);
+                    }
                 }
 
                 // Threads states.
