@@ -589,7 +589,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
         // Apply committed entries more quickly
-        // Or if it's a singleton, it will become leader latter.
         if self.fsm.peer.raft_group.store().commit_index()
             > self.fsm.peer.raft_group.store().applied_index()
         {

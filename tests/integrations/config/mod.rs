@@ -139,7 +139,6 @@ fn test_serde_custom_tikv_config() {
     store_batch_system.pool_size = 3;
     store_batch_system.reschedule_duration = ReadableDuration::secs(2);
     value.raft_store = RaftstoreConfig {
-        sync_log: false,
         prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),

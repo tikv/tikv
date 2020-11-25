@@ -503,11 +503,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             None => return false,
         };
 
-        // Write to engine
-        // raftstore.sync-log = true means we need prevent data loss when power failure.
-        // take raft log gc for example, we write kv WAL first, then write raft WAL,
-        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
-        // so we use sync-log flag here.
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
@@ -2455,7 +2450,7 @@ pub enum Msg {
         cb: Callback<RocksEngine>,
     },
     #[cfg(any(test, feature = "testexport"))]
-    Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
 }
 
 impl Msg {
@@ -2915,7 +2910,7 @@ impl ApplyFsm {
                     cb,
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
+                Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }
@@ -3360,7 +3355,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate, _): (&ApplyDelegate, _)| {
+                Box::new(move |delegate: &ApplyDelegate| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
@@ -3500,14 +3495,11 @@ mod tests {
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
 
-        router.schedule_task(
-            1,
-            Msg::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)], 2, 2, 3)),
-        );
+        router.schedule_task(1, Msg::apply(Apply::new(1, 1, vec![new_entry(2, 3, None)])));
         // non registered region should be ignored.
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
 
-        router.schedule_task(2, Msg::apply(Apply::new(2, 11, vec![], 3, 2, 3)));
+        router.schedule_task(2, Msg::apply(Apply::new(2, 11, vec![])));
         // empty entries should be ignored.
         let reg_term = reg.term;
         validate(&router, 2, move |delegate| {
@@ -3527,7 +3519,7 @@ mod tests {
             2,
             vec![
                 Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-                Msg::Snapshot(GenSnapTask::new(2, 0, tx)),
+                Msg::Snapshot(GenSnapTask::new(2, tx)),
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {

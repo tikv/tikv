@@ -92,10 +92,6 @@ fn test_write_update_to_file() {
 ## comment should be reserve
 [raftstore]
 
-## comment should be reserve
-# comment with one `#` should also be reserve
-sync-log = true
-
 # config that comment out by one `#` should be update in place
 ## pd-heartbeat-tick-interval = "30s"
 # pd-heartbeat-tick-interval = "30s"
@@ -131,7 +127,6 @@ blob-run-mode = "normal"
             "raftstore.pd-heartbeat-tick-interval".to_owned(),
             "1h".to_owned(),
         );
-        change.insert("raftstore.sync-log".to_owned(), "false".to_owned());
         change.insert(
             "coprocessor.region-split-keys".to_owned(),
             "10000".to_owned(),

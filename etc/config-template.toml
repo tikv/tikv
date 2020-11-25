@@ -234,10 +234,11 @@
 # retry-max-count = -1
 
 [raftstore]
-## Whether to force to flush logs.
-## Set to `true` (default) for best reliability, which prevents data loss when there is a power
-## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
-# sync-log = true
+## The delay time of raft db sync.
+## The unit is microsecond.
+## Set it to control sync frequency and get better performance on some types of disk.
+## Default is 0.
+# delay-sync-us = 0
 
 ## Whether to enable Raft prevote.
 ## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
