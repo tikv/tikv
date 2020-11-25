@@ -29,8 +29,8 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // true for high reliability, prevent data loss when power failure.
-    pub sync_log: bool,
+    // delay microsecond of raft db sync, 0 means no delay.
+    pub delay_sync_us: u64,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -164,8 +164,6 @@ pub struct Config {
     #[config(hidden)]
     pub hibernate_regions: bool,
     pub hibernate_timeout: ReadableDuration,
-    #[config(hidden)]
-    pub early_apply: bool,
     #[doc(hidden)]
     #[config(hidden)]
     pub dev_assert: bool,
@@ -191,7 +189,7 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            sync_log: true,
+            delay_sync_us: 0,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -248,7 +246,6 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: false,
             hibernate_timeout: ReadableDuration::minutes(10),
-            early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -478,10 +475,15 @@ impl Config {
         Ok(())
     }
 
+    pub fn delay_sync_enabled(&self) -> bool {
+        self.delay_sync_us != 0
+    }
+
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["sync_log"])
-            .set((self.sync_log as i32).into());
+            .with_label_values(&["delay_sync_us"])
+            .set((self.delay_sync_us as i32).into());
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());

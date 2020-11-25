@@ -3072,7 +3072,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs?branch=0.6.x#b5f5830f889f31453590e85613a9bf23d0e2fea9"
+source = "git+https://github.com/gengliqi/raft-rs?branch=async-ready-0.6#29790a2b0d6366b8550afd894bedf2bd9ef8878d"
 dependencies = [
  "fxhash",
  "getset",
@@ -3086,7 +3086,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs?branch=0.6.x#b5f5830f889f31453590e85613a9bf23d0e2fea9"
+source = "git+https://github.com/gengliqi/raft-rs?branch=async-ready-0.6#29790a2b0d6366b8550afd894bedf2bd9ef8878d"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3129,7 +3129,8 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "rand 0.6.5",
+ "raft-proto",
+ "rand 0.7.3",
  "serde",
  "serde_derive",
  "serde_with",

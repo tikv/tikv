@@ -40,6 +40,7 @@ use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
+use crate::store::fsm::sync_policy::SyncPolicy;
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -258,6 +259,7 @@ pub struct PollContext<T, C: 'static> {
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
+    pub sync_policy: SyncPolicy,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -282,7 +284,7 @@ impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
 
     #[inline]
     fn set_sync_log(&mut self, sync: bool) {
-        self.sync_log = sync;
+        self.sync_log |= sync;
     }
 }
 
@@ -544,22 +546,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
-        if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
-            for (ready, invoke_ctx) in &mut ready_res {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready, invoke_ctx);
-            }
-            self.poll_ctx.ready_res = ready_res;
-        }
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
@@ -581,14 +567,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_between_save");
-        if !self.poll_ctx.raft_wb.is_empty() {
-            fail_point!(
-                "raft_before_save_on_store_1",
-                self.poll_ctx.store_id() == 1,
-                |_| {}
-            );
+
+        let raft_wb_is_empty = self.poll_ctx.raft_wb.is_empty();
+        if !raft_wb_is_empty {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
+            write_opts.set_sync(false);
             self.poll_ctx
                 .engines
                 .raft
@@ -610,12 +593,29 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
 
+        let synced = if self.poll_ctx.sync_policy.delay_sync_enabled() {
+            self.poll_ctx.sync_policy.sync_if_needed(true)
+        } else {
+            if !raft_wb_is_empty {
+                self.poll_ctx.engines.raft.sync_wal().unwrap_or_else(|e| {
+                    panic!("{} failed to sync raft engine: {:?}", self.tag, e);
+                });
+            }
+            true
+        };
+
         report_perf_context!(
             self.poll_ctx.perf_context_statistics,
             STORE_PERF_CONTEXT_TIME_HISTOGRAM
         );
         fail_point!("raft_after_save");
+
         if ready_cnt != 0 {
+            let current_ts = if synced {
+                None
+            } else {
+                Some(self.poll_ctx.sync_policy.current_ts())
+            };
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
             for (ready, invoke_ctx) in ready_res.drain(..) {
@@ -627,7 +627,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     }
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
+                    .post_raft_ready_append(ready, invoke_ctx, current_ts);
             }
         }
         let dur = self.timer.elapsed();
@@ -715,6 +715,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.update_ticks_timeout();
         }
+        self.poll_ctx.sync_policy.try_flush_regions();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
@@ -801,14 +802,20 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
             .process_ready
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.sync_policy.metrics.flush();
         self.poll_ctx.store_stat.flush();
+        self.poll_ctx.sync_policy.try_flush_regions();
     }
 
-    fn pause(&mut self) {
+    fn pause(&mut self) -> bool {
+        let all_synced_and_flushed = self.poll_ctx.sync_policy.try_sync_and_flush();
         if self.poll_ctx.need_flush_trans {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
+        // If there are cached data and go into pause status, that will cause high latency or hunger
+        // so it should return false(means pause failed) when there are still jobs to do
+        all_synced_and_flushed
     }
 }
 
@@ -832,6 +839,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: Engines,
     applying_snap_count: Arc<AtomicUsize>,
+    pub sync_policy: SyncPolicy,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1044,6 +1052,7 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
+            sync_policy: self.sync_policy.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1122,6 +1131,12 @@ impl RaftBatchSystem {
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host,
         };
+        let sync_policy = SyncPolicy::new(
+            engines.clone(),
+            self.router.clone(),
+            cfg.value().delay_sync_enabled(),
+            cfg.value().delay_sync_us as i64,
+        );
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1142,6 +1157,7 @@ impl RaftBatchSystem {
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
+            sync_policy,
         };
         let region_peers = builder.init()?;
         let engine = RocksEngine::from_db(builder.engines.kv.clone());

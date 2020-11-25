@@ -151,7 +151,6 @@ pub struct RaftTruncatedState {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct RaftApplyState {
     pub applied_index: u64,
-    pub last_commit_index: u64,
     pub commit_index: u64,
     pub commit_term: u64,
     pub truncated_state: RaftTruncatedState,
@@ -208,7 +207,6 @@ impl RegionMeta {
             raft_status: raft_group.status().into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
-                last_commit_index: apply_state.get_last_commit_index(),
                 commit_index: apply_state.get_commit_index(),
                 commit_term: apply_state.get_commit_term(),
                 truncated_state: RaftTruncatedState {

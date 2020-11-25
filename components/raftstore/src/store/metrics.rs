@@ -253,4 +253,33 @@ lazy_static! {
             "collect topN of read qps",
         &["order"]
         ).unwrap();
+
+    pub static ref SYNC_EVENTS: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_sync_events",
+            "Counts of raftstore sync events.",
+            &["event"]
+        )
+        .unwrap();
+
+    pub static ref PEER_SYNC_LOG_INTERVAL_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_sync_log_interval_seconds",
+            "Bucketed histogram of sync log interval",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_THREAD_CHECK_SYNC_RESULT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_thread_check_sync_result_seconds",
+            "Bucketed histogram of sync log in idle stat interval",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_SYNC_DELAY_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_sync_delay_seconds",
+            "Bucketed histogram of sync delay seconds",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        ).unwrap();
 }
