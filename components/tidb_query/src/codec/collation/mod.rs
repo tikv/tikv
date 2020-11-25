@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod latin1_bin;
 mod utf8mb4;
 
+pub use self::latin1_bin::*;
 pub use self::utf8mb4::*;
 
 use std::cmp::Ordering;
