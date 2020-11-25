@@ -3130,6 +3130,9 @@ where
             return;
         }
 
+        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
+            return;
+        }
         let region_id = self.region_id;
         let peer_id = self.peer.get_id();
         let scheduler = ctx.pd_scheduler.clone();
