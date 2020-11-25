@@ -33,6 +33,12 @@ pub enum DiscardReason {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
+        ProposalInMergingMode(region_id: u64) {
+            display("{} peer in merging mode, can't do proposal", region_id)
+        }
+        ReadIndexNotReady(reason: String, region_id: u64) {
+            display("read index not ready, reason {}, region {}", reason, region_id)
+        }
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
             display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
         }
