@@ -14,8 +14,5 @@ bitflags = "1.0"
 error_code = { path = "../error_code" }
 failure = "0.1"
 tikv_alloc = { path = "../tikv_alloc" }
-<<<<<<< HEAD
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-=======
 bstr = "0.2.8"
->>>>>>> 4f5fd7220... copr: add latin1_bin collator to ignore UTF-8 check (#9052)
