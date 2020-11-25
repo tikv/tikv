@@ -580,37 +580,6 @@ impl ControlThreadPool {
     }
 }
 
-#[test]
-fn test_control_thread_pool_adjust_keep_tasks() {
-    use std::thread::sleep;
-
-    let counter = Arc::new(AtomicU32::new(0));
-    let mut pool = ControlThreadPool::new();
-    pool.adjust_with(3);
-
-    for i in 0..8 {
-        let ctr = counter.clone();
-        pool.spawn(move || {
-            sleep(Duration::from_millis(100));
-            ctr.fetch_or(1 << i, Ordering::SeqCst);
-        });
-    }
-
-    sleep(Duration::from_millis(150));
-    pool.adjust_with(4);
-
-    for i in 8..16 {
-        let ctr = counter.clone();
-        pool.spawn(move || {
-            sleep(Duration::from_millis(100));
-            ctr.fetch_or(1 << i, Ordering::SeqCst);
-        });
-    }
-
-    sleep(Duration::from_millis(250));
-    assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
-}
-
 impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     pub fn new(
         store_id: u64,
@@ -919,7 +888,9 @@ fn to_sst_compression_type(ct: CompressionType) -> Option<SstCompressionType> {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::{fs, thread};
+
     use external_storage::{make_local_backend, make_noop_backend};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
@@ -928,12 +899,14 @@ pub mod tests {
     use raftstore::coprocessor::Result as CopResult;
     use raftstore::coprocessor::SeekRegionCallback;
     use raftstore::store::util::new_peer;
-    use std::thread;
+    use rand::Rng;
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
+
+    use super::*;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -1017,6 +990,45 @@ pub mod tests {
         check(resp);
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
+    }
+
+    fn make_unique_dir(path: &Path) -> PathBuf {
+        let uid: u64 = rand::thread_rng().gen();
+        let tmp_suffix = format!("{:016x}", uid);
+        let unique = path.join(tmp_suffix);
+        fs::create_dir_all(&unique).unwrap();
+        unique
+    }
+
+    #[test]
+    fn test_control_thread_pool_adjust_keep_tasks() {
+        use std::thread::sleep;
+
+        let counter = Arc::new(AtomicU32::new(0));
+        let mut pool = ControlThreadPool::new();
+        pool.adjust_with(3);
+
+        for i in 0..8 {
+            let ctr = counter.clone();
+            pool.spawn(move || {
+                sleep(Duration::from_millis(100));
+                ctr.fetch_or(1 << i, Ordering::SeqCst);
+            });
+        }
+
+        sleep(Duration::from_millis(150));
+        pool.adjust_with(4);
+
+        for i in 8..16 {
+            let ctr = counter.clone();
+            pool.spawn(move || {
+                sleep(Duration::from_millis(100));
+                ctr.fetch_or(1 << i, Ordering::SeqCst);
+            });
+        }
+
+        sleep(Duration::from_millis(250));
+        assert_eq!(counter.load(Ordering::SeqCst), 0xffff);
     }
 
     #[test]
@@ -1199,8 +1211,8 @@ pub mod tests {
             req.set_end_version(ts.into_inner());
             let (tx, rx) = unbounded();
 
-            // Set an unique path to avoid AlreadyExists error.
-            req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));
+            let tmp1 = make_unique_dir(tmp.path());
+            req.set_storage_backend(make_local_backend(&tmp1));
             if len % 2 == 0 {
                 req.set_rate_limit(10 * 1024 * 1024);
             }
@@ -1255,8 +1267,8 @@ pub mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         req.set_concurrency(4);
-        // Set an unique path to avoid AlreadyExists error.
-        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
+        let tmp1 = make_unique_dir(tmp.path());
+        req.set_storage_backend(make_local_backend(&tmp1));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -1276,8 +1288,8 @@ pub mod tests {
         let now = alloc_ts();
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
-        // Set an unique path to avoid AlreadyExists error.
-        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
+        let tmp2 = make_unique_dir(tmp.path());
+        req.set_storage_backend(make_local_backend(&tmp2));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
