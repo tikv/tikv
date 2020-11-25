@@ -28,7 +28,7 @@ pub fn date_format(
     let (t, layout) = (t.as_ref().unwrap(), layout.as_ref().unwrap());
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
 
@@ -53,7 +53,7 @@ pub fn week_with_mode(
     let (t, m) = (t.unwrap(), m.unwrap());
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     let week = t.week(WeekMode::from_bits_truncate(*m as u32));
@@ -69,7 +69,7 @@ pub fn week_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<In
     let t = t.as_ref().unwrap();
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     let day = t.weekday().num_days_from_monday();
@@ -187,7 +187,7 @@ pub fn sub_datetime_and_duration(
             return ctx
                 .handle_invalid_time_error(Error::overflow(
                     "DATETIME",
-                    format!("({} + {})", datetime, duration),
+                    format!("({} - {})", datetime, duration),
                 ))
                 .map(|_| Ok(None))?
         }
@@ -291,7 +291,7 @@ pub fn year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> 
     if t.is_zero() {
         if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| Ok(None))?;
         }
         return Ok(Some(0));
@@ -310,7 +310,7 @@ pub fn day_of_month(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     if t.is_zero() {
         if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| Ok(None))?;
         }
         return Ok(Some(0));
@@ -368,7 +368,7 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
 pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     if t.month() == 0 {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     if t.day() == 0 {
@@ -390,13 +390,17 @@ pub fn add_duration_and_duration(
     let res = match res {
         None => {
             return ctx
-                .handle_invalid_time_error(Error::overflow(duration1, duration2))
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} + {})", duration1, duration2),
+                ))
                 .map(|_| Ok(None))?
         }
         Some(res) => res,
     };
     Ok(Some(res))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
