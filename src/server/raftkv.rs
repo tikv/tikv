@@ -461,6 +461,10 @@ where
     }
 
     fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+        fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
+            "injected error for async_snapshot"
+        )));
+
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         if !ctx.start_ts.is_zero() {
