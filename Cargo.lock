@@ -4596,6 +4596,7 @@ name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "bstr",
  "error_code",
  "failure",
  "tikv_alloc",
