@@ -30,7 +30,6 @@ pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
     new_test_engine_with_options(path, cfs, |_, _| {})
 }
 
-<<<<<<< HEAD
 pub fn new_test_engine_with_env(path: &str, cfs: &[&str], env: Arc<Env>) -> RocksEngine {
     new_test_engine_with_options_and_env(path, cfs, |_, _| {}, Some(env))
 }
@@ -41,9 +40,6 @@ pub fn new_test_engine_with_options_and_env<F>(
     mut apply: F,
     env: Option<Arc<Env>>,
 ) -> RocksEngine
-=======
-pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], mut apply: F) -> RocksEngine
->>>>>>> 0623c5596... sst_importer: do not change block_cache_size in import mode (#6558)
 where
     F: FnMut(&str, &mut ColumnFamilyOptions),
 {
@@ -51,12 +47,9 @@ where
         .iter()
         .map(|cf| {
             let mut opt = ColumnFamilyOptions::new();
-<<<<<<< HEAD
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
-=======
->>>>>>> 0623c5596... sst_importer: do not change block_cache_size in import mode (#6558)
             apply(*cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",

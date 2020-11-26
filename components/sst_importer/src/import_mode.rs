@@ -44,19 +44,11 @@ impl ImportModeSwitcher {
         self.backup_db_options = ImportModeDBOptions::new_options(db);
         self.backup_cf_options.clear();
 
-<<<<<<< HEAD
-        let import_db_options = ImportModeDBOptions::new();
+        let import_db_options = self.backup_db_options.optimized_for_import_mode();
         import_db_options.set_options(db)?;
-        let import_cf_options = ImportModeCFOptions::new();
         for cf_name in db.cf_names() {
             let cf_opts = ImportModeCFOptions::new_options(db, cf_name);
-=======
-        let import_db_options = self.backup_db_options.optimized_for_import_mode();
-        import_db_options.set_options(&self.db)?;
-        for cf_name in self.db.cf_names() {
-            let cf_opts = ImportModeCFOptions::new_options(&self.db, cf_name);
             let import_cf_options = cf_opts.optimized_for_import_mode();
->>>>>>> 0623c5596... sst_importer: do not change block_cache_size in import mode (#6558)
             self.backup_cf_options.push((cf_name.to_owned(), cf_opts));
             import_cf_options.set_options(db, cf_name, mf)?;
         }
@@ -172,12 +164,8 @@ mod tests {
 
     use engine_traits::KvEngine;
     use tempfile::Builder;
-<<<<<<< HEAD
-    use test_sst_importer::new_test_engine;
-=======
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
->>>>>>> 0623c5596... sst_importer: do not change block_cache_size in import mode (#6558)
 
     fn check_import_options<E>(
         db: &E,
@@ -242,9 +230,7 @@ mod tests {
         check_import_options(&db, &import_db_options, &import_cf_options);
         switcher.enter_normal_mode(&db, mf).unwrap();
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-<<<<<<< HEAD
         switcher.enter_normal_mode(&db, mf).unwrap();
-=======
     }
 
     #[test]
@@ -278,7 +264,6 @@ mod tests {
 
         thread::sleep(Duration::from_secs(1));
 
->>>>>>> 0623c5596... sst_importer: do not change block_cache_size in import mode (#6558)
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
 
