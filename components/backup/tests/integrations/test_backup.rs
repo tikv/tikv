@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
-use std::path::Path;
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
@@ -24,6 +24,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
+use rand::Rng;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -207,6 +208,24 @@ impl TestSuite {
         assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     }
 
+    fn must_kv_put(&mut self, key_count: usize, versions: usize) {
+        for _ in 0..versions {
+            for i in 0..key_count {
+                let (k, v) = (format!("key_{}", i), format!("value_{}", i));
+                // Prewrite
+                let start_ts = self.alloc_ts();
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.key = k.clone().into_bytes();
+                mutation.value = v.clone().into_bytes();
+                self.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
+                // Commit
+                let commit_ts = self.alloc_ts();
+                self.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
+            }
+        }
+    }
+
     fn backup(
         &self,
         start_key: Vec<u8>,
@@ -333,32 +352,25 @@ fn name_to_cf(name: &str) -> CfName {
     }
 }
 
+fn make_unique_dir(path: &Path) -> PathBuf {
+    let uid: u64 = rand::thread_rng().gen();
+    let tmp_suffix = format!("{:016x}", uid);
+    let unique = path.join(tmp_suffix);
+    fs::create_dir_all(&unique).unwrap();
+    unique
+}
+
 #[test]
 fn test_backup_and_import() {
     let mut suite = TestSuite::new(3);
-
     // 3 version for each key.
-    for _ in 0..3 {
-        // 60 keys.
-        for i in 0..60 {
-            let (k, v) = (format!("key_{}", i), format!("value_{}", i));
-            // Prewrite
-            let start_ts = suite.alloc_ts();
-            let mut mutation = Mutation::default();
-            mutation.set_op(Op::Put);
-            mutation.key = k.clone().into_bytes();
-            mutation.value = v.clone().into_bytes();
-            suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
-            // Commit
-            let commit_ts = suite.alloc_ts();
-            suite.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
-        }
-    }
+    let key_count = 60;
+    suite.must_kv_put(key_count, 3);
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
     let backup_ts = suite.alloc_ts();
-    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup(
         vec![],   // start
         vec![],   // end
@@ -377,13 +389,12 @@ fn test_backup_and_import() {
     suite.cluster.must_delete_range_cf(CF_DEFAULT, b"", b"");
     suite.cluster.must_delete_range_cf(CF_WRITE, b"", b"");
     // Backup file should have same contents.
-    // backup ts + 1 avoid file already exist.
     let rx = suite.backup(
         vec![],   // start
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &tmp.path().join(format!("{}", backup_ts.next())),
+        &make_unique_dir(tmp.path()),
     );
     let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
@@ -435,13 +446,12 @@ fn test_backup_and_import() {
     }
 
     // Backup file should have same contents.
-    // backup ts + 2 avoid file already exist.
     let rx = suite.backup(
         vec![],   // start
         vec![],   // end
         0.into(), // begin_ts
         backup_ts,
-        &tmp.path().join(format!("{}", backup_ts.next().next())),
+        &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
     assert_eq!(files1, resps3[0].files);
@@ -452,24 +462,10 @@ fn test_backup_and_import() {
 #[test]
 fn test_backup_meta() {
     let mut suite = TestSuite::new(3);
-    let key_count = 60;
-
     // 3 version for each key.
-    for _ in 0..3 {
-        for i in 0..key_count {
-            let (k, v) = (format!("key_{}", i), format!("value_{}", i));
-            // Prewrite
-            let start_ts = suite.alloc_ts();
-            let mut mutation = Mutation::default();
-            mutation.set_op(Op::Put);
-            mutation.key = k.clone().into_bytes();
-            mutation.value = v.clone().into_bytes();
-            suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
-            // Commit
-            let commit_ts = suite.alloc_ts();
-            suite.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
-        }
-    }
+    let key_count = 60;
+    suite.must_kv_put(key_count, 3);
+
     let backup_ts = suite.alloc_ts();
     // key are order by lexicographical order, 'a'-'z' will cover all
     let (admin_checksum, admin_total_kvs, admin_total_bytes) =
@@ -477,7 +473,7 @@ fn test_backup_meta() {
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup(
         vec![],   // start
         vec![],   // end
@@ -499,7 +495,7 @@ fn test_backup_meta() {
         total_kvs += f.get_total_kvs();
         total_bytes += f.get_total_bytes();
     }
-    assert_eq!(total_kvs, key_count);
+    assert_eq!(total_kvs, key_count as u64);
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
@@ -520,8 +516,7 @@ fn test_backup_rawkv() {
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
-    let backup_ts = suite.alloc_ts();
-    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
         vec![b'a'], // start
         vec![b'z'], // end
@@ -537,12 +532,11 @@ fn test_backup_rawkv() {
     // Delete all data, there should be no backup files.
     suite.cluster.must_delete_range_cf(CF_DEFAULT, b"", b"");
     // Backup file should have same contents.
-    // backup ts + 1 avoid file already exist.
     let rx = suite.backup_raw(
         vec![], // start
         vec![], // end
         cf.clone(),
-        &tmp.path().join(format!("{}", backup_ts.next())),
+        &make_unique_dir(tmp.path()),
     );
     let resps2 = block_on(rx.collect::<Vec<_>>());
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
@@ -594,13 +588,12 @@ fn test_backup_rawkv() {
     }
 
     // Backup file should have same contents.
-    // backup ts + 2 avoid file already exist.
     // Set non-empty range to check if it's incorrectly encoded.
     let rx = suite.backup_raw(
         vec![b'a'], // start
         vec![b'z'], // end
         cf,
-        &tmp.path().join(format!("{}", backup_ts.next().next())),
+        &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
     let files3 = resps3[0].files.clone();
@@ -619,7 +612,7 @@ fn test_backup_rawkv() {
 
 #[test]
 fn test_backup_raw_meta() {
-    let mut suite = TestSuite::new(3);
+    let suite = TestSuite::new(3);
     let key_count: u64 = 60;
     let cf = String::from(CF_DEFAULT);
 
@@ -627,14 +620,13 @@ fn test_backup_raw_meta() {
         let (k, v) = suite.gen_raw_kv(i);
         suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
     }
-    let backup_ts = suite.alloc_ts();
     // Keys are order by lexicographical order, 'a'-'z' will cover all.
     let (admin_checksum, admin_total_kvs, admin_total_bytes) =
         suite.raw_kv_checksum("a".to_owned(), "z".to_owned(), CF_DEFAULT);
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let storage_path = make_unique_dir(tmp.path());
     let rx = suite.backup_raw(
         vec![], // start
         vec![], // end
@@ -670,8 +662,10 @@ fn test_backup_raw_meta() {
 #[test]
 fn test_invalid_external_storage() {
     let mut suite = TestSuite::new(1);
+    // Put some data.
+    suite.must_kv_put(3, 1);
 
-    // Set backup directory read-only. TiKV will fail to open external storage.
+    // Set backup directory read-only. TiKV fails to backup.
     let tmp = Builder::new().tempdir().unwrap();
     let f = File::open(&tmp.path()).unwrap();
     let mut perms = f.metadata().unwrap().permissions();
