@@ -92,6 +92,7 @@ tikv_alloc = { path = "../components/tikv_alloc" }
 tikv_util = { path = "../components/tikv_util" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types" }
+iosnoop = { path = "../components/iosnoop" }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 

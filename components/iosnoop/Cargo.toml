@@ -1,0 +1,19 @@
+[package]
+name = "iosnoop"
+version = "0.1.0"
+authors = ["Connor <zbk602423539@gmail.com>"]
+edition = "2018"
+
+[features]
+bcc-iosnoop = ["bcc"]
+
+[dependencies]
+nix = "0.19"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_util = { path = "../tikv_util" }
+tikv_alloc = { path = "../tikv_alloc" }
+lazy_static = "1.3"
+
+[target.'cfg(unix)'.dependencies]
+bcc = { version = "0.0.30", optional = true }

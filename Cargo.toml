@@ -63,6 +63,9 @@ test-engines-panic = [
   "engine_test/test-engine-kv-panic",
   "engine_test/test-engine-raft-panic",
 ]
+bcc-iosnoop = [
+  "iosnoop/bcc",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -155,6 +158,7 @@ tidb_query_aggr = { path = "components/tidb_query_aggr" }
 tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
+iosnoop = { path = "components/iosnoop" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
@@ -224,6 +228,7 @@ members = [
   "components/resolved_ts",
   "components/batch-system",
   "components/cdc",
+  "components/iosnoop",
   "components/raftstore",
   "components/into_other",
   "components/encryption",

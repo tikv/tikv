@@ -74,6 +74,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, FutureWorker, Worker},
 };
 use tokio::runtime::Builder;
+use iosnoop::IOSnooper;
 
 use crate::{setup::*, signal_handler};
 use tikv_util::worker::LazyWorker;
@@ -112,6 +113,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
             tikv.init_metrics_flusher();
+            tikv.init_io_snooper();
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -823,6 +825,17 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.to_stop.push(metrics_flusher);
     }
 
+    fn init_io_snooper(&mut self) {
+       let mut io_snooper = Box::new(IOSnooper::new());
+
+        // Start metrics flusher
+        if let Err(e) = io_snooper.start() {
+            error!(%e; "failed to start io snooper");
+        }
+
+        self.to_stop.push(io_snooper);
+    }
+
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1103,6 +1116,12 @@ where
 }
 
 impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
+    fn stop(mut self: Box<Self>) {
+        (*self).stop()
+    }
+}
+
+impl Stop for IOSnooper {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
