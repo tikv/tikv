@@ -33,6 +33,12 @@ pub enum DiscardReason {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
+        ProposalInMergingMode(region_id: u64) {
+            display("{} peer in merging mode, can't do proposal", region_id)
+        }
+        ReadIndexNotReady(reason: &'static str, region_id: u64) {
+            display("read index not ready, reason {}, region {}", reason, region_id)
+        }
         RaftEntryTooLarge(region_id: u64, entry_size: u64) {
             description("raft entry is too large")
             display("raft entry is too large, region {}, entry size {}", region_id, entry_size)
@@ -218,6 +224,17 @@ impl From<Error> for errorpb::Error {
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::default());
             }
+            Error::ReadIndexNotReady(reason, region_id) => {
+                errorpb
+                    .mut_read_index_not_ready()
+                    .set_reason(reason.to_string());
+                errorpb.mut_read_index_not_ready().set_region_id(region_id);
+            }
+            Error::ProposalInMergingMode(region_id) => {
+                errorpb
+                    .mut_proposal_in_merging_mode()
+                    .set_region_id(region_id);
+            }
             Error::Transport(reason) if reason == DiscardReason::Full => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
@@ -267,6 +284,8 @@ impl From<prost::DecodeError> for Error {
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
+            Error::ProposalInMergingMode(_) => error_code::raftstore::PROPOSAL_IN_MERGING_MODE,
+            Error::ReadIndexNotReady(_, _) => error_code::raftstore::READ_INDEX_NOT_READY,
             Error::RaftEntryTooLarge(_, _) => error_code::raftstore::ENTRY_TOO_LARGE,
             Error::StoreNotMatch(_, _) => error_code::raftstore::STORE_NOT_MATCH,
             Error::RegionNotFound(_) => error_code::raftstore::REGION_NOT_FOUND,
