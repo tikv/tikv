@@ -10,7 +10,9 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{
+    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
@@ -134,11 +136,6 @@ impl<T: Simulator> Cluster<T> {
             sim,
             pd_client,
         }
-    }
-
-    // To destroy temp dir later.
-    pub fn take_path(&mut self) -> Vec<TempDir> {
-        std::mem::replace(&mut self.paths, vec![])
     }
 
     pub fn id(&self) -> u64 {
@@ -932,11 +929,22 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
     }
 
-    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> raft_serverpb::RaftLocalState {
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
         let key = keys::raft_state_key(region_id);
         self.get_raft_engine(store_id)
             .c()
             .get_msg::<raft_serverpb::RaftLocalState>(&key)
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .c()
+            .get_msg_cf::<RegionLocalState>(
+                engine_traits::CF_RAFT,
+                &keys::region_state_key(region_id),
+            )
             .unwrap()
             .unwrap()
     }
@@ -1095,6 +1103,7 @@ impl<T: Simulator> Cluster<T> {
                 region_epoch: region.get_region_epoch().clone(),
                 split_keys: vec![split_key],
                 callback: cb,
+                source: "test".into(),
             },
         )
         .unwrap();
@@ -1115,6 +1124,9 @@ impl<T: Simulator> Cluster<T> {
                         if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
+                            || error
+                                .get_message()
+                                .contains("peer is not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1128,7 +1140,7 @@ impl<T: Simulator> Cluster<T> {
                     assert_eq!(regions[0].get_end_key(), key.as_slice());
                     assert_eq!(regions[0].get_end_key(), regions[1].get_start_key());
                 });
-                self.split_region(region, split_key, Callback::Write(check));
+                self.split_region(region, split_key, Callback::write(check));
             }
 
             if self.pd_client.check_split(region, split_key)
@@ -1172,7 +1184,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = self
             .pd_client
             .get_region_by_id(target)
@@ -1186,9 +1198,35 @@ impl<T: Simulator> Cluster<T> {
             .wait()
             .unwrap()
             .unwrap();
-        let req = new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge);
-        self.call_command_on_leader(req, Duration::from_secs(3))
-            .unwrap()
+        new_admin_request(source.get_id(), source.get_region_epoch(), prepare_merge)
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, cb: Callback<RocksEngine>) {
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)
+            .unwrap();
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
+
+    pub fn must_try_merge(&mut self, source: u64, target: u64) {
+        let resp = self.try_merge(source, target);
+        if is_error_response(&resp) {
+            panic!(
+                "{} failed to try merge to {}, resp {:?}",
+                source, target, resp
+            );
+        }
     }
 
     /// Make sure region exists on that store.

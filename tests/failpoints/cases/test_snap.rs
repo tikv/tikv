@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
-use std::{fs, io, thread};
+use std::{fs, io, mem, thread};
 
 use fail;
 use raft::eraftpb::MessageType;
@@ -234,7 +234,7 @@ fn test_node_request_snapshot_on_split() {
     cluster.split_region(
         &region,
         b"k1",
-        Callback::Write(Box::new(move |_| {
+        Callback::write(Box::new(move |_| {
             split_tx.send(()).unwrap();
         })),
     );
@@ -376,4 +376,96 @@ fn test_shutdown_when_snap_gc() {
     if dir.count() == 0 {
         panic!("store 2 snap dir must not be empty");
     }
+}
+
+// Test if a peer handle the old snapshot properly.
+#[test]
+fn test_receive_old_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    // Bypass the snapshot gc because the snapshot may be used twice.
+    let peer_2_handle_snap_mgr_gc_fp = "peer_2_handle_snap_mgr_gc";
+    fail::cfg(peer_2_handle_snap_mgr_gc_fp, "return()").unwrap();
+
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+
+    cluster.must_put(b"k00", b"v1");
+    // Ensure peer 2 is initialized.
+    must_get_equal(&cluster.get_engine(2), b"k00", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    for i in 0..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(r1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgSnapshot)
+            .reserve_dropped(Arc::clone(&dropped_msgs)),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+
+    cluster.clear_send_filters();
+
+    for _ in 0..20 {
+        let guard = dropped_msgs.lock().unwrap();
+        if !guard.is_empty() {
+            break;
+        }
+        drop(guard);
+        sleep_ms(10);
+    }
+    let msgs = {
+        let mut guard = dropped_msgs.lock().unwrap();
+        if guard.is_empty() {
+            drop(guard);
+            panic!("do not receive snapshot msg in 200ms");
+        }
+        mem::replace(guard.as_mut(), vec![])
+    };
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    for i in 20..40 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+    must_get_equal(&cluster.get_engine(2), b"k39", b"v1");
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    // Send the old snapshot
+    for raft_msg in msgs {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+
+    cluster.must_put(b"k40", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k40", b"v1");
+
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
+    must_get_none(&cluster.get_engine(2), b"k40");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k5");
+
+    let left = cluster.get_region(b"k1");
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
+
+    cluster.must_put(b"k11", b"v1");
+    // If peer 2 handles previous old snapshot properly and does not leave over metadata
+    // in `pending_snapshot_regions`, peer 4 should be created normally.
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v1");
+
+    fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }

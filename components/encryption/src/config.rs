@@ -19,8 +19,6 @@ pub struct EncryptionConfig {
     #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
     #[config(skip)]
-    pub file_rewrite_threshold: u64,
-    #[config(skip)]
     pub master_key: MasterKeyConfig,
     #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
@@ -33,7 +31,6 @@ impl Default for EncryptionConfig {
             data_key_rotation_period: ReadableDuration::days(7),
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
-            file_rewrite_threshold: 1000000,
         }
     }
 }
@@ -190,7 +187,6 @@ mod tests {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"

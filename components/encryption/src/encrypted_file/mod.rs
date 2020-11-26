@@ -14,9 +14,9 @@ use crate::metrics::*;
 use crate::Result;
 
 mod header;
-pub use header::*;
+use header::*;
 
-pub const TMP_FILE_SUFFIX: &str = ".tmp";
+const TMP_FILE_SUFFIX: &str = ".tmp";
 
 /// An file encrypted by master key.
 pub struct EncryptedFile<'a> {
@@ -44,7 +44,7 @@ impl<'a> EncryptedFile<'a> {
             Ok(mut f) => {
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf)?;
-                let (_, content, _) = Header::parse(&buf)?;
+                let (_, content) = Header::parse(&buf)?;
                 let mut encrypted_content = EncryptedContent::default();
                 encrypted_content.merge_from_bytes(content)?;
                 let plaintext = master_key.decrypt(&encrypted_content)?;
@@ -77,7 +77,7 @@ impl<'a> EncryptedFile<'a> {
             .encrypt(&plaintext_content)?
             .write_to_bytes()
             .unwrap();
-        let header = Header::new(&encrypted_content, Version::V1);
+        let header = Header::new(&encrypted_content);
         tmp_file.write_all(&header.to_bytes())?;
         tmp_file.write_all(&encrypted_content)?;
         tmp_file.sync_all()?;

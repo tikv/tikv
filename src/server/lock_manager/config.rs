@@ -4,9 +4,13 @@ use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
+use tikv_util::config::ReadableDuration;
 
 use std::error::Error;
-use tikv_util::config::ReadableDuration;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
@@ -18,7 +22,6 @@ pub struct Config {
     pub wait_for_lock_timeout: ReadableDuration,
     #[serde(deserialize_with = "readable_duration_or_u64")]
     pub wake_up_delay_duration: ReadableDuration,
-    #[config(skip)]
     pub pipelined: bool,
 }
 
@@ -76,16 +79,19 @@ impl Config {
 pub struct LockManagerConfigManager {
     pub waiter_mgr_scheduler: WaiterMgrScheduler,
     pub detector_scheduler: DeadlockScheduler,
+    pub pipelined: Arc<AtomicBool>,
 }
 
 impl LockManagerConfigManager {
     pub fn new(
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
+        pipelined: Arc<AtomicBool>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
+            pipelined,
         }
     }
 }
@@ -103,6 +109,10 @@ impl ConfigManager for LockManagerConfigManager {
             (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
             (None, None) => {}
         };
+        if let Some(p) = change.remove("pipelined").map(Into::into) {
+            self.pipelined.store(p, Ordering::Relaxed);
+            info!("lock manager config changed"; "pipelined" => p);
+        }
         Ok(())
     }
 }

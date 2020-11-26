@@ -19,7 +19,8 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    KvEngine, MiscExt, Peekable, Snapshot as SnapshotTrait, WriteBatch, WriteBatchVecExt,
+    DeleteStrategy, KvEngine, MiscExt, Peekable, Range as EngineRange, Snapshot as SnapshotTrait,
+    WriteBatch, WriteBatchVecExt,
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -42,14 +43,13 @@ use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::store::util::{check_region_epoch, compare_region_epoch};
-use crate::store::util::{KeysInfoFormatter, PerfContextStatistics};
+use crate::store::util::{
+    check_region_epoch, compare_region_epoch, KeysInfoFormatter, PerfContextStatistics,
+    ADMIN_CMD_EPOCH_MAP,
+};
+use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
+use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
-
-use crate::store::{cmd_resp, util, Config, RegionSnapshot};
-use crate::{Error, Result};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -60,8 +60,6 @@ use tikv_util::MustConsumeVec;
 use txn_types::TxnExtra;
 
 use super::metrics::*;
-
-use super::super::RegionTask;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const WRITE_BATCH_LIMIT: usize = 16;
@@ -1047,9 +1045,13 @@ impl ApplyDelegate {
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_wb_mut().set_save_point();
+        let mut origin_epoch = None;
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
             Ok(a) => {
                 ctx.kv_wb_mut().pop_save_point().unwrap();
+                if req.has_admin_request() {
+                    origin_epoch = Some(self.region.get_region_epoch().clone());
+                }
                 a
             }
             Err(e) => {
@@ -1108,6 +1110,19 @@ impl ApplyDelegate {
                     self.region = region.clone();
                     self.is_merging = false;
                 }
+            }
+        }
+        if let Some(epoch) = origin_epoch {
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let epoch_state = *ADMIN_CMD_EPOCH_MAP.get(&cmd_type).unwrap();
+            // The chenge-epoch behavior **MUST BE** equal to the settings in `ADMIN_CMD_EPOCH_MAP`
+            if (epoch_state.change_ver
+                && epoch.get_version() == self.region.get_region_epoch().get_version())
+                || (epoch_state.change_conf_ver
+                    && epoch.get_conf_ver() == self.region.get_region_epoch().get_conf_ver())
+            {
+                panic!("{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                        self.tag, req, epoch_state, epoch, self.region.get_region_epoch());
             }
         }
 
@@ -1399,44 +1414,33 @@ impl ApplyDelegate {
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
         if !notify_only {
+            let range = vec![EngineRange::new(&start_key, &end_key)];
+            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
+                panic!(
+                    "{} failed to delete {:?} in ranges [{}, {}): {:?}",
+                    self.tag,
+                    strategy,
+                    hex::encode_upper(&start_key),
+                    hex::encode_upper(&end_key),
+                    e
+                )
+            };
             engine
-                .delete_files_in_range_cf(cf, &start_key, &end_key, /* include_end */ false)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete files in range [{}, {}): {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
+                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
+            let strategy = if use_delete_range {
+                DeleteStrategy::DeleteByRange
+            } else {
+                DeleteStrategy::DeleteByKey
+            };
             // Delete all remaining keys.
             engine
-                .delete_all_in_range_cf(cf, &start_key, &end_key, use_delete_range)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                        self.tag,
-                        log_wrappers::Value::key(&start_key),
-                        log_wrappers::Value::key(&end_key),
-                        cf,
-                        e
-                    );
-                });
+                .delete_ranges_cf(cf, strategy.clone(), &range)
+                .unwrap_or_else(move |e| fail_f(e, strategy));
             engine
-                .delete_blob_files_in_range_cf(
-                    cf, &start_key, &end_key, /* include_end */ false,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to delete blob files in range [{}, {}): {:?}",
-                        self.tag,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key),
-                        e
-                    )
-                });
+                .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
+                .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -1895,6 +1899,7 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         {
+            fail_point!("apply_before_commit_merge");
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
@@ -2030,6 +2035,8 @@ impl ApplyDelegate {
         ctx: &mut ApplyContext<W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
+        fail_point!("apply_before_rollback_merge");
+
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["rollback_merge", "all"])
             .inc();
@@ -2342,6 +2349,7 @@ impl RegionProposal {
 
 pub struct Destroy {
     region_id: u64,
+    merge_from_snapshot: bool,
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2482,8 +2490,11 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64) -> Msg {
-        Msg::Destroy(Destroy { region_id })
+    pub fn destroy(region_id: u64, merge_from_snapshot: bool) -> Msg {
+        Msg::Destroy(Destroy {
+            region_id,
+            merge_from_snapshot,
+        })
     }
 }
 
@@ -2544,6 +2555,8 @@ pub enum TaskRes {
         region_id: u64,
         // ID of peer that has been destroyed.
         peer_id: u64,
+        // Whether destroy request is from its target region's snapshot
+        merge_from_snapshot: bool,
     },
 }
 
@@ -2696,6 +2709,9 @@ impl ApplyFsm {
         d: Destroy,
     ) {
         assert_eq!(d.region_id, self.delegate.region_id());
+        if d.merge_from_snapshot {
+            assert_eq!(self.delegate.stopped, false);
+        }
         if !self.delegate.stopped {
             self.destroy(ctx);
             ctx.notifier.notify(
@@ -2704,6 +2720,7 @@ impl ApplyFsm {
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
                         peer_id: self.delegate.id,
+                        merge_from_snapshot: d.merge_from_snapshot,
                     },
                 },
             );
@@ -3477,7 +3494,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
             TxnExtra::default(),
@@ -3496,7 +3513,7 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(Box::new(move |write: WriteResponse| {
+                Callback::write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
                 })),
                 TxnExtra::default(),
@@ -3591,10 +3608,12 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2));
+        router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),
+                TaskRes::Destroy {
+                    region_id, peer_id, ..
+                } => (region_id, peer_id),
                 e => panic!("expected destroy result, but got {:?}", e),
             },
             e => panic!("expected destroy result, but got {:?}", e),
@@ -3608,7 +3627,7 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(Box::new(move |resp: WriteResponse| {
+            Callback::write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
             })),
             TxnExtra::default(),
@@ -3648,7 +3667,7 @@ mod tests {
             region_id: u64,
             tx: Sender<RaftCmdResponse>,
         ) -> EntryBuilder {
-            let cb = Callback::Write(Box::new(move |resp: WriteResponse| {
+            let cb = Callback::write(Box::new(move |resp: WriteResponse| {
                 tx.send(resp.response).unwrap();
             }));
             self.capture_resp_with_cb(router, id, region_id, cb)
@@ -4022,7 +4041,7 @@ mod tests {
                 &router,
                 3,
                 1,
-                Callback::Write(Box::new(move |resp: WriteResponse| {
+                Callback::write(Box::new(move |resp: WriteResponse| {
                     // Sleep until yield timeout.
                     thread::sleep(Duration::from_millis(500));
                     capture_tx_clone.send(resp.response).unwrap();

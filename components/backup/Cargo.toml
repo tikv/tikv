@@ -75,6 +75,10 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
 
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+branch = "tikv-4.0"
+
 [dependencies.futures_01]
 version = "0.1"
 package = "futures"
