@@ -597,7 +597,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.sync_policy.sync_if_needed(true)
         } else {
             if !raft_wb_is_empty {
-                self.poll_ctx.engines.raft.sync_wal().unwrap_or_else(|e| {
+                self.poll_ctx.engines.sync_raft().unwrap_or_else(|e| {
                     panic!("{} failed to sync raft engine: {:?}", self.tag, e);
                 });
             }

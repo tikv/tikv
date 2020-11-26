@@ -1171,10 +1171,9 @@ impl Peer {
     /// of `PeerStorage` which is the greatest commit index that can be observed outside.
     /// The third place is in `read_index`, handle it like the second one.
     fn on_leader_commit_idx_changed(&mut self, pre_commit_index: u64, commit_index: u64) {
-        if commit_index <= pre_commit_index {
+        if commit_index <= pre_commit_index || !self.is_leader() {
             return;
         }
-        assert!(self.is_leader());
 
         // The admin cmds in `CmdEpochChecker` are proposed by the current leader so we can
         // use it to get the split/prepare-merge cmds which was committed just now.
@@ -1338,9 +1337,9 @@ impl Peer {
                 //      the ready need to be persisted one by one from raft-rs's view.
                 //   2. When this peer is applying snapshot, the response msg should not
                 //      be sent to leader, thus the leader will not send new entries to
-                //      this peer. Although it's possible a new leader may send new entries
-                //      to this peer, this possibility is very low. In most cases, there is
-                //      no msg need to be handled.
+                //      this peer. Although it's possible a new leader may send a AppendEntries
+                //      msg to this peer, this possibility is very low. In most cases, there
+                //      is no msg need to be handled.
                 // So we choose to not get a new ready which makes the logic more clear.
                 debug!(
                     "still applying snapshot, skip further handling";
