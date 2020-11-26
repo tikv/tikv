@@ -654,11 +654,14 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
-        // Apply committed entries more quickly
-        // Or if it's a singleton, it will become leader latter.
+        // Apply committed entries more quickly.
+        // Or if it's a leader. This implicitly means it's a singleton
+        // because it becomes leader in `Peer::new` when it's a
+        // singleton. It has a no-op entry that need to be persisted,
+        // committed, and then it should apply it.
         if self.fsm.peer.raft_group.store().commit_index()
             > self.fsm.peer.raft_group.store().applied_index()
-            || self.fsm.peer.raft_group.raft.prs().is_singleton()
+            || self.fsm.peer.is_leader()
         {
             self.fsm.has_ready = true;
         }
