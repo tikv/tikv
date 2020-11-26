@@ -155,7 +155,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         config: &Config,
         read_pool: ReadPoolHandle,
         lock_mgr: Option<L>,
-        pipelined_pessimistic_lock: bool,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
@@ -164,7 +163,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
-            pipelined_pessimistic_lock,
         );
 
         info!("Storage started.");
@@ -1268,7 +1266,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             self.engine.clone(),
         );
         let lock_manager = if self.pessimistic_txn_enabled || self.pipelined_pessimistic_lock {
-            Some(DummyLockManager {})
+            Some(DummyLockManager { pipelined: true })
         } else {
             None
         };
@@ -1277,7 +1275,6 @@ impl<E: Engine> TestStorageBuilder<E> {
             &self.config,
             ReadPool::from(read_pool).handle(),
             lock_manager,
-            self.pipelined_pessimistic_lock,
         )
     }
 }
