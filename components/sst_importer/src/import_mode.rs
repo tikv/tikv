@@ -236,31 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn test_import_mode_timeout() {
-        let temp_dir = Builder::new()
-            .prefix("test_import_mode_timeout")
-            .tempdir()
-            .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
-
-        let normal_db_options = ImportModeDBOptions::new_options(&db);
-        let import_db_options = normal_db_options.optimized_for_import_mode();
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
-        let import_cf_options = normal_cf_options.optimized_for_import_mode();
-
-        fn mf(_cf: &str, _name: &str, _v: f64) {}
-
-        let mut switcher = ImportModeSwitcher::new();
-        check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_import_mode(&db, mf).unwrap();
-        check_import_options(&db, &import_db_options, &import_cf_options);
-
-        thread::sleep(Duration::from_secs(1));
-
-        check_import_options(&db, &normal_db_options, &normal_cf_options);
-    }
-
-    #[test]
     fn test_import_mode_should_not_decrease_level0_stop_writes_trigger() {
         // This checks issue tikv/tikv#6545.
         let temp_dir = Builder::new()
