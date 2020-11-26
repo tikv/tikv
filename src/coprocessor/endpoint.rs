@@ -432,14 +432,8 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
-<<<<<<< HEAD
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        let tracker = Box::new(Tracker::new(req_ctx));
-=======
-        let priority = req_ctx.context.get_priority();
-        let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
 
         self.read_pool
             .spawn(priority, move || {
