@@ -162,9 +162,6 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use std::thread;
-    use std::time::Duration;
-
     use engine_traits::KvEngine;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
