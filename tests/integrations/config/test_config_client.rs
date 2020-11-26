@@ -154,10 +154,6 @@ blob-run-mode = "normal"
 ## comment should be reserve
 [raftstore]
 
-## comment should be reserve
-# comment with one `#` should also be reserve
-sync-log = false
-
 # config that comment out by one `#` should be update in place
 ## pd-heartbeat-tick-interval = "30s"
 pd-heartbeat-tick-interval = "1h"
