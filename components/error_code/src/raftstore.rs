@@ -6,12 +6,9 @@ use kvproto::errorpb;
 define_error_codes!(
     "KV:Raftstore:",
 
-<<<<<<< HEAD
     ENGINE => ("Engine", "", ""),
-=======
     PROPOSAL_IN_MERGING_MODE => ("ProposalInMergingMode", "", ""),
     READ_INDEX_NOT_READY => ("ReadIndexNotReady", "", ""),
->>>>>>> ca0374c60... raftstore: change some box_err to error in kvproto (#9101)
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
     STORE_NOT_MATCH => ("StoreNotMatch", "", ""),
