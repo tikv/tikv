@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::{stream, Future, Stream};
+use futures::Future;
 use tempfile::Builder;
 
 use kvproto::import_sstpb::*;

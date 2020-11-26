@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
+use futures::{stream, Future, Stream};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use tempfile::Builder;
