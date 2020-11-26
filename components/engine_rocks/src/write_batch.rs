@@ -14,6 +14,7 @@ pub const WRITE_BATCH_MAX_BATCH: usize = 16;
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
     type WriteBatchVec = RocksWriteBatchVec;
+    const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
         debug_assert_eq!(

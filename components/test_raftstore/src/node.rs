@@ -62,7 +62,7 @@ impl Transport for ChannelTransport {
         let region_id = msg.get_region_id();
         let is_snapshot = msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
 
-        if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+        if is_snapshot {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {

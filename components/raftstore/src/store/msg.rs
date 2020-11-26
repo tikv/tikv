@@ -13,6 +13,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use std::borrow::Cow;
 use txn_types::TxnExtra;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -39,6 +40,7 @@ pub struct WriteResponse {
 
 pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type ExtCallback = Box<dyn FnOnce() + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -51,13 +53,27 @@ pub enum Callback<E: KvEngine> {
     /// Read callback.
     Read(ReadCallback<E>),
     /// Write callback.
-    Write(WriteCallback),
+    Write {
+        cb: WriteCallback,
+        /// `proposed_cb` is called after a request is proposed to the raft group successfully.
+        /// It's used to notify the caller to move on early because it's very likely the request
+        /// will be applied to the raftstore.
+        proposed_cb: Option<ExtCallback>,
+    },
 }
 
 impl<E> Callback<E>
 where
     E: KvEngine,
 {
+    pub fn write(cb: WriteCallback) -> Self {
+        Self::write_ext(cb, None)
+    }
+
+    pub fn write_ext(cb: WriteCallback, proposed_cb: Option<ExtCallback>) -> Self {
+        Callback::Write { cb, proposed_cb }
+    }
+
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -69,9 +85,17 @@ where
                 };
                 read(resp);
             }
-            Callback::Write(write) => {
+            Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
-                write(resp);
+                cb(resp);
+            }
+        }
+    }
+
+    pub fn invoke_proposed(&mut self) {
+        if let Callback::Write { proposed_cb, .. } = self {
+            if let Some(cb) = proposed_cb.take() {
+                cb()
             }
         }
     }
@@ -99,7 +123,7 @@ where
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write(_) => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
         }
     }
 }
@@ -165,6 +189,21 @@ impl StoreTick {
     }
 }
 
+#[derive(Debug)]
+pub enum MergeResultKind {
+    /// Its target peer applys `CommitMerge` log.
+    FromTargetLog,
+    /// Its target peer receives snapshot.
+    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
+    /// Then its target peer will remove this peer data and apply snapshot atomically.
+    FromTargetSnapshotStep1,
+    /// In step 2, this peer should destroy its peer fsm.
+    FromTargetSnapshotStep2,
+    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
+    /// It happens if and only if its target peer has been removed by conf change.
+    Stale,
+}
+
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
@@ -187,10 +226,9 @@ pub enum SignificantMsg {
     CatchUpLogs(CatchUpLogs),
     /// Result of the fact that the region is merged.
     MergeResult {
+        target_region_id: u64,
         target: metapb::Peer,
-        // True means it's a stale merge source.
-        // False means it came from target region.
-        stale: bool,
+        result: MergeResultKind,
     },
     /// Capture the changes of the region.
     CaptureChange {
@@ -212,6 +250,7 @@ pub enum CasualMessage<E: KvEngine> {
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
         callback: Callback<E>,
+        source: Cow<'static, str>,
     },
 
     /// Hash result of ComputeHash command.
@@ -236,6 +275,7 @@ pub enum CasualMessage<E: KvEngine> {
     HalfSplitRegion {
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
+        source: &'static str,
     },
     /// Remove snapshot files in `snaps`.
     GcSnap {
@@ -267,10 +307,15 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
                 index,
                 escape(hash)
             ),
-            CasualMessage::SplitRegion { ref split_keys, .. } => write!(
+            CasualMessage::SplitRegion {
+                ref split_keys,
+                source,
+                ..
+            } => write!(
                 fmt,
-                "Split region with {}",
-                KeysInfoFormatter(split_keys.iter())
+                "Split region with {} from {}",
+                KeysInfoFormatter(split_keys.iter()),
+                source,
             ),
             CasualMessage::RegionApproximateSize { size } => {
                 write!(fmt, "Region's approximate size [size: {:?}]", size)
@@ -281,7 +326,9 @@ impl<E: KvEngine> fmt::Debug for CasualMessage<E> {
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
             }
-            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            CasualMessage::HalfSplitRegion { source, .. } => {
+                write!(fmt, "Half Split from {}", source)
+            }
             CasualMessage::GcSnap { ref snaps } => write! {
                 fmt,
                 "gc snaps {:?}",

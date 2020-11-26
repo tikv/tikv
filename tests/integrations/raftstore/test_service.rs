@@ -685,11 +685,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 1);
-    for e in entries {
-        assert_eq!(e.get_name(), fp);
-        assert_eq!(e.get_actions(), act);
-    }
+    assert!(entries
+        .iter()
+        .any(|e| e.get_name() == fp && e.get_actions() == act));
 
     let mut recover_req = debugpb::RecoverFailPointRequest::default();
     recover_req.set_name(fp.to_owned());
@@ -699,7 +697,9 @@ fn test_debug_fail_point() {
         .list_fail_points(&debugpb::ListFailPointsRequest::default())
         .unwrap();
     let entries = resp.get_entries();
-    assert_eq!(entries.len(), 0);
+    assert!(entries
+        .iter()
+        .all(|e| !(e.get_name() == fp && e.get_actions() == act)));
 }
 
 #[test]

@@ -238,7 +238,7 @@ impl<S: CasualRouter<RocksEngine>> Runner<S> {
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let msg = new_split_region(region_epoch, split_keys);
+            let msg = new_split_region(region_epoch, split_keys, "split checker");
             let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
@@ -327,10 +327,12 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
 fn new_split_region(
     region_epoch: RegionEpoch,
     split_keys: Vec<Vec<u8>>,
+    source: &'static str,
 ) -> CasualMessage<RocksEngine> {
     CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
         callback: Callback::None,
+        source: source.into(),
     }
 }

@@ -804,11 +804,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let ret = check_data_dir("/sys/invalid", "/proc/mounts");
             assert!(ret.is_err());
             // get real path's fs_info
-            let tmp_dir = Builder::new().prefix("test-get-fs-info").tempdir().unwrap();
+            let tmp_dir = Builder::new()
+                .prefix("test-check-data-dir")
+                .tempdir()
+                .unwrap();
             let data_path = format!("{}/data1", tmp_dir.path().display());
+            ::std::fs::create_dir(&data_path).unwrap();
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
-            // data_path may not mountted on a normal device on container
+            // data_path may not mounted on a normal device on container
             if !fs_info.fsname.starts_with("/dev") {
                 return;
             }
@@ -903,13 +907,15 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
-pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
+///
+/// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
+pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
     // Try to validate "IPv4:Port" and "[IPv6]:Port".
-    if SocketAddrV4::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV4::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
-    if SocketAddrV6::from_str(addr).is_ok() {
-        return Ok(());
+    if let Ok(a) = SocketAddrV6::from_str(addr) {
+        return Ok(a.ip().is_unspecified());
     }
 
     let parts: Vec<&str> = addr
@@ -939,7 +945,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Err(ConfigError::Address(format!("invalid addr: {:?}", e)));
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Default)]
@@ -1416,6 +1422,20 @@ mod tests {
 
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
+        }
+
+        let table = vec![
+            ("0.0.0.0:8080", true),
+            ("[::0]:8080", true),
+            ("127.0.0.1:8080", false),
+            ("[::1]:8080", false),
+            ("localhost:8080", false),
+            ("pingcap.com:8080", false),
+            ("funnydomain:8080", false),
+        ];
+
+        for (addr, is_unspecified) in table {
+            assert_eq!(check_addr(addr).unwrap(), is_unspecified);
         }
     }
 

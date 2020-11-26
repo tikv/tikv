@@ -7,6 +7,7 @@ use tikv::config::*;
 use tikv::server::lock_manager::*;
 use tikv::server::resolve::{Callback, StoreAddrResolver};
 use tikv::server::{Error, Result};
+use tikv::storage::lock_manager::LockManager as LockManagerTrait;
 use tikv_util::config::ReadableDuration;
 
 #[test]
@@ -35,7 +36,7 @@ fn setup(
     DetectorScheduler,
     LockManager,
 ) {
-    let mut lock_mgr = LockManager::new();
+    let mut lock_mgr = LockManager::new(false);
     let pd_client = Arc::new(TestPdClient::new(0, true));
     let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
     lock_mgr
@@ -161,6 +162,13 @@ fn test_lock_manager_cfg_update() {
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4321);
     });
+
+    // update pipelined
+    assert!(!lock_mgr.pipelined());
+    cfg_controller
+        .update_config("pessimistic-txn.pipelined", "true")
+        .unwrap();
+    assert!(lock_mgr.pipelined());
 
     lock_mgr.stop();
 }
