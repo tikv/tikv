@@ -162,10 +162,12 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
+    use std::thread;
+    use std::time::Duration;
+
     use engine_traits::KvEngine;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
-    use tikv_util::config::ReadableDuration;
 
     fn check_import_options<E>(
         db: &E,
@@ -248,18 +250,9 @@ mod tests {
 
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
-        let cfg = Config {
-            import_mode_timeout: ReadableDuration::millis(300),
-            ..Config::default()
-        };
-        let threads = futures_cpupool::Builder::new()
-            .name_prefix("sst-importer")
-            .pool_size(cfg.num_threads)
-            .create();
-
-        let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+        let mut switcher = ImportModeSwitcher::new();
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_import_mode(mf).unwrap();
+        switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
 
         thread::sleep(Duration::from_secs(1));
