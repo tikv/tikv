@@ -174,7 +174,7 @@ fn test_node_merge_with_slow_learner() {
     let state1 = cluster.truncated_state(right.get_id(), 1);
     (0..50).for_each(|i| cluster.must_put(b"k2", format!("v{}", i).as_bytes()));
 
-    // wait to trigger compact raft log
+    // Wait to trigger compact raft log
     let timer = Instant::now();
     loop {
         let state2 = cluster.truncated_state(right.get_id(), 1);

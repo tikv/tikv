@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
@@ -23,7 +22,6 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::raft_serverpb::{
     ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-    RaftSnapshotData,
 };
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
@@ -44,7 +42,6 @@ use crate::store::fsm::{
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::{Error, Result};
-use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::Instant as UtilInstant;
@@ -340,7 +337,9 @@ pub struct Peer {
     /// Indicates whether the peer should be woken up.
     pub should_wake_up: bool,
     /// Whether this peer is destroyed asynchronously.
-    /// If it's true when merging, its data in storeMeta will be removed early by the target peer
+    /// If it's true,
+    /// 1. when merging, its data in storeMeta will be removed early by the target peer.
+    /// 2. all read requests must be rejected.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -572,7 +571,7 @@ impl Peer {
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
-    pub fn maybe_destroy(&mut self) -> Option<DestroyPeerJob> {
+    pub fn maybe_destroy<T, C>(&mut self, ctx: &PollContext<T, C>) -> Option<DestroyPeerJob> {
         if self.pending_remove {
             info!(
                 "is being destroyed, skip";
@@ -581,16 +580,25 @@ impl Peer {
             );
             return None;
         }
-
-        if self.is_applying_snapshot() {
-            if !self.mut_store().cancel_applying_snap() {
+        {
+            let meta = ctx.store_meta.lock().unwrap();
+            if meta.atomic_snap_regions.contains_key(&self.region_id) {
                 info!(
-                    "stale peer is applying snapshot, will destroy next time";
+                    "stale peer is applying atomic snapshot, will destroy next time";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
                 return None;
             }
+        }
+
+        if self.is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
+            info!(
+                "stale peer is applying snapshot, will destroy next time";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return None;
         }
 
         self.pending_remove = true;
@@ -1287,8 +1295,8 @@ impl Peer {
             ctx.need_flush_trans = true;
             self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
-
-        if let Some(snap) = self.get_pending_snapshot() {
+        let mut destroy_regions = vec![];
+        if self.has_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
@@ -1302,46 +1310,24 @@ impl Peer {
                 return None;
             }
 
-            let mut snap_data = RaftSnapshotData::default();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to parse snap data";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
-            let region = snap_data.take_region();
-
             let meta = ctx.store_meta.lock().unwrap();
-            // Region's range changes if and only if epoch version change. So if the snapshot's
-            // version is not larger than now, we can make sure there is no overlap.
-            if region.get_region_epoch().get_version()
-                > meta.regions[&region.get_id()]
-                    .get_region_epoch()
-                    .get_version()
-            {
-                // For merge process, when applying snapshot or create new peer the stale source
-                // peer is destroyed asynchronously. So here checks whether there is any overlap, if
-                // so, wait and do not handle raft ready.
-                if let Some(r) = meta
-                    .region_ranges
-                    .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
-                    .map(|(_, &region_id)| &meta.regions[&region_id])
-                    .take_while(|r| enc_start_key(r) < enc_end_key(&region))
-                    .find(|r| r.get_id() != region.get_id())
-                {
-                    info!(
-                        "snapshot range overlaps, wait source destroy finish";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "apply_index" => self.get_store().applied_index(),
-                        "last_applying_index" => self.last_applying_idx,
-                        "overlap_region" => ?r,
-                    );
-                    return None;
+            // For merge process, the stale source peer is destroyed asynchronously when applying
+            // snapshot or creating new peer. So here checks whether there is any overlap, if so,
+            // wait and do not handle raft ready.
+            if let Some(wait_destroy_regions) = meta.atomic_snap_regions.get(&self.region_id) {
+                for (source_region_id, is_ready) in wait_destroy_regions {
+                    if !is_ready {
+                        info!(
+                            "snapshot range overlaps, wait source destroy finish";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer.get_id(),
+                            "apply_index" => self.get_store().applied_index(),
+                            "last_applying_index" => self.last_applying_idx,
+                            "overlap_region_id" => source_region_id,
+                        );
+                        return None;
+                    }
+                    destroy_regions.push(meta.regions[source_region_id].clone());
                 }
             }
         }
@@ -1360,12 +1346,6 @@ impl Peer {
             return None;
         }
 
-        debug!(
-            "handle raft ready";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
-
         let before_handle_raft_ready_1003 = || {
             fail_point!(
                 "before_handle_raft_ready_1003",
@@ -1374,6 +1354,18 @@ impl Peer {
             );
         };
         before_handle_raft_ready_1003();
+
+        fail_point!(
+            "before_handle_snapshot_ready_3",
+            self.peer.get_id() == 3 && self.get_pending_snapshot().is_some(),
+            |_| None
+        );
+
+        debug!(
+            "handle raft ready";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
@@ -1450,7 +1442,10 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
-        let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
+        let invoke_ctx = match self
+            .mut_store()
+            .handle_raft_ready(ctx, &ready, destroy_regions)
+        {
             Ok(r) => r,
             Err(e) => {
                 // We may have written something to writebatch and it can't be reverted, so has
