@@ -1147,8 +1147,7 @@ fn test_txn_heart_beat() {
     );
 }
 
-#[test]
-fn test_batch_get_memory_lock() {
+fn test_with_memory_lock_cluster(f: impl FnOnce(TikvClient, Context, /* raw_key */ Vec<u8>, Lock)) {
     let (cluster, client, ctx) = must_new_cluster_and_kv_client();
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
     let raw_key = b"key".to_vec();
@@ -1168,11 +1167,34 @@ fn test_batch_get_memory_lock() {
     guard.with_lock(|l| {
         *l = Some(lock.clone());
     });
-
-    let mut req = BatchGetRequest::default();
-    req.set_context(ctx);
-    req.set_keys(vec![b"unlocked".to_vec(), raw_key.clone()].into());
-    req.version = 50;
-    let resp = client.kv_batch_get(&req).unwrap();
-    assert_eq!(resp.get_error().get_locked(), &lock.into_lock_info(raw_key));
+    f(client, ctx, raw_key, lock);
 }
+
+#[test]
+fn test_batch_get_memory_lock() {
+    test_with_memory_lock_cluster(|client, ctx, raw_key, lock| {
+        let mut req = BatchGetRequest::default();
+        req.set_context(ctx);
+        req.set_keys(vec![b"unlocked".to_vec(), raw_key.clone()].into());
+        req.version = 50;
+        let resp = client.kv_batch_get(&req).unwrap();
+        let lock_info = lock.into_lock_info(raw_key);
+        assert_eq!(resp.pairs[0].get_error().get_locked(), &lock_info);
+        assert_eq!(resp.get_error().get_locked(), &lock_info);
+    });
+}
+
+#[test]
+fn test_kv_scan_memory_lock() {
+    test_with_memory_lock_cluster(|client, ctx, raw_key, lock| {
+        let mut req = ScanRequest::default();
+        req.set_context(ctx);
+        req.set_start_key(b"a".to_vec());
+        req.version = 50;
+        let resp = client.kv_scan(&req).unwrap();
+        let lock_info = lock.into_lock_info(raw_key);
+        assert_eq!(resp.pairs[0].get_error().get_locked(), &lock_info);
+        assert_eq!(resp.get_error().get_locked(), &lock_info);
+    });
+}
+ 
