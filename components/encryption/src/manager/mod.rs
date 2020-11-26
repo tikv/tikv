@@ -611,6 +611,9 @@ impl EncryptionKeyManager for DataKeyManager {
     }
 
     fn delete_file(&self, fname: &str) -> IoResult<()> {
+        fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
+            std::io::ErrorKind::Other.into()
+        ));
         self.dicts.delete_file(fname)?;
         Ok(())
     }
