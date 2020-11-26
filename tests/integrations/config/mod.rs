@@ -79,13 +79,7 @@ fn test_serde_custom_tikv_config() {
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
-<<<<<<< HEAD
-=======
-        enable_request_batch: false,
-        background_thread_count: 999,
-        raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {

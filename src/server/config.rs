@@ -88,18 +88,7 @@ pub struct Config {
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
-<<<<<<< HEAD
-=======
-    pub enable_request_batch: bool,
-    pub background_thread_count: usize,
-    // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
-
-    // Test only.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    pub raft_client_backoff_step: ReadableDuration,
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -161,13 +150,7 @@ impl Default for Config {
             heavy_load_threshold: 300,
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
-<<<<<<< HEAD
-=======
-            enable_request_batch: true,
-            raft_client_backoff_step: ReadableDuration::secs(1),
-            background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
         }
     }
 }

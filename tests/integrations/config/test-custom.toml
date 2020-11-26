@@ -48,12 +48,7 @@ snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
-<<<<<<< HEAD
-=======
-enable-request-batch = false
-background-thread-count = 999
 end-point-slow-log-threshold = "1s"
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
 
 [server.labels]
 a = "b"
