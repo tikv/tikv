@@ -1077,7 +1077,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
- "fail",
+ "fail 0.4.0",
  "failure",
  "futures 0.3.7",
  "futures-util",

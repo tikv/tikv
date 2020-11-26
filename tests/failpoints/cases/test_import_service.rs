@@ -70,15 +70,11 @@ fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<U
     r2.set_data(data.to_vec());
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
+        .map(|r| (r, WriteFlags::default()))
         .collect();
-    let (mut tx, rx) = import.upload().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
-    })
+    let (tx, rx) = import.upload().unwrap();
+    let stream = stream::iter_ok(reqs);
+    stream.forward(tx).and_then(|_| rx).wait()
 }
 
 #[test]
