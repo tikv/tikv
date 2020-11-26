@@ -24,11 +24,11 @@ pub const MICRO_WIDTH: usize = 6;
 const SECS_PER_HOUR: i64 = 3600;
 const SECS_PER_MINUTE: i64 = 60;
 
-const MAX_HOUR_PART: u32 = 838;
-const MAX_MINUTE_PART: u32 = 59;
-const MAX_SECOND_PART: u32 = 59;
-const MAX_NANOS_PART: u32 = 999_999_999;
-const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
+pub const MAX_HOUR_PART: u32 = 838;
+pub const MAX_MINUTE_PART: u32 = 59;
+pub const MAX_SECOND_PART: u32 = 59;
+pub const MAX_NANOS_PART: u32 = 999_999_999;
+pub const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
     + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
     + MAX_SECOND_PART as i64)
     * NANOS_PER_SEC
