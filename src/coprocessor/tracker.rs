@@ -188,20 +188,10 @@ impl Tracker {
             return;
         }
 
-<<<<<<< HEAD
         // Print slow log if *process* time is long.
-        if time::duration_to_sec(self.total_process_time) > SLOW_QUERY_LOWER_BOUND {
+        if self.total_process_time > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
-=======
-        let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
-
-        if self.req_lifetime > self.slow_log_threshold {
-            let first_range = self.req_ctx.ranges.first();
-            let some_table_id = first_range.as_ref().map(|range| {
-                tidb_query_datatype::codec::table::decode_table_id(range.get_start())
-                    .unwrap_or_default()
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
             });
 
             info!(#"slow_log", "slow-query";

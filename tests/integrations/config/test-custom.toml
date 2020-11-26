@@ -62,13 +62,9 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
-<<<<<<< HEAD
 request-batch-enable-cross-command = true
 request-batch-wait-duration = "10ms"
-=======
-background-thread-count = 999
 end-point-slow-log-threshold = "1s"
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
 
 [server.labels]
 a = "b"

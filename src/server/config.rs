@@ -100,21 +100,12 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
-<<<<<<< HEAD
     // Whether to collect batch across commands under heavy workload.
     pub request_batch_enable_cross_command: bool,
     // Wait duration before each request batch is processed.
     pub request_batch_wait_duration: ReadableDuration,
-=======
-    pub background_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
-
-    // Test only.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    pub raft_client_backoff_step: ReadableDuration,
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -180,14 +171,9 @@ impl Default for Config {
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
             enable_request_batch: true,
-<<<<<<< HEAD
             request_batch_enable_cross_command: false,
             request_batch_wait_duration: ReadableDuration::millis(1),
-=======
-            raft_client_backoff_step: ReadableDuration::secs(1),
-            background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
->>>>>>> f9dca12f5... Add end_point_slow_log_threshold config (#9061)
         }
     }
 }
