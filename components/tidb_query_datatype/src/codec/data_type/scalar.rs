@@ -31,6 +31,8 @@ pub enum ScalarValue {
     DateTime(Option<super::DateTime>),
     Duration(Option<super::Duration>),
     Json(Option<super::Json>),
+    Enum(Option<super::Enum>),
+    Set(Option<super::Set>),
 }
 
 impl ScalarValue {
@@ -53,6 +55,8 @@ impl ScalarValue {
             ScalarValue::Decimal(x) => ScalarValueRef::Decimal(x.as_ref()),
             ScalarValue::Bytes(x) => ScalarValueRef::Bytes(x.as_ref().map(|x| x.as_slice())),
             ScalarValue::Json(x) => ScalarValueRef::Json(x.as_ref().map(|x| x.as_ref())),
+            ScalarValue::Enum(x) => ScalarValueRef::Enum(x.as_ref().map(|x| x.as_ref())),
+            ScalarValue::Set(x) => ScalarValueRef::Set(x.as_ref().map(|x| x.as_ref())),
         }
     }
 
@@ -174,6 +178,8 @@ pub enum ScalarValueRef<'a> {
     DateTime(Option<&'a super::DateTime>),
     Duration(Option<&'a super::Duration>),
     Json(Option<JsonRef<'a>>),
+    Enum(Option<EnumRef<'a>>),
+    Set(Option<SetRef<'a>>),
 }
 
 impl<'a> ScalarValueRef<'a> {
@@ -188,6 +194,8 @@ impl<'a> ScalarValueRef<'a> {
             ScalarValueRef::Decimal(x) => ScalarValue::Decimal(x.cloned()),
             ScalarValueRef::Bytes(x) => ScalarValue::Bytes(x.map(|x| x.to_vec())),
             ScalarValueRef::Json(x) => ScalarValue::Json(x.map(|x| x.to_owned())),
+            ScalarValueRef::Enum(x) => ScalarValue::Enum(x.map(|x| x.to_owned())),
+            ScalarValueRef::Set(x) => ScalarValue::Set(x.map(|x| x.to_owned())),
         }
     }
 
@@ -289,6 +297,9 @@ impl<'a> ScalarValueRef<'a> {
                 }
                 Ok(())
             }
+            // TODO: we should implement enum/set encode
+            ScalarValueRef::Enum(_) => unimplemented!(),
+            ScalarValueRef::Set(_) => unimplemented!(),
         }
     }
 

@@ -528,3 +528,15 @@ impl<'a> RawDatumDecoder<Json> for &'a [u8] {
         decode_json_datum(self)
     }
 }
+
+impl<'a> RawDatumDecoder<Enum> for &'a [u8] {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Enum>> {
+        unimplemented!()
+    }
+}
+
+impl<'a> RawDatumDecoder<Set> for &'a [u8] {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Set>> {
+        unimplemented!()
+    }
+}

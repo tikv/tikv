@@ -326,6 +326,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
+name = "boringssl-src"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c212e3cd725f096e4de48d4ded0909cb62cb92c1a3420ff0e95edb46390a7736"
+dependencies = [
+ "cmake",
+]
+
+[[package]]
 name = "bstr"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -680,6 +689,12 @@ dependencies = [
  "proc-macro-hack",
  "rand",
 ]
+
+[[package]]
+name = "const_fn"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c478836e029dcef17fb47c89023448c64f781a046e0300e257ad8225ae59afab"
 
 [[package]]
 name = "constant_time_eq"
@@ -1060,6 +1075,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1499,7 +1515,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
 dependencies = [
  "typenum",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -1543,16 +1559,16 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63fac32f9f74fa1fd78215d04b47f134c1ee5a535c237a54d52bf18cf65ac983"
+checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
  "grpcio-sys",
  "libc",
  "log",
- "parking_lot 0.10.0",
+ "parking_lot 0.11.0",
  "prost",
  "protobuf",
 ]
@@ -1573,11 +1589,12 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.6.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d4e9309f1151c9ebcd07622858c4a504b6ea6cd2821524fe74ccde8ea830d7"
+checksum = "3e6ea7ecb083588c8b3446270e95415c14ea856539e41ed3ad0c53614398a13f"
 dependencies = [
  "bindgen",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc",
@@ -1900,7 +1917,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#cdcb788eaebd513df2e5e98a7b8b4fe6132713cc"
+source = "git+https://github.com/pingcap/kvproto.git#2f1a3bc78fc900dc5f9d0914828cf8cc8c25a63d"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -1975,7 +1992,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
 dependencies = [
  "cc",
  "cmake",
@@ -1984,7 +2001,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2004,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2823,7 +2840,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -2836,7 +2853,7 @@ dependencies = [
  "quote",
  "syn",
  "syn-mid",
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -3085,7 +3102,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#6998aedadab120450b588170e6e36202b1af19df"
+source = "git+https://github.com/tikv/raft-rs?branch=master#6998aedadab120450b588170e6e36202b1af19df"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3419,7 +3436,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c6b58a4e99bb7fcc088cf856493d5f80907658ea"
+source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3536,7 +3553,7 @@ dependencies = [
  "rustc_version",
  "serde",
  "sha2",
- "time 0.2.16",
+ "time 0.2.23",
  "tokio",
 ]
 
@@ -4396,6 +4413,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_coprocessor",
  "test_pd",
@@ -4507,6 +4525,7 @@ dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
+ "bstr",
  "chrono",
  "chrono-tz",
  "codec",
@@ -4700,9 +4719,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b441ce9e5ab1d28f7643e62f0fa445086d8c84075150be840adae054cc05bd9c"
+checksum = "f28c80e4338857639f443169a601fafe49866aed8d7a8d565c2f5bfb1a021adf"
 dependencies = [
  "libc",
  "paste",
@@ -4711,9 +4730,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.0+5.2.1"
+version = "0.4.1+5.2.1-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f5230e450d11f3a5ba46e94073e6d4d2afcc26ecd47b80533420eed648b3084"
+checksum = "8a26331b05179d4cb505c8d6814a7e18d298972f0a551b0e3cefccff927f86d3"
 dependencies = [
  "cc",
  "fs_extra",
@@ -4722,9 +4741,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a90c7c5e31d05b8a79b7d4dd50d0ea4a57db4ed2bf694c66763d79cdb84045cc"
+checksum = "3c14a5a604eb8715bc5785018a37d00739b180bcf609916ddf4393d33d49ccdf"
 dependencies = [
  "libc",
  "tikv-jemalloc-sys",
@@ -4813,16 +4832,16 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.16"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a51cadc5b1eec673a685ff7c33192ff7b7603d0b75446fb354939ee615acb15"
+checksum = "bcdaeea317915d59b2b4cd3b5efcd156c309108664277793f5351700c02ce98b"
 dependencies = [
- "cfg-if",
+ "const_fn",
  "libc",
  "standback",
  "stdweb",
  "time-macros",
- "version_check 0.9.1",
+ "version_check 0.9.2",
  "winapi 0.3.8",
 ]
 
@@ -5041,7 +5060,7 @@ version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50f37be617794602aabbeee0be4f259dc1778fabe05e2d67ee8f79326d5cb4f6"
 dependencies = [
- "version_check 0.9.1",
+ "version_check 0.9.2",
 ]
 
 [[package]]
@@ -5150,9 +5169,9 @@ checksum = "914b1a6776c4c929a602fafd8bc742e06365d4bcbe48c30f9cca5824f70dc9dd"
 
 [[package]]
 name = "version_check"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "078775d0255232fb988e6fccf26ddc9d1ac274299aaedcedce21c6f72cc533ce"
+checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
 
 [[package]]
 name = "vlog"
@@ -5367,7 +5386,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#6bbea16a485583d7a6e32de335f6c6ec448df44a"
+source = "git+https://github.com/tikv/yatp.git#6bbea16a485583d7a6e32de335f6c6ec448df44a"
 dependencies = [
  "crossbeam-deque",
  "dashmap",

@@ -3,11 +3,14 @@
 mod bit_vec;
 mod chunked_vec_bytes;
 mod chunked_vec_common;
+mod chunked_vec_enum;
 mod chunked_vec_json;
+mod chunked_vec_set;
 mod chunked_vec_sized;
 mod logical_rows;
 mod scalar;
 mod vector;
+
 pub use logical_rows::{LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS};
 
 // Concrete eval types without a nullable wrapper.
@@ -15,10 +18,15 @@ pub type Int = i64;
 pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
-pub use crate::codec::mysql::{json::JsonRef, Decimal, Duration, Json, JsonType, Time as DateTime};
+
+pub use crate::codec::mysql::{
+    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
+};
 pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
+pub use chunked_vec_enum::ChunkedVecEnum;
 pub use chunked_vec_json::ChunkedVecJson;
+pub use chunked_vec_set::ChunkedVecSet;
 pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
@@ -92,6 +100,18 @@ impl<'a> AsMySQLBool for JsonRef<'a> {
     }
 }
 
+impl<'a> AsMySQLBool for EnumRef<'a> {
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(!self.is_empty())
+    }
+}
+
+impl<'a> AsMySQLBool for SetRef<'a> {
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(!self.is_empty())
+    }
+}
+
 impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
@@ -110,9 +130,27 @@ impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
     }
 }
 
+impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
+impl<'a> AsMySQLBool for Option<SetRef<'a>> {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
+        }
+    }
+}
+
 pub macro match_template_evaluable($t:tt, $($tail:tt)*) {
     match_template::match_template! {
-        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json],
+        $t = [Int, Real, Decimal, Bytes, DateTime, Duration, Json, Set, Enum],
         $($tail)*
     }
 }
@@ -237,6 +275,8 @@ impl_evaluable_ret! { Bytes, ChunkedVecBytes }
 impl_evaluable_ret! { DateTime, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Duration, ChunkedVecSized<Self> }
 impl_evaluable_ret! { Json, ChunkedVecJson }
+impl_evaluable_ret! { Enum, ChunkedVecEnum }
+impl_evaluable_ret! { Set, ChunkedVecSet }
 
 pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     const EVAL_TYPE: EvalType;
@@ -356,6 +396,18 @@ impl<'a> UnsafeRefInto<JsonRef<'static>> for JsonRef<'a> {
     }
 }
 
+impl<'a> UnsafeRefInto<EnumRef<'static>> for EnumRef<'a> {
+    unsafe fn unsafe_into(self) -> EnumRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
+impl<'a> UnsafeRefInto<SetRef<'static>> for SetRef<'a> {
+    unsafe fn unsafe_into(self) -> SetRef<'static> {
+        std::mem::transmute(self)
+    }
+}
+
 impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     const EVAL_TYPE: EvalType = EvalType::Json;
     type EvaluableType = Json;
@@ -392,6 +444,77 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
 
     #[inline]
     fn from_owned_value(value: &'a Json) -> Self {
+        value.as_ref()
+    }
+}
+
+impl<'a> EvaluableRef<'a> for EnumRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Enum;
+    type EvaluableType = Enum;
+    type ChunkedType = &'a ChunkedVecEnum;
+
+    #[inline]
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Enum(x) => x.as_ref().map(|x| x.as_ref()),
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Enum(x) => x,
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecEnum {
+        match v {
+            VectorValue::Enum(x) => x,
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_owned()
+    }
+    #[inline]
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
+        value.as_ref()
+    }
+}
+
+impl<'a> EvaluableRef<'a> for SetRef<'a> {
+    const EVAL_TYPE: EvalType = EvalType::Set;
+    type EvaluableType = Set;
+    type ChunkedType = &'a ChunkedVecSet;
+    #[inline]
+    fn borrow_scalar_value(v: &'a ScalarValue) -> Option<Self> {
+        match v {
+            ScalarValue::Set(x) => x.as_ref().map(|x| x.as_ref()),
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self> {
+        match v {
+            ScalarValueRef::Set(x) => x,
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn borrow_vector_value(v: &'a VectorValue) -> &ChunkedVecSet {
+        match v {
+            VectorValue::Set(x) => x,
+            _ => unimplemented!(),
+        }
+    }
+    #[inline]
+    fn to_owned_value(self) -> Self::EvaluableType {
+        self.to_owned()
+    }
+    #[inline]
+    fn from_owned_value(value: &'a Self::EvaluableType) -> Self {
         value.as_ref()
     }
 }
