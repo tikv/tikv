@@ -10,7 +10,9 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::{self, RaftApplyState, RaftMessage, RaftTruncatedState};
+use kvproto::raft_serverpb::{
+    self, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState, RegionLocalState,
+};
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
@@ -927,11 +929,22 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
     }
 
-    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> raft_serverpb::RaftLocalState {
+    pub fn raft_local_state(&self, region_id: u64, store_id: u64) -> RaftLocalState {
         let key = keys::raft_state_key(region_id);
         self.get_raft_engine(store_id)
             .c()
             .get_msg::<raft_serverpb::RaftLocalState>(&key)
+            .unwrap()
+            .unwrap()
+    }
+
+    pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        self.get_engine(store_id)
+            .c()
+            .get_msg_cf::<RegionLocalState>(
+                engine_traits::CF_RAFT,
+                &keys::region_state_key(region_id),
+            )
             .unwrap()
             .unwrap()
     }

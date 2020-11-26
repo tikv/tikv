@@ -189,6 +189,21 @@ impl StoreTick {
     }
 }
 
+#[derive(Debug)]
+pub enum MergeResultKind {
+    /// Its target peer applys `CommitMerge` log.
+    FromTargetLog,
+    /// Its target peer receives snapshot.
+    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
+    /// Then its target peer will remove this peer data and apply snapshot atomically.
+    FromTargetSnapshotStep1,
+    /// In step 2, this peer should destroy its peer fsm.
+    FromTargetSnapshotStep2,
+    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
+    /// It happens if and only if its target peer has been removed by conf change.
+    Stale,
+}
+
 /// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
 /// groups to update some important internal status.
 #[derive(Debug)]
@@ -211,10 +226,9 @@ pub enum SignificantMsg {
     CatchUpLogs(CatchUpLogs),
     /// Result of the fact that the region is merged.
     MergeResult {
+        target_region_id: u64,
         target: metapb::Peer,
-        // True means it's a stale merge source.
-        // False means it came from target region.
-        stale: bool,
+        result: MergeResultKind,
     },
     /// Capture the changes of the region.
     CaptureChange {
