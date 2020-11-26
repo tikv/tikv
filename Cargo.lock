@@ -1957,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#cc13a62c987038db6f38a0fc854c54c7fba6d2d3"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#0e3ce33f29b8be60d24610eb1c4695114de367ca"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -3130,7 +3130,7 @@ dependencies = [
  "quick-error",
  "raft",
  "raft-proto",
- "rand 0.7.3",
+ "rand 0.6.5",
  "serde",
  "serde_derive",
  "serde_with",
@@ -4595,6 +4595,7 @@ name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "bstr",
  "error_code",
  "failure",
  "tikv_alloc",
