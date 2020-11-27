@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
 
@@ -2125,9 +2127,33 @@ where
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exists", self.fsm.peer.tag);
         }
-        // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
+
+        let new_region_count = regions.len() as u64;
+        // Roughly estimate the size and keys and then let split checker to update it.
+        self.fsm.peer.approximate_size = self
+            .fsm
+            .peer
+            .approximate_size
+            .map_or(None, |x| Some(x / new_region_count));
+        self.fsm.peer.approximate_keys = self
+            .fsm
+            .peer
+            .approximate_keys
+            .map_or(None, |x| Some(x / new_region_count));
+        if let Err(e) = self.ctx.split_check_scheduler.schedule(
+            SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                region: self.fsm.peer.region().clone(),
+                pending_tasks: Arc::new(AtomicU64::new(1)),
+                cb: Box::new(move |_, _| {}),
+            },
+        ) {
+            error!(
+                "failed to schedule split check task";
+                "region_id" => self.fsm.region_id(),
+                "err" => ?e,
+            );
+        }
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
@@ -2219,6 +2245,28 @@ where
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
+            // We roughly estimate the size and keys for new region to avoid blocking heartbeat.
+            // But the value may be far from the real value. So we let split checker to update
+            // it immediately.
+            if !self.fsm.peer.is_region_size_or_keys_none() {
+                new_peer.peer.approximate_size =
+                    Some(self.fsm.peer.approximate_size.unwrap() / new_region_count);
+                new_peer.peer.approximate_keys =
+                    Some(self.fsm.peer.approximate_keys.unwrap() / new_region_count);
+            }
+            if let Err(e) = self.ctx.split_check_scheduler.schedule(
+                SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                    region: new_region.clone(),
+                    pending_tasks: Arc::new(AtomicU64::new(1)),
+                    cb: Box::new(move |_, _| {}),
+                },
+            ) {
+                error!(
+                    "failed to schedule split check task";
+                    "region_id" => new_region.get_id(),
+                    "err" => ?e,
+                );
+            }
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.

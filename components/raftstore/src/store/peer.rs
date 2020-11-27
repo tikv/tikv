@@ -3100,7 +3100,7 @@ where
         Some(status)
     }
 
-    fn is_region_size_or_keys_none(&self) -> bool {
+    pub fn is_region_size_or_keys_none(&self) -> bool {
         fail_point!("region_size_or_keys_none", |_| true);
         self.approximate_size.is_none() || self.approximate_keys.is_none()
     }
