@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{metrics::*, reader::MvccReader, ErrorInner, Result};
+use crate::storage::mvcc::{reader::MvccReader, ErrorInner, Result};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -898,6 +898,31 @@ mod tests {
         test_scan_keys_imp(vec![b"a", b"c", b"e", b"b", b"d", b"f"], vec![&v1, &v4]);
     }
 
+    fn txn_props(
+        start_ts: TimeStamp,
+        primary: &[u8],
+        commit_kind: CommitKind,
+        for_update_ts: Option<TimeStamp>,
+        txn_size: u64,
+        skip_constraint_check: bool,
+    ) -> TransactionProperties {
+        let kind = if let Some(ts) = for_update_ts {
+            TransactionKind::Pessimistic(ts)
+        } else {
+            TransactionKind::Optimistic(skip_constraint_check)
+        };
+
+        TransactionProperties {
+            start_ts,
+            kind,
+            commit_kind,
+            primary,
+            txn_size,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
+        }
+    }
+
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
@@ -909,15 +934,7 @@ mod tests {
 
         prewrite(
             &mut txn,
-            &TransactionProperties {
-                start_ts: 10.into(),
-                kind: TransactionKind::Optimistic(false),
-                commit_kind: CommitKind::TwoPc,
-                primary: pk,
-                txn_size: 0,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::default(),
-            },
+            &txn_props(10.into(), pk, CommitKind::TwoPc, None, 0, false),
             Mutation::Put((key.clone(), v.to_vec())),
             &None,
             false,
@@ -958,15 +975,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
         assert!(prewrite(
             &mut txn,
-            &TransactionProperties {
-                start_ts: 5.into(),
-                kind: TransactionKind::Optimistic(false),
-                commit_kind: CommitKind::TwoPc,
-                primary: key,
-                txn_size: 0,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::default(),
-            },
+            &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             &None,
             false,
@@ -977,15 +986,7 @@ mod tests {
         let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
         prewrite(
             &mut txn,
-            &TransactionProperties {
-                start_ts: 5.into(),
-                kind: TransactionKind::Optimistic(true),
-                commit_kind: CommitKind::TwoPc,
-                primary: key,
-                txn_size: 0,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::default(),
-            },
+            &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, true),
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             &None,
             false,
@@ -1458,15 +1459,14 @@ mod tests {
                 txn.extra_op = ExtraOp::ReadOldValue;
                 prewrite(
                     &mut txn,
-                    &TransactionProperties {
-                        start_ts: start_ts.into(),
-                        kind: TransactionKind::Pessimistic(TimeStamp::default()),
-                        commit_kind: CommitKind::TwoPc,
-                        primary: b"key",
-                        txn_size: 0,
-                        lock_ttl: 0,
-                        min_commit_ts: TimeStamp::zero(),
-                    },
+                    &txn_props(
+                        start_ts.into(),
+                        b"key",
+                        CommitKind::TwoPc,
+                        Some(TimeStamp::default()),
+                        0,
+                        false,
+                    ),
                     mutation,
                     &None,
                     true,
@@ -1475,15 +1475,7 @@ mod tests {
             } else {
                 prewrite(
                     &mut txn,
-                    &TransactionProperties {
-                        start_ts: start_ts.into(),
-                        kind: TransactionKind::Optimistic(false),
-                        commit_kind: CommitKind::TwoPc,
-                        primary: b"key",
-                        txn_size: 0,
-                        lock_ttl: 0,
-                        min_commit_ts: TimeStamp::zero(),
-                    },
+                    &txn_props(start_ts.into(), b"key", CommitKind::TwoPc, None, 0, false),
                     mutation,
                     &None,
                     false,
@@ -1524,15 +1516,14 @@ mod tests {
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = prewrite(
                 &mut txn,
-                &TransactionProperties {
-                    start_ts: TimeStamp::new(2),
-                    kind: TransactionKind::Optimistic(false),
-                    commit_kind: CommitKind::Async(TimeStamp::zero()),
-                    primary: b"key",
-                    txn_size: 0,
-                    lock_ttl: 0,
-                    min_commit_ts: TimeStamp::zero(),
-                },
+                &txn_props(
+                    TimeStamp::new(2),
+                    b"key",
+                    CommitKind::Async(TimeStamp::zero()),
+                    None,
+                    0,
+                    false,
+                ),
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 false,
@@ -1580,15 +1571,14 @@ mod tests {
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let min_commit_ts = prewrite(
                 &mut txn,
-                &TransactionProperties {
-                    start_ts: TimeStamp::new(2),
-                    kind: TransactionKind::Pessimistic(4.into()),
-                    commit_kind: CommitKind::Async(TimeStamp::zero()),
-                    primary: b"key",
-                    txn_size: 4,
-                    lock_ttl: 0,
-                    min_commit_ts: TimeStamp::zero(),
-                },
+                &txn_props(
+                    TimeStamp::new(2),
+                    b"key",
+                    CommitKind::Async(TimeStamp::zero()),
+                    Some(4.into()),
+                    4,
+                    false,
+                ),
                 mutation,
                 &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
                 true,
@@ -1635,15 +1625,14 @@ mod tests {
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         let min_commit_ts = prewrite(
             &mut txn,
-            &TransactionProperties {
-                start_ts: TimeStamp::new(2),
-                kind: TransactionKind::Pessimistic(4.into()),
-                commit_kind: CommitKind::Async(TimeStamp::zero()),
-                primary: b"key",
-                txn_size: 4,
-                lock_ttl: 0,
-                min_commit_ts: TimeStamp::zero(),
-            },
+            &txn_props(
+                TimeStamp::new(2),
+                b"key",
+                CommitKind::Async(TimeStamp::zero()),
+                Some(4.into()),
+                4,
+                false,
+            ),
             mutation,
             &Some(vec![b"key1".to_vec(), b"key2".to_vec(), b"key3".to_vec()]),
             true,

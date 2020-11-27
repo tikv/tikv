@@ -533,6 +533,28 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
+        fn txn_props(
+            start_ts: TimeStamp,
+            primary: &[u8],
+            pessimistic: bool,
+        ) -> TransactionProperties {
+            let kind = if pessimistic {
+                TransactionKind::Pessimistic(TimeStamp::default())
+            } else {
+                TransactionKind::Optimistic(false)
+            };
+
+            TransactionProperties {
+                start_ts,
+                kind,
+                commit_kind: CommitKind::TwoPc,
+                primary,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            }
+        }
+
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
@@ -542,15 +564,7 @@ mod tests {
 
             prewrite(
                 &mut txn,
-                &TransactionProperties {
-                    start_ts: start_ts,
-                    kind: TransactionKind::Optimistic(false),
-                    commit_kind: CommitKind::TwoPc,
-                    primary: pk,
-                    txn_size: 0,
-                    lock_ttl: 0,
-                    min_commit_ts: TimeStamp::default(),
-                },
+                &Self::txn_props(start_ts, pk, false),
                 m,
                 &None,
                 false,
@@ -573,15 +587,7 @@ mod tests {
 
             prewrite(
                 &mut txn,
-                &TransactionProperties {
-                    start_ts: start_ts,
-                    kind: TransactionKind::Pessimistic(TimeStamp::default()),
-                    commit_kind: CommitKind::TwoPc,
-                    primary: pk,
-                    txn_size: 0,
-                    lock_ttl: 0,
-                    min_commit_ts: TimeStamp::default(),
-                },
+                &Self::txn_props(start_ts, pk, true),
                 m,
                 &None,
                 true,

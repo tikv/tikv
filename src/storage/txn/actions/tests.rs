@@ -217,6 +217,27 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
     );
 }
 
+fn default_txn_props(
+    start_ts: TimeStamp,
+    primary: &[u8],
+    for_update_ts: TimeStamp,
+) -> TransactionProperties {
+    let kind = if for_update_ts.is_zero() {
+        TransactionKind::Optimistic(false)
+    } else {
+        TransactionKind::Pessimistic(for_update_ts)
+    };
+
+    TransactionProperties {
+        start_ts,
+        kind,
+        commit_kind: CommitKind::TwoPc,
+        primary,
+        txn_size: 0,
+        lock_ttl: 0,
+        min_commit_ts: TimeStamp::default(),
+    }
+}
 fn must_prewrite_put_err_impl<E: Engine>(
     engine: &E,
     key: &[u8],
@@ -233,22 +254,9 @@ fn must_prewrite_put_err_impl<E: Engine>(
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
     let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
 
-    let txn_kind = if for_update_ts.is_zero() {
-        TransactionKind::Optimistic(false)
-    } else {
-        TransactionKind::Pessimistic(for_update_ts)
-    };
     prewrite(
         &mut txn,
-        &TransactionProperties {
-            start_ts: ts,
-            kind: txn_kind,
-            commit_kind: CommitKind::TwoPc,
-            primary: pk,
-            txn_size: 0,
-            lock_ttl: 0,
-            min_commit_ts: TimeStamp::default(),
-        },
+        &default_txn_props(ts, pk, for_update_ts),
         mutation,
         &None,
         is_pessimistic_lock,
@@ -302,22 +310,9 @@ fn must_prewrite_delete_impl<E: Engine>(
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
     let mutation = Mutation::Delete(Key::from_raw(key));
 
-    let txn_kind = if for_update_ts.is_zero() {
-        TransactionKind::Optimistic(false)
-    } else {
-        TransactionKind::Pessimistic(for_update_ts)
-    };
     prewrite(
         &mut txn,
-        &TransactionProperties {
-            start_ts: ts,
-            kind: txn_kind,
-            commit_kind: CommitKind::TwoPc,
-            primary: pk,
-            txn_size: 0,
-            lock_ttl: 0,
-            min_commit_ts: TimeStamp::default(),
-        },
+        &default_txn_props(ts, pk, for_update_ts),
         mutation,
         &None,
         is_pessimistic_lock,
@@ -365,22 +360,9 @@ fn must_prewrite_lock_impl<E: Engine>(
     let mut txn = MvccTxn::new(snapshot, ts, true, cm);
 
     let mutation = Mutation::Lock(Key::from_raw(key));
-    let txn_kind = if for_update_ts.is_zero() {
-        TransactionKind::Optimistic(false)
-    } else {
-        TransactionKind::Pessimistic(for_update_ts)
-    };
     prewrite(
         &mut txn,
-        &TransactionProperties {
-            start_ts: ts,
-            kind: txn_kind,
-            commit_kind: CommitKind::TwoPc,
-            primary: pk,
-            txn_size: 0,
-            lock_ttl: 0,
-            min_commit_ts: TimeStamp::default(),
-        },
+        &default_txn_props(ts, pk, for_update_ts),
         mutation,
         &None,
         is_pessimistic_lock,
@@ -409,15 +391,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
 
     assert!(prewrite(
         &mut txn,
-        &TransactionProperties {
-            start_ts: ts,
-            kind: TransactionKind::Optimistic(false),
-            commit_kind: CommitKind::TwoPc,
-            primary: pk,
-            txn_size: 0,
-            lock_ttl: 0,
-            min_commit_ts: TimeStamp::default(),
-        },
+        &default_txn_props(ts, pk, TimeStamp::zero()),
         Mutation::Lock(Key::from_raw(key)),
         &None,
         false,
