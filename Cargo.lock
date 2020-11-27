@@ -1077,6 +1077,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
+ "fail 0.4.0",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1957,7 +1958,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#cc13a62c987038db6f38a0fc854c54c7fba6d2d3"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#0e3ce33f29b8be60d24610eb1c4695114de367ca"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -4465,6 +4466,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_coprocessor",
  "test_pd",
@@ -4594,6 +4596,7 @@ name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "bstr",
  "error_code",
  "failure",
  "tikv_alloc",

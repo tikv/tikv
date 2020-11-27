@@ -16,7 +16,7 @@ use uuid::Error as UuidError;
 
 use crate::metrics::*;
 
-pub fn error_inc(err: &Error) {
+pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {
         Error::Io(..) => "io",
         Error::Grpc(..) => "grpc",
@@ -35,7 +35,7 @@ pub fn error_inc(err: &Error) {
         Error::CodecError(..) => "codec",
         _ => return,
     };
-    IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
+    IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }
 
 quick_error! {
