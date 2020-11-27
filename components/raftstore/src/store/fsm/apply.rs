@@ -2,7 +2,8 @@
 
 use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::VecDeque;
+use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -358,6 +359,8 @@ where
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    ssts: HashMap<String, Vec<SstMeta>>,
+    pending_ingest_ranges: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -404,6 +407,8 @@ where
             yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,
+            ssts: Default::default(),
+            pending_ingest_ranges: BTreeMap::default(),
         }
     }
 
@@ -455,6 +460,9 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
+        if !self.ssts.is_empty() {
+            self.flush_ingest();
+        }
         if !self.kv_wb_mut().is_empty() {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -487,6 +495,22 @@ where
             cbs.invoke_all(&self.host);
         }
         need_sync
+    }
+
+    /// Writes all the changes into RocksDB.
+    /// If it returns true, all pending writes are persisted in engines.
+    fn flush_ingest(&mut self) {
+        for (cf, ssts) in self.ssts.iter() {
+            self.importer
+                .ingest(cf.as_str(), ssts, &self.engine)
+                .unwrap_or_else(|e| {
+                    // If this failed, it means that the file is corrupted or something
+                    // is wrong with the engine, but we can do nothing about that.
+                    panic!("{} check {:?}: {:?}", self.tag, ssts, e);
+                });
+        }
+        self.ssts.clear();
+        self.pending_ingest_ranges.clear();
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -558,6 +582,25 @@ where
         );
         self.committed_count = 0;
         is_synced
+    }
+
+    fn has_ingest_overlap(&self, start_key: &[u8], end_key: &[u8]) -> bool {
+        let sub_range = self
+            .pending_ingest_ranges
+            .range((Unbounded, Excluded(start_key.to_vec())));
+        let s_key = start_key.to_vec();
+        if let Some((_, e_key)) = sub_range.last() {
+            if e_key.cmp(&s_key) == CmpOrdering::Greater {
+                return true;
+            }
+        }
+
+        // find the rest ranges that overlap with [start_key, end_key)
+        return self
+            .pending_ingest_ranges
+            .range((Included(s_key), Excluded(end_key.to_vec())))
+            .last()
+            .is_some();
     }
 }
 
@@ -750,6 +793,9 @@ where
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
+    /// If there is a pending ingest file, apply shall ingest at once then can write another data.
+    pending_ingest: bool,
+
     /// Indicates the peer is in merging, if that compact log won't be performed.
     is_merging: bool,
     /// Records the epoch version after the last merge.
@@ -804,6 +850,7 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
+            pending_ingest: false,
         }
     }
 
@@ -1325,6 +1372,23 @@ where
 
             responses.push(resp);
         }
+        if !ssts.is_empty() {
+            if ctx.has_ingest_overlap(self.region.get_start_key(), self.region.get_end_key()) {
+                ctx.flush_ingest();
+            }
+            ctx.pending_ingest_ranges.insert(
+                self.region.get_start_key().to_vec(),
+                self.region.get_end_key().to_vec(),
+            );
+            for s in ssts.iter() {
+                let cf = s.get_cf_name().to_string();
+                if let Some(metas) = ctx.ssts.get_mut(&cf) {
+                    metas.push(s.clone());
+                } else {
+                    ctx.ssts.insert(cf, vec![s.clone()]);
+                }
+            }
+        }
 
         let mut resp = RaftCmdResponse::default();
         if !req.get_header().get_uuid().is_empty() {
@@ -1337,6 +1401,7 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
+            self.pending_ingest = true;
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -1529,10 +1594,10 @@ where
             return Err(e);
         }
 
-        importer.ingest(sst, engine).unwrap_or_else(|e| {
+        importer.check(sst, engine).unwrap_or_else(|e| {
             // If this failed, it means that the file is corrupted or something
             // is wrong with the engine, but we can do nothing about that.
-            panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
+            panic!("{} check {:?}: {:?}", self.tag, sst, e);
         });
 
         ssts.push(sst.clone());
@@ -3299,6 +3364,10 @@ where
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
+                if self.delegate.pending_ingest {
+                    apply_ctx.flush_ingest();
+                    self.delegate.pending_ingest = false;
+                }
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
@@ -3532,6 +3601,7 @@ where
         if is_synced {
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+                fsm.delegate.pending_ingest = false;
             }
         }
     }

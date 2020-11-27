@@ -50,6 +50,14 @@ impl Key {
         Key(encoded)
     }
 
+    pub fn from_raw_with_prefix(prefix: &[u8], key: &[u8]) -> Key {
+        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let mut encoded = Vec::with_capacity(len + prefix.len());
+        encoded.extend_from_slice(prefix);
+        encoded.encode_bytes(key, false).unwrap();
+        Key(encoded)
+    }
+
     /// Creates a key from raw bytes but returns None if the key is an empty slice.
     #[inline]
     pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {

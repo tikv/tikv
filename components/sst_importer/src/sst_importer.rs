@@ -27,6 +27,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
+use keys::DATA_PREFIX_KEY;
 use tikv_util::file::sync_dir;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
@@ -82,17 +83,20 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
-        match self.dir.ingest(meta, engine, self.key_manager.as_deref()) {
-            Ok(_) => {
-                info!("ingest"; "meta" => ?meta);
-                Ok(())
-            }
-            Err(e) => {
-                error!(%e; "ingest failed"; "meta" => ?meta, );
-                Err(e)
-            }
-        }
+    pub fn check<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
+        self.dir
+            .check(meta, engine, self.key_manager.as_deref())
+            .map_err(|e| {
+                error!(%e; "check sst failed"; "meta" => ?meta,);
+                e
+            })
+    }
+
+    pub fn ingest<E: KvEngine>(&self, cf: &str, meta: &[SstMeta], engine: &E) -> Result<()> {
+        self.dir.ingest(cf, meta, engine).map_err(|e| {
+            error!(%e; "ingest failed"; "meta" => ?meta,);
+            e
+        })
     }
 
     // Downloads an SST file from an external storage.
@@ -486,25 +490,33 @@ impl<E: KvEngine> SSTWriter<E> {
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
-            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
+            let k = Key::from_raw_with_prefix(DATA_PREFIX_KEY, m.get_key()).append_ts(commit_ts);
+            self.put(k.as_encoded(), m.get_value(), commit_ts, m.get_op())?;
         }
         Ok(())
     }
 
-    fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
-        let k = keys::data_key(key);
-        let (_, commit_ts) = Key::split_on_ts_for(key)?;
+    fn put(&mut self, key: &[u8], value: &[u8], commit_ts: TimeStamp, op: PairOp) -> Result<()> {
         let w = match (op, is_short_value(value)) {
-            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None),
-            (PairOp::Put, true) => KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec())),
+            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None)
+                .as_ref()
+                .to_bytes(),
+            (PairOp::Put, true) => WriteRef {
+                write_type: WriteType::Put,
+                start_ts: commit_ts,
+                short_value: Some(value),
+                has_overlapped_rollback: false,
+            }
+            .to_bytes(),
             (PairOp::Put, false) => {
-                self.default.put(&k, value)?;
+                self.default.put(key, value)?;
                 self.default_entries += 1;
                 KvWrite::new(WriteType::Put, commit_ts, None)
+                    .as_ref()
+                    .to_bytes()
             }
         };
-        self.write.put(&k, &w.as_ref().to_bytes())?;
+        self.write.put(key, &w)?;
         self.write_entries += 1;
         Ok(())
     }
@@ -634,13 +646,12 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest<E: KvEngine>(
+    fn check<E: KvEngine>(
         &self,
         meta: &SstMeta,
         engine: &E,
         key_manager: Option<&DataKeyManager>,
     ) -> Result<()> {
-        let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         super::prepare_sst_for_ingestion(&path.save, &path.clone, key_manager)?;
@@ -656,10 +667,21 @@ impl ImportDir {
         } else {
             debug!("skipping SST validation since length and crc32 are both 0");
         }
+        Ok(())
+    }
 
+    fn ingest<E: KvEngine>(&self, cf: &str, metas: &[SstMeta], engine: &E) -> Result<()> {
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
-        engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
+        let start = Instant::now();
+        let mut paths = vec![];
+        for sst in metas {
+            assert_eq!(sst.get_cf_name(), cf);
+            let path = self.join(sst)?;
+            paths.push(path.clone);
+        }
+        let files: Vec<&str> = paths.iter().map(|p| p.to_str().unwrap()).collect();
+        engine.ingest_external_file_cf(cf, &opts, &files)?;
         IMPORTER_INGEST_DURATION
             .with_label_values(&["ingest"])
             .observe(start.elapsed().as_secs_f64());
@@ -978,7 +1000,8 @@ mod tests {
             f.append(&data).unwrap();
             f.finish().unwrap();
 
-            dir.ingest(&meta, &db, key_manager.as_deref()).unwrap();
+            dir.check(&meta, &db, key_manager.as_deref()).unwrap();
+            dir.ingest(CF_DEFAULT, &[meta.clone()], &db).unwrap();
             check_db_range(&db, range);
 
             ingested.push(meta);
@@ -1539,7 +1562,10 @@ mod tests {
 
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
-            importer.ingest(&meta, &db).unwrap();
+            importer.check(&meta, &db).unwrap();
+            importer
+                .ingest(meta.get_cf_name(), &[meta.clone()], &db)
+                .unwrap();
 
             // verifies the DB content is correct.
             let mut iter = db.iterator_cf(cf).unwrap();
