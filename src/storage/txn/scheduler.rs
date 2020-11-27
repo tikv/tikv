@@ -272,11 +272,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
+            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-wkr"),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
                 std::cmp::max(1, worker_pool_size / 2),
-                "sched-high-pri-pool",
+                "sched-hi-pri",
             ),
             lock_mgr,
             concurrency_manager,
