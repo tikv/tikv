@@ -2131,16 +2131,10 @@ where
 
         let new_region_count = regions.len() as u64;
         // Roughly estimate the size and keys and then let split checker to update it.
-        self.fsm.peer.approximate_size = self
-            .fsm
-            .peer
-            .approximate_size
-            .and_then(|x| Some(x / new_region_count));
-        self.fsm.peer.approximate_keys = self
-            .fsm
-            .peer
-            .approximate_keys
-            .and_then(|x| Some(x / new_region_count));
+        self.fsm.peer.approximate_size =
+            self.fsm.peer.approximate_size.map(|x| x / new_region_count);
+        self.fsm.peer.approximate_keys =
+            self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(
             SplitCheckTask::GetRegionApproximateSizeAndKeys {
                 region: self.fsm.peer.region().clone(),
@@ -2245,15 +2239,10 @@ where
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
-            // We roughly estimate the size and keys for new region to avoid blocking heartbeat.
-            // But the value may be far from the real value. So we let split checker to update
-            // it immediately.
-            if !self.fsm.peer.is_region_size_or_keys_none() {
-                new_peer.peer.approximate_size =
-                    Some(self.fsm.peer.approximate_size.unwrap() / new_region_count);
-                new_peer.peer.approximate_keys =
-                    Some(self.fsm.peer.approximate_keys.unwrap() / new_region_count);
-            }
+            // The size and keys for new region may be far from the real value.
+            // So we let split checker to update it immediately.
+            new_peer.peer.approximate_size = self.fsm.peer.approximate_size;
+            new_peer.peer.approximate_keys = self.fsm.peer.approximate_keys;
             if let Err(e) = self.ctx.split_check_scheduler.schedule(
                 SplitCheckTask::GetRegionApproximateSizeAndKeys {
                     region: new_region.clone(),
