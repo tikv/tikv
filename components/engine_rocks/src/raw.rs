@@ -13,7 +13,8 @@ pub use rocksdb::{
     CompactionJobInfo, CompactionPriority, DBBottommostLevelCompaction, DBCompactionFilter,
     DBCompactionStyle, DBCompressionType, DBEntryType, DBInfoLogLevel, DBIterator, DBOptions,
     DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType, DBTitanDBBlobRunMode, Env,
-    EventListener, IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator, PerfContext, Range,
-    ReadOptions, SeekKey, SliceTransform, TableFilter, TablePropertiesCollector,
-    TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions, Writable, WriteOptions, DB,
+    EventListener, FullKey, IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator,
+    PerfContext, Range, ReadOptions, SeekKey, SliceTransform, TableFilter,
+    TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions,
+    Writable, WriteOptions, DB,
 };
