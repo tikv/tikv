@@ -413,7 +413,7 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>` or `Option<BytesRef>`.
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`.
 struct RpnFnRefEvaluableTypeWithOption(RpnFnRefEvaluableType);
 
 impl parse::Parse for RpnFnRefEvaluableTypeWithOption {
@@ -481,7 +481,7 @@ impl RpnFnRefEvaluableType {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
             RpnFnRefEvaluableType::Type(x) => {
-                if is_json(x) || is_bytes(x) || is_enum(x) {
+                if is_json(x) || is_bytes(x) || is_enum(x) || is_set(x) {
                     quote! {
                         #x <#lifetime>
                     }
@@ -846,6 +846,14 @@ fn is_enum(ty: &TypePath) -> bool {
     }
 }
 
+/// Checks if parameter type is Set
+fn is_set(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "SetRef" || *x == "Set",
+        None => false,
+    }
+}
+
 /// Get corresponding VARGS buffer
 /// Json or JsonRef will be stored in `VARG_PARAM_BUF_JSON_REF`
 /// Bytes or BytesRef will be stored in `VARG_PARAM_BUF_BYTES_REF`
@@ -876,6 +884,8 @@ fn get_vectoried_type(ty: &TypePath) -> TokenStream {
                 quote! { BytesRef }
             } else if *x == "EnumRef" {
                 quote! { EnumRef }
+            } else if *x == "SetRef" {
+                quote! { SetRef }
             } else {
                 quote! { &#ty }
             }
@@ -1026,6 +1036,10 @@ impl VargsRpnFn {
         } else if is_enum(arg_type) {
             quote! {
                 let arg: Option<EnumRef> = unsafe { std::mem::transmute::<Option<EnumRef>, Option<EnumRef<'static>>>(arg) };
+            }
+        } else if is_set(arg_type) {
+            quote! {
+                let arg: Option<SetRef> = unsafe { std::mem::transmute::<Option<SetRef>, Option<SetRef<'static>>>(arg) };
             }
         } else {
             quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
@@ -1301,11 +1315,11 @@ impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
         let param = parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>` or `Option<BytesRef>`"))
+            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`"))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,
-                "Expect parameter type to be like `&T`, `JsonRef`, `EnumRef` or `BytesRef`",
+                "Expect parameter type to be like `&T`, `JsonRef`, `EnumRef`, `SetRef` or `BytesRef`",
             ))
         } else {
             Ok(param)
@@ -2145,6 +2159,13 @@ mod tests_normal {
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
         {
+            let input = quote! { SetRef };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { SetRef };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
             let input = quote! { C::T };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
@@ -2197,6 +2218,19 @@ mod tests_normal {
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(!is_enum(&type_path));
+    }
+
+    #[test]
+    fn test_is_set() {
+        let input = quote! { SetRef };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_set(&type_path));
+
+        let input = quote! { &Int };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_set(&type_path));
     }
 
     #[test]
