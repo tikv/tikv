@@ -260,7 +260,10 @@ mod tests {
 
         update!(state, &mut ctx, Some(SetRef::new(&buf, 0b11))).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
-        assert_eq!(result[0].to_set_vec(), vec![Some(Set::new(buf.clone(), 0b11))]);
+        assert_eq!(
+            result[0].to_set_vec(),
+            vec![Some(Set::new(buf.clone(), 0b11))]
+        );
 
         update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
