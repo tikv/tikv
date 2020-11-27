@@ -1742,17 +1742,17 @@ where
                 let current_term = self.term();
                 let cbs = committed_entries
                     .iter()
-                    .filter_map(|e| {
+                    .map(|e| {
                         self.proposals
-                            .find_proposal(e.get_term(), e.get_index(), current_term)
-                    })
-                    .map(|mut p| {
-                        if p.must_pass_epoch_check {
-                            // In this case the apply can be guaranteed to be successful. Invoke the
-                            // on_committed callback if necessary.
-                            p.cb.invoke_committed();
-                        }
-                        p
+                            .find_proposal(e.get_index(), e.get_term(), current_term)
+                            .map(|mut p| {
+                                if p.must_pass_epoch_check {
+                                    // In this case the apply can be guaranteed to be successful. Invoke the
+                                    // on_committed callback if necessary.
+                                    p.cb.invoke_committed();
+                                }
+                                p.cb
+                            })
                     })
                     .collect();
                 let committed_index = self.raft_group.raft.raft_log.committed;
@@ -1762,10 +1762,10 @@ where
                     self.region_id,
                     self.term(),
                     committed_entries,
+                    cbs,
                     self.get_store().committed_index(),
                     committed_index,
                     committed_term,
-                    cbs,
                 );
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
