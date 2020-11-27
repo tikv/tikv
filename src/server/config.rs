@@ -104,6 +104,8 @@ pub struct Config {
     pub request_batch_enable_cross_command: bool,
     // Wait duration before each request batch is processed.
     pub request_batch_wait_duration: ReadableDuration,
+    // If handle time is larger than the threshold, it will print slow log in end point.
+    pub end_point_slow_log_threshold: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -171,6 +173,7 @@ impl Default for Config {
             enable_request_batch: true,
             request_batch_enable_cross_command: false,
             request_batch_wait_duration: ReadableDuration::millis(1),
+            end_point_slow_log_threshold: ReadableDuration::secs(1),
         }
     }
 }
