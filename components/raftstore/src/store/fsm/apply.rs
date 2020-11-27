@@ -796,7 +796,7 @@ where
         apply_ctx: &mut ApplyContext<EK, W>,
         mut committed_entries_drainer: EntriesCmdVec<EK::Snapshot>,
     ) {
-        if committed_entries_drainer.len() == 0 {
+        if committed_entries_drainer.is_empty() {
             return;
         }
         apply_ctx.prepare_for(self);
