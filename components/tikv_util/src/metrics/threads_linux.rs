@@ -47,7 +47,7 @@ impl ThreadsCollector {
                  seconds by threads.",
             )
             .namespace(ns.clone()),
-            &["name", "tid"],
+            &["name"],
         )
         .unwrap();
         descs.extend(cpu_totals.desc().into_iter().cloned());
@@ -62,7 +62,7 @@ impl ThreadsCollector {
                 "threads_io_bytes_total",
                 "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
             ).namespace(ns.clone()),
-            &["name", "tid", "io"],
+            &["name", "io"],
         )
         .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
@@ -72,7 +72,7 @@ impl ThreadsCollector {
                 "Number of thread voluntary context switches.",
             )
             .namespace(ns.clone()),
-            &["name", "tid"],
+            &["name"],
         )
         .unwrap();
         let nonvoluntary_ctxt_switches = IntCounterVec::new(
@@ -81,7 +81,7 @@ impl ThreadsCollector {
                 "Number of thread nonvoluntary context switches.",
             )
             .namespace(ns),
-            &["name", "tid"],
+            &["name"],
         )
         .unwrap();
 
@@ -122,7 +122,7 @@ impl Collector for ThreadsCollector {
                 let name = sanitize_thread_name(tid, &stat.command);
                 let cpu_total = metrics
                     .cpu_totals
-                    .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                    .get_metric_with_label_values(&[&name])
                     .unwrap();
                 let past = cpu_total.get();
                 let delta = total - past;
@@ -143,7 +143,7 @@ impl Collector for ThreadsCollector {
                     // Threads IO.
                     let read_total = metrics
                         .io_totals
-                        .get_metric_with_label_values(&[&name, &format!("{}", tid), "read"])
+                        .get_metric_with_label_values(&[&name, "read"])
                         .unwrap();
                     let read_past = read_total.get();
                     let read_delta = read_bytes as f64 - read_past;
@@ -153,7 +153,7 @@ impl Collector for ThreadsCollector {
 
                     let write_total = metrics
                         .io_totals
-                        .get_metric_with_label_values(&[&name, &format!("{}", tid), "write"])
+                        .get_metric_with_label_values(&[&name, "write"])
                         .unwrap();
                     let write_past = write_total.get();
                     let write_delta = write_bytes as f64 - write_past;
@@ -167,7 +167,7 @@ impl Collector for ThreadsCollector {
                     let voluntary_ctxt_switches = status.voluntary_ctxt_switches;
                     let voluntary_total = metrics
                         .voluntary_ctxt_switches
-                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .get_metric_with_label_values(&[&name])
                         .unwrap();
                     let voluntary_past = voluntary_total.get();
                     let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
@@ -179,7 +179,7 @@ impl Collector for ThreadsCollector {
                     let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
                     let nonvoluntary_total = metrics
                         .nonvoluntary_ctxt_switches
-                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .get_metric_with_label_values(&[&name])
                         .unwrap();
                     let nonvoluntary_past = nonvoluntary_total.get();
                     let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;

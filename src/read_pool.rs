@@ -176,7 +176,7 @@ fn get_unified_read_pool_name() -> String {
 
 #[cfg(not(test))]
 fn get_unified_read_pool_name() -> String {
-    "unified-read-pool".to_string()
+    "unf-rd-pool".to_string()
 }
 
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(

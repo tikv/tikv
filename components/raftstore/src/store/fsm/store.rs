@@ -1302,8 +1302,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
         });
 
-        let tag = format!("raftstore-{}", store.get_id());
-        self.system.spawn(tag, builder);
+        self.system.spawn("raftstore".into(), builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
