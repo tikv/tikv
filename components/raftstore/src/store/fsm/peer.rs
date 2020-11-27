@@ -2135,12 +2135,12 @@ where
             .fsm
             .peer
             .approximate_size
-            .map_or(None, |x| Some(x / new_region_count));
+            .and_then(|x| Some(x / new_region_count));
         self.fsm.peer.approximate_keys = self
             .fsm
             .peer
             .approximate_keys
-            .map_or(None, |x| Some(x / new_region_count));
+            .and_then(|x| Some(x / new_region_count));
         if let Err(e) = self.ctx.split_check_scheduler.schedule(
             SplitCheckTask::GetRegionApproximateSizeAndKeys {
                 region: self.fsm.peer.region().clone(),
