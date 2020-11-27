@@ -103,6 +103,9 @@ impl RowSlice<'_> {
     ///
     /// Returns true if found
     pub fn search_in_null_ids(&self, id: i64) -> bool {
+        if !self.id_valid(id) {
+            return false;
+        }
         match self {
             RowSlice::Big { null_ids, .. } => null_ids.binary_search(&(id as u32)).is_ok(),
             RowSlice::Small { null_ids, .. } => null_ids.binary_search(&(id as u8)).is_ok(),
@@ -246,8 +249,9 @@ mod tests {
         let cols = vec![
             Column::new(1, 1000),
             Column::new(356, 2),
-            Column::new(33, ScalarValue::Int(None)),
+            Column::new(33, ScalarValue::Int(None)), //0x21
             Column::new(3, 3),
+            Column::new(64123, 5),
         ];
         let mut buf = vec![];
         buf.write_row(&mut EvalContext::default(), cols).unwrap();
@@ -280,6 +284,8 @@ mod tests {
         );
         assert_eq!(Some((0, 2)), big_row.search_in_non_null_ids(1).unwrap());
         assert_eq!(Some((3, 4)), big_row.search_in_non_null_ids(356).unwrap());
+        assert_eq!(Some((4, 5)), big_row.search_in_non_null_ids(64123).unwrap());
+        assert_eq!(None, big_row.search_in_non_null_ids(64124).unwrap());
 
         let data = encoded_data();
         let row = RowSlice::from_bytes(&data).unwrap();
@@ -299,9 +305,21 @@ mod tests {
     fn test_search_in_null_ids() {
         let data = encoded_data_big();
         let row = RowSlice::from_bytes(&data).unwrap();
-        assert!(row.search_in_null_ids(33));
+        assert!(row.search_in_null_ids(0x21));
         assert!(!row.search_in_null_ids(3));
         assert!(!row.search_in_null_ids(333));
+        assert!(!row.search_in_null_ids(0xCC21));
+        assert!(!row.search_in_null_ids(0xFF0021));
+        assert!(!row.search_in_null_ids(0xFF00000021));
+
+        let data = encoded_data();
+        let row = RowSlice::from_bytes(&data).unwrap();
+        assert!(row.search_in_null_ids(0x21));
+        assert!(!row.search_in_null_ids(3));
+        assert!(!row.search_in_null_ids(333));
+        assert!(!row.search_in_null_ids(0xCC21));
+        assert!(!row.search_in_null_ids(0xFF0021));
+        assert!(!row.search_in_null_ids(0xFF00000021));
     }
 }
 

@@ -96,6 +96,7 @@ fn test_serde_custom_tikv_config() {
         enable_request_batch: false,
         request_batch_enable_cross_command: true,
         request_batch_wait_duration: ReadableDuration::millis(10),
+        end_point_slow_log_threshold: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
