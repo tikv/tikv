@@ -1197,4 +1197,3 @@ fn test_kv_scan_memory_lock() {
         assert_eq!(resp.get_error().get_locked(), &lock_info);
     });
 }
- 
