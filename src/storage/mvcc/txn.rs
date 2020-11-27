@@ -1975,6 +1975,7 @@ mod tests {
         let w = must_written(&engine, k2, 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         must_get(&engine, k2, 30, v2);
+        must_acquire_pessimistic_lock_err(&engine, k2, k2, 20, 25);
     }
 
     #[test]
@@ -1996,5 +1997,9 @@ mod tests {
         // commit T1
         must_commit(&engine, k1, 10, 20);
         must_commit(&engine, k2, 10, 20);
+
+        let w = must_written(&engine, k2, 10, 20, WriteType::Put);
+        assert!(w.has_overlapped_rollback);
+        must_prewrite_put_err(&engine, k2, v2, k2, 20);
     }
 }
