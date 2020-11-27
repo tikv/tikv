@@ -145,7 +145,7 @@ impl Tracker {
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
         assert_eq!(self.current_stage, TrackerState::ItemFinished);
-        let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
+        let is_slow_query = self.item_process_time > self.slow_log_threshold;
         let mut exec_details = kvrpcpb::ExecDetails::new();
         if self.req_ctx.context.get_handle_time() || is_slow_query {
             let mut handle = kvrpcpb::HandleTime::new();
