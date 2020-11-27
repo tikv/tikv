@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
@@ -185,14 +184,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::AggrFunction;
-    use super::*;
+    use std::sync::Arc;
 
     use tidb_query_datatype::FieldTypeTp;
+    use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use crate::AggrDefinitionParser;
-    use tikv_util::buffer_vec::BufferVec;
+
+    use super::super::AggrFunction;
+    use super::*;
 
     #[test]
     fn test_update() {
