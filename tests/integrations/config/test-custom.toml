@@ -64,6 +64,7 @@ heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 request-batch-enable-cross-command = true
 request-batch-wait-duration = "10ms"
+end-point-slow-log-threshold = "1s"
 
 [server.labels]
 a = "b"
