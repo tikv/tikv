@@ -681,6 +681,12 @@ where
         }
     }
 
+    pub async fn thread_stats(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        Ok(Response::new(
+            tikv_util::metrics::dump_thread_stats().into(),
+        ))
+    }
+
     pub async fn sync_status(req: Request<Body>) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref TABLE: Regex = Regex::new(r"/tiflash/sync-status/(?P<id>\d+)").unwrap();
@@ -798,6 +804,7 @@ where
                             (Method::GET, path) if path.starts_with("/tiflash/sync-status") => {
                                 Self::sync_status(req).await
                             }
+                            (Method::GET, "/thread_stats") => Self::thread_stats(req).await,
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }

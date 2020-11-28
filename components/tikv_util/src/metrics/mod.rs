@@ -50,3 +50,8 @@ lazy_static! {
     )
     .unwrap();
 }
+
+#[cfg(not(target_os = "linux"))]
+pub use self::threads_dummy::dump_thread_stats;
+#[cfg(target_os = "linux")]
+pub use self::threads_linux::dump_thread_stats;

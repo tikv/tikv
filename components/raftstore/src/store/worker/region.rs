@@ -647,7 +647,7 @@ where
         info!("create region runner"; "pool_size" => pool_size, "opt_pre_handle_snap" => opt_pre_handle_snap);
 
         Runner {
-            pool: Builder::new(thd_name!("region_task"))
+            pool: Builder::new(thd_name!("region-task"))
                 .max_thread_count(pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
