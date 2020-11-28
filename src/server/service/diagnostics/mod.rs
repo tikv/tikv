@@ -107,13 +107,12 @@ impl Diagnostics for Service {
             return;
         }
         let tp = req.get_tp();
-<<<<<<< HEAD
         let collect = self
             .pool
             .spawn_fn(move || {
                 let s = match tp {
                     ServerInfoType::LoadInfo | ServerInfoType::All => {
-                        let mut system = sysinfo::System::new();
+                        let mut system = SYS_INFO.lock().unwrap();
                         system.refresh_networks_list();
                         system.refresh_all();
                         let load = (
@@ -162,59 +161,6 @@ impl Diagnostics for Service {
             .spawn(collect)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
-=======
-
-        let collect = async move {
-            let (load, when) = match tp {
-                ServerInfoType::LoadInfo | ServerInfoType::All => {
-                    let mut system = SYS_INFO.lock().unwrap();
-                    system.refresh_networks_list();
-                    system.refresh_all();
-                    let load = (
-                        sys::cpu_time_snapshot(),
-                        system
-                            .get_networks()
-                            .into_iter()
-                            .map(|(n, d)| (n.to_owned(), sys::NicSnapshot::from_network_data(d)))
-                            .collect(),
-                        ioload::IoLoad::snapshot(),
-                    );
-                    let when = Instant::now() + Duration::from_millis(1000);
-                    (Some(load), when)
-                }
-                _ => (None, Instant::now()),
-            };
-
-            let timer = GLOBAL_TIMER_HANDLE.clone();
-            let _ = timer.delay(when).compat().await;
-
-            let mut server_infos = Vec::new();
-            match req.get_tp() {
-                ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
-                ServerInfoType::LoadInfo => sys::load_info(load.unwrap(), &mut server_infos),
-                ServerInfoType::SystemInfo => sys::system_info(&mut server_infos),
-                ServerInfoType::All => {
-                    sys::hardware_info(&mut server_infos);
-                    sys::load_info(load.unwrap(), &mut server_infos);
-                    sys::system_info(&mut server_infos);
-                }
-            };
-            // Sort pairs by key to make result stable
-            server_infos
-                .sort_by(|a, b| (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name())));
-            let mut resp = ServerInfoResponse::default();
-            resp.set_items(server_infos.into());
-            resp
-        };
-
-        let f = self.pool.spawn(collect).then(|res| async move {
-            let res = sink.success(res.unwrap()).map_err(Error::from).await;
-            if let Err(e) = res {
-                debug!("Diagnostics rpc failed"; "err" => ?e);
-            }
-        });
-
->>>>>>> f88f88a5f... tikv_util: use singleton sysinfo::System (#8799)
         ctx.spawn(f);
     }
 }

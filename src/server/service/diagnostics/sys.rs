@@ -517,15 +517,6 @@ mod tests {
     #[test]
     fn test_load_info() {
         let prev_cpu = cpu_time_snapshot();
-<<<<<<< HEAD
-        let mut system = sysinfo::System::new();
-        system.refresh_all();
-        let prev_nic = system
-            .get_networks()
-            .into_iter()
-            .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
-            .collect();
-=======
         let prev_nic = {
             let mut system = SYS_INFO.lock().unwrap();
             system.refresh_networks_list();
@@ -536,7 +527,6 @@ mod tests {
                 .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
                 .collect()
         };
->>>>>>> f88f88a5f... tikv_util: use singleton sysinfo::System (#8799)
         let prev_io = ioload::IoLoad::snapshot();
         let mut collector = vec![];
         load_info((prev_cpu, prev_nic, prev_io), &mut collector);
