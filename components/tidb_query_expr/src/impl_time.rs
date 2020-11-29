@@ -540,7 +540,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration1)
                 .push_param(duration2)
-                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .evaluate(ScalarFuncSig::SubDurationAndDuration)
                 .unwrap();
             assert_eq!(output, expected);
         }
