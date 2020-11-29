@@ -156,6 +156,12 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>> {
+    Ok(from_time.date_diff(*to_time))
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
@@ -878,6 +884,53 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToSeconds)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(1),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                Some(1),
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let arg1 = Time::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
+            let arg2 = Time::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::DateDiff)
                 .unwrap();
             assert_eq!(output, exp);
         }
