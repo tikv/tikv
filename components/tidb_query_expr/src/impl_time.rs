@@ -156,13 +156,9 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn]
 #[inline]
-pub fn date_diff(
-    _ctx: &mut EvalContext,
-    from_time: &DateTime,
-    to_time: &DateTime,
-) -> Result<Option<Int>> {
+pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>> {
     Ok(from_time.date_diff(*to_time))
 }
 
