@@ -180,6 +180,27 @@ pub fn add_datetime_and_duration(
     Ok(Some(res))
 }
 
+#[rpn_fn(capture=[ctx])]
+#[inline]
+pub fn sub_duration_and_duration(
+    ctx: &mut EvalContext,
+    duration1: &Duration,
+    duration2: &Duration,
+) -> Result<Option<Duration>> {
+    let result = match duration1.checked_sub(*duration2) {
+        Some(result) => result,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "Duration",
+                    format!("({} - {})", duration1, duration2),
+                ))
+                .map(|_| Ok(None))?
+        }
+    };
+    Ok(Some(result))
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn sub_datetime_and_duration(
@@ -481,6 +502,31 @@ mod tests {
             (Some("11:59:59"), Some("00:00:01"), Some("12:00:00")),
             (Some("23:59:59"), Some("00:00:01"), Some("24:00:00")),
             (Some("23:59:59"), Some("00:00:02"), Some("24:00:01")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration1, duration2, exp) in cases {
+            let expected =
+                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
+            let duration1 =
+                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
+            let duration2 =
+                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration1)
+                .push_param(duration2)
+                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+    #[test]
+    fn test_sub_duration_and_duration() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
             (None, None, None),
         ];
         let mut ctx = EvalContext::default();
