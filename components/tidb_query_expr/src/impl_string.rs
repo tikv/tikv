@@ -32,6 +32,44 @@ pub fn oct_int(num: &Int, writer: BytesWriter) -> Result<BytesGuard> {
     Ok(writer.write(Some(Bytes::from(format!("{:o}", num)))))
 }
 
+#[rpn_fn(writer)]
+#[inline]
+pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    if s.is_empty() {
+        return Ok(writer.write(None));
+    }
+
+    let mut trimmed = s.iter().skip_while(|x| x.is_ascii_whitespace());
+    let mut r = Some(0u64);
+    let mut negative = false;
+    let mut overflow = false;
+    if let Some(&c) = trimmed.next() {
+        if c == b'-' {
+            negative = true;
+        } else if c >= b'0' && c <= b'9' {
+            r = Some(u64::from(c) - u64::from(b'0'));
+        } else if c != b'+' {
+            return Ok(writer.write(Some(b"0".to_vec())));
+        }
+
+        for c in trimmed.take_while(|&&c| c >= b'0' && c <= b'9') {
+            r = r
+                .and_then(|r| r.checked_mul(10))
+                .and_then(|r| r.checked_add(u64::from(*c - b'0')));
+            if r.is_none() {
+                overflow = true;
+                break;
+            }
+        }
+    }
+    let mut r = r.unwrap_or(u64::MAX);
+    if negative && !overflow {
+        r = r.wrapping_neg();
+    }
+
+    Ok(writer.write(Some(format!("{:o}", r as i64).into_bytes())))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn length(arg: BytesRef) -> Result<Option<i64>> {
@@ -935,6 +973,74 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .evaluate(ScalarFuncSig::OctInt)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_oct_string() {
+        let cases = vec![
+            (Some(b"".to_vec()), None),
+            (Some(b" ".to_vec()), Some(b"0".to_vec())),
+            (
+                Some(b"-1".to_vec()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (Some(b"1.0".to_vec()), Some(b"1".to_vec())),
+            (Some(b"9.5".to_vec()), Some(b"11".to_vec())),
+            (
+                Some(b"-2.7".to_vec()),
+                Some(b"1777777777777777777776".to_vec()),
+            ),
+            (
+                Some(b"-1.5".to_vec()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (Some(b"0".to_vec()), Some(b"0".to_vec())),
+            (Some(b"1".to_vec()), Some(b"1".to_vec())),
+            (Some(b"8".to_vec()), Some(b"10".to_vec())),
+            (Some(b"12".to_vec()), Some(b"14".to_vec())),
+            (Some(b"20".to_vec()), Some(b"24".to_vec())),
+            (Some(b"100".to_vec()), Some(b"144".to_vec())),
+            (Some(b"1024".to_vec()), Some(b"2000".to_vec())),
+            (Some(b"2048".to_vec()), Some(b"4000".to_vec())),
+            (
+                Some(format!(" {}", i64::MAX).into_bytes()),
+                Some(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Some(format!(" {}", u64::MAX).into_bytes()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Some(format!(" +{}", u64::MAX).into_bytes()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Some(format!(" +{}1", u64::MAX).into_bytes()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (
+                Some(format!(" -{}", u64::MAX).into_bytes()),
+                Some(b"1".to_vec()),
+            ),
+            (
+                Some(format!("-{}", (1u64 << 63) + 1).into_bytes()),
+                Some(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Some(format!(" -{}1", u64::MAX).into_bytes()),
+                Some(b"1777777777777777777777".to_vec()),
+            ),
+            (Some(b" ++1".to_vec()), Some(b"0".to_vec())),
+            (Some(b" +1".to_vec()), Some(b"1".to_vec())),
+            (None, None),
+        ];
+        for (arg0, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .evaluate(ScalarFuncSig::OctString)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
