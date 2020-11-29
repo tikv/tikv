@@ -20,10 +20,10 @@ use engine_rocks::{
 use engine_traits::{Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt, CF_WRITE};
 use pd_client::ClusterVersion;
 use prometheus::{local::*, *};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::{GcConfig, GcWorkerConfigManager};
-use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
@@ -136,26 +136,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
-        for i in 0..context.file_numbers().len() {
-            let table_props = context.table_properties(i);
-            let user_props = unsafe {
-                &*(table_props.user_collected_properties() as *const _
-                    as *const RocksUserCollectedPropertiesNoRc)
-            };
-            if let Ok(props) = RocksMvccProperties::decode(user_props) {
-                sum_props.add(&props);
-                if check_need_gc(safe_point.into(), ratio_threshold, &props) {
-                    needs_gc += 1;
-                }
-            }
-        }
-
-        if !check_need_gc(safe_point.into(), ratio_threshold, &sum_props)
-            && needs_gc < (context.file_numbers().len() + 1) >> 1
-        {
-            // NOTE: here we don't treat the bottommost level specially.
-            // Maybe it's necessary to make a green channel for it.
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             return std::ptr::null_mut();
         }
@@ -550,6 +531,55 @@ fn do_check_allowed(enable: bool, skip_vcheck: bool, cluster_version: &ClusterVe
         })
 }
 
+fn check_need_gc(
+    safe_point: TimeStamp,
+    mut ratio_threshold: f64,
+    context: &CompactionFilterContext,
+) -> bool {
+    if ratio_threshold < 1.0 {
+        return true;
+    }
+
+    let is_bottommost = context.is_bottommost_level();
+    let mut check_props = |props: &MvccProperties| {
+        if props.min_ts > safe_point {
+            return false;
+        }
+        let num_versions = if is_bottommost {
+            props.num_versions as f64
+        } else {
+            if ratio_threshold < 1.5 {
+                ratio_threshold = 1.5;
+            }
+            (props.num_versions - props.num_deletes) as f64
+        };
+        if num_versions > props.num_rows as f64 * ratio_threshold {
+            return true;
+        }
+        if num_versions > props.num_puts as f64 * ratio_threshold {
+            return true;
+        }
+        props.max_row_versions > 1024
+    };
+
+    let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
+    for i in 0..context.file_numbers().len() {
+        let table_props = context.table_properties(i);
+        let user_props = unsafe {
+            &*(table_props.user_collected_properties() as *const _
+                as *const RocksUserCollectedPropertiesNoRc)
+        };
+        if let Ok(props) = RocksMvccProperties::decode(user_props) {
+            sum_props.add(&props);
+            if check_props(&props) {
+                needs_gc += 1;
+            }
+        }
+    }
+
+    needs_gc >= (context.file_numbers().len() + 1) >> 1 || check_props(&sum_props)
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -561,7 +591,6 @@ pub mod tests {
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, Peekable, SyncMutable};
-    use txn_types::TimeStamp;
 
     // Use a lock to protect concurrent compactions.
     lazy_static! {
