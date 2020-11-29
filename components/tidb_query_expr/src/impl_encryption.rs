@@ -64,75 +64,69 @@ pub fn sha2(
     }
 }
 
-#[rpn_fn(nullable)]
+#[rpn_fn(writer)]
 #[inline]
-pub fn compress(input: Option<BytesRef>) -> Result<Option<Bytes>> {
+pub fn compress(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     // compress implements the `COMPRESS` built-in function.
     // MySQL doc: https://dev.mysql.com/doc/refman/5.6/en/encryption-functions.html#function_compress
-    match input {
-        Some(input) => {
-            // according to MySQL doc: Empty strings are stored as empty strings.
-            if input.is_empty() {
-                return Ok(Some(vec![]));
+    // according to MySQL doc: Empty strings are stored as empty strings.
+    if input.is_empty() {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    let mut e = ZlibEncoder::new(input, Compression::default());
+    // preferred capacity is input length plus four bytes length header and one extra end "."
+    // max capacity is isize::max_value(), or will panic with "capacity overflow"
+    let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
+    vec.resize(4, 0);
+    LittleEndian::write_u32(&mut vec, input.len() as u32);
+    match e.read_to_end(&mut vec) {
+        Ok(_) => {
+            // according to MySQL doc: append "." if ends with space
+            if vec[vec.len() - 1] == 32 {
+                vec.push(b'.');
             }
-            let mut e = ZlibEncoder::new(input, Compression::default());
-            // preferred capacity is input length plus four bytes length header and one extra end "."
-            // max capacity is isize::max_value(), or will panic with "capacity overflow"
-            let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
-            vec.resize(4, 0);
-            LittleEndian::write_u32(&mut vec, input.len() as u32);
-            match e.read_to_end(&mut vec) {
-                Ok(_) => {
-                    // according to MySQL doc: append "." if ends with space
-                    if vec[vec.len() - 1] == 32 {
-                        vec.push(b'.');
-                    }
-                    Ok(Some(vec))
-                }
-                _ => Ok(None),
-            }
+            Ok(writer.write(Some(vec)))
         }
-        _ => Ok(None),
+        _ => Ok(writer.write(None)),
     }
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(writer, capture = [ctx])]
 #[inline]
-pub fn uncompress(ctx: &mut EvalContext, input: Option<BytesRef>) -> Result<Option<Bytes>> {
+pub fn uncompress(
+    ctx: &mut EvalContext,
+    input: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
     // uncompressed implements the `UNCOMPRESS` built-in function.
     // MySQL doc: https://dev.mysql.com/doc/refman/5.6/en/encryption-functions.html#function_uncompress
-    match input {
-        Some(input) => {
-            // according to MySQL doc: Empty strings are stored as empty strings.
-            if input.is_empty() {
-                return Ok(Some(vec![]));
-            }
-            if input.len() <= 4 {
-                ctx.warnings.append_warning(Error::zlib_data_corrupted());
-                return Ok(None);
-            }
+    // according to MySQL doc: Empty strings are stored as empty strings.
+    if input.is_empty() {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+    if input.len() <= 4 {
+        ctx.warnings.append_warning(Error::zlib_data_corrupted());
+        return Ok(writer.write(None));
+    }
 
-            let len = LittleEndian::read_u32(&input[0..4]) as usize;
-            let mut d = ZlibDecoder::new(&input[4..]);
-            let mut vec = Vec::with_capacity(len);
+    let len = LittleEndian::read_u32(&input[0..4]) as usize;
+    let mut d = ZlibDecoder::new(&input[4..]);
+    let mut vec = Vec::with_capacity(len);
 
-            // if the length of uncompressed string is greater than the length we read from the first
-            //     four bytes, return null and generate a length corrupted warning.
-            // if the length of uncompressed string is zero or uncompress fail, return null and generate
-            //     a data corrupted warning
-            match d.read_to_end(&mut vec) {
-                Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(Some(vec)),
-                Ok(decoded_len) if len < decoded_len => {
-                    ctx.warnings.append_warning(Error::zlib_length_corrupted());
-                    Ok(None)
-                }
-                _ => {
-                    ctx.warnings.append_warning(Error::zlib_data_corrupted());
-                    Ok(None)
-                }
-            }
+    // if the length of uncompressed string is greater than the length we read from the first
+    //     four bytes, return null and generate a length corrupted warning.
+    // if the length of uncompressed string is zero or uncompress fail, return null and generate
+    //     a data corrupted warning
+    match d.read_to_end(&mut vec) {
+        Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(writer.write(Some(vec))),
+        Ok(decoded_len) if len < decoded_len => {
+            ctx.warnings.append_warning(Error::zlib_length_corrupted());
+            Ok(writer.write(None))
         }
-        _ => Ok(None),
+        _ => {
+            ctx.warnings.append_warning(Error::zlib_data_corrupted());
+            Ok(writer.write(None))
+        }
     }
 }
 
