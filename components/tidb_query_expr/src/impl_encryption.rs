@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use byteorder::{ByteOrder, LittleEndian};
+use flate2::read::{ZlibDecoder, ZlibEncoder};
+use flate2::Compression;
 use openssl::hash::{self, MessageDigest};
+use std::io::Read;
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_datatype::expr::{Error, EvalContext};
@@ -55,6 +59,78 @@ pub fn sha2(
                 }
             };
             hex_digest(sha2, input).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn(nullable)]
+#[inline]
+pub fn compress(input: Option<BytesRef>) -> Result<Option<Bytes>> {
+    // compress implements the `COMPRESS` built-in function.
+    // MySQL doc: https://dev.mysql.com/doc/refman/5.6/en/encryption-functions.html#function_compress
+    match input {
+        Some(input) => {
+            // according to MySQL doc: Empty strings are stored as empty strings.
+            if input.is_empty() {
+                return Ok(Some(vec![]));
+            }
+            let mut e = ZlibEncoder::new(input, Compression::default());
+            // preferred capacity is input length plus four bytes length header and one extra end "."
+            // max capacity is isize::max_value(), or will panic with "capacity overflow"
+            let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
+            vec.resize(4, 0);
+            LittleEndian::write_u32(&mut vec, input.len() as u32);
+            match e.read_to_end(&mut vec) {
+                Ok(_) => {
+                    // according to MySQL doc: append "." if ends with space
+                    if vec[vec.len() - 1] == 32 {
+                        vec.push(b'.');
+                    }
+                    Ok(Some(vec))
+                }
+                _ => Ok(None),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
+pub fn uncompress(ctx: &mut EvalContext, input: Option<BytesRef>) -> Result<Option<Bytes>> {
+    // uncompressed implements the `UNCOMPRESS` built-in function.
+    // MySQL doc: https://dev.mysql.com/doc/refman/5.6/en/encryption-functions.html#function_uncompress
+    match input {
+        Some(input) => {
+            // according to MySQL doc: Empty strings are stored as empty strings.
+            if input.is_empty() {
+                return Ok(Some(vec![]));
+            }
+            if input.len() <= 4 {
+                ctx.warnings.append_warning(Error::zlib_data_corrupted());
+                return Ok(None);
+            }
+
+            let len = LittleEndian::read_u32(&input[0..4]) as usize;
+            let mut d = ZlibDecoder::new(&input[4..]);
+            let mut vec = Vec::with_capacity(len);
+
+            // if the length of uncompressed string is greater than the length we read from the first
+            //     four bytes, return null and generate a length corrupted warning.
+            // if the length of uncompressed string is zero or uncompress fail, return null and generate
+            //     a data corrupted warning
+            match d.read_to_end(&mut vec) {
+                Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => Ok(Some(vec)),
+                Ok(decoded_len) if len < decoded_len => {
+                    ctx.warnings.append_warning(Error::zlib_length_corrupted());
+                    Ok(None)
+                }
+                _ => {
+                    ctx.warnings.append_warning(Error::zlib_data_corrupted());
+                    Ok(None)
+                }
+            }
         }
         _ => Ok(None),
     }
@@ -292,6 +368,65 @@ mod tests {
                 .unwrap()
                 .is_none())
         }
+    }
+
+    #[test]
+    fn test_compress() {
+        let test_cases = vec![
+            (
+                b"hello world".to_vec(),
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+            ),
+            (b"".to_vec(), ""),
+            (
+                b"hello wor012".to_vec(),
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+            ),
+        ];
+        for (arg, expect) in test_cases {
+            let expect = Some(hex::decode(expect.as_bytes().to_vec()).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Bytes>(ScalarFuncSig::Compress)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Compress);
+    }
+
+    #[test]
+    fn test_uncompress() {
+        let cases = vec![
+            ("", Some("")),
+            (
+                "0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Some("hello world"),
+            ),
+            (
+                "0C000000789CCB48CDC9C95728CF2F32303402001D8004202E",
+                Some("hello wor012"),
+            ),
+            (
+                "12000000789CCB48CDC9C95728CF2FCA4901001A0B045D",
+                Some("hello world"),
+            ),
+            ("010203", None),
+            ("01020304", None),
+            ("020000000000", None),
+            ("0000000001", None),
+            ("02000000789CCB48CDC9C95728CF2FCA4901001A0B045D", None),
+        ];
+        for (arg, expect) in cases {
+            let arg = hex::decode(arg.as_bytes()).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Bytes>(ScalarFuncSig::Uncompress)
+                .unwrap();
+            let expect = expect.map(|s| Bytes::from(s));
+            assert_eq!(output, expect);
+        }
+        test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Uncompress);
     }
 
     #[test]
