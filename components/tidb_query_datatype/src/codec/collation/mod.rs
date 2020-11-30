@@ -39,14 +39,14 @@ pub trait Charset {
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
     type Weight: Integer;
-    
+
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.
     fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
-    
+
     /// Returns the SortKey of `bstr` as an owned byte vector.
     fn sort_key(bstr: &[u8]) -> Result<Vec<u8>> {
         let mut v = Vec::default();

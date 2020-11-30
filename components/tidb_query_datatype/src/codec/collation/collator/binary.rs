@@ -14,7 +14,7 @@ impl Collator for CollatorBinary {
     fn char_weight(ch: u8) -> Self::Weight {
         ch
     }
-    
+
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
         writer.write_bytes(bstr)?;

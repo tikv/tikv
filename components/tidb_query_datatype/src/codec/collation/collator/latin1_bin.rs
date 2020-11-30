@@ -32,9 +32,7 @@ impl Collator for CollatorLatin1Bin {
 
     #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        B(bstr)
-            .trim_end_with(|c| c == PADDING_SPACE)
-            .hash(state);
+        B(bstr).trim_end_with(|c| c == PADDING_SPACE).hash(state);
         Ok(())
     }
 }

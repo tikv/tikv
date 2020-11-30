@@ -42,12 +42,8 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
 
     #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let mut ca = str::from_utf8(a)?
-            .trim_end_matches(PADDING_SPACE)
-            .chars();
-        let mut cb = str::from_utf8(b)?
-            .trim_end_matches(PADDING_SPACE)
-            .chars();
+        let mut ca = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE).chars();
+        let mut cb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE).chars();
         let mut an = 0;
         let mut bn = 0;
 

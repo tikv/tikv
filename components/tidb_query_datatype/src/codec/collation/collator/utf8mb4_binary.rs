@@ -44,7 +44,7 @@ pub struct CollatorUtf8Mb4BinNoPadding;
 impl Collator for CollatorUtf8Mb4BinNoPadding {
     type Charset = CharsetUtf8mb4;
     type Weight = u32;
-  
+
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
         ch as u32
