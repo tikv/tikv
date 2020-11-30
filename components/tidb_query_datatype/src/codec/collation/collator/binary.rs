@@ -8,12 +8,13 @@ pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
     type Charset = CharsetBinary;
+    type Weight = u8;
 
     #[inline]
-    fn validate(_bstr: &[u8]) -> Result<()> {
-        Ok(())
+    fn char_weight(ch: u8) -> Self::Weight {
+        ch
     }
-
+    
     #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
         writer.write_bytes(bstr)?;

@@ -8,51 +8,49 @@ pub struct CollatorUtf8Mb4GeneralCi;
 
 impl Collator for CollatorUtf8Mb4GeneralCi {
     type Charset = CharsetUtf8mb4;
+    type Weight = u16;
 
     #[inline]
-    fn validate(bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
-        Ok(())
+    fn char_weight(ch: char) -> Self::Weight {
+        let r = ch as usize;
+        if r > 0xFFFF {
+            return 0xFFFD;
+        }
+        if let Some(plane) = GENERAL_CI_PLANE_TABLE[r >> 8] {
+            plane[r & 0xFF]
+        } else {
+            r as u16
+        }
     }
 
+    #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
         let mut n = 0;
         for ch in s.chars() {
-            writer.write_u16_be(general_ci_convert(ch))?;
+            writer.write_u16_be(Self::char_weight(ch))?;
             n += 1;
         }
         Ok(n * std::mem::size_of::<u16>())
     }
 
+    #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(TRIM_PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
+        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
         Ok(sa
             .chars()
-            .map(general_ci_convert)
-            .cmp(sb.chars().map(general_ci_convert)))
+            .map(Self::char_weight)
+            .cmp(sb.chars().map(Self::char_weight)))
     }
 
+    #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
-        for ch in s.chars().map(general_ci_convert) {
+        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
+        for ch in s.chars().map(Self::char_weight) {
             ch.hash(state);
         }
         Ok(())
-    }
-}
-
-#[inline]
-fn general_ci_convert(c: char) -> u16 {
-    let r = c as usize;
-    if r > 0xFFFF {
-        return 0xFFFD;
-    }
-    if let Some(plane) = GENERAL_CI_PLANE_TABLE[r >> 8] {
-        plane[r & 0xFF]
-    } else {
-        r as u16
     }
 }
 

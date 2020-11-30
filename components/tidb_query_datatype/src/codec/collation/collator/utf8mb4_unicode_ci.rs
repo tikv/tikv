@@ -8,33 +8,45 @@ pub struct CollatorUtf8Mb4UnicodeCi;
 
 impl Collator for CollatorUtf8Mb4UnicodeCi {
     type Charset = CharsetUtf8mb4;
+    type Weight = u128;
 
     #[inline]
-    fn validate(bstr: &[u8]) -> Result<()> {
-        str::from_utf8(bstr)?;
-        Ok(())
+    fn char_weight(ch: char) -> Self::Weight {
+        let r = ch as usize;
+        if r > 0xFFFF {
+            return 0xFFFD;
+        }
+
+        let u = UNICODE_CI_TABLE[r];
+        if u == LONG_RUNE {
+            return map_long_rune(r);
+        }
+
+        u as u128
     }
 
+    #[inline]
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
         let mut n = 0;
         for ch in s.chars() {
-            let mut convert = unicode_ci_convert(ch);
-            while convert != 0 {
-                writer.write_u16_be((convert & 0xFFFF) as u16)?;
+            let mut weight = Self::char_weight(ch);
+            while weight != 0 {
+                writer.write_u16_be((weight & 0xFFFF) as u16)?;
                 n += 1;
-                convert >>= 16
+                weight >>= 16
             }
         }
         Ok(n * std::mem::size_of::<u16>())
     }
 
+    #[inline]
     fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
         let mut ca = str::from_utf8(a)?
-            .trim_end_matches(TRIM_PADDING_SPACE)
+            .trim_end_matches(PADDING_SPACE)
             .chars();
         let mut cb = str::from_utf8(b)?
-            .trim_end_matches(TRIM_PADDING_SPACE)
+            .trim_end_matches(PADDING_SPACE)
             .chars();
         let mut an = 0;
         let mut bn = 0;
@@ -42,7 +54,7 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
         loop {
             if an == 0 {
                 for ach in &mut ca {
-                    an = unicode_ci_convert(ach);
+                    an = Self::char_weight(ach);
                     if an != 0 {
                         break;
                     }
@@ -51,7 +63,7 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
 
             if bn == 0 {
                 for bch in &mut cb {
-                    bn = unicode_ci_convert(bch);
+                    bn = Self::char_weight(bch);
                     if bn != 0 {
                         break;
                     }
@@ -79,36 +91,52 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
         }
     }
 
+    #[inline]
     fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
-        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let s = str::from_utf8(bstr)?.trim_end_matches(PADDING_SPACE);
         for ch in s.chars() {
-            let mut convert = unicode_ci_convert(ch);
-            while convert != 0 {
-                (convert & 0xFFFF).hash(state);
-                convert >>= 16;
+            let mut weight = Self::char_weight(ch);
+            while weight != 0 {
+                (weight & 0xFFFF).hash(state);
+                weight >>= 16;
             }
         }
         Ok(())
     }
 }
 
-#[inline]
-fn unicode_ci_convert(c: char) -> u128 {
-    let r = c as usize;
-    if r > 0xFFFF {
-        return 0xFFFD;
-    }
-
-    let u = UNICODE_CI_TABLE[r];
-    if u == LONG_RUNE {
-        return map_long_rune(r);
-    }
-
-    u as u128
-}
-
 // Created from https://www.unicode.org/Public/UCA/4.0.0/allkeys-4.0.0.txt
+
 static LONG_RUNE: u64 = 0xFFFD;
+
+#[inline]
+fn map_long_rune(r: usize) -> u128 {
+    match r {
+        0x321D => 0x000002891E031DC21D6E1DC61D6D0288,
+        0x321E => 0x0000000002891DCB1D741DC61D6D0288,
+        0x327C => 0x0000000000001DC61D621E0F1DBE1D70,
+        0x3307 => 0x0000000000001E650E0B1E591E5E1E55,
+        0x3315 => 0x0000000000001E721E781E591E7C1E58,
+        0x3316 => 0x000000001E7A1E650E0B1E731E7C1E58,
+        0x3317 => 0x0000000000001E651E631E7D1E7C1E58,
+        0x3319 => 0x0000000000001E811E651E721E781E59,
+        0x331A => 0x0000000000001E7C1E531E5F1E7A1E59,
+        0x3320 => 0x0000000000001E720E0B1E621E811E5C,
+        0x332B => 0x0000000000001E651E811E5F0E0B1E6B,
+        0x332E => 0x0000000000001E7A1E651E5E1E521E6C,
+        0x3332 => 0x0000000000001E651E631E781E521E6D,
+        0x3334 => 0x0000000000001E7A1E551E5D1E631E6D,
+        0x3336 => 0x0000000000001E7A0E0B1E611E591E6E,
+        0x3347 => 0x0000000000001E811E771E5D1E811E70,
+        0x334A => 0x0000000000001E7A0E0B1E6B1E791E71,
+        0x3356 => 0x0000000000001E811E5A1E651E811E7B,
+        0x337F => 0xF93EFB40CF1AFB40DF0FFB40E82AFB40,
+        0x33AE => 0x0000000000000FEA04370E6D0E330FC0,
+        0x33AF => 0x000000000E2B0FEA04370E6D0E330FC0,
+        0xFDFB => 0x13B713AB135013AB135E020913AB135E,
+        _ => 0xFFFD,
+    }
+}
 
 #[rustfmt::skip]
 static UNICODE_CI_TABLE: [u64; 0x10000] = [
@@ -657,32 +685,3 @@ static UNICODE_CI_TABLE: [u64; 0x10000] = [
     0xFEFDFBC1,0xFEFEFBC1,0,0xFF00FBC1,0x251,0x27E,0x2D2,0xE0F,0x2D3,0x2CF,0x277,0x288,0x289,0x2C8,0x428,0x22F,0x221,0x25D,0x2CC,0xE29,0xE2A,0xE2B,0xE2C,0xE2D,0xE2E,0xE2F,0xE30,0xE31,0xE32,0x23D,0x23A,0x42C,0x42D,0x42E,0x255,0x2C7,0xE33,0xE4A,0xE60,0xE6D,0xE8B,0xEB9,0xEC1,0xEE1,0xEFB,0xF10,0xF21,0xF2E,0xF5B,0xF64,0xF82,0xFA7,0xFB4,0xFC0,0xFEA,0x1002,0x101F,0x1044,0x1051,0x105A,0x105E,0x106A,0x28A,0x2CE,0x28B,0x20F,0x21B,0x20C,0xE33,0xE4A,0xE60,0xE6D,0xE8B,0xEB9,0xEC1,0xEE1,0xEFB,0xF10,0xF21,0xF2E,0xF5B,0xF64,0xF82,0xFA7,0xFB4,0xFC0,0xFEA,0x1002,0x101F,0x1044,0x1051,0x105A,0x105E,0x106A,0x28C,0x430,0x28D,0x433,0x29A,0x29B,0x266,0x2B2,0x2B3,0x237,0x22E,0x1E80,0x1E52,0x1E53,0x1E54,0x1E55,0x1E56,0x1E75,0x1E76,0x1E77,0x1E63,0xE0B,0x1E52,0x1E53,0x1E54,0x1E55,0x1E56,0x1E57,0x1E58,0x1E59,0x1E5A,0x1E5B,0x1E5C,0x1E5D,0x1E5E,0x1E5F,0x1E60,0x1E61,0x1E62,0x1E63,0x1E64,0x1E65,0x1E66,0x1E67,0x1E68,0x1E69,0x1E6A,0x1E6B,0x1E6C,0x1E6D,0x1E6E,0x1E6F,0x1E70,0x1E71,0x1E72,0x1E73,0x1E74,0x1E75,0x1E76,0x1E77,0x1E78,0x1E79,0x1E7A,0x1E7B,0x1E7C,0x1E7D,0x1E81,0,0,0x1DBD,0x1D62,0x1D63,0x1E02,0x1D64,0x1E04,0x1E05,0x1D65,0x1D66,0x1D67,0x1E08,0x1E09,0x1E0A,0x1E0B,0x1E0C,0x1E0D,0x1D7C,0x1D68,0x1D69,0x1D6A,0x1D83,0x1D6B,0x1D6C,0x1D6D,0x1D6E,0x1D6F,0x1D70,0x1D71,/* FEFD */
     0x1D72,0x1D73,0x1D74,0xFFBFFBC1,0xFFC0FBC1,0xFFC1FBC1,0x1DBE,0x1DBF,0x1DC0,0x1DC1,0x1DC2,0x1DC3,0xFFC8FBC1,0xFFC9FBC1,0x1DC4,0x1DC5,0x1DC6,0x1DC7,0x1DC8,0x1DC9,0xFFD0FBC1,0xFFD1FBC1,0x1DCA,0x1DCB,0x1DCC,0x1DCD,0x1DCE,0x1DCF,0xFFD8FBC1,0xFFD9FBC1,0x1DD0,0x1DD1,0x1DD2,0xFFDDFBC1,0xFFDEFBC1,0xFFDFFBC1,0xE0E,0xE10,0x42F,0x210,0x431,0xE11,0xE20,0xFFE7FBC1,0x5FE,0x3AE,0x3B0,0x3AF,0x3B1,0x69C,0x6C7,0xFFEFFBC1,0xFFF0FBC1,0xFFF1FBC1,0xFFF2FBC1,0xFFF3FBC1,0xFFF4FBC1,0xFFF5FBC1,0xFFF6FBC1,0xFFF7FBC1,0xFFF8FBC1,0,0,0,0xDC5,0xDC6,0xFFFEFBC1,0xFFFFFBC1,
 ];
-
-#[inline]
-fn map_long_rune(r: usize) -> u128 {
-    match r {
-        0x321D => 0x000002891E031DC21D6E1DC61D6D0288,
-        0x321E => 0x0000000002891DCB1D741DC61D6D0288,
-        0x327C => 0x0000000000001DC61D621E0F1DBE1D70,
-        0x3307 => 0x0000000000001E650E0B1E591E5E1E55,
-        0x3315 => 0x0000000000001E721E781E591E7C1E58,
-        0x3316 => 0x000000001E7A1E650E0B1E731E7C1E58,
-        0x3317 => 0x0000000000001E651E631E7D1E7C1E58,
-        0x3319 => 0x0000000000001E811E651E721E781E59,
-        0x331A => 0x0000000000001E7C1E531E5F1E7A1E59,
-        0x3320 => 0x0000000000001E720E0B1E621E811E5C,
-        0x332B => 0x0000000000001E651E811E5F0E0B1E6B,
-        0x332E => 0x0000000000001E7A1E651E5E1E521E6C,
-        0x3332 => 0x0000000000001E651E631E781E521E6D,
-        0x3334 => 0x0000000000001E7A1E551E5D1E631E6D,
-        0x3336 => 0x0000000000001E7A0E0B1E611E591E6E,
-        0x3347 => 0x0000000000001E811E771E5D1E811E70,
-        0x334A => 0x0000000000001E7A0E0B1E6B1E791E71,
-        0x3356 => 0x0000000000001E811E5A1E651E811E7B,
-        0x337F => 0xF93EFB40CF1AFB40DF0FFB40E82AFB40,
-        0x33AE => 0x0000000000000FEA04370E6D0E330FC0,
-        0x33AF => 0x000000000E2B0FEA04370E6D0E330FC0,
-        0xFDFB => 0x13B713AB135013AB135E020913AB135E,
-        _ => 0xFFFD,
-    }
-}

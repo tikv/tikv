@@ -9,6 +9,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use codec::prelude::*;
+use num::Integer;
 
 use crate::codec::Result;
 use collator::*;
@@ -30,17 +31,22 @@ pub macro match_template_collator($t:tt, $($tail:tt)*) {
 pub trait Charset {
     type Char: Copy + Into<u32>;
 
+    fn validate(bstr: &[u8]) -> Result<()>;
+
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
 }
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
-
-    fn validate(bstr: &[u8]) -> Result<()>;
+    type Weight: Integer;
+    
+    /// Returns the weight of a given char. The chars that have equal
+    /// weight are considered as the same char with this collation.
+    fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
     /// Writes the SortKey of `bstr` into `writer`.
     fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize>;
-
+    
     /// Returns the SortKey of `bstr` as an owned byte vector.
     fn sort_key(bstr: &[u8]) -> Result<Vec<u8>> {
         let mut v = Vec::default();
@@ -73,7 +79,7 @@ where
 {
     #[inline]
     pub fn new(inner: T) -> Result<Self> {
-        C::validate(inner.as_ref())?;
+        C::Charset::validate(inner.as_ref())?;
         Ok(Self {
             inner,
             _phantom: PhantomData,
@@ -97,7 +103,7 @@ where
     #[inline]
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn new_ref(inner: &T) -> Result<&Self> {
-        C::validate(inner.as_ref())?;
+        C::Charset::validate(inner.as_ref())?;
         Ok(unsafe { std::mem::transmute(inner) })
     }
 
@@ -105,7 +111,7 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn map_option(inner: &Option<T>) -> Result<&Option<Self>> {
         if let Some(inner) = inner {
-            C::validate(inner.as_ref())?;
+            C::Charset::validate(inner.as_ref())?;
         }
         Ok(unsafe { std::mem::transmute(inner) })
     }
@@ -114,7 +120,7 @@ where
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn map_option_owned(inner: Option<T>) -> Result<Option<Self>> {
         if let Some(inner) = inner {
-            C::validate(inner.as_ref())?;
+            C::Charset::validate(inner.as_ref())?;
             return Self::new(inner).map(Some);
         }
         Ok(None)
