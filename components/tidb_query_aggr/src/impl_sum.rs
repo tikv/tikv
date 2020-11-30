@@ -257,17 +257,17 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(1))]);
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
 
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(5))]);
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
     }
 
     /// SUM(Bytes) should produce (Real).
