@@ -13,4 +13,4 @@ mod imp;
 #[path = "null.rs"]
 mod imp;
 
-pub use imp::{IOSnooper, IOContext};
+pub use imp::{IOContext, IOSnooper};

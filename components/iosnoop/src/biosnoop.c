@@ -1,5 +1,3 @@
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
 #include <uapi/linux/ptrace.h>
 #include <linux/blkdev.h>
 
@@ -9,19 +7,38 @@ struct data_t {
     u64 len;
 };
 
+struct val_t {
+    u32 pid;
+};
+
+BPF_HASH(infobyreq, struct request *, struct val_t);
 BPF_PERF_OUTPUT(events);
+
+int trace_pid_start(struct pt_regs *ctx, struct request *req)
+{
+    struct val_t val = {};
+    u64 ts;
+
+    u64 id = bpf_get_current_pid_tgid();
+    u32 pid = id & (((u64)1 << 32) - 1);
+    u32 tgid = id >> 32;
+    if (tgid != ##TGID##) {
+        return 0;
+    }
+    val.pid = pid;
+    infobyreq.update(&req, &val);
+    return 0;
+}
 
 // output
 int trace_req_completion(struct pt_regs *ctx, struct request *req)
 {
     struct data_t data = {};
+    struct val_t *valp;
 
-    id = bpf_get_current_pid_tgid() >> 32;
-    tgid = id & (1 <<< 32);
-    if (tgid != ##TGID##) {
-        return 0;
-    }
-    data.pid = id >> 32;
+    valp = infobyreq.lookup(&req);
+    if (valp == 0) return 0;
+    data.pid = valp->pid;
     data.len = req->__data_len;
 
 /*
@@ -40,5 +57,6 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
 #endif
 
     events.perf_submit(ctx, &data, sizeof(data));
+    infobyreq.delete(&req);
     return 0;
 }

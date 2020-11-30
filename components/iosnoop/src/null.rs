@@ -20,8 +20,8 @@ impl IOSnooper {
     }
 
     pub fn start(&mut self) -> Result<(), String> {
-       info!("IO snooper is not started due to not compiling with BCC");
-       Ok(())
+        info!("IO snooper is not started due to not compiling with BCC");
+        Ok(())
     }
 
     pub fn stop(&mut self) {}
