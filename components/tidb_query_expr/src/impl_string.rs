@@ -983,6 +983,7 @@ mod tests {
         let cases = vec![
             (Some(b"".to_vec()), None),
             (Some(b" ".to_vec()), Some(b"0".to_vec())),
+            (Some(b"a".to_vec()), Some(b"0".to_vec())),
             (
                 Some(b"-1".to_vec()),
                 Some(b"1777777777777777777777".to_vec()),
@@ -1001,6 +1002,7 @@ mod tests {
             (Some(b"1".to_vec()), Some(b"1".to_vec())),
             (Some(b"8".to_vec()), Some(b"10".to_vec())),
             (Some(b"12".to_vec()), Some(b"14".to_vec())),
+            (Some(b"12a".to_vec()), Some(b"14".to_vec())),
             (Some(b"20".to_vec()), Some(b"24".to_vec())),
             (Some(b"100".to_vec()), Some(b"144".to_vec())),
             (Some(b"1024".to_vec()), Some(b"2000".to_vec())),
