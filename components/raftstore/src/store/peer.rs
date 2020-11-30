@@ -3776,7 +3776,7 @@ mod tests {
                 is_conf_change: false,
                 index,
                 term: gen_term(index),
-                cb: Callback::None,
+                cb: Callback::write(Box::new(|_| {})),
                 renew_lease_time,
                 must_pass_epoch_check: false,
             });
