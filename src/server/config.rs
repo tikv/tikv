@@ -104,8 +104,6 @@ pub struct Config {
     // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
 
-    // IO rate limits
-
     // Test only.
     #[doc(hidden)]
     #[serde(skip_serializing)]

@@ -6,7 +6,7 @@ use std::future::{self, Future};
 use std::io::{self, ErrorKind, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
@@ -141,7 +141,6 @@ impl<R: Read> Read for Sha256Reader<R> {
 pub enum IOOp {
     Read,
     Write,
-    All,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -173,25 +172,34 @@ fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
+/// No-op limiter
+/// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
-pub struct IORateLimiter {}
+pub struct IORateLimiter {
+    unit: atomic::AtomicUsize,
+}
 
-// No-op limiter
 impl IORateLimiter {
-    pub fn new() -> IORateLimiter {
-        IORateLimiter {}
+    pub fn new(_unit: usize) -> IORateLimiter {
+        IORateLimiter {
+            unit: atomic::AtomicUsize::new(_unit),
+        }
     }
 
-    pub fn request(&self, _io_type: IOType, _io_op: IOOp, _bytes: usize) {}
+    /// Request for token for bytes and potentially update statistics. If this
+    /// request can not be satisfied, the call is blocked. Granted token can be
+    /// less than the requested amount.
+    pub fn request(&self, _io_type: IOType, _io_op: IOOp, bytes: usize) -> usize {
+        std::cmp::min(self.unit.load(atomic::Ordering::Relaxed), bytes)
+    }
 
     pub fn async_request(
         &self,
         io_type: IOType,
         io_op: IOOp,
         bytes: usize,
-    ) -> impl Future<Output = ()> {
-        self.request(io_type, io_op, bytes);
-        future::ready(())
+    ) -> impl Future<Output = usize> {
+        future::ready(self.request(io_type, io_op, bytes))
     }
 
     pub fn disable_rate_limit(&self, _io_type: IOType) {}
@@ -215,6 +223,7 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     }
 }
 
+/// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
 pub struct InstrumentedFile {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
@@ -263,18 +272,42 @@ impl InstrumentedFile {
 impl Read for InstrumentedFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Some(limiter) = &mut self.limiter {
-            limiter.request(get_io_type(), IOOp::Read, buf.len());
+            let mut remains = buf.len();
+            let mut pos = 0;
+            while remains > 0 {
+                let allowed = limiter.request(get_io_type(), IOOp::Read, remains);
+                let read = self.inner.read(&mut buf[pos..pos + allowed])?;
+                pos += read;
+                remains -= read;
+                if read < allowed {
+                    break;
+                }
+            }
+            Ok(pos)
+        } else {
+            self.inner.read(buf)
         }
-        self.inner.read(buf)
     }
 }
 
 impl Write for InstrumentedFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if let Some(limiter) = &mut self.limiter {
-            limiter.request(get_io_type(), IOOp::Write, buf.len());
+            let mut remains = buf.len();
+            let mut pos = 0;
+            while remains > 0 {
+                let allowed = limiter.request(get_io_type(), IOOp::Write, remains);
+                let written = self.inner.write(&buf[pos..pos + allowed])?;
+                pos += written;
+                remains -= written;
+                if written < allowed {
+                    break;
+                }
+            }
+            Ok(pos)
+        } else {
+            self.inner.write(buf)
         }
-        self.inner.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -482,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        set_io_rate_limiter(IORateLimiter::new());
+        set_io_rate_limiter(IORateLimiter::new(1));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
