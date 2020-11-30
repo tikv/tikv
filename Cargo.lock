@@ -3073,7 +3073,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=async-ready-0.6#29790a2b0d6366b8550afd894bedf2bd9ef8878d"
+source = "git+https://github.com/gengliqi/raft-rs?branch=fix-clippy#f08f3f537bd55546ee04f972958d6dced59cd552"
 dependencies = [
  "fxhash",
  "getset",
@@ -3087,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=async-ready-0.6#29790a2b0d6366b8550afd894bedf2bd9ef8878d"
+source = "git+https://github.com/gengliqi/raft-rs?branch=fix-clippy#f08f3f537bd55546ee04f972958d6dced59cd552"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3130,7 +3130,6 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "raft-proto",
  "rand 0.6.5",
  "serde",
  "serde_derive",
