@@ -2145,6 +2145,7 @@ where
             error!(
                 "failed to schedule split check task";
                 "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
                 "err" => ?e,
             );
         }
@@ -2238,24 +2239,9 @@ where
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
-
-            // The size and keys for new region may be far from the real value.
-            // So we let split checker to update it immediately.
             new_peer.peer.approximate_size = self.fsm.peer.approximate_size;
             new_peer.peer.approximate_keys = self.fsm.peer.approximate_keys;
-            if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                    region: new_region.clone(),
-                    pending_tasks: Arc::new(AtomicU64::new(1)),
-                    cb: Box::new(move |_, _| {}),
-                },
-            ) {
-                error!(
-                    "failed to schedule split check task";
-                    "region_id" => new_region.get_id(),
-                    "err" => ?e,
-                );
-            }
+
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
@@ -2263,7 +2249,7 @@ where
             }
 
             new_peer.peer.activate(self.ctx);
-            meta.regions.insert(new_region_id, new_region);
+            meta.regions.insert(new_region_id, new_region.clone());
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
@@ -2291,6 +2277,22 @@ where
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
                 }
+            }
+
+            // The size and keys for new region may be far from the real value.
+            // So we let split checker to update it immediately.
+            if let Err(e) = self.ctx.split_check_scheduler.schedule(
+                SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                    region: new_region,
+                    pending_tasks: Arc::new(AtomicU64::new(1)),
+                    cb: Box::new(move |_, _| {}),
+                },
+            ) {
+                error!(
+                    "failed to schedule split check task";
+                    "region_id" => new_region_id,
+                    "err" => ?e,
+                );
             }
         }
     }
