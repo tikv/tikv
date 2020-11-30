@@ -103,15 +103,15 @@ impl<S: Snapshot> ProposalQueue<S> {
 
     // Find proposal in front or at the given term and index
     fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<S>> {
-        self.queue.pop_front().and_then(|cmd| {
+        self.queue.pop_front().and_then(|p| {
             // Comparing the term first then the index, because the term is
             // increasing among all log entries and the index is increasing
             // inside a given term
-            if (cmd.term, cmd.index) > (term, index) {
-                self.queue.push_front(cmd);
+            if (p.term, p.index) > (term, index) {
+                self.queue.push_front(p);
                 return None;
             }
-            Some(cmd)
+            Some(p)
         })
     }
 
@@ -121,7 +121,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         while let Some(p) = self.pop(term, index) {
             if p.term == term {
                 if p.index == index {
-                    return Some(p);
+                    return if p.cb.is_none() { None } else { Some(p) };
                 } else {
                     panic!(
                         "{} unexpected callback at term {}, found index {}, expected {}",
