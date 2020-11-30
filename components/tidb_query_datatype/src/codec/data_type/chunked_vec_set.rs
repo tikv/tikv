@@ -37,7 +37,7 @@ impl ChunkedVecSet {
         } else {
             None
         }
-    }   
+    }
 }
 
 impl ChunkedVec<Set> for ChunkedVecSet {
@@ -82,7 +82,7 @@ impl ChunkedVec<Set> for ChunkedVecSet {
         self.value.append(&mut other.value);
         self.bitmap.append(&mut other.bitmap);
     }
-    
+
     fn to_vec(&self) -> Vec<Option<Set>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {

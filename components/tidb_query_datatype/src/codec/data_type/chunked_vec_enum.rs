@@ -30,7 +30,7 @@ pub struct ChunkedVecEnum {
 }
 
 impl ChunkedVecEnum {
-        #[inline]
+    #[inline]
     pub fn get(&self, idx: usize) -> Option<EnumRef> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
@@ -43,14 +43,14 @@ impl ChunkedVecEnum {
 
 impl ChunkedVec<Enum> for ChunkedVecEnum {
     impl_chunked_vec_common! { Enum }
-    
-        fn with_capacity(capacity: usize) -> Self {
-            Self {
-                data: Arc::new(BufferVec::new()),
-                bitmap: BitVec::with_capacity(capacity),
-                value: Vec::with_capacity(capacity),
-            }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Arc::new(BufferVec::new()),
+            bitmap: BitVec::with_capacity(capacity),
+            value: Vec::with_capacity(capacity),
         }
+    }
 
     #[inline]
     fn push_data(&mut self, value: Enum) {
@@ -64,7 +64,7 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
         self.value.push(0);
     }
 
-fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.value.len()
     }
 
@@ -74,16 +74,16 @@ fn len(&self) -> usize {
             self.value.truncate(len);
         }
     }
-    
+
     fn capacity(&self) -> usize {
         self.bitmap.capacity().max(self.value.capacity())
     }
-    
+
     fn append(&mut self, other: &mut Self) {
         self.value.append(&mut other.value);
         self.bitmap.append(&mut other.bitmap);
     }
-    
+
     fn to_vec(&self) -> Vec<Option<Enum>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {

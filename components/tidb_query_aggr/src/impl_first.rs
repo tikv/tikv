@@ -55,13 +55,19 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_exp.push(exp);
 
         match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
+            TT = [
+                Int => &'static Int,
+                Real => &'static Real,
+                Duration => &'static Real,
+                Decimal => &'static Decimal,
+                DateTime => &'static DateTime,
+                Json => JsonRef<'static>,
+                Bytes => BytesRef<'static>,
+                Enum => EnumRef<'static>,
+                Set => SetRef<'static>,
+            ],
             match eval_type {
-                EvalType::TT => Ok(Box::new(AggrFnFirst::<&'static TT>::new())),
-                EvalType::Json => Ok(Box::new(AggrFnFirst::<JsonRef<'static>>::new())),
-                EvalType::Bytes => Ok(Box::new(AggrFnFirst::<BytesRef<'static>>::new())),
-                EvalType::Enum => Ok(Box::new(AggrFnFirst::<EnumRef<'static>>::new())),
-                EvalType::Set => Ok(Box::new(AggrFnFirst::<SetRef<'static>>::new())),
+                EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new())),
             }
         }
     }

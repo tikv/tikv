@@ -34,7 +34,6 @@ impl ChunkedVecBytes {
         self.length += 1;
     }
 
-
     #[inline]
     pub fn push_ref(&mut self, value: Option<BytesRef>) {
         if let Some(x) = value {
@@ -82,7 +81,7 @@ impl ChunkedVec<Bytes> for ChunkedVecBytes {
         self.finish_append();
     }
 
-fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.length
     }
 
