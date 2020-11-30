@@ -13,7 +13,7 @@ base64 = "0.12"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { path = "../codec" }
-flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
+flate2 = { version = "1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"
 match_template = { path = "../match_template" }
 num = { version = "0.3", default-features = false }
