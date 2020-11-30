@@ -94,7 +94,6 @@ endpoints = [
 job = "tikv_1"
 
 [raftstore]
-sync-log = false
 prevote = false
 raftdb-path = "/var"
 capacity = 123

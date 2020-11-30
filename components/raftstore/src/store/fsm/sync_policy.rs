@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use std::sync::Arc;
@@ -15,16 +15,59 @@ use crate::store::fsm::RaftRouter;
 use crate::store::local_metrics::SyncEventMetrics;
 use crate::store::PeerMsg;
 
-const UNSYNCED_REGIONS_SIZE_LIMIT: usize = 512;
+const UNSYNCED_REGIONS_SIZE_LIMIT: usize = 1024;
+
+pub trait Action: Clone {
+    fn current_ts(&self) -> i64;
+    fn sync_raft_engine(&self);
+    fn notify_synced(&self, region_id: u64, number: u64);
+}
+
+#[derive(Clone)]
+pub struct SyncAction<EK: KvEngine, ER: RaftEngine> {
+    raft_engine: ER,
+    router: RaftRouter<EK, ER>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> SyncAction<EK, ER> {
+    pub fn new(raft_engine: ER, router: RaftRouter<EK, ER>) -> SyncAction<EK, ER> {
+        SyncAction {
+            raft_engine,
+            router,
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Action for SyncAction<EK, ER> {
+    fn current_ts(&self) -> i64 {
+        TiInstant::now_coarse().to_microsec()
+    }
+
+    fn sync_raft_engine(&self) {
+        self.raft_engine.sync().unwrap_or_else(|e| {
+            panic!("failed to sync raft engine: {:?}", e);
+        });
+    }
+
+    fn notify_synced(&self, region_id: u64, number: u64) {
+        if let Err(e) = self.router.force_send(region_id, PeerMsg::Noop) {
+            debug!(
+                "failed to send noop to trigger persisted ready";
+                "region_id" => region_id,
+                "ready_number" => number,
+                "error" => ?e,
+            );
+        }
+    }
+}
 
 /// Used for controlling the raft-engine wal 'sync' policy.
 /// When regions receive data, the 'sync' will be holded until it reach
 /// the deadline. After that, when 'sync' is called by certain thread later,
 /// then the notifications will be sent to these unsynced regions.
-pub struct SyncPolicy<EK: KvEngine, ER: RaftEngine> {
+pub struct SyncPolicy<A: Action> {
     pub metrics: SyncEventMetrics,
-    raft_engine: ER,
-    router: RaftRouter<EK, ER>,
+    sync_action: A,
     delay_sync_enabled: bool,
     delay_sync_us: i64,
 
@@ -36,52 +79,40 @@ pub struct SyncPolicy<EK: KvEngine, ER: RaftEngine> {
     local_last_sync_ts: i64,
 
     /// Store the unsynced regions, notify them when 'sync' is triggered and finished.
-    /// The map contains: <region_id, (ready number, atomic notifier, create_time)>
-    unsynced_regions_map: HashMap<u64, (u64, Arc<AtomicU64>, i64)>,
-    /// Used for quickly checking if timestamp reaches deadline.
-    /// The set contains: <(create_time, region_id)>
-    unsynced_regions_set: BTreeSet<(i64, u64)>,
+    /// Contains: (create_time, region_id, ready number, atomic notifier)
+    unsynced_regions: VecDeque<(i64, u64, u64, Arc<AtomicU64>)>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
-    pub fn new(
-        raft_engine: ER,
-        router: RaftRouter<EK, ER>,
-        delay_sync_enabled: bool,
-        delay_sync_us: i64,
-    ) -> SyncPolicy<EK, ER> {
-        let current_ts = TiInstant::now_coarse().to_microsec();
+impl<A: Action> SyncPolicy<A> {
+    pub fn new(sync_action: A, delay_sync_enabled: bool, delay_sync_us: i64) -> SyncPolicy<A> {
+        let current_ts = sync_action.current_ts();
         SyncPolicy {
             metrics: SyncEventMetrics::default(),
-            raft_engine,
-            router,
+            sync_action,
             delay_sync_us,
             global_plan_sync_ts: Arc::new(AtomicI64::new(current_ts)),
             global_last_sync_ts: Arc::new(AtomicI64::new(current_ts)),
             delay_sync_enabled,
             local_last_sync_ts: current_ts,
-            unsynced_regions_map: HashMap::default(),
-            unsynced_regions_set: BTreeSet::default(),
+            unsynced_regions: VecDeque::default(),
         }
     }
 
-    pub fn clone(&self) -> SyncPolicy<EK, ER> {
+    pub fn clone(&self) -> SyncPolicy<A> {
         SyncPolicy {
             metrics: SyncEventMetrics::default(),
-            raft_engine: self.raft_engine.clone(),
-            router: self.router.clone(),
+            sync_action: self.sync_action.clone(),
             delay_sync_enabled: self.delay_sync_enabled,
             delay_sync_us: self.delay_sync_us,
             global_plan_sync_ts: self.global_plan_sync_ts.clone(),
             global_last_sync_ts: self.global_last_sync_ts.clone(),
-            local_last_sync_ts: self.global_last_sync_ts.load(Ordering::Relaxed),
-            unsynced_regions_map: HashMap::default(),
-            unsynced_regions_set: BTreeSet::default(),
+            local_last_sync_ts: self.global_last_sync_ts.load(Ordering::Acquire),
+            unsynced_regions: self.unsynced_regions.clone(),
         }
     }
 
     pub fn current_ts(&self) -> i64 {
-        TiInstant::now_coarse().to_microsec()
+        self.sync_action.current_ts()
     }
 
     pub fn delay_sync_enabled(&self) -> bool {
@@ -90,7 +121,7 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
 
     /// Return if all unsynced regions are flushed.
     pub fn try_flush_regions(&mut self) -> bool {
-        if !self.delay_sync_enabled || self.unsynced_regions_map.is_empty() {
+        if !self.delay_sync_enabled || self.unsynced_regions.is_empty() {
             return true;
         }
         let last_sync_ts = self.global_last_sync_ts.load(Ordering::Acquire);
@@ -115,9 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
             return false;
         }
 
-        self.raft_engine.sync().unwrap_or_else(|e| {
-            panic!("failed to sync raft engine: {:?}", e);
-        });
+        self.sync_action.sync_raft_engine();
 
         self.metrics.sync_events.sync_raftdb_count += 1;
         if !for_ready {
@@ -137,7 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
             return true;
         }
 
-        if self.unsynced_regions_map.is_empty() {
+        if self.unsynced_regions.is_empty() {
             return true;
         }
 
@@ -152,43 +181,17 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
         &mut self,
         region_id: u64,
         number: u64,
-        notify: Arc<AtomicU64>,
+        notifier: Arc<AtomicU64>,
         current_ts: i64,
     ) {
         if !self.delay_sync_enabled {
             return;
         }
-        if let Some((_, _, prev_ts)) = self
-            .unsynced_regions_map
-            .insert(region_id, (number, notify, current_ts))
-        {
-            if !self.unsynced_regions_set.remove(&(prev_ts, region_id)) {
-                panic!(
-                    "sync policy metadata corrupt, region_id {}, ts {} not in set",
-                    region_id, prev_ts
-                );
-            }
+        if let Some(v) = self.unsynced_regions.back() {
+            assert!(v.0 <= current_ts, "last ts > current ts, ts jump back!");
         }
-        self.unsynced_regions_set.insert((current_ts, region_id));
-    }
-
-    pub fn mark_region_synced(&mut self, region_id: u64) {
-        if !self.delay_sync_enabled {
-            return;
-        }
-        if let Some((_, _, prev_ts)) = self.unsynced_regions_map.remove(&region_id) {
-            if !self.unsynced_regions_set.remove(&(prev_ts, region_id)) {
-                panic!(
-                    "sync policy metadata corrupt, region_id {}, ts {} not in set",
-                    region_id, prev_ts
-                );
-            }
-        }
-        if self.unsynced_regions_map.len() < UNSYNCED_REGIONS_SIZE_LIMIT
-            && self.unsynced_regions_map.capacity() > 2 * UNSYNCED_REGIONS_SIZE_LIMIT
-        {
-            self.unsynced_regions_map.shrink_to_fit();
-        }
+        self.unsynced_regions
+            .push_back((current_ts, region_id, number, notifier));
     }
 
     /// Update the global status(last_sync_ts, last_plan_ts),
@@ -229,7 +232,7 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
             return false;
         }
 
-        let mut need_sync = if self.unsynced_regions_map.len() > UNSYNCED_REGIONS_SIZE_LIMIT {
+        let mut need_sync = if self.unsynced_regions.len() > UNSYNCED_REGIONS_SIZE_LIMIT {
             self.metrics.sync_events.sync_raftdb_delay_cache_is_full += 1;
             true
         } else {
@@ -265,20 +268,20 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
 
     /// Return if all unsynced region are flushed
     fn flush_unsynced_regions(&mut self, synced_ts: i64, flush_all: bool) -> bool {
-        while let Some((ts, region_id)) = self.unsynced_regions_set.iter().next() {
-            let delay_duration = synced_ts - *ts;
+        let mut need_notify_regions = HashMap::default();
+        while let Some(v) = self.unsynced_regions.front() {
+            let delay_duration = synced_ts - (*v).0;
             if !flush_all && delay_duration <= 0 {
                 break;
             }
+            let (_, region_id, number, notifier) = self.unsynced_regions.pop_front().unwrap();
             self.metrics
                 .sync_delay_duration
                 .observe(delay_duration as f64 / 1e9);
 
-            let (ts, region_id) = (*ts, *region_id);
-            assert_eq!(self.unsynced_regions_set.remove(&(ts, region_id)), true);
-            let (number, notifier, ts2) = self.unsynced_regions_map.remove(&region_id).unwrap();
-            assert_eq!(ts, ts2);
-
+            need_notify_regions.insert(region_id, (number, notifier));
+        }
+        for (region_id, (number, notifier)) in need_notify_regions {
             loop {
                 let pre_number = notifier.load(Ordering::Acquire);
                 assert_ne!(pre_number, number);
@@ -286,23 +289,149 @@ impl<EK: KvEngine, ER: RaftEngine> SyncPolicy<EK, ER> {
                     break;
                 }
                 if pre_number == notifier.compare_and_swap(pre_number, number, Ordering::AcqRel) {
-                    if let Err(e) = self.router.force_send(region_id, PeerMsg::Noop) {
-                        debug!(
-                            "failed to send noop to trigger persisted ready";
-                            "region_id" => region_id,
-                            "ready_number" => number,
-                            "error" => ?e,
-                        );
-                    }
+                    self.sync_action.notify_synced(region_id, number);
                     break;
                 }
             }
         }
-        if self.unsynced_regions_map.len() < UNSYNCED_REGIONS_SIZE_LIMIT
-            && self.unsynced_regions_map.capacity() > 2 * UNSYNCED_REGIONS_SIZE_LIMIT
+
+        if self.unsynced_regions.len() < UNSYNCED_REGIONS_SIZE_LIMIT
+            && self.unsynced_regions.capacity() > 2 * UNSYNCED_REGIONS_SIZE_LIMIT
         {
-            self.unsynced_regions_map.shrink_to_fit();
+            self.unsynced_regions.shrink_to_fit();
         }
-        self.unsynced_regions_map.is_empty()
+        self.unsynced_regions.is_empty()
+    }
+}
+
+pub fn new_sync_policy<EK: KvEngine, ER: RaftEngine>(
+    raft_engine: ER,
+    router: RaftRouter<EK, ER>,
+    delay_sync_enabled: bool,
+    delay_sync_us: i64,
+) -> SyncPolicy<SyncAction<EK, ER>> {
+    SyncPolicy::new(
+        SyncAction::new(raft_engine, router),
+        delay_sync_enabled,
+        delay_sync_us,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tikv_util::collections::HashSet;
+    use tikv_util::mpsc::{self, Receiver, Sender};
+
+    #[derive(Clone)]
+    struct TestSyncAction {
+        raft_engine: Sender<()>,
+        router: Sender<(u64, u64)>,
+        time: Arc<AtomicI64>,
+    }
+
+    impl Action for TestSyncAction {
+        fn current_ts(&self) -> i64 {
+            self.time.load(Ordering::Acquire)
+        }
+
+        fn sync_raft_engine(&self) {
+            self.raft_engine.send(()).unwrap();
+        }
+
+        fn notify_synced(&self, region_id: u64, number: u64) {
+            self.router.send((region_id, number)).unwrap();
+        }
+    }
+
+    struct TestSyncPolicy {
+        sync_policy: SyncPolicy<TestSyncAction>,
+        raft_rx: Receiver<()>,
+        router_rx: Receiver<(u64, u64)>,
+        _time: Arc<AtomicI64>,
+    }
+
+    fn new_test_sync_policy(delay_sync_enabled: bool, delay_sync_us: i64) -> TestSyncPolicy {
+        let (raft_tx, raft_rx) = mpsc::unbounded();
+        let (router_tx, router_rx) = mpsc::unbounded();
+        let time = Arc::new(AtomicI64::new(0));
+        let action = TestSyncAction {
+            raft_engine: raft_tx,
+            router: router_tx,
+            time: time.clone(),
+        };
+        TestSyncPolicy {
+            sync_policy: SyncPolicy::new(action, delay_sync_enabled, delay_sync_us),
+            raft_rx,
+            router_rx,
+            time,
+        }
+    }
+
+    fn must_sync_times(raft_rx: &Receiver<()>, times: usize) {
+        assert_eq!(raft_rx.len(), times, "raft sync times != expected times");
+    }
+
+    fn must_same_router_msg(router_rx: &Receiver<(u64, u64)>, msg: Vec<(u64, u64)>) {
+        assert_eq!(
+            router_rx.len(),
+            msg.len(),
+            "router msg len != expected msg len"
+        );
+        let mut msg_set = HashSet::default();
+        for v in msg {
+            msg_set.insert(v);
+        }
+        while let Ok(v) = router_rx.try_recv() {
+            if !msg_set.remove(&v) {
+                panic!("router msg {:?} not in expected msg", v);
+            }
+        }
+        assert!(
+            msg_set.is_empty(),
+            "remaining expected msg {:?} not in router msg",
+            msg_set
+        );
+    }
+
+    #[test]
+    fn test_disable_delay_sync() {
+        let test_sync_policy = new_test_sync_policy(false, 10);
+        let mut sync_policy = test_sync_policy.sync_policy.clone();
+        assert!(!sync_policy.delay_sync_enabled());
+        assert!(sync_policy.try_flush_regions());
+        assert!(!sync_policy.sync_if_needed(false));
+        assert!(!sync_policy.sync_if_needed(true));
+        assert!(sync_policy.try_sync_and_flush());
+
+        sync_policy.mark_region_unsynced(1, 1, Arc::new(AtomicU64::new(1)), 1);
+        assert!(sync_policy.unsynced_regions.is_empty());
+    }
+
+    #[test]
+    fn test_try_flush_regions() {
+        let test = new_test_sync_policy(true, 10);
+        let mut sync_policy = test.sync_policy.clone();
+        assert_eq!(sync_policy.local_last_sync_ts, 0);
+
+        let notify_1 = Arc::new(AtomicU64::new(0));
+        let notify_2 = Arc::new(AtomicU64::new(0));
+        let notify_3 = Arc::new(AtomicU64::new(2));
+        sync_policy.mark_region_unsynced(1, 1, notify_1.clone(), 2);
+        sync_policy.mark_region_unsynced(1, 3, notify_1.clone(), 5);
+        sync_policy.mark_region_unsynced(2, 1, notify_2.clone(), 6);
+        sync_policy.mark_region_unsynced(2, 4, notify_2.clone(), 8);
+        sync_policy.mark_region_unsynced(1, 5, notify_1.clone(), 11);
+        sync_policy.mark_region_unsynced(3, 4, notify_3.clone(), 12);
+
+        sync_policy.global_plan_sync_ts.store(10, Ordering::Release);
+        sync_policy.global_last_sync_ts.store(10, Ordering::Release);
+
+        sync_policy.try_flush_regions();
+
+        assert_eq!(sync_policy.local_last_sync_ts, 10);
+        must_sync_times(&test.raft_rx, 0);
+        must_same_router_msg(&test.router_rx, vec![(1, 3), (2, 4)]);
     }
 }

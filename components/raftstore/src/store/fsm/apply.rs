@@ -936,10 +936,6 @@ where
         // TOOD(cdc): should we observe empty cmd, aka leader change?
 
         self.apply_state.set_applied_index(index);
-        self.apply_state.set_last_commit_index(0);
-        self.apply_state.set_commit_index(index);
-        self.apply_state.set_commit_term(term);
-
         self.applied_index_term = term;
         assert!(term > 0);
 
@@ -1136,11 +1132,7 @@ where
         }
 
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
-
         exec_ctx.apply_state.set_applied_index(index);
-        exec_ctx.apply_state.set_last_commit_index(0);
-        exec_ctx.apply_state.set_commit_index(index);
-        exec_ctx.apply_state.set_commit_term(term);
 
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
@@ -3026,6 +3018,21 @@ where
 
         self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
+        if let Some(entry) = apply.entries.last() {
+            let prev_state = (
+                self.delegate.apply_state.get_commit_index(),
+                self.delegate.apply_state.get_commit_term(),
+            );
+            let cur_state = (entry.get_index(), entry.get_term());
+            if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+                panic!(
+                    "{} commit state jump backward {:?} -> {:?}",
+                    self.delegate.tag, prev_state, cur_state
+                );
+            }
+            self.delegate.apply_state.set_commit_index(cur_state.0);
+            self.delegate.apply_state.set_commit_term(cur_state.1);
+        }
 
         self.append_proposal(apply.cbs.drain(..));
         self.delegate

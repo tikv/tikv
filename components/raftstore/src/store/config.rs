@@ -27,7 +27,8 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // delay microsecond of raft db sync, 0 means no delay.
+    // delay time of raft db sync (us).
+    #[config(skip)]
     pub delay_sync_us: u64,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]

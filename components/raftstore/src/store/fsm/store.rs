@@ -48,7 +48,7 @@ use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
-use crate::store::fsm::sync_policy::SyncPolicy;
+use crate::store::fsm::sync_policy::{new_sync_policy, SyncAction, SyncPolicy};
 use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -335,7 +335,7 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub sync_policy: SyncPolicy<EK, ER>,
+    pub sync_policy: SyncPolicy<SyncAction<EK, ER>>,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
@@ -906,7 +906,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    pub sync_policy: SyncPolicy<EK, ER>,
+    pub sync_policy: SyncPolicy<SyncAction<EK, ER>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1231,7 +1231,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
-        let sync_policy = SyncPolicy::new(
+        let sync_policy = new_sync_policy(
             engines.raft.clone(),
             self.router.clone(),
             cfg.value().delay_sync_enabled(),
