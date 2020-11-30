@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Types and conversion functionality for storage related errors
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
@@ -16,6 +17,7 @@ use txn_types::{KvPair, TimeStamp};
 
 quick_error! {
     #[derive(Debug)]
+    // Enum to simplify matching and associated logic for a bunch of storage related errors
     pub enum ErrorInner {
         Engine(err: kv::Error) {
             from()
@@ -60,6 +62,7 @@ quick_error! {
     }
 }
 
+// Wrapper type instead of exposing ErrorInner to other modules directly
 pub struct Error(pub Box<ErrorInner>);
 
 impl fmt::Debug for Error {
@@ -112,6 +115,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
+// Enum to cater for communication over wire protocols
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
