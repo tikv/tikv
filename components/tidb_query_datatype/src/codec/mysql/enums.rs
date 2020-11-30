@@ -29,14 +29,7 @@ impl Enum {
 
 impl ToString for Enum {
     fn to_string(&self) -> String {
-        if self.value == 0 {
-            return String::new();
-        }
-
-        let buf = &self.data[self.value - 1];
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf).to_string()
+        self.as_ref().to_string()
     }
 }
 
@@ -88,6 +81,19 @@ impl<'a> EnumRef<'a> {
     }
     pub fn is_empty(&self) -> bool {
         self.value == 0
+    }
+}
+
+impl<'a> ToString for EnumRef<'a> {
+    fn to_string(&self) -> String {
+        if self.value == 0 {
+            return String::new();
+        }
+
+        let buf = &self.data[self.value - 1];
+
+        // TODO: Check the requirements and intentions of to_string usage.
+        String::from_utf8_lossy(buf).to_string()
     }
 }
 

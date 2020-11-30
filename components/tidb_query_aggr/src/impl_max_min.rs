@@ -94,7 +94,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
                 EvalType::TT => Ok(Box::new(AggFnExtremum::<&'static TT, T>::new())),
                 EvalType::Json => Ok(Box::new(AggFnExtremum::<BytesRef<'static>, T>::new())),
                 EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new())),
-                EvalType::Enum => Ok(Box::new(AggFnExtremum::<EnumRef<'static>, T>::new())),
+                EvalType::Enum => Ok(Box::new(AggFnExtremumForEnum::<T>::new())),
                 EvalType::Set => Ok(Box::new(AggFnExtremum::<SetRef<'static>, T>::new())),
             }
         }
@@ -178,6 +178,98 @@ where
         }
         Ok(())
     }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        target[0].push(self.extremum.clone());
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggFnStateExtremumForEnum::<E>::new())]
+pub struct AggFnExtremumForEnum<E>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Enum>,
+{
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E> AggFnExtremumForEnum<E>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Enum>,
+{
+    fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggFnStateExtremumForEnum<E>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Enum>,
+{
+    extremum: Option<Enum>,
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E> AggFnStateExtremumForEnum<E>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Enum>,
+{
+    pub fn new() -> Self {
+        Self {
+            extremum: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// # Notes
+    ///
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
+    /// than by the string's relative position in the set. This differs from how ORDER BY
+    /// compares them.
+    ///
+    /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
+    #[inline]
+    fn update_concrete<'a>(
+        &mut self,
+        _ctx: &mut EvalContext,
+        value: Option<EnumRef>,
+    ) -> Result<()> {
+        let extreme_ref = self
+            .extremum
+            .as_ref()
+            .map(|x| EnumRef::from_owned_value(unsafe { std::mem::transmute(x) }));
+
+        if value.is_some()
+            && (self.extremum.is_none()
+                || extreme_ref
+                    .unwrap()
+                    .to_string()
+                    .cmp(&value.unwrap().to_string())
+                    == E::ORD)
+        {
+            self.extremum = value.map(|x| x.to_owned_value());
+        }
+        Ok(())
+    }
+}
+
+impl<E> super::ConcreteAggrFunctionState for AggFnStateExtremumForEnum<E>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Enum>,
+{
+    type ParameterType = EnumRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
@@ -271,14 +363,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use tidb_query_datatype::EvalType;
+    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use super::*;
     use crate::parser::AggrDefinitionParser;
     use crate::AggrFunction;
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+
+    use super::*;
 
     #[test]
     fn test_max() {
@@ -330,6 +426,40 @@ mod tests {
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_int_vec(), &[Some(40)]);
+    }
+
+    #[test]
+    fn test_max_enum() {
+        let mut ctx = EvalContext::default();
+        let function = AggFnExtremumForEnum::<Max>::new();
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Enum)];
+
+        let mut buf = BufferVec::new();
+        buf.push("B - 我好强啊");
+        buf.push("A - 我太强啦");
+        let buf = Arc::new(buf);
+
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_enum_vec(), &[None]);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new(buf.clone(), 1))]
+        );
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new(buf.clone(), 1))]
+        );
     }
 
     #[test]
