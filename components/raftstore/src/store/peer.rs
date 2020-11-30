@@ -2129,7 +2129,6 @@ where
                 }
                 self.should_wake_up = true;
                 let p = Proposal {
-                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer),
                     index: idx,
                     term: self.term(),
                     cb,
@@ -2565,7 +2564,6 @@ where
             let req = RaftCmdRequest::default();
             if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
                 let p = Proposal {
-                    is_conf_change: false,
                     index,
                     term: self.term(),
                     cb: Callback::None,
@@ -3772,7 +3770,6 @@ mod tests {
         for index in 1..=100 {
             let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
             pq.push(Proposal {
-                is_conf_change: false,
                 index,
                 term: gen_term(index),
                 cb: Callback::None,

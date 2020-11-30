@@ -913,12 +913,12 @@ where
                     }
                 }
             }
-            match self.process_raft_cmd(apply_ctx, index, term, cmd, cb) {
+            return match self.process_raft_cmd(apply_ctx, index, term, cmd, cb) {
                 ApplyResult::WaitMergeSource(mut res) => {
                     assert!(res.entry.cb_to_ep(entry));
                     ApplyResult::WaitMergeSource(res)
                 }
-                res => return res,
+                res => res,
             };
         }
         // TOOD(cdc): should we observe empty cmd, aka leader change?
@@ -2742,7 +2742,6 @@ pub struct Proposal<S>
 where
     S: Snapshot,
 {
-    pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
     pub cb: Callback<S>,
