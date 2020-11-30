@@ -1744,7 +1744,7 @@ where
                     .iter()
                     .map(|e| {
                         self.proposals
-                            .find_proposal(e.get_index(), e.get_term(), current_term)
+                            .find_proposal(e.get_term(), e.get_index(), current_term)
                             .map(|mut p| {
                                 if p.must_pass_epoch_check {
                                     // In this case the apply can be guaranteed to be successful. Invoke the
