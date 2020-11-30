@@ -238,11 +238,7 @@ where
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete<'a>(
-        &mut self,
-        _ctx: &mut EvalContext,
-        value: Option<EnumRef>,
-    ) -> Result<()> {
+    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
