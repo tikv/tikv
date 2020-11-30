@@ -6,7 +6,7 @@
 //! which might require the database to be constructed with specific options.
 
 use crate::errors::Result;
-use crate::Range;
+use crate::{CfName, Range};
 
 pub trait RangePropertiesExt {
     /// Gets the number of keys in a range.
@@ -17,7 +17,7 @@ pub trait RangePropertiesExt {
         range: Range,
         region_id: u64,
         large_threshold: u64,
-    ) -> Result<u64>;
+    ) -> Result<(CfName, u64)>;
 
     fn get_range_approximate_keys_cf(
         &self,

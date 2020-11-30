@@ -3,7 +3,7 @@
 use crate::engine::RocksEngine;
 use crate::properties::{get_range_entries_and_versions, RangeProperties};
 use engine_traits::{
-    MiscExt, Range, RangePropertiesExt, Result, TableProperties, TablePropertiesCollection,
+    CfName, MiscExt, Range, RangePropertiesExt, Result, TableProperties, TablePropertiesCollection,
     TablePropertiesExt, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
 };
 use std::path::Path;
@@ -14,23 +14,34 @@ impl RangePropertiesExt for RocksEngine {
         range: Range,
         region_id: u64,
         large_threshold: u64,
-    ) -> Result<u64> {
-        // try to get from RangeProperties first.
-        match self.get_range_approximate_keys_cf(CF_WRITE, range, region_id, large_threshold) {
-            Ok(v) => {
-                return Ok(v);
+    ) -> Result<(CfName, u64)> {
+        // For Txn, Return result of CF_WRITE directly if it's not empty.
+        // For RawKV, return result of CF_DEFAULT.
+        let cfs = vec![CF_WRITE, CF_DEFAULT];
+        for cf in cfs {
+            // try to get from RangeProperties first.
+            let num_keys_cf =
+                match self.get_range_approximate_keys_cf(cf, range, region_id, large_threshold) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        debug!(
+                            "failed to get keys from RangeProperties";
+                            "err" => ?e,
+                        );
+                        let start = &range.start_key;
+                        let end = &range.end_key;
+                        let (_, keys) =
+                            get_range_entries_and_versions(self, CF_WRITE, &start, &end)
+                                .unwrap_or_default();
+                        keys
+                    }
+                };
+            if num_keys_cf > 0 {
+                return Ok((cf, num_keys_cf));
             }
-            Err(e) => debug!(
-                "failed to get keys from RangeProperties";
-                "err" => ?e,
-            ),
         }
 
-        let start = &range.start_key;
-        let end = &range.end_key;
-        let (_, keys) =
-            get_range_entries_and_versions(self, CF_WRITE, &start, &end).unwrap_or_default();
-        Ok(keys)
+        Ok((CF_DEFAULT, 0))
     }
 
     fn get_range_approximate_keys_cf(
