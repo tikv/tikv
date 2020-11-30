@@ -218,10 +218,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        let result = match self.has_value {
-            false => None,
-            true => Some(self.sum),
-        };
+        let result = if self.has_value { Some(self.sum) } else { None };
 
         target[0].push(result);
         Ok(())
