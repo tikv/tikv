@@ -1075,6 +1075,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1916,7 +1917,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#2f1a3bc78fc900dc5f9d0914828cf8cc8c25a63d"
+source = "git+https://github.com/pingcap/kvproto.git#5dfa7b1325a3bfc07100eb2bcde655950122fa25"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -4412,6 +4413,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_coprocessor",
  "test_pd",
