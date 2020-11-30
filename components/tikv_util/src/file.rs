@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::Cell;
 use std::fs::{self, OpenOptions};
-use std::io::{self, ErrorKind, Read};
+use std::future::{self, Future};
+use std::io::{self, ErrorKind, Read, Write};
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -132,6 +135,199 @@ impl<R: Read> Read for Sha256Reader<R> {
         self.hasher.lock().unwrap().update(&buf[..len])?;
         Ok(len)
     }
+}
+
+#[derive(Debug)]
+pub enum IOOp {
+    Read,
+    Write,
+    All,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum IOType {
+    Other,
+    Read,
+    Write,
+    Coprocessor,
+    Flush,
+    Compaction,
+    Replication,
+    LoadBalance,
+    Import,
+    Export,
+}
+
+thread_local! {
+    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
+}
+
+#[allow(dead_code)]
+fn set_io_type(new_io_type: IOType) {
+    IO_TYPE.with(|io_type| {
+        io_type.set(new_io_type);
+    });
+}
+
+fn get_io_type() -> IOType {
+    IO_TYPE.with(|io_type| io_type.get())
+}
+
+#[derive(Debug)]
+pub struct IORateLimiter {}
+
+// No-op limiter
+impl IORateLimiter {
+    pub fn new() -> IORateLimiter {
+        IORateLimiter {}
+    }
+
+    pub fn request(&self, _io_type: IOType, _io_op: IOOp, _bytes: usize) {}
+
+    pub fn async_request(
+        &self,
+        io_type: IOType,
+        io_op: IOOp,
+        bytes: usize,
+    ) -> impl Future<Output = ()> {
+        self.request(io_type, io_op, bytes);
+        future::ready(())
+    }
+
+    pub fn disable_rate_limit(&self, _io_type: IOType) {}
+
+    pub fn enable_rate_limit(&self, _io_type: IOType) {}
+}
+
+lazy_static! {
+    static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
+}
+
+pub fn set_io_rate_limiter(limiter: IORateLimiter) {
+    *IO_RATE_LIMITER.lock().unwrap() = Some(Arc::new(limiter));
+}
+
+pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
+    if let Some(ref limiter) = *IO_RATE_LIMITER.lock().unwrap() {
+        Some(limiter.clone())
+    } else {
+        None
+    }
+}
+
+pub struct InstrumentedFile {
+    inner: fs::File,
+    limiter: Option<Arc<IORateLimiter>>,
+}
+
+impl Deref for InstrumentedFile {
+    type Target = fs::File;
+
+    fn deref(&self) -> &fs::File {
+        &self.inner
+    }
+}
+
+impl DerefMut for InstrumentedFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl InstrumentedFile {
+    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<InstrumentedFile> {
+        let inner = fs::File::open(path)?;
+        Ok(InstrumentedFile {
+            inner,
+            limiter: get_io_rate_limiter(),
+        })
+    }
+
+    pub fn create<P: AsRef<Path>>(path: P) -> io::Result<InstrumentedFile> {
+        let inner = fs::File::create(path)?;
+        Ok(InstrumentedFile {
+            inner,
+            limiter: get_io_rate_limiter(),
+        })
+    }
+
+    pub fn try_clone(&self) -> io::Result<InstrumentedFile> {
+        let inner = self.inner.try_clone()?;
+        Ok(InstrumentedFile {
+            inner,
+            limiter: get_io_rate_limiter(),
+        })
+    }
+}
+
+impl Read for InstrumentedFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(limiter) = &mut self.limiter {
+            limiter.request(get_io_type(), IOOp::Read, buf.len());
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Write for InstrumentedFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(limiter) = &mut self.limiter {
+            limiter.request(get_io_type(), IOOp::Write, buf.len());
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Indicates how large a buffer to pre-allocate before reading the entire file.
+fn initial_buffer_size(file: &InstrumentedFile) -> usize {
+    // Allocate one extra byte so the buffer doesn't need to grow before the
+    // final `read` call at the end of the file.  Don't worry about `usize`
+    // overflow because reading will fail regardless in that case.
+    file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0)
+}
+
+/// Write a slice as the entire contents of a file.
+pub fn instrumented_write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
+    InstrumentedFile::create(path)?.write_all(contents.as_ref())
+}
+
+/// Read the entire contents of a file into a bytes vector.
+pub fn instrumented_read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
+    let mut file = InstrumentedFile::open(path)?;
+    let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Read the entire contents of a file into a string.
+pub fn instrumented_read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
+    let mut file = InstrumentedFile::open(path)?;
+    let mut string = String::with_capacity(initial_buffer_size(&file));
+    file.read_to_string(&mut string)?;
+    Ok(string)
+}
+
+/// Copies the contents of one file to another. This function will also
+/// copy the permission bits of the original file to the destination file.
+pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = InstrumentedFile::open(from.as_ref())?;
+    let mut writer = InstrumentedFile::create(to.as_ref())?;
+    let perm = reader.metadata()?.permissions();
+
+    let ret = io::copy(&mut reader, &mut writer)?;
+    fs::set_permissions(to.as_ref(), perm)?;
+    Ok(ret)
 }
 
 #[cfg(test)]
@@ -282,5 +478,27 @@ mod tests {
             sha256_hasher.lock().unwrap().finish().unwrap().to_vec(),
             direct_sha256
         );
+    }
+
+    #[test]
+    fn test_instrumented_file() {
+        set_io_rate_limiter(IORateLimiter::new());
+
+        let tmp_dir = TempDir::new().unwrap();
+        let tmp_file = tmp_dir.path().join("instrumented.txt");
+        let content = String::from("magic words");
+        {
+            set_io_type(IOType::Write);
+            let mut f = InstrumentedFile::create(&tmp_file).unwrap();
+            f.write_all(content.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+        {
+            set_io_type(IOType::Read);
+            let mut buffer = String::new();
+            let mut f = InstrumentedFile::open(&tmp_file).unwrap();
+            assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
+            assert_eq!(buffer, content);
+        }
     }
 }
