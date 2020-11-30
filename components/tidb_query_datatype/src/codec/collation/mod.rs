@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use codec::prelude::*;
-use num::Integer;
+use num::Unsigned;
 
 use crate::codec::Result;
 use collator::*;
@@ -38,10 +38,11 @@ pub trait Charset {
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
     type Charset: Charset;
-    type Weight: Integer;
+    type Weight: Unsigned;
 
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.
+    /// See more on http://www.unicode.org/reports/tr10/#Weight_Level_Defn.
     fn char_weight(char: <Self::Charset as Charset>::Char) -> Self::Weight;
 
     /// Writes the SortKey of `bstr` into `writer`.
