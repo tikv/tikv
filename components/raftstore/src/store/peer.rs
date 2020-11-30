@@ -2129,7 +2129,8 @@ where
                 }
                 self.should_wake_up = true;
                 let p = Proposal {
-                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer),
+                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer)
+                        || req_admin_cmd_type == Some(AdminCmdType::ChangePeerV2),
                     index: idx,
                     term: self.term(),
                     cb,
