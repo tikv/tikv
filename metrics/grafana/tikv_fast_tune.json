@@ -14,19 +14,19 @@
       "type": "grafana",
       "id": "grafana",
       "name": "Grafana",
-      "version": "6.0.1"
+      "version": "6.1.6"
     },
     {
       "type": "panel",
       "id": "graph",
       "name": "Graph",
-      "version": "5.0.0"
+      "version": ""
     },
     {
       "type": "datasource",
       "id": "prometheus",
       "name": "Prometheus",
-      "version": "5.0.0"
+      "version": "1.0.0"
     }
   ],
   "annotations": {
@@ -46,7 +46,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1606812472063,
+  "iteration": 1606814402924,
   "links": [],
   "panels": [
     {
@@ -376,6 +376,10 @@
         {
           "alias": "get-rpc-qps",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc-qps",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -508,6 +512,10 @@
         {
           "alias": "cop-rpc-qps",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc-qps",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -579,6 +587,7 @@
         "172.16.4.231:16812-lat-999%": "rgb(255, 138, 140)",
         "172.16.4.55:23581-lat-999%": "light-red",
         "172.16.5.113:16810-lat-999%": "rgb(54, 51, 209)",
+        "172.16.5.34:23581-lat-999%": "dark-red",
         "copr-scan-number": "light-red",
         "kv_commit": "green",
         "wait-duration-999%": "orange",
@@ -707,6 +716,7 @@
         "172.16.4.55:23581-lat-999%": "super-light-blue",
         "172.16.5.113:16810-lat-999%": "rgb(54, 51, 209)",
         "172.16.5.33:16808-lat-999%": "super-light-red",
+        "172.16.5.34:23581-lat-999%": "dark-purple",
         "copr-scan-number": "light-red",
         "kv_commit": "green",
         "wait-duration-999%": "orange",
@@ -763,7 +773,8 @@
           "alias": "/(.*)-lat-999%/",
           "legend": false,
           "transform": "negative-Y",
-          "yaxis": 2
+          "yaxis": 2,
+          "zindex": 3
         }
       ],
       "spaceLength": 10,
@@ -1474,6 +1485,10 @@
           "alias": "duration-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -1618,6 +1633,10 @@
           "alias": "get-duration-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "get-rpc-qps",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -1702,6 +1721,278 @@
     },
     {
       "aliasColors": {
+        "duration-99%": "blue",
+        "duration-999%": "yellow",
+        "kv_commit": "green",
+        "pending-bytes": "orange",
+        "pending-bytes-kv": "rgb(21, 121, 231)",
+        "pending-bytes-raft": "dark-red",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_TEST-CLUSTER}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "id": 9876,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "pending-bytes-kv",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "pending-bytes-raft",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"})",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "pending-bytes-kv",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"raft\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "pending-bytes-raft",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Too many compaction pending bytes accumulating ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "172.16.4.55:23581-pending-bytes-KVDB": "rgb(100, 144, 211)",
+        "duration-99%": "blue",
+        "duration-999%": "yellow",
+        "kv_commit": "green",
+        "pending-bytes": "orange",
+        "pending-bytes-kv": "rgb(21, 121, 231)",
+        "pending-bytes-raft": "dark-red",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_TEST-CLUSTER}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "id": 11282,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/(.*)-pending-bytes-(.*)/",
+          "legend": false,
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"}) by (instance)",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "{{instance}}-pending-bytes-KVDB",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Some instances' KVDB compaction pending bytes accumulating ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
         "kv_commit": "green",
         "move-peer-opm": "red",
         "move-peer-ops": "dark-red",
@@ -1727,7 +2018,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 33
+        "y": 38
       },
       "id": 11276,
       "legend": {
@@ -1866,7 +2157,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 33
+        "y": 38
       },
       "id": 11280,
       "legend": {
@@ -1994,7 +2285,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 43
       },
       "id": 11275,
       "legend": {
@@ -2120,7 +2411,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 38
+        "y": 43
       },
       "id": 11277,
       "legend": {
@@ -2249,7 +2540,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 48
       },
       "id": 11283,
       "legend": {
@@ -2353,7 +2644,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 53
       },
       "id": 11267,
       "panels": [],
@@ -2381,7 +2672,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 54
       },
       "id": 9255,
       "legend": {
@@ -2502,7 +2793,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 54
       },
       "id": 8947,
       "legend": {
@@ -2648,7 +2939,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 59
       },
       "id": 9407,
       "legend": {
@@ -2691,6 +2982,10 @@
           "alias": "wait-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -2794,7 +3089,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 54
+        "y": 59
       },
       "id": 9408,
       "legend": {
@@ -2929,7 +3224,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 59
+        "y": 64
       },
       "id": 10486,
       "legend": {
@@ -3065,7 +3360,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 64
       },
       "id": 11258,
       "legend": {
@@ -3197,7 +3492,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 69
       },
       "id": 8945,
       "legend": {
@@ -3328,7 +3623,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 69
       },
       "id": 8946,
       "legend": {
@@ -3460,7 +3755,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 69
+        "y": 74
       },
       "id": 11281,
       "legend": {
@@ -3492,7 +3787,8 @@
           "alias": "/(.*)-flow/",
           "legend": false,
           "transform": "negative-Y",
-          "yaxis": 2
+          "yaxis": 2,
+          "zindex": 3
         }
       ],
       "spaceLength": 10,
@@ -3592,7 +3888,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 69
+        "y": 74
       },
       "id": 11270,
       "legend": {
@@ -3625,6 +3921,10 @@
           "legend": false,
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -3715,7 +4015,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 74
+        "y": 79
       },
       "id": 11261,
       "legend": {
@@ -3753,6 +4053,10 @@
           "alias": "batch-size-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -3852,7 +4156,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 74
+        "y": 79
       },
       "id": 11262,
       "legend": {
@@ -3890,6 +4194,10 @@
           "alias": "batch-size-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -3993,7 +4301,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 79
+        "y": 84
       },
       "id": 11263,
       "legend": {
@@ -4143,7 +4451,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 79
+        "y": 84
       },
       "id": 9571,
       "legend": {
@@ -4286,7 +4594,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 84
+        "y": 89
       },
       "id": 9099,
       "legend": {
@@ -4419,7 +4727,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 84
+        "y": 89
       },
       "id": 9101,
       "legend": {
@@ -4553,7 +4861,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 94
       },
       "id": 8025,
       "legend": {
@@ -4686,7 +4994,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 94
       },
       "id": 9100,
       "legend": {
@@ -4818,7 +5126,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 94
+        "y": 99
       },
       "id": 9102,
       "legend": {
@@ -4934,7 +5242,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 99
+        "y": 104
       },
       "id": 8792,
       "panels": [],
@@ -4972,7 +5280,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 105
       },
       "id": 10942,
       "legend": {
@@ -5112,7 +5420,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 100
+        "y": 105
       },
       "id": 10334,
       "legend": {
@@ -5271,7 +5579,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 105
+        "y": 110
       },
       "id": 9563,
       "legend": {
@@ -5415,7 +5723,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 105
+        "y": 110
       },
       "id": 10790,
       "legend": {
@@ -5536,7 +5844,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 110
+        "y": 115
       },
       "id": 9561,
       "legend": {
@@ -5569,6 +5877,10 @@
           "alias": "copr-scan-number",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -5659,7 +5971,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 110
+        "y": 115
       },
       "id": 10030,
       "legend": {
@@ -5791,7 +6103,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 115
+        "y": 120
       },
       "id": 10182,
       "legend": {
@@ -5914,7 +6226,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 115
+        "y": 120
       },
       "id": 9569,
       "legend": {
@@ -6050,7 +6362,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 120
+        "y": 125
       },
       "id": 11259,
       "legend": {
@@ -6172,7 +6484,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 120
+        "y": 125
       },
       "id": 9570,
       "legend": {
@@ -6292,7 +6604,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 130
       },
       "id": 9568,
       "legend": {
@@ -6325,6 +6637,10 @@
           "alias": "count",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -6415,7 +6731,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 130
       },
       "id": 9567,
       "legend": {
@@ -6453,6 +6769,10 @@
           "alias": "duration-max",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
         }
       ],
       "spaceLength": 10,
@@ -6527,143 +6847,6 @@
     },
     {
       "aliasColors": {
-        "duration-99%": "blue",
-        "duration-999%": "yellow",
-        "kv_commit": "green",
-        "pending-bytes": "orange",
-        "pending-bytes-kv": "rgb(21, 121, 231)",
-        "pending-bytes-raft": "dark-red",
-        "wait-duration-999%": "orange",
-        "wait-queue": "semi-dark-red",
-        "wait-sched": "semi-dark-red",
-        "write-rpc": "green"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "decimals": 1,
-      "description": "",
-      "editable": true,
-      "error": false,
-      "fill": 2,
-      "grid": {},
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 0,
-        "y": 130
-      },
-      "id": 9876,
-      "legend": {
-        "alignAsTable": false,
-        "avg": false,
-        "current": false,
-        "hideEmpty": true,
-        "max": false,
-        "min": false,
-        "rightSide": false,
-        "show": true,
-        "sideWidth": null,
-        "sort": "max",
-        "sortDesc": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "paceLength": 10,
-      "percentage": false,
-      "pointradius": 5,
-      "points": false,
-      "renderer": "flot",
-      "repeatedByRow": true,
-      "seriesOverrides": [
-        {
-          "alias": "pending-bytes-kv",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "pending-bytes-raft",
-          "transform": "negative-Y",
-          "yaxis": 2
-        }
-      ],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"})",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "pending-bytes-kv",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "write-rpc",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"raft\"})",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "pending-bytes-raft",
-          "refId": "B"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Too many compaction pending bytes accumulating ?",
-      "tooltip": {
-        "msResolution": false,
-        "shared": true,
-        "sort": 0,
-        "value_type": "cumulative"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "decbytes",
-          "label": null,
-          "logBase": 1,
-          "max": "0",
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {
         "hit-count": "super-light-blue",
         "kv_commit": "green",
         "wait-queue": "orange",
@@ -6683,8 +6866,8 @@
       "gridPos": {
         "h": 5,
         "w": 12,
-        "x": 12,
-        "y": 130
+        "x": 0,
+        "y": 135
       },
       "id": 9566,
       "legend": {
@@ -6781,133 +6964,6 @@
         "align": false,
         "alignLevel": null
       }
-    },
-    {
-      "aliasColors": {
-        "172.16.4.55:23581-pending-bytes-KVDB": "rgb(100, 144, 211)",
-        "duration-99%": "blue",
-        "duration-999%": "yellow",
-        "kv_commit": "green",
-        "pending-bytes": "orange",
-        "pending-bytes-kv": "rgb(21, 121, 231)",
-        "pending-bytes-raft": "dark-red",
-        "wait-duration-999%": "orange",
-        "wait-queue": "semi-dark-red",
-        "wait-sched": "semi-dark-red",
-        "write-rpc": "green"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "decimals": 1,
-      "description": "",
-      "editable": true,
-      "error": false,
-      "fill": 2,
-      "grid": {},
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 0,
-        "y": 135
-      },
-      "id": 11282,
-      "legend": {
-        "alignAsTable": false,
-        "avg": false,
-        "current": false,
-        "hideEmpty": true,
-        "max": false,
-        "min": false,
-        "rightSide": false,
-        "show": true,
-        "sideWidth": null,
-        "sort": "max",
-        "sortDesc": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "paceLength": 10,
-      "percentage": false,
-      "pointradius": 5,
-      "points": false,
-      "renderer": "flot",
-      "repeatedByRow": true,
-      "seriesOverrides": [
-        {
-          "alias": "/(.*)-pending-bytes-(.*)/",
-          "legend": false,
-          "transform": "negative-Y",
-          "yaxis": 2
-        }
-      ],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{instance=~\"$instance\", db=\"kv\"}) by (instance)",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "{{instance}}-pending-bytes-KVDB",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "write-rpc",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Some instances' KVDB compaction pending bytes accumulating ?",
-      "tooltip": {
-        "msResolution": false,
-        "shared": true,
-        "sort": 0,
-        "value_type": "cumulative"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "decbytes",
-          "label": null,
-          "logBase": 1,
-          "max": "0",
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
     }
   ],
   "refresh": "5m",
@@ -6972,5 +7028,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-FastTune",
   "uid": "TiKVFastTune",
-  "version": 2
+  "version": 7
 }
