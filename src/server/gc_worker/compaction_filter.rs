@@ -319,7 +319,9 @@ impl WriteCompactionFilter {
                         let _ = filtered.next().unwrap();
                         break;
                     }
-                    CmpOrdering::Greater => drop(filtered.next().unwrap()),
+                    CmpOrdering::Greater => {
+                        let _ = filtered.next().unwrap();
+                    }
                 }
             }
             if need_delete {
