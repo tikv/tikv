@@ -126,13 +126,14 @@ fn test_ingest_key_manager_delete_file_failed() {
         .get(&node_id)
         .unwrap()
         .get_path(&meta);
-    // wait until the raw uploaded file is deleted by the async clean up task.
-    loop {
+    // wait up to 5 seconds to make sure raw uploaded file is deleted by the async clean up task.
+    for _ in 0..50 {
         if !save_path.as_path().exists() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    assert!(!save_path.as_path().exists());
 
     // Do upload and ingest again, though key manager contains this file, the ingest action should success.
     upload_sst(&import, &meta, &data).unwrap();
