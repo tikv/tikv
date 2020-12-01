@@ -531,18 +531,16 @@ impl SyncEvents {
 
 #[derive(Clone)]
 pub struct SyncEventMetrics {
-    pub sync_log_interval: LocalHistogram,
     pub sync_delay_duration: LocalHistogram,
-    pub thread_check_result: LocalHistogram,
+    pub thread_check_delay: LocalHistogram,
     pub sync_events: SyncEvents,
 }
 
 impl Default for SyncEventMetrics {
     fn default() -> SyncEventMetrics {
         SyncEventMetrics {
-            sync_log_interval: PEER_SYNC_LOG_INTERVAL_HISTOGRAM.local(),
             sync_delay_duration: PEER_SYNC_DELAY_HISTOGRAM.local(),
-            thread_check_result: PEER_THREAD_CHECK_SYNC_RESULT_HISTOGRAM.local(),
+            thread_check_delay: PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM.local(),
             sync_events: Default::default(),
         }
     }
@@ -550,9 +548,8 @@ impl Default for SyncEventMetrics {
 
 impl SyncEventMetrics {
     pub fn flush(&mut self) {
-        self.sync_log_interval.flush();
         self.sync_delay_duration.flush();
-        self.thread_check_result.flush();
+        self.thread_check_delay.flush();
         self.sync_events.flush();
     }
 }

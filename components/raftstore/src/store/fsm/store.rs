@@ -40,7 +40,7 @@ use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
-use crate::store::fsm::sync_policy::SyncPolicy;
+use crate::store::fsm::sync_policy::{new_sync_policy, SyncAction, SyncPolicy};
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -268,7 +268,7 @@ pub struct PollContext<T, C: 'static> {
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub sync_policy: SyncPolicy,
+    pub sync_policy: SyncPolicy<SyncAction>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -796,6 +796,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
         self.flush_ticks();
+        self.poll_ctx.sync_policy.try_flush_regions();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -807,7 +808,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.sync_policy.metrics.flush();
         self.poll_ctx.store_stat.flush();
-        self.poll_ctx.sync_policy.try_flush_regions();
     }
 
     fn pause(&mut self) -> bool {
@@ -842,7 +842,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: Engines,
     applying_snap_count: Arc<AtomicUsize>,
-    pub sync_policy: SyncPolicy,
+    pub sync_policy: SyncPolicy<SyncAction>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1133,7 +1133,7 @@ impl RaftBatchSystem {
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             coprocessor_host,
         };
-        let sync_policy = SyncPolicy::new(
+        let sync_policy = new_sync_policy(
             engines.clone(),
             self.router.clone(),
             cfg.value().delay_sync_enabled(),

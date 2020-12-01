@@ -3073,7 +3073,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=fix-clippy#f08f3f537bd55546ee04f972958d6dced59cd552"
+source = "git+https://github.com/pingcap/raft-rs?branch=0.6.x#eddf8e6c37558d2c94872399ad4b287e123b5e02"
 dependencies = [
  "fxhash",
  "getset",
@@ -3087,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/gengliqi/raft-rs?branch=fix-clippy#f08f3f537bd55546ee04f972958d6dced59cd552"
+source = "git+https://github.com/pingcap/raft-rs?branch=0.6.x#eddf8e6c37558d2c94872399ad4b287e123b5e02"
 dependencies = [
  "lazy_static",
  "prost",
