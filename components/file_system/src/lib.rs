@@ -9,6 +9,12 @@ mod rate_limiter;
 pub use file::{File, OpenOptions};
 pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 
+pub use std::fs::{
+    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
+    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder,
+    DirEntry, FileType, Metadata, Permissions, ReadDir,
+};
+
 use std::cell::Cell;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};

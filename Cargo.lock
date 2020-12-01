@@ -1293,6 +1293,7 @@ name = "file_system"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "fs2",
  "lazy_static",
  "openssl",
  "rand",

@@ -7,6 +7,8 @@ use std::io::{self, Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use fs2::FileExt;
+
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
 pub struct File {
     inner: fs::File,
@@ -115,6 +117,44 @@ impl Write for File {
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
+    }
+}
+
+/// fs2::FileExt
+impl File {
+    pub fn duplicate(&self) -> io::Result<File> {
+        Ok(File {
+            inner: self.inner.duplicate()?,
+            limiter: get_io_rate_limiter(),
+        })
+    }
+
+    pub fn allocated_size(&self) -> io::Result<u64> {
+        self.inner.allocated_size()
+    }
+
+    pub fn allocate(&self, len: u64) -> io::Result<()> {
+        self.inner.allocate(len)
+    }
+
+    pub fn lock_shared(&self) -> io::Result<()> {
+        self.inner.lock_shared()
+    }
+
+    pub fn lock_exclusive(&self) -> io::Result<()> {
+        self.inner.lock_exclusive()
+    }
+
+    pub fn try_lock_shared(&self) -> io::Result<()> {
+        self.inner.try_lock_shared()
+    }
+
+    pub fn try_lock_exclusive(&self) -> io::Result<()> {
+        self.inner.try_lock_exclusive()
+    }
+
+    pub fn unlock(&self) -> io::Result<()> {
+        self.inner.unlock()
     }
 }
 
