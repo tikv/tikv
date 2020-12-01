@@ -9,13 +9,13 @@ use std::sync::{atomic, Arc, Mutex};
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    unit: atomic::AtomicUsize,
+    refill_bytes: atomic::AtomicUsize,
 }
 
 impl IORateLimiter {
-    pub fn new(_unit: usize) -> IORateLimiter {
+    pub fn new(_refill_bytes: usize) -> IORateLimiter {
         IORateLimiter {
-            unit: atomic::AtomicUsize::new(_unit),
+            refill_bytes: atomic::AtomicUsize::new(_refill_bytes),
         }
     }
 
@@ -23,7 +23,7 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested amount.
     pub fn request(&self, _io_type: IOType, _io_op: IOOp, bytes: usize) -> usize {
-        std::cmp::min(self.unit.load(atomic::Ordering::Relaxed), bytes)
+        std::cmp::min(self.refill_bytes.load(atomic::Ordering::Relaxed), bytes)
     }
 
     pub fn async_request(

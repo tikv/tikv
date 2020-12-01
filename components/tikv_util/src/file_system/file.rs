@@ -164,6 +164,7 @@ impl OpenOptions {
 mod tests {
     use tempfile::TempDir;
 
+    use super::super::*;
     use super::*;
 
     #[test]
