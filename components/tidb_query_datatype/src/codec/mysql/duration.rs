@@ -13,7 +13,6 @@ use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
-use tikv_util::is_zero_duration;
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANOS_PER_MILLI: i64 = 1_000_000;
