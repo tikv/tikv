@@ -10,7 +10,7 @@ impl Collator for CollatorBinary {
     type Charset = CharsetBinary;
     type Weight = u8;
 
-    const IsCaseInsensitive: bool = false;
+    const IS_CASE_INSENSITIVE: bool = false;
 
     #[inline]
     fn char_weight(ch: u8) -> Self::Weight {

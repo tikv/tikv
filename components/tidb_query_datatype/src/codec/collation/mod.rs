@@ -40,7 +40,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     type Charset: Charset;
     type Weight: Unsigned;
 
-    const IsCaseInsensitive: bool;
+    const IS_CASE_INSENSITIVE: bool;
 
     /// Returns the weight of a given char. The chars that have equal
     /// weight are considered as the same char with this collation.

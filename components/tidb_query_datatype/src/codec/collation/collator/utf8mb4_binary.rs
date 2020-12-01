@@ -10,7 +10,7 @@ impl Collator for CollatorUtf8Mb4Bin {
     type Charset = CharsetUtf8mb4;
     type Weight = u32;
 
-    const IsCaseInsensitive: bool = false;
+    const IS_CASE_INSENSITIVE: bool = false;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
@@ -46,6 +46,8 @@ pub struct CollatorUtf8Mb4BinNoPadding;
 impl Collator for CollatorUtf8Mb4BinNoPadding {
     type Charset = CharsetUtf8mb4;
     type Weight = u32;
+
+    const IS_CASE_INSENSITIVE: bool = false;
 
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
