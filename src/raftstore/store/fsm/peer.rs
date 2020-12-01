@@ -635,7 +635,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.on_ready_rollback_merge(0, None);
         }
         let s = self.fsm.raft_heap_size(&self.ctx.cfg);
-        let trace = self.fsm.trace.as_ref().unwrap();
+        let trace = match &self.fsm.trace {
+            Some(t) => t,
+            None => return,
+        };
         trace.raft_machine.store(s, Ordering::Relaxed);
         trace
             .proposals
