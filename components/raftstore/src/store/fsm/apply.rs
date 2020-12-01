@@ -337,7 +337,7 @@ where
     apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
-    kv_wb: Option<W>,
+    kv_wb: W,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -377,6 +377,10 @@ where
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     ) -> ApplyContext<EK, W> {
+        // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
+        // Otherwise create `RocksWriteBatch`.
+        let kv_wb = W::with_capacity(&engine, DEFAULT_APPLY_WB_SIZE);
+
         ApplyContext {
             tag,
             timer: None,
@@ -386,7 +390,7 @@ where
             engine,
             router,
             notifier,
-            kv_wb: None,
+            kv_wb,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
             kv_wb_last_bytes: 0,
@@ -409,7 +413,6 @@ where
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        self.prepare_write_batch();
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
 
@@ -425,26 +428,13 @@ where
         }
     }
 
-    /// Prepares WriteBatch.
-    ///
-    /// If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
-    /// Otherwise create `RocksWriteBatch`.
-    pub fn prepare_write_batch(&mut self) {
-        if self.kv_wb.is_none() {
-            let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
-            self.kv_wb = Some(kv_wb);
-            self.kv_wb_last_bytes = 0;
-            self.kv_wb_last_keys = 0;
-        }
-    }
-
     /// Commits all changes have done for delegate. `persistent` indicates whether
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if self.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb_mut());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
         // force it call `prepare_for` automatically.
@@ -465,7 +455,7 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
-        if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+        if !self.kv_wb_mut().is_empty() {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.kv_wb()
@@ -480,9 +470,9 @@ where
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
-                // Control the memory usage for the WriteBatch.
-                let kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
-                self.kv_wb = Some(kv_wb);
+                // Control the memory usage for the WriteBatch. Whether it's `RocksWriteBatch` or
+                // `RocksWriteBatchVec` depends on the `enable_multi_batch_write` configuration.
+                self.kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
                 self.kv_wb_mut().clear();
@@ -506,7 +496,7 @@ where
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(self.kv_wb.as_mut().unwrap());
+            delegate.write_apply_state(self.kv_wb_mut());
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -528,12 +518,12 @@ where
 
     #[inline]
     pub fn kv_wb(&self) -> &W {
-        self.kv_wb.as_ref().unwrap()
+        &self.kv_wb
     }
 
     #[inline]
     pub fn kv_wb_mut(&mut self) -> &mut W {
-        self.kv_wb.as_mut().unwrap()
+        &mut self.kv_wb
     }
 
     /// Flush all pending writes to engines.
@@ -2032,6 +2022,7 @@ where
         ctx: &mut ApplyContext<EK, W>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!("apply_before_split");
         fail_point!(
             "apply_before_split_1_3",
             self.id == 3 && self.region_id() == 1,
@@ -2181,7 +2172,7 @@ where
             }
         }
 
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb_mut();
         for new_region in &regions {
             if new_region.get_id() == derived.get_id() {
                 continue;
@@ -2266,7 +2257,7 @@ where
         merging_state.set_target(prepare_merge.get_target().to_owned());
         merging_state.set_commit(exec_ctx.index);
         write_peer_state(
-            ctx.kv_wb.as_mut().unwrap(),
+            ctx.kv_wb_mut(),
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
@@ -2402,7 +2393,7 @@ where
         } else {
             region.set_start_key(source_region.get_start_key().to_vec());
         }
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
+        let kv_wb_mut = ctx.kv_wb_mut();
         write_peer_state(kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
@@ -2459,8 +2450,7 @@ where
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        let kv_wb_mut = ctx.kv_wb.as_mut().unwrap();
-        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!(
                 "{} failed to rollback merge {:?}: {:?}",
                 self.tag, rollback, e
@@ -3239,7 +3229,6 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            apply_ctx.prepare_write_batch();
             self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
@@ -3311,7 +3300,7 @@ where
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
-                if apply_ctx.kv_wb.is_some() && apply_ctx.kv_wb().count() > 0 {
+                if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
                 ReadResponse {

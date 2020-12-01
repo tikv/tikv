@@ -291,6 +291,7 @@ where
                     let mut resp = IngestResponse::default();
                     let mut header = res.response.take_header();
                     if header.has_error() {
+                        pb_error_inc(label, header.get_error());
                         resp.set_error(header.take_error());
                     }
                     Ok(resp)
@@ -456,4 +457,29 @@ where
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
+}
+
+// add error statistics from pb error response
+fn pb_error_inc(type_: &str, e: &errorpb::Error) {
+    let label = if e.has_not_leader() {
+        "not_leader"
+    } else if e.has_store_not_match() {
+        "store_not_match"
+    } else if e.has_region_not_found() {
+        "region_not_found"
+    } else if e.has_key_not_in_region() {
+        "key_not_in_range"
+    } else if e.has_epoch_not_match() {
+        "epoch_not_match"
+    } else if e.has_server_is_busy() {
+        "server_is_busy"
+    } else if e.has_stale_command() {
+        "stale_command"
+    } else if e.has_raft_entry_too_large() {
+        "raft_entry_too_large"
+    } else {
+        "unknown"
+    };
+
+    IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }

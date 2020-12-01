@@ -205,7 +205,7 @@ dependencies = [
  "futures 0.3.7",
  "futures-executor",
  "futures-util",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -324,6 +324,15 @@ name = "boolinator"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
+
+[[package]]
+name = "boringssl-src"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c212e3cd725f096e4de48d4ded0909cb62cb92c1a3420ff0e95edb46390a7736"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "bstr"
@@ -447,7 +456,7 @@ dependencies = [
  "fail",
  "failure",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -578,7 +587,7 @@ dependencies = [
  "error_code",
  "fs2",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -1060,6 +1069,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1189,7 +1199,7 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
- "grpcio",
+ "grpcio 0.7.0",
  "kvproto",
  "lazy_static",
  "raft",
@@ -1549,10 +1559,26 @@ checksum = "63fac32f9f74fa1fd78215d04b47f134c1ee5a535c237a54d52bf18cf65ac983"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
- "grpcio-sys",
+ "grpcio-sys 0.6.0",
  "libc",
  "log",
  "parking_lot 0.10.0",
+ "prost",
+ "protobuf",
+]
+
+[[package]]
+name = "grpcio"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
+dependencies = [
+ "bytes 0.5.3",
+ "futures 0.3.7",
+ "grpcio-sys 0.7.1",
+ "libc",
+ "log",
+ "parking_lot 0.11.0",
  "prost",
  "protobuf",
 ]
@@ -1578,6 +1604,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12d4e9309f1151c9ebcd07622858c4a504b6ea6cd2821524fe74ccde8ea830d7"
 dependencies = [
  "bindgen",
+ "cc",
+ "cmake",
+ "libc",
+ "libz-sys",
+ "pkg-config",
+ "walkdir",
+]
+
+[[package]]
+name = "grpcio-sys"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6ea7ecb083588c8b3446270e95415c14ea856539e41ed3ad0c53614398a13f"
+dependencies = [
+ "bindgen",
+ "boringssl-src",
  "cc",
  "cmake",
  "libc",
@@ -1903,7 +1945,7 @@ version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#13345c110d832c71632bbacbc3ae78de9e7ccf43"
 dependencies = [
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.6.0",
  "lazy_static",
  "prost",
  "prost-derive",
@@ -1975,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#cca367df99c9a1091613697859417b6ff81209a9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#0aba96a0d5a54ae4a4a66a394833f72d0bd25b5e"
 dependencies = [
  "cc",
  "cmake",
@@ -1984,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#cca367df99c9a1091613697859417b6ff81209a9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#0aba96a0d5a54ae4a4a66a394833f72d0bd25b5e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2004,7 +2046,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#cca367df99c9a1091613697859417b6ff81209a9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#0aba96a0d5a54ae4a4a66a394833f72d0bd25b5e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2657,7 +2699,7 @@ dependencies = [
  "error_code",
  "fail",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -3419,7 +3461,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#cca367df99c9a1091613697859417b6ff81209a9"
+source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=limiterv3#0aba96a0d5a54ae4a4a66a394833f72d0bd25b5e"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3677,7 +3719,7 @@ name = "security"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "grpcio",
+ "grpcio 0.7.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -3965,7 +4007,7 @@ dependencies = [
  "external_storage",
  "futures 0.3.7",
  "futures-util",
- "grpcio",
+ "grpcio 0.7.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4271,7 +4313,7 @@ version = "0.0.1"
 dependencies = [
  "fail",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "kvproto",
  "pd_client",
  "security",
@@ -4291,7 +4333,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -4344,7 +4386,7 @@ version = "0.0.1"
 dependencies = [
  "encryption",
  "fail",
- "grpcio",
+ "grpcio 0.7.0",
  "kvproto",
  "rand",
  "rand_isaac",
@@ -4377,7 +4419,7 @@ dependencies = [
  "external_storage",
  "fail",
  "futures 0.3.7",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "hyper",
  "keys",
@@ -4396,6 +4438,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_coprocessor",
  "test_pd",
@@ -4507,6 +4550,7 @@ dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
+ "bstr",
  "chrono",
  "chrono-tz",
  "codec",
@@ -4622,7 +4666,7 @@ dependencies = [
  "futures 0.3.7",
  "futures-executor",
  "futures-util",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "http",
  "hyper",
@@ -4763,7 +4807,7 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "fxhash",
- "grpcio",
+ "grpcio 0.7.0",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
