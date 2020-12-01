@@ -465,7 +465,7 @@ mod tests {
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
     use crate::storage::txn::{
-        acquire_pessimistic_lock, cleanup, commit, pessimistic_prewrite, prewrite,
+        acquire_pessimistic_lock, cleanup, commit, gc, pessimistic_prewrite, prewrite,
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -655,7 +655,7 @@ mod tests {
                     self.region.clone(),
                 );
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
-                txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
+                gc(&mut txn, Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;

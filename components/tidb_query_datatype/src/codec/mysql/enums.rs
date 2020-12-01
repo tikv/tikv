@@ -89,6 +89,9 @@ impl<'a> EnumRef<'a> {
     pub fn is_empty(&self) -> bool {
         self.value == 0
     }
+    pub fn value(&self) -> usize {
+        self.value
+    }
 }
 
 impl<'a> Eq for EnumRef<'a> {}
