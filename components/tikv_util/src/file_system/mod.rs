@@ -96,42 +96,38 @@ pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
     Ok(string)
 }
 
-/// Copies the contents of one file to another. This function will also
-/// copy the permission bits of the original file to the destination file.
-pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
+fn copy_imp(from: &Path, to: &Path, sync: bool) -> io::Result<u64> {
+    if !from.is_file() {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
             "the source path is not an existing regular file",
         ));
     }
 
-    let mut reader = File::open(from.as_ref())?;
-    let mut writer = File::create(to.as_ref())?;
+    let mut reader = File::open(from)?;
+    let mut writer = File::create(to)?;
     let perm = reader.metadata()?.permissions();
 
     let ret = io::copy(&mut reader, &mut writer)?;
-    fs::set_permissions(to.as_ref(), perm)?;
+    fs::set_permissions(to, perm)?;
+    if sync {
+        writer.sync_all()?;
+        if let Some(parent) = to.parent() {
+            sync_dir(parent)?;
+        }
+    }
     Ok(ret)
 }
 
-/// Copies the contents of one file to another. Synchronize afterwards.
+/// Copies the contents of one file to another. This function will also
+/// copy the permission bits of the original file to the destination file.
+pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    copy_imp(from.as_ref(), to.as_ref(), false)
+}
+
+/// Copies the contents and permission bits of one file to another, then synchronizes.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "the source path is not an existing regular file",
-        ));
-    }
-
-    let mut reader = File::open(from.as_ref())?;
-    let mut writer = File::create(to.as_ref())?;
-    let perm = reader.metadata()?.permissions();
-
-    let ret = io::copy(&mut reader, &mut writer)?;
-    fs::set_permissions(to.as_ref(), perm)?;
-    writer.sync_all()?;
-    Ok(ret)
+    copy_imp(from.as_ref(), to.as_ref(), true)
 }
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
