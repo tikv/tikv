@@ -552,7 +552,7 @@ where
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return false,
+            None => return,
         };
 
         // Write to engine

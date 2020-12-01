@@ -874,17 +874,19 @@ mod tests {
         let manager = manager.unwrap().unwrap();
 
         let file = manager.new_file("foo").unwrap();
-        manager.link_file("foo", "foo1").unwrap();
+        manager.link_file("foo", "foo1", false).unwrap();
 
         // Must be the same.
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
         // Source file not exists.
-        manager.link_file("not exists", "not exists1").unwrap();
+        manager
+            .link_file("not exists", "not exists1", false)
+            .unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
-        manager.link_file("foo2", "foo1").unwrap_err();
+        manager.link_file("foo2", "foo1", false).unwrap_err();
     }
 
     #[test]
