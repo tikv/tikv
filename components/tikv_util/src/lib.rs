@@ -39,7 +39,6 @@ pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
 pub mod config;
-pub mod file_system;
 pub mod future;
 #[macro_use]
 pub mod macros;

@@ -21,7 +21,7 @@ impl IORateLimiter {
 
     /// Request for token for bytes and potentially update statistics. If this
     /// request can not be satisfied, the call is blocked. Granted token can be
-    /// less than the requested amount.
+    /// less than the requested bytes.
     pub fn request(&self, _io_type: IOType, _io_op: IOOp, bytes: usize) -> usize {
         std::cmp::min(self.refill_bytes.load(atomic::Ordering::Relaxed), bytes)
     }

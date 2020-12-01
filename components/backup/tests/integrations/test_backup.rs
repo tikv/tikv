@@ -35,7 +35,7 @@ use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::collections::HashMap;
-use tikv_util::file_system::calc_crc32_bytes;
+use file_system::calc_crc32_bytes;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;

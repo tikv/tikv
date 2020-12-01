@@ -667,7 +667,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     } else {
                         k.into_raw().unwrap()
                     };
-                    tikv_util::file_system::sha256(&input).ok().map(hex::encode)
+                    file_system::sha256(&input).ok().map(hex::encode)
                 });
                 let name = backup_file_name(store_id, &brange.region, key);
                 let ct = to_sst_compression_type(request.compression_type);

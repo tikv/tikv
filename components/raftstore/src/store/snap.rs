@@ -30,7 +30,7 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use keys::{enc_end_key, enc_start_key};
 use openssl::symm::{Cipher, Crypter, Mode};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file_system::{
+use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
 };
 use tikv_util::time::{duration_to_sec, Limiter};
@@ -1550,7 +1550,6 @@ pub mod tests {
 
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
-    use tikv_util::file_system as file_util;
     use tikv_util::time::Limiter;
 
     use super::{
@@ -2494,12 +2493,12 @@ pub mod tests {
             .unwrap();
         writer.put(b"a", b"a").unwrap();
         let r = writer.finish().unwrap();
-        assert!(file_util::file_exists(&sst_path));
+        assert!(file_system::file_exists(&sst_path));
         assert_eq!(r.file_path().to_str().unwrap(), sst_path.as_str());
         drop(src_mgr);
         let src_mgr = SnapManager::new(mgr_path.to_owned());
         src_mgr.init().unwrap();
         // The sst_path will be deleted by SnapManager because it is a temp filet.
-        assert!(!file_util::file_exists(&sst_path));
+        assert!(!file_system::file_exists(&sst_path));
     }
 }
