@@ -3,7 +3,9 @@
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
+use engine_traits::{
+    self, IterOptions, Iterable, PbPeekable, Peekable, ReadOptions, Result, Snapshot,
+};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
@@ -110,3 +112,5 @@ impl Peekable for RocksSnapshot {
         Ok(v.map(RocksDBVector::from_raw))
     }
 }
+
+impl PbPeekable for RocksSnapshot {}

@@ -46,7 +46,9 @@ pub trait Peekable {
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Self::DBVector>> {
         self.get_value_cf_opt(&ReadOptions::default(), cf, key)
     }
+}
 
+pub trait PbPeekable: Peekable {
     /// Read a value and return it as a protobuf message.
     fn get_msg<M: protobuf::Message + Default>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value(key)?;

@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use engine_traits::CF_RAFT;
 use test_raftstore::*;
 

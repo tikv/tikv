@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::Compat;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{PbPeekable, Peekable, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::util::is_learner;
 use raftstore::Result;

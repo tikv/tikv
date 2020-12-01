@@ -4,8 +4,8 @@ use crate::db_vector::PanicDBVector;
 use crate::snapshot::PanicSnapshot;
 use crate::write_batch::PanicWriteBatch;
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SeekKey, SyncMutable,
-    WriteOptions,
+    IterOptions, Iterable, Iterator, KvEngine, PbPeekable, Peekable, ReadOptions, Result, SeekKey,
+    SyncMutable, WriteOptions,
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +40,8 @@ impl Peekable for PanicEngine {
         panic!()
     }
 }
+
+impl PbPeekable for PanicEngine {}
 
 impl SyncMutable for PanicEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {

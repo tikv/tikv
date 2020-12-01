@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::RegionLocalState;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
+use engine_traits::{Engines, PbPeekable, ALL_CFS, CF_RAFT};
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::store::fsm::store::StoreMeta;
 use raftstore::store::{bootstrap_store, fsm, AutoSplitController, SnapManager};

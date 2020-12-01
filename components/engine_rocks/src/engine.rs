@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+    Error, IterOptions, Iterable, KvEngine, PbPeekable, Peekable, ReadOptions, Result, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -155,6 +155,8 @@ impl Peekable for RocksEngine {
     }
 }
 
+impl PbPeekable for RocksEngine {}
+
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.db.put(key, value).map_err(Error::Engine)
@@ -185,7 +187,7 @@ impl SyncMutable for RocksEngine {
 #[cfg(test)]
 mod tests {
     use crate::raw_util;
-    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
+    use engine_traits::{Iterable, KvEngine, PbPeekable, Peekable, SyncMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;

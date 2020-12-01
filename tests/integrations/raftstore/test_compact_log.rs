@@ -3,7 +3,7 @@
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, CF_RAFT};
+use engine_traits::{Engines, PbPeekable, Peekable, CF_RAFT};
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;

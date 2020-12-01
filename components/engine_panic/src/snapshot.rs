@@ -3,7 +3,7 @@
 use crate::db_vector::PanicDBVector;
 use crate::engine::PanicEngine;
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot,
+    IterOptions, Iterable, Iterator, PbPeekable, Peekable, ReadOptions, Result, SeekKey, Snapshot,
 };
 use std::ops::Deref;
 
@@ -31,6 +31,8 @@ impl Peekable for PanicSnapshot {
         panic!()
     }
 }
+
+impl PbPeekable for PanicSnapshot {}
 
 impl Iterable for PanicSnapshot {
     type Iterator = PanicSnapshotIterator;

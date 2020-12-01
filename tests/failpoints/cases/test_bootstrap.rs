@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use kvproto::{metapb, raft_serverpb};
 use test_raftstore::*;
 

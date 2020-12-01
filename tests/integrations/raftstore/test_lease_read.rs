@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine_rocks::{Compat, RocksSnapshot};
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use pd_client::PdClient;
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;

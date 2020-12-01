@@ -9,7 +9,7 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine_traits::CF_RAFT;
-use engine_traits::{Engines, KvEngine, Mutable, Peekable};
+use engine_traits::{Engines, KvEngine, Mutable, PbPeekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1636,7 +1636,7 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_test::raft::{RaftTestEngine, RaftTestWriteBatch};
     use engine_traits::Engines;
-    use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
+    use engine_traits::{Iterable, Peekable, SyncMutable, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;

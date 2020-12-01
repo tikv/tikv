@@ -12,7 +12,7 @@ use tikv_util::config::*;
 
 use engine_rocks::raw::Writable;
 use engine_rocks::Compat;
-use engine_traits::{Iterable, Peekable};
+use engine_traits::{Iterable, PbPeekable};
 use engine_traits::{SyncMutable, CF_RAFT};
 use test_raftstore::*;
 

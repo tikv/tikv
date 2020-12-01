@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterOptions, KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot,
+    IterOptions, KvEngine, PbPeekable, Peekable, ReadOptions, Result as EngineResult, Snapshot,
 };
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
@@ -217,6 +217,8 @@ where
             .map_err(|e| self.handle_get_value_error(e, cf, key))
     }
 }
+
+impl<S: Snapshot> PbPeekable for RegionSnapshot<S> {}
 
 impl<S> RegionSnapshot<S>
 where

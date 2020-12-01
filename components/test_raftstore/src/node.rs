@@ -15,7 +15,7 @@ use super::*;
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{Engines, MiscExt, Peekable};
+use engine_traits::{Engines, MiscExt, PbPeekable};
 use raftstore::coprocessor::config::SplitCheckConfigManager;
 use raftstore::coprocessor::CoprocessorHost;
 use raftstore::errors::Error as RaftError;

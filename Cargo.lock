@@ -3393,7 +3393,10 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
+ "engine_traits",
  "hex 0.4.2",
+ "kvproto",
+ "raftstore",
  "slog",
  "slog-global",
  "tikv_util",

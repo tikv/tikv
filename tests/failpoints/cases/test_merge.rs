@@ -13,7 +13,7 @@ use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{PbPeekable, CF_RAFT};
 use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;

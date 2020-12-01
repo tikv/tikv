@@ -12,6 +12,7 @@ use crate::*;
 /// A TiKV key-value store
 pub trait KvEngine:
     Peekable
+    + PbPeekable
     + SyncMutable
     + Iterable
     + WriteBatchExt

@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use engine_traits::{CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
 use raftstore::store::*;

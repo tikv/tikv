@@ -10,7 +10,7 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;

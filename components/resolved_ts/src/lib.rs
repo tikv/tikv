@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use(debug)]
+#[macro_use]
 extern crate tikv_util;
+
+mod observer;
 
 use std::cmp;
 use std::collections::BTreeMap;

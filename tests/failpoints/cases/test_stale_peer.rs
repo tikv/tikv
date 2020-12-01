@@ -4,7 +4,7 @@ use std::thread;
 use std::time::*;
 
 use engine_rocks::Compat;
-use engine_traits::Peekable;
+use engine_traits::PbPeekable;
 use kvproto::raft_serverpb::RaftLocalState;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
