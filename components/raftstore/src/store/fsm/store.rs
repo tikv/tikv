@@ -859,6 +859,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         self.flush_ticks();
+        self.poll_ctx.sync_policy.try_flush_regions();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -870,7 +871,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.sync_policy.metrics.flush();
         self.poll_ctx.store_stat.flush();
-        self.poll_ctx.sync_policy.try_flush_regions();
     }
 
     fn pause(&mut self) -> bool {

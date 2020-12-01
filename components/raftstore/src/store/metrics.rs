@@ -473,25 +473,20 @@ lazy_static! {
         )
         .unwrap();
 
-    pub static ref PEER_SYNC_LOG_INTERVAL_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_sync_log_interval_seconds",
-            "Bucketed histogram of sync log interval",
-            exponential_buckets(0.0001, 2.0, 20).unwrap()
-        ).unwrap();
-
-    pub static ref PEER_THREAD_CHECK_SYNC_RESULT_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_thread_check_sync_result_seconds",
-            "Bucketed histogram of sync log in idle stat interval",
-            exponential_buckets(0.0001, 2.0, 20).unwrap()
-        ).unwrap();
-
     pub static ref PEER_SYNC_DELAY_HISTOGRAM: Histogram =
         register_histogram!(
-            "tikv_raftstore_sync_delay_seconds",
-            "Bucketed histogram of sync delay seconds",
-            exponential_buckets(0.0001, 2.0, 20).unwrap()
+            "tikv_raftstore_peer_sync_delay_microseconds",
+            "Bucketed histogram of peer sync delay microseconds",
+            // 100us ~ 100s
+            exponential_buckets(100.0, 2.0, 21).unwrap()
+        ).unwrap();
+
+    pub static ref PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_thread_check_sync_delay_microseconds",
+            "Bucketed histogram of sync log in idle stat interval",
+            // 100us ~ 100s
+            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
