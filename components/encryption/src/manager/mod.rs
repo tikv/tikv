@@ -531,7 +531,7 @@ impl DataKeyManager {
         )
     }
 
-    pub fn sync(&self) -> Result<()>{
+    pub fn sync(&self) -> Result<()> {
         self.dicts.sync()
     }
 

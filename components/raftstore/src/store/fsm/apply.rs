@@ -342,7 +342,6 @@ where
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -398,7 +397,6 @@ where
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
@@ -419,7 +417,6 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
-        self.last_applied_index = delegate.apply_state.get_applied_index();
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
@@ -438,12 +435,11 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        if delegate.last_sync_apply_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
-        // last_applied_index doesn't need to be updated, set persistent to true will
-        // force it call `prepare_for` automatically.
         self.commit_opt(delegate, true);
+        delegate.last_sync_apply_index = delegate.apply_state.get_applied_index();
     }
 
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
@@ -552,7 +548,7 @@ where
 
     /// Flush all pending writes to engines.
     /// If it returns true, all pending writes are persisted in engines.
-    pub fn flush(&mut self) -> bool {
+    pub fn flush(&mut self) {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
@@ -564,7 +560,7 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let is_synced = self.write_to_db();
+        self.write_to_db();
 
         if !self.apply_res.is_empty() {
             let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
@@ -581,7 +577,6 @@ where
             self.committed_count
         );
         self.committed_count = 0;
-        is_synced
     }
 
     fn has_ingest_overlap(&self, start_key: &[u8], end_key: &[u8]) -> bool {
@@ -793,9 +788,6 @@ where
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
-    /// If there is a pending ingest file, apply shall ingest at once then can write another data.
-    pending_ingest: bool,
-
     /// Indicates the peer is in merging, if that compact log won't be performed.
     is_merging: bool,
     /// Records the epoch version after the last merge.
@@ -815,7 +807,8 @@ where
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
-    /// The latest synced apply index.
+
+    /// The latest apply index which has been written to KvEngine
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
@@ -850,7 +843,6 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
-            pending_ingest: false,
         }
     }
 
@@ -969,7 +961,11 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
+            let has_unsync_data =
+                self.last_sync_apply_index != self.apply_state.get_applied_index();
+            if (has_unsync_data && should_write_to_engine(&cmd))
+                || apply_ctx.kv_wb().should_write_to_engine()
+            {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
@@ -1401,7 +1397,6 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            self.pending_ingest = true;
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -3302,7 +3297,6 @@ where
 
             apply_ctx.flush();
             // For now, it's more like last_flush_apply_index.
-            // TODO: Update it only when `flush()` returns true.
             self.delegate.last_sync_apply_index = applied_index;
         }
 
@@ -3364,9 +3358,8 @@ where
         ) {
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
-                if self.delegate.pending_ingest {
+                if !apply_ctx.ssts.is_empty() {
                     apply_ctx.flush_ingest();
-                    self.delegate.pending_ingest = false;
                 }
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
@@ -3597,12 +3590,9 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-                fsm.delegate.pending_ingest = false;
-            }
+        self.apply_ctx.flush();
+        for fsm in fsms {
+            fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
         }
     }
 }
