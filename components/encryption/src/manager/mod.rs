@@ -225,7 +225,7 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> Result<()> {
         let mut log_file = self.log_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -249,6 +249,9 @@ impl Dicts {
             (method, file, file_num)
         };
         log_file.insert(dst_fname, &file)?;
+        if sync {
+            log_file.sync()?;
+        }
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != compat(EncryptionMethod::Plaintext) {
@@ -301,6 +304,11 @@ impl Dicts {
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn sync(&self) -> Result<()> {
+        let f = self.log_file.lock().unwrap();
+        f.sync()
     }
 
     fn maybe_rotate_data_key(
@@ -523,6 +531,10 @@ impl DataKeyManager {
         )
     }
 
+    pub fn sync(&self) -> Result<()>{
+        self.dicts.sync()
+    }
+
     pub fn dump_key_dict(
         config: &EncryptionConfig,
         dict_path: &str,
@@ -618,8 +630,8 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname)?;
+    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> IoResult<()> {
+        self.dicts.link_file(src_fname, dst_fname, sync)?;
         Ok(())
     }
 

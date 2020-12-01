@@ -24,6 +24,7 @@ use super::Result;
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     path: P,
     clone: Q,
+    sync: bool,
     encryption_key_manager: Option<&DataKeyManager>,
 ) -> Result<()> {
     #[cfg(unix)]
@@ -56,7 +57,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
     if let Some(key_manager) = encryption_key_manager {
-        key_manager.link_file(path, clone)?;
+        key_manager.link_file(path, clone, sync)?;
     }
     Ok(())
 }

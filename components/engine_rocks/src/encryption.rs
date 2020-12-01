@@ -48,7 +48,7 @@ impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyMan
         self.manager.delete_file(fname)
     }
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        self.manager.link_file(src_fname, dst_fname)
+        self.manager.link_file(src_fname, dst_fname, true)
     }
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         self.manager.rename_file(src_fname, dst_fname)

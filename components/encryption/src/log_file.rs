@@ -119,6 +119,9 @@ impl LogFile {
         let base_dir = File::open(&self.base)?;
         base_dir.sync_all()?;
         let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
+        if let Some(f) = self.append_file.as_ref() {
+            f.sync_all()?;
+        }
         self.append_file.replace(file);
 
         Ok(())
@@ -178,7 +181,6 @@ impl LogFile {
         let file = self.append_file.as_mut().unwrap();
         let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
         file.write_all(&bytes)?;
-        file.sync_all()?;
 
         self.file_dict.files.insert(name.to_owned(), info.clone());
         self.check_compact()?;
@@ -219,6 +221,12 @@ impl LogFile {
         self.removed += 1;
         self.check_compact()?;
 
+        Ok(())
+    }
+
+    pub fn sync(&self) -> Result<()> {
+        let file = self.append_file.as_ref().unwrap();
+        file.sync_all()?;
         Ok(())
     }
 
