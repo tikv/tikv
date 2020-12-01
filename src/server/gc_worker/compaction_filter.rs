@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::Cell;
+use std::cmp::Ordering as CmpOrdering;
 use std::ffi::CString;
 use std::result::Result;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,27 +10,24 @@ use std::time::{Duration, Instant};
 
 use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter, DB,
+    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter, DBIterator,
+    ReadOptions, DB,
 };
 use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksUserCollectedPropertiesNoRc,
     RocksWriteBatch,
 };
-use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
-    CF_WRITE,
-};
+use engine_traits::{Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt, CF_WRITE};
 use pd_client::ClusterVersion;
 use prometheus::{local::*, *};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::{GcConfig, GcWorkerConfigManager};
-use crate::storage::mvcc::{check_need_gc, GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 const NEAR_SEEK_LIMIT: usize = 16;
-const SINGLE_SST_RATIO_THRESHOLD_ADJUST: f64 = 0.2;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -138,44 +136,26 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let (mut needs_gc, mut mvcc_props) = (false, MvccProperties::new());
-        for i in 0..context.file_numbers().len() {
-            let table_props = context.table_properties(i);
-            let user_props = unsafe {
-                &*(table_props.user_collected_properties() as *const _
-                    as *const RocksUserCollectedPropertiesNoRc)
-            };
-            if let Ok(props) = RocksMvccProperties::decode(user_props) {
-                mvcc_props.add(&props);
-                let sst_ratio = ratio_threshold + SINGLE_SST_RATIO_THRESHOLD_ADJUST;
-                if check_need_gc(safe_point.into(), sst_ratio, &props) {
-                    needs_gc = true;
-                    break;
-                }
-            }
-        }
-        if !needs_gc && !check_need_gc(safe_point.into(), ratio_threshold, &mvcc_props) {
-            // NOTE: here we don't treat the bottommost level specially.
-            // Maybe it's necessary to make a green channel for it.
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             return std::ptr::null_mut();
         }
 
         let name = CString::new("write_compaction_filter").unwrap();
         let db = Arc::clone(&gc_context.db);
-        let filter = Box::new(WriteCompactionFilter::new(
-            db,
-            safe_point,
-            context,
-            &mvcc_props,
-        ));
+        debug!(
+            "gc in compaction filter"; "safe_point" => safe_point,
+            "files" => ?context.file_numbers(),
+            "bottommost" => context.is_bottommost_level(),
+            "manual" => context.is_manual_compaction(),
+        );
+        let filter = Box::new(WriteCompactionFilter::new(db, safe_point, context));
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
 struct WriteCompactionFilter {
     safe_point: u64,
-    handle_mvcc_deletes: bool,
     engine: RocksEngine,
     is_invalid: bool,
     write_batch: RocksWriteBatch,
@@ -183,9 +163,13 @@ struct WriteCompactionFilter {
     key_prefix: Vec<u8>,
     remove_older: bool,
 
-    // To handle delete marks.
-    write_iter: Option<RocksEngineIterator>,
+    // For handling MVCC delete marks at the bottommost level.
+    is_bottommost_level: bool,
+    // Layout: (delete_mark, vec![(key, sequence), ...]).
+    #[allow(clippy::type_complexity)]
+    deleting_filtered: Option<(Vec<u8>, Vec<(Vec<u8>, u64)>)>,
     near_seek_distance: usize,
+    write_iter: Option<RocksEngineIterator>,
 
     versions: usize,
     filtered: usize,
@@ -198,27 +182,24 @@ struct WriteCompactionFilter {
 }
 
 impl WriteCompactionFilter {
-    fn new(
-        db: Arc<DB>,
-        safe_point: u64,
-        context: &CompactionFilterContext,
-        props: &MvccProperties,
-    ) -> Self {
+    fn new(db: Arc<DB>, safe_point: u64, context: &CompactionFilterContext) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
 
         let mut filter = WriteCompactionFilter {
             safe_point,
-            handle_mvcc_deletes: context.is_bottommost_level() || too_many_delete_marks(props),
             engine: RocksEngine::from_db(db.clone()),
             is_invalid: false,
             write_batch: RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE),
 
             key_prefix: vec![],
             remove_older: false,
-            write_iter: None,
+
+            is_bottommost_level: context.is_bottommost_level(),
+            deleting_filtered: None,
             near_seek_distance: NEAR_SEEK_LIMIT,
+            write_iter: None,
 
             versions: 0,
             filtered: 0,
@@ -230,16 +211,11 @@ impl WriteCompactionFilter {
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
         };
 
-        if filter.handle_mvcc_deletes {
-            let iter_opts = IterOptions::default();
-            match filter.engine.iterator_cf_opt(CF_WRITE, iter_opts) {
-                Ok(iter) => filter.write_iter = Some(iter),
-                Err(e) => {
-                    warn!("compaction filter can't init iterator"; "err" => ?e);
-                    GC_COMPACTION_FAILURE.inc();
-                    filter.is_invalid = true;
-                }
-            }
+        if filter.is_bottommost_level {
+            let db = filter.engine.as_inner();
+            let cf = db.cf_handle(CF_WRITE).unwrap();
+            let iter = DBIterator::new_cf(db.clone(), cf, ReadOptions::new());
+            filter.write_iter = Some(RocksEngineIterator::from_raw(iter));
         }
 
         filter
@@ -249,10 +225,12 @@ impl WriteCompactionFilter {
         &mut self,
         _start_level: usize,
         key: &[u8],
+        sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {
-        self.near_seek_distance += 1;
+        self.meet_a_key_in_filter();
+
         let (key_prefix, commit_ts) = split_ts(key)?;
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -260,10 +238,11 @@ impl WriteCompactionFilter {
 
         self.versions += 1;
         if self.key_prefix != key_prefix {
+            self.handle_delete_mark()?;
+            self.switch_key_metrics();
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
             self.remove_older = false;
-            self.switch_key_metrics();
         }
 
         let mut filtered = self.remove_older;
@@ -274,12 +253,14 @@ impl WriteCompactionFilter {
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
-                    if self.handle_mvcc_deletes {
+                    if self.is_bottommost_level {
                         filtered = true;
-                        self.handle_delete_mark(key)?;
+                        self.deleting_filtered = Some((key.to_vec(), Vec::new()));
                     }
                 }
             }
+        } else if let Some(deleting_filtered) = self.deleting_filtered.as_mut() {
+            deleting_filtered.1.push((key.to_vec(), sequence));
         }
 
         let decision = match (filtered, self.remove_older) {
@@ -299,9 +280,22 @@ impl WriteCompactionFilter {
         Ok(decision)
     }
 
+    fn meet_a_key_in_filter(&mut self) {
+        if self.is_bottommost_level && self.deleting_filtered.is_none() {
+            // The compaction hasn't met the next MVCC delete mark.
+            self.near_seek_distance += 1;
+        }
+    }
+
     // Do gc before a delete mark.
-    fn handle_delete_mark(&mut self, mark: &[u8]) -> Result<(), String> {
-        let mut valid = self.write_iter_seek_to(mark)?;
+    fn handle_delete_mark(&mut self) -> Result<(), String> {
+        let (mark, mut filtered) = match self.deleting_filtered.take() {
+            Some((x, y)) => (x, y.into_iter().peekable()),
+            None => return Ok(()),
+        };
+        debug_assert!(self.is_bottommost_level);
+
+        let mut valid = self.write_iter_seek_to(&mark)?;
         let mut write_iter = self.write_iter.take().unwrap();
         if valid && write_iter.key() == mark {
             // The delete mark itself is handled in `filter`.
@@ -313,8 +307,24 @@ impl WriteCompactionFilter {
             if truncate_ts(key)? != self.key_prefix.as_slice() {
                 break;
             }
-            self.handle_filtered_write(parse_write(value)?)?;
-            self.delete_write_key(key)?;
+            let mut need_delete = true;
+            while let Some((k, s)) = filtered.peek() {
+                match key.cmp(k.as_slice()) {
+                    CmpOrdering::Less => break,
+                    CmpOrdering::Equal => {
+                        let seq = write_iter.as_raw().sequence();
+                        assert!(seq >= *s);
+                        need_delete = seq > *s;
+                        let _ = filtered.next().unwrap();
+                        break;
+                    }
+                    CmpOrdering::Greater => drop(filtered.next().unwrap()),
+                }
+            }
+            if need_delete {
+                self.delete_write_key(key)?;
+                self.handle_filtered_write(parse_write(value)?)?;
+            }
             valid = write_iter.next()?;
         }
         self.write_iter = Some(write_iter);
@@ -426,13 +436,14 @@ thread_local! {
 
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
+        self.handle_delete_mark().unwrap();
+        self.switch_key_metrics();
         if !self.write_batch.is_empty() {
             self.engine.write(&self.write_batch).unwrap();
             self.write_batch.clear();
         }
         self.engine.sync_wal().unwrap();
 
-        self.switch_key_metrics();
         if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);
@@ -457,6 +468,7 @@ impl CompactionFilter for WriteCompactionFilter {
         &mut self,
         level: usize,
         key: &[u8],
+        sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
@@ -465,7 +477,7 @@ impl CompactionFilter for WriteCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        match self.do_filter(level, key, value, value_type) {
+        match self.do_filter(level, key, sequence, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
@@ -501,10 +513,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
     }
 }
 
-fn too_many_delete_marks(props: &MvccProperties) -> bool {
-    props.num_deletes as f64 / props.num_versions as f64 > 0.2
-}
-
 pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
     do_check_allowed(
         cfg_value.enable_compaction_filter,
@@ -523,6 +531,55 @@ fn do_check_allowed(enable: bool, skip_vcheck: bool, cluster_version: &ClusterVe
         })
 }
 
+fn check_need_gc(
+    safe_point: TimeStamp,
+    mut ratio_threshold: f64,
+    context: &CompactionFilterContext,
+) -> bool {
+    if ratio_threshold < 1.0 {
+        return true;
+    }
+
+    let is_bottommost = context.is_bottommost_level();
+    let mut check_props = |props: &MvccProperties| {
+        if props.min_ts > safe_point {
+            return false;
+        }
+        let num_versions = if is_bottommost {
+            props.num_versions as f64
+        } else {
+            if ratio_threshold < 1.5 {
+                ratio_threshold = 1.5;
+            }
+            (props.num_versions - props.num_deletes) as f64
+        };
+        if num_versions > props.num_rows as f64 * ratio_threshold {
+            return true;
+        }
+        if num_versions > props.num_puts as f64 * ratio_threshold {
+            return true;
+        }
+        props.max_row_versions > 1024
+    };
+
+    let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
+    for i in 0..context.file_numbers().len() {
+        let table_props = context.table_properties(i);
+        let user_props = unsafe {
+            &*(table_props.user_collected_properties() as *const _
+                as *const RocksUserCollectedPropertiesNoRc)
+        };
+        if let Ok(props) = RocksMvccProperties::decode(user_props) {
+            sum_props.add(&props);
+            if check_props(&props) {
+                needs_gc += 1;
+            }
+        }
+    }
+
+    needs_gc >= (context.file_numbers().len() + 1) >> 1 || check_props(&sum_props)
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -534,7 +591,6 @@ pub mod tests {
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, Peekable, SyncMutable};
-    use txn_types::TimeStamp;
 
     // Use a lock to protect concurrent compactions.
     lazy_static! {
@@ -758,26 +814,33 @@ pub mod tests {
             let raw_engine = engine.get_rocksdb();
 
             // So the construction of SST files will be:
-            // L6: |AAAAA_101, CCCCC_111|
+            // L6: |AAAAA_101, BBBBB_101, CCCCC_111|
             must_prewrite_put(&engine, b"zAAAAA", b"zvalue", b"zkey", 100);
             must_commit(&engine, b"zAAAAA", 100, 101);
+            must_prewrite_put(&engine, b"zBBBBB", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zBBBBB", 100, 101);
             must_prewrite_put(&engine, b"zCCCCC", b"zvalue", b"zkey", 110);
             must_commit(&engine, b"zCCCCC", 110, 111);
             do_gc_by_compact(&raw_engine, None, None, 50, Some(6));
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
             // So the construction of SST files will be:
-            // L0: |BBBB_101, DDDDD_101|
+            // L0: |BBBBB_101, DDDDD_101|
             // L6: |AAAAA_101, CCCCC_111|
-            must_prewrite_put(&engine, b"zBBBBB", b"zvalue", b"zkey", 100);
-            must_commit(&engine, b"zBBBBB", 100, 101);
+            let b_101_k = Key::from_raw(b"zBBBBB").append_ts(101.into());
+            let b_101_k = b_101_k.into_encoded();
+            let b_101_v = raw_engine
+                .get_value_cf(CF_WRITE, &b_101_k)
+                .unwrap()
+                .unwrap();
+            raw_engine.put_cf(CF_WRITE, &b_101_k, &b_101_v).unwrap();
             must_prewrite_put(&engine, b"zDDDDD", b"zvalue", b"zkey", 100);
             must_commit(&engine, b"zDDDDD", 100, 101);
             raw_engine.flush_cf(CF_WRITE, true).unwrap();
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 1);
 
             // So the construction of SST files will be:
-            // L0: |AAAAA_111, BBBBB_111|, |BBBB_101, DDDDD_101|
+            // L0: |AAAAA_111, BBBBB_111|, |BBBBB_101, DDDDD_101|
             // L6: |AAAAA_101, CCCCC_111|
             must_prewrite_put(&engine, b"zAAAAA", b"zvalue", b"zkey", 110);
             must_commit(&engine, b"zAAAAA", 110, 111);

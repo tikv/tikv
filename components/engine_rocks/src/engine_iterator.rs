@@ -13,6 +13,9 @@ impl RocksEngineIterator {
     pub fn from_raw(iter: DBIterator<Arc<DB>>) -> RocksEngineIterator {
         RocksEngineIterator(iter)
     }
+    pub fn as_raw(&self) -> &DBIterator<Arc<DB>> {
+        &self.0
+    }
 }
 
 impl engine_traits::Iterator for RocksEngineIterator {
