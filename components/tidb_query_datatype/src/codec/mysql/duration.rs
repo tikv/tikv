@@ -9,7 +9,7 @@ use tipb::FieldType;
 
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE};
+use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
 use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;

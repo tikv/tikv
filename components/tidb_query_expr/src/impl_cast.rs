@@ -1314,7 +1314,6 @@ mod tests {
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
-    use tidb_query_datatype::codec::Error;
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -5279,9 +5278,24 @@ mod tests {
                 true,
             ),
             // will truncated
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
+            (
+                8376049,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                true,
+            ),
+            (
+                8375960,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                true,
+            ),
+            (
+                8376049,
+                0,
+                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                true,
+            ),
             (
                 10000000000,
                 0,
@@ -5302,10 +5316,11 @@ mod tests {
             ),
         ];
 
-        for (input, fsp, expected, overflow) in cs {
+        for (input, fsp, expected, overflow_or_truncate) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
+                    truncate_as_warning: true,
                     ..CtxConfig::default()
                 })
                 .push_param(input)
@@ -5336,9 +5351,13 @@ mod tests {
                     );
                 }
             }
-            if overflow {
+            if overflow_or_truncate {
                 assert_eq!(ctx.warnings.warning_cnt, 1);
-                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code() == ERR_DATA_OUT_OF_RANGE
+                        || ctx.warnings.warnings[0].get_code() == ERR_TRUNCATE_WRONG_VALUE,
+                    true
+                );
             }
         }
     }
