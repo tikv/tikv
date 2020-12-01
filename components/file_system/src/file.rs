@@ -78,7 +78,7 @@ impl Read for File {
                 let read = self.inner.read(&mut buf[pos..pos + allowed])?;
                 pos += read;
                 remains -= read;
-                if read < allowed {
+                if read == 0 {
                     break;
                 }
             }
@@ -105,7 +105,7 @@ impl Write for File {
                 let written = self.inner.write(&buf[pos..pos + allowed])?;
                 pos += written;
                 remains -= written;
-                if written < allowed {
+                if written == 0 {
                     break;
                 }
             }
