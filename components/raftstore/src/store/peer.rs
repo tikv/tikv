@@ -144,6 +144,10 @@ impl<S: Snapshot> ProposalQueue<S> {
         self.queue.push_back(p);
     }
 
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     fn gc(&mut self) {
         if self.queue.capacity() > SHRINK_CACHE_CAPACITY && self.queue.len() < SHRINK_CACHE_CAPACITY
         {
@@ -1740,21 +1744,25 @@ where
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
                 let current_term = self.term();
-                let cbs = committed_entries
-                    .iter()
-                    .filter_map(|e| {
-                        self.proposals
-                            .find_proposal(e.get_term(), e.get_index(), current_term)
-                    })
-                    .map(|mut p| {
-                        if p.must_pass_epoch_check {
-                            // In this case the apply can be guaranteed to be successful. Invoke the
-                            // on_committed callback if necessary.
-                            p.cb.invoke_committed();
-                        }
-                        p
-                    })
-                    .collect();
+                let cbs = if !self.proposals.is_empty() {
+                    committed_entries
+                        .iter()
+                        .filter_map(|e| {
+                            self.proposals
+                                .find_proposal(e.get_term(), e.get_index(), current_term)
+                        })
+                        .map(|mut p| {
+                            if p.must_pass_epoch_check {
+                                // In this case the apply can be guaranteed to be successful. Invoke the
+                                // on_committed callback if necessary.
+                                p.cb.invoke_committed();
+                            }
+                            p
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
                 let committed_index = self.raft_group.raft.raft_log.committed;
                 let committed_term = self.raft_group.raft.raft_log.term(committed_index).unwrap();
                 let apply = Apply::new(
