@@ -139,19 +139,19 @@ enum Substitution {
 
 impl Parse for Substitution {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let template_ident = input.parse()?;
+        let left_ident = input.parse()?;
         let fat_arrow: Option<Token![=>]> = input.parse()?;
         if fat_arrow.is_some() {
-            let mut tokens: Vec<TokenTree> = vec![];
+            let mut right_tokens: Vec<TokenTree> = vec![];
             while !input.peek(Token![,]) && !input.is_empty() {
-                tokens.push(input.parse()?);
+                right_tokens.push(input.parse()?);
             }
             Ok(Substitution::Map(
-                template_ident,
-                tokens.into_iter().collect(),
+                left_ident,
+                right_tokens.into_iter().collect(),
             ))
         } else {
-            Ok(Substitution::Identical(template_ident))
+            Ok(Substitution::Identical(left_ident))
         }
     }
 }

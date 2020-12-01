@@ -75,6 +75,7 @@ impl ChunkedVec<Bytes> for ChunkedVecBytes {
         self.data.append(&mut value);
         self.finish_append();
     }
+
     #[inline]
     fn push_null(&mut self) {
         self.bitmap.push(false);
