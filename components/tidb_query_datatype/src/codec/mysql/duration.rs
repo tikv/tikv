@@ -13,6 +13,7 @@ use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
 use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
+use tikv_util::is_zero_duration;
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANOS_PER_MILLI: i64 = 1_000_000;
@@ -517,10 +518,8 @@ impl Duration {
         let second = (abs % 100) as u32;
 
         if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
-            return Err(Error::Eval(
-                format!("invalid time format: '{}'", n),
-                ERR_TRUNCATE_WRONG_VALUE,
-            ));
+            ctx.handle_truncate_err(Error::truncated_wrong_val("Duration", n))?;
+            return Self::new_from_parts(false, 0, 0, 0, 0, fsp);
         }
 
         Self::new_from_parts(n.is_negative(), hour, minute, second, 0, fsp)
