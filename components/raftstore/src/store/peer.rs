@@ -114,6 +114,7 @@ impl<S: Snapshot> ProposalQueue<S> {
                 propos.push(p);
             }
         }
+        self.gc();
         propos
     }
 
@@ -1565,6 +1566,17 @@ where
 
         self.last_unpersisted_number = ready.number();
 
+        if !ready.must_sync() {
+            // If this ready need not to sync, the term, vote must not be changed,
+            // entries and snapshot must be empty.
+            if let Some(hs) = ready.hs() {
+                assert_eq!(hs.get_term(), self.get_store().hard_state().get_term());
+                assert_eq!(hs.get_vote(), self.get_store().hard_state().get_vote());
+            }
+            assert!(ready.entries().is_empty());
+            assert!(ready.snapshot().is_empty());
+        }
+
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
         self.on_role_changed(ctx, &ready);
@@ -1740,6 +1752,7 @@ where
         ready: Ready,
         current_ts: Option<i64>,
     ) {
+        assert_eq!(ready.number(), self.last_unpersisted_number);
         if !ready.snapshot().is_empty() {
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
@@ -1752,47 +1765,55 @@ where
                 self.term(),
                 self.raft_group.store().region(),
             );
-        } else if let Some(ts) = current_ts {
-            ctx.sync_policy.mark_region_unsynced(
-                self.region_id,
-                ready.number(),
-                self.persisted_notifier.clone(),
-                ts,
-            );
-            self.raft_group.advance_append_async(ready);
-        } else {
-            // Update the last persisted number and persisted notifier
-            self.last_persisted_number = self.last_unpersisted_number;
-            self.persisted_notifier
-                .store(self.last_persisted_number, Ordering::Release);
+            return;
+        }
 
-            let mut light_rd = self.raft_group.advance_append(ready);
-
-            self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
-
-            if let Some(commit_index) = light_rd.commit_index() {
-                let pre_commit_index = self.get_store().commit_index();
-                assert!(commit_index >= pre_commit_index);
-                // No need to persist the commit index but the one in memory
-                // (i.e. commit of hardstate in PeerStorage) should be updated.
-                self.mut_store().set_commit_index(commit_index);
-                if self.is_leader() {
-                    self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
-                }
+        if let Some(ts) = current_ts {
+            if ready.must_sync() || self.last_persisted_number + 1 < ready.number() {
+                ctx.sync_policy.mark_region_unsynced(
+                    self.region_id,
+                    ready.number(),
+                    self.persisted_notifier.clone(),
+                    ts,
+                );
+                self.raft_group.advance_append_async(ready);
+                return;
             }
+            // If this ready need not to sync and there is no previous unpersisted ready,
+            // we can safely consider it is persisted.
+            // It's probably the case that the follower of a cold region receives a heartbeat.
+            assert_eq!(self.last_persisted_number + 1, ready.number());
+        }
 
-            if !light_rd.messages().is_empty() {
-                ctx.need_flush_trans = true;
-                for vec_msg in light_rd.take_messages() {
-                    self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
-                }
-            }
+        self.last_persisted_number = ready.number();
+        self.persisted_notifier
+            .store(ready.number(), Ordering::Release);
 
-            if !light_rd.committed_entries().is_empty() {
-                self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+        let mut light_rd = self.raft_group.advance_append(ready);
+
+        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
+        if let Some(commit_index) = light_rd.commit_index() {
+            let pre_commit_index = self.get_store().commit_index();
+            assert!(commit_index >= pre_commit_index);
+            // No need to persist the commit index but the one in memory
+            // (i.e. commit of hardstate in PeerStorage) should be updated.
+            self.mut_store().set_commit_index(commit_index);
+            if self.is_leader() {
+                self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
             }
         }
-        self.proposals.gc();
+
+        if !light_rd.messages().is_empty() {
+            ctx.need_flush_trans = true;
+            for vec_msg in light_rd.take_messages() {
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+            }
+        }
+
+        if !light_rd.committed_entries().is_empty() {
+            self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+        }
     }
 
     pub fn check_new_persisted(&mut self) -> bool {

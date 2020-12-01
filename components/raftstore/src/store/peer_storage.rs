@@ -859,6 +859,11 @@ where
     }
 
     #[inline]
+    pub fn hard_state(&self) -> &HardState {
+        self.raft_state.get_hard_state()
+    }
+
+    #[inline]
     pub fn truncated_index(&self) -> u64 {
         self.apply_state.get_truncated_state().get_index()
     }
