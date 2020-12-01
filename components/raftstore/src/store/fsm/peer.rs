@@ -2239,10 +2239,10 @@ where
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
-            new_peer.peer.approximate_size = self.fsm.peer.approximate_size;
-            new_peer.peer.approximate_keys = self.fsm.peer.approximate_keys;
 
             if is_leader {
+                new_peer.peer.approximate_size = self.fsm.peer.approximate_size;
+                new_peer.peer.approximate_keys = self.fsm.peer.approximate_keys;
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
@@ -2279,20 +2279,22 @@ where
                 }
             }
 
-            // The size and keys for new region may be far from the real value.
-            // So we let split checker to update it immediately.
-            if let Err(e) = self.ctx.split_check_scheduler.schedule(
-                SplitCheckTask::GetRegionApproximateSizeAndKeys {
-                    region: new_region,
-                    pending_tasks: Arc::new(AtomicU64::new(1)),
-                    cb: Box::new(move |_, _| {}),
-                },
-            ) {
-                error!(
-                    "failed to schedule split check task";
-                    "region_id" => new_region_id,
-                    "err" => ?e,
-                );
+            if is_leader {
+                // The size and keys for new region may be far from the real value.
+                // So we let split checker to update it immediately.
+                if let Err(e) = self.ctx.split_check_scheduler.schedule(
+                    SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                        region: new_region,
+                        pending_tasks: Arc::new(AtomicU64::new(1)),
+                        cb: Box::new(move |_, _| {}),
+                    },
+                ) {
+                    error!(
+                        "failed to schedule split check task";
+                        "region_id" => new_region_id,
+                        "err" => ?e,
+                    );
+                }
             }
         }
     }
