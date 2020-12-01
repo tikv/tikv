@@ -50,6 +50,7 @@ impl<EK: KvEngine, ER: RaftEngine> Action for SyncAction<EK, ER> {
     }
 
     fn notify_synced(&self, region_id: u64, number: u64) {
+        // TODO: we don't need to send a noop if this fsm still has many messages.
         if let Err(e) = self.router.force_send(region_id, PeerMsg::Noop) {
             debug!(
                 "failed to send noop to trigger persisted ready";
