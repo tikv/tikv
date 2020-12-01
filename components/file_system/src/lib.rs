@@ -11,12 +11,11 @@ pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
-    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder,
-    DirEntry, FileType, Metadata, Permissions, ReadDir,
+    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
+    FileType, Metadata, Permissions, ReadDir,
 };
 
 use std::cell::Cell;
-use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -118,7 +117,7 @@ fn copy_imp(from: &Path, to: &Path, sync: bool) -> io::Result<u64> {
     let perm = reader.metadata()?.permissions();
 
     let ret = io::copy(&mut reader, &mut writer)?;
-    fs::set_permissions(to, perm)?;
+    set_permissions(to, perm)?;
     if sync {
         writer.sync_all()?;
         if let Some(parent) = to.parent() {
@@ -140,7 +139,7 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
 }
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
-    let meta = fs::metadata(path)?;
+    let meta = metadata(path)?;
     Ok(meta.len())
 }
 
@@ -152,7 +151,7 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
 /// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
 /// Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
-    match fs::remove_file(&file) {
+    match remove_file(&file) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
@@ -162,7 +161,7 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
 /// Deletes given path from file system. Returns `true` on success, `false` if the directory doesn't
 /// exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
-    match fs::remove_dir_all(&dir) {
+    match remove_dir_all(&dir) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
@@ -172,7 +171,7 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
 /// Creates a new, empty directory at the provided path. Returns `true` on success,
 /// `false` if the directory already exists. Otherwise the raw error will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
-    match fs::create_dir(&dir) {
+    match create_dir(&dir) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
         Err(e) => Err(e),
@@ -358,7 +357,7 @@ mod tests {
             .map(|()| rng.sample(Alphanumeric))
             .take(size)
             .collect();
-        fs::write(path, s.as_bytes()).unwrap();
+        write(path, s.as_bytes()).unwrap();
         calc_crc32_bytes(s.as_bytes())
     }
 
@@ -400,10 +399,10 @@ mod tests {
         let large_file = tmp_dir.path().join("large.txt");
         gen_rand_file(&large_file, DIGEST_BUFFER_SIZE * 4);
 
-        let large_file_bytes = fs::read(&large_file).unwrap();
+        let large_file_bytes = read(&large_file).unwrap();
         let direct_sha256 = sha256(&large_file_bytes).unwrap();
 
-        let large_file_reader = fs::File::open(&large_file).unwrap();
+        let large_file_reader = File::open(&large_file).unwrap();
         let (mut sha256_reader, sha256_hasher) = Sha256Reader::new(large_file_reader).unwrap();
         let ret = sha256_reader.read_to_end(&mut Vec::new());
 

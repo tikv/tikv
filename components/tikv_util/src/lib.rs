@@ -21,6 +21,7 @@ extern crate test;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::fs::File;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -29,7 +30,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
-use file_system::File;
+use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
 #[macro_use]
