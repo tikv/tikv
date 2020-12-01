@@ -11,6 +11,8 @@ impl Collator for CollatorLatin1Bin {
     type Charset = CharsetBinary;
     type Weight = u8;
 
+    const IsCaseInsensitive: bool = false;
+
     #[inline]
     fn char_weight(ch: u8) -> Self::Weight {
         ch

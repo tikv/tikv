@@ -10,6 +10,8 @@ impl Collator for CollatorUtf8Mb4UnicodeCi {
     type Charset = CharsetUtf8mb4;
     type Weight = u128;
 
+    const IsCaseInsensitive: bool = true;
+
     #[inline]
     fn char_weight(ch: char) -> Self::Weight {
         let r = ch as usize;
