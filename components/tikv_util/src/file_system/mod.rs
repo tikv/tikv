@@ -1,15 +1,138 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
+mod file;
+mod rate_limiter;
+
+pub use file::{File, OpenOptions};
+pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 
 use std::cell::Cell;
-use std::fs::{self, OpenOptions};
-use std::future::{self, Future};
+use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
+
+#[derive(Debug)]
+pub enum IOOp {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum IOType {
+    Other,
+    Read,
+    Write,
+    Coprocessor,
+    Flush,
+    Compaction,
+    Replication,
+    LoadBalance,
+    Import,
+    Export,
+}
+
+thread_local! {
+    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
+}
+
+fn set_io_type(new_io_type: IOType) {
+    IO_TYPE.with(|io_type| {
+        io_type.set(new_io_type);
+    });
+}
+
+fn get_io_type() -> IOType {
+    IO_TYPE.with(|io_type| io_type.get())
+}
+
+pub struct WithIOType {
+    previous_io_type: IOType,
+}
+
+impl WithIOType {
+    pub fn new(new_io_type: IOType) -> WithIOType {
+        let previous_io_type = get_io_type();
+        set_io_type(new_io_type);
+        WithIOType { previous_io_type }
+    }
+}
+
+impl Drop for WithIOType {
+    fn drop(&mut self) {
+        set_io_type(self.previous_io_type);
+    }
+}
+
+/// Indicates how large a buffer to pre-allocate before reading the entire file.
+fn initial_buffer_size(file: &File) -> usize {
+    // Allocate one extra byte so the buffer doesn't need to grow before the
+    // final `read` call at the end of the file.  Don't worry about `usize`
+    // overflow because reading will fail regardless in that case.
+    file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0)
+}
+
+/// Write a slice as the entire contents of a file.
+pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
+    File::create(path)?.write_all(contents.as_ref())
+}
+
+/// Read the entire contents of a file into a bytes vector.
+pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Read the entire contents of a file into a string.
+pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut string = String::with_capacity(initial_buffer_size(&file));
+    file.read_to_string(&mut string)?;
+    Ok(string)
+}
+
+/// Copies the contents of one file to another. This function will also
+/// copy the permission bits of the original file to the destination file.
+pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from.as_ref())?;
+    let mut writer = File::create(to.as_ref())?;
+    let perm = reader.metadata()?.permissions();
+
+    let ret = io::copy(&mut reader, &mut writer)?;
+    fs::set_permissions(to.as_ref(), perm)?;
+    Ok(ret)
+}
+
+/// Copies the contents of one file to another. Synchronize afterwards.
+pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from.as_ref())?;
+    let mut writer = File::create(to.as_ref())?;
+    let perm = reader.metadata()?.permissions();
+
+    let ret = io::copy(&mut reader, &mut writer)?;
+    fs::set_permissions(to.as_ref(), perm)?;
+    writer.sync_all()?;
+    Ok(ret)
+}
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
@@ -55,7 +178,7 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
 pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
     // File::open will not error when opening a directory
     // because it just call libc::open and do not do the file or dir check
-    fs::File::open(path)?.sync_all()
+    File::open(path)?.sync_all()
 }
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
@@ -137,237 +260,10 @@ impl<R: Read> Read for Sha256Reader<R> {
     }
 }
 
-#[derive(Debug)]
-pub enum IOOp {
-    Read,
-    Write,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum IOType {
-    Other,
-    Read,
-    Write,
-    Coprocessor,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Import,
-    Export,
-}
-
-thread_local! {
-    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
-}
-
-#[allow(dead_code)]
-fn set_io_type(new_io_type: IOType) {
-    IO_TYPE.with(|io_type| {
-        io_type.set(new_io_type);
-    });
-}
-
-fn get_io_type() -> IOType {
-    IO_TYPE.with(|io_type| io_type.get())
-}
-
-/// No-op limiter
-/// An instance of `IORateLimiter` should be safely shared between threads.
-#[derive(Debug)]
-pub struct IORateLimiter {
-    unit: atomic::AtomicUsize,
-}
-
-impl IORateLimiter {
-    pub fn new(_unit: usize) -> IORateLimiter {
-        IORateLimiter {
-            unit: atomic::AtomicUsize::new(_unit),
-        }
-    }
-
-    /// Request for token for bytes and potentially update statistics. If this
-    /// request can not be satisfied, the call is blocked. Granted token can be
-    /// less than the requested amount.
-    pub fn request(&self, _io_type: IOType, _io_op: IOOp, bytes: usize) -> usize {
-        std::cmp::min(self.unit.load(atomic::Ordering::Relaxed), bytes)
-    }
-
-    pub fn async_request(
-        &self,
-        io_type: IOType,
-        io_op: IOOp,
-        bytes: usize,
-    ) -> impl Future<Output = usize> {
-        future::ready(self.request(io_type, io_op, bytes))
-    }
-
-    pub fn disable_rate_limit(&self, _io_type: IOType) {}
-
-    pub fn enable_rate_limit(&self, _io_type: IOType) {}
-}
-
-lazy_static! {
-    static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
-}
-
-pub fn set_io_rate_limiter(limiter: IORateLimiter) {
-    *IO_RATE_LIMITER.lock().unwrap() = Some(Arc::new(limiter));
-}
-
-pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
-    if let Some(ref limiter) = *IO_RATE_LIMITER.lock().unwrap() {
-        Some(limiter.clone())
-    } else {
-        None
-    }
-}
-
-/// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
-pub struct InstrumentedFile {
-    inner: fs::File,
-    limiter: Option<Arc<IORateLimiter>>,
-}
-
-impl Deref for InstrumentedFile {
-    type Target = fs::File;
-
-    fn deref(&self) -> &fs::File {
-        &self.inner
-    }
-}
-
-impl DerefMut for InstrumentedFile {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl InstrumentedFile {
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<InstrumentedFile> {
-        let inner = fs::File::open(path)?;
-        Ok(InstrumentedFile {
-            inner,
-            limiter: get_io_rate_limiter(),
-        })
-    }
-
-    pub fn create<P: AsRef<Path>>(path: P) -> io::Result<InstrumentedFile> {
-        let inner = fs::File::create(path)?;
-        Ok(InstrumentedFile {
-            inner,
-            limiter: get_io_rate_limiter(),
-        })
-    }
-
-    pub fn try_clone(&self) -> io::Result<InstrumentedFile> {
-        let inner = self.inner.try_clone()?;
-        Ok(InstrumentedFile {
-            inner,
-            limiter: get_io_rate_limiter(),
-        })
-    }
-}
-
-impl Read for InstrumentedFile {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if let Some(limiter) = &mut self.limiter {
-            let mut remains = buf.len();
-            let mut pos = 0;
-            while remains > 0 {
-                let allowed = limiter.request(get_io_type(), IOOp::Read, remains);
-                let read = self.inner.read(&mut buf[pos..pos + allowed])?;
-                pos += read;
-                remains -= read;
-                if read < allowed {
-                    break;
-                }
-            }
-            Ok(pos)
-        } else {
-            self.inner.read(buf)
-        }
-    }
-}
-
-impl Write for InstrumentedFile {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Some(limiter) = &mut self.limiter {
-            let mut remains = buf.len();
-            let mut pos = 0;
-            while remains > 0 {
-                let allowed = limiter.request(get_io_type(), IOOp::Write, remains);
-                let written = self.inner.write(&buf[pos..pos + allowed])?;
-                pos += written;
-                remains -= written;
-                if written < allowed {
-                    break;
-                }
-            }
-            Ok(pos)
-        } else {
-            self.inner.write(buf)
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
-/// Indicates how large a buffer to pre-allocate before reading the entire file.
-fn initial_buffer_size(file: &InstrumentedFile) -> usize {
-    // Allocate one extra byte so the buffer doesn't need to grow before the
-    // final `read` call at the end of the file.  Don't worry about `usize`
-    // overflow because reading will fail regardless in that case.
-    file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0)
-}
-
-/// Write a slice as the entire contents of a file.
-pub fn instrumented_write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
-    InstrumentedFile::create(path)?.write_all(contents.as_ref())
-}
-
-/// Read the entire contents of a file into a bytes vector.
-pub fn instrumented_read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
-    let mut file = InstrumentedFile::open(path)?;
-    let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-/// Read the entire contents of a file into a string.
-pub fn instrumented_read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
-    let mut file = InstrumentedFile::open(path)?;
-    let mut string = String::with_capacity(initial_buffer_size(&file));
-    file.read_to_string(&mut string)?;
-    Ok(string)
-}
-
-/// Copies the contents of one file to another. This function will also
-/// copy the permission bits of the original file to the destination file.
-pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "the source path is not an existing regular file",
-        ));
-    }
-
-    let mut reader = InstrumentedFile::open(from.as_ref())?;
-    let mut writer = InstrumentedFile::create(to.as_ref())?;
-    let perm = reader.metadata()?.permissions();
-
-    let ret = io::copy(&mut reader, &mut writer)?;
-    fs::set_permissions(to.as_ref(), perm)?;
-    Ok(ret)
-}
-
 #[cfg(test)]
 mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::fs::OpenOptions;
     use std::io::Write;
     use std::iter;
     use tempfile::TempDir;
@@ -511,27 +407,5 @@ mod tests {
             sha256_hasher.lock().unwrap().finish().unwrap().to_vec(),
             direct_sha256
         );
-    }
-
-    #[test]
-    fn test_instrumented_file() {
-        set_io_rate_limiter(IORateLimiter::new(1));
-
-        let tmp_dir = TempDir::new().unwrap();
-        let tmp_file = tmp_dir.path().join("instrumented.txt");
-        let content = String::from("magic words");
-        {
-            set_io_type(IOType::Write);
-            let mut f = InstrumentedFile::create(&tmp_file).unwrap();
-            f.write_all(content.as_bytes()).unwrap();
-            f.sync_all().unwrap();
-        }
-        {
-            set_io_type(IOType::Read);
-            let mut buffer = String::new();
-            let mut f = InstrumentedFile::open(&tmp_file).unwrap();
-            assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
-            assert_eq!(buffer, content);
-        }
     }
 }

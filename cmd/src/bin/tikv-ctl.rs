@@ -45,7 +45,7 @@ use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, file::calc_crc32, unescape};
+use tikv_util::{escape, file_system::calc_crc32, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";

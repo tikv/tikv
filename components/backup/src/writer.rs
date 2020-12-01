@@ -12,7 +12,7 @@ use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
+use tikv_util::{self, box_err, file_system::Sha256Reader, time::Limiter};
 use txn_types::KvPair;
 
 use crate::metrics::*;
