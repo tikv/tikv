@@ -315,6 +315,8 @@ impl WriteCompactionFilter {
                     CmpOrdering::Equal => {
                         let seq = write_iter.as_raw().sequence().unwrap();
                         assert!(seq >= *s);
+                        // NOTE: in the bottommost level sequence could be 0. So it's required that
+                        // an ingested file's sequence is not 0 if it overlaps with the DB.
                         need_delete = seq > *s;
                         let _ = filtered.next().unwrap();
                         break;
@@ -592,8 +594,11 @@ pub mod tests {
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::raw::{CompactOptions, CompactionOptions};
     use engine_rocks::util::get_cf_handle;
-    use engine_rocks::RocksEngine;
-    use engine_traits::{MiscExt, Peekable, SyncMutable};
+    use engine_rocks::{RocksEngine, RocksIngestExternalFileOptions, RocksSstWriterBuilder};
+    use engine_traits::{
+        ImportExt, IngestExternalFileOptions, IterOptions, Iterable, MiscExt, Peekable, SstWriter,
+        SstWriterBuilder, SyncMutable,
+    };
 
     // Use a lock to protect concurrent compactions.
     lazy_static! {
@@ -708,6 +713,7 @@ pub mod tests {
         assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
     }
 
+    // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -739,6 +745,7 @@ pub mod tests {
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
     }
 
+    // Test a delete mark can be handled with all older dirty versions correctly.
     #[test]
     fn test_compaction_filter_handle_deleting() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -763,6 +770,8 @@ pub mod tests {
         must_get_none(&engine, b"zkey", 110);
     }
 
+    // Test if there are not enought garbage in SST files involved by a compaction, no compaction
+    // filter will be created.
     #[test]
     fn test_mvcc_properties() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -783,6 +792,12 @@ pub mod tests {
         }
     }
 
+    // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction filters,
+    // delete marks can only be handled in the bottommost level. Otherwise dirty
+    // versions could be exposed incorrectly.
+    //
+    // This case tests that delete marks won't be handled at internal levels, and at
+    // the bottommost levels, dirty versions still can't be exposed.
     #[test]
     fn test_remove_and_skip_until() {
         let mut cfg = DbConfig::default();
@@ -825,6 +840,73 @@ pub mod tests {
         // Compact the mvcc delete mark to L6, the stale version shouldn't be exposed.
         do_gc_by_compact(&raw_engine, None, None, 200, Some(6));
         must_get_none(&engine, b"zkey", 200);
+    }
+
+    // Compaction filter uses sequence number to determine 2 same user keys is exactly
+    // one or not. It's required that sequence number of ingested snapshot files can't
+    // be 0 if those files are overlapped with any level in the current DB. It's ensured
+    // by the current RocksDB implementation.
+    // PTAL at `Status ExternalSstFileIngestionJob::AssignLevelAndSeqnoForIngestedFile(...)`.
+    #[test]
+    fn test_ingested_ssts_seqno() {
+        for level in 0..7 {
+            let mut cfg = DbConfig::default();
+            cfg.writecf.disable_auto_compactions = true;
+            cfg.writecf.dynamic_level_bytes = false;
+            let dir = tempfile::TempDir::new().unwrap();
+            let engine = TestEngineBuilder::new()
+                .path(dir.path())
+                .build_with_cfg(&cfg)
+                .unwrap();
+            let raw_engine = engine.get_rocksdb();
+            must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
+            must_commit(&engine, b"zkey", 100, 110);
+
+            if level == 0 {
+                raw_engine.flush_cf(CF_WRITE, true).unwrap();
+            } else {
+                let db = raw_engine.as_inner();
+                let handle = get_cf_handle(db, CF_WRITE).unwrap();
+                let mut compact_opts = compact_options();
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(level as i32);
+                db.compact_range_cf_opt(handle, &compact_opts, None, None);
+            }
+            assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[level], 1);
+
+            let sst = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+            let sst_path = sst.to_str().unwrap();
+            let mut sst_writer = RocksSstWriterBuilder::new()
+                .set_db(&raw_engine)
+                .set_cf(CF_WRITE)
+                .build(sst_path)
+                .unwrap();
+
+            let opts = IterOptions::new(None, None, true);
+            let mut iter = raw_engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
+            let mut valid = iter.seek(SeekKey::Start).unwrap();
+            while valid {
+                sst_writer.put(iter.key(), iter.value()).unwrap();
+                valid = iter.next().unwrap();
+            }
+            sst_writer.finish().unwrap();
+            drop(iter);
+
+            let mut opts = RocksIngestExternalFileOptions::new();
+            opts.move_files(true);
+            raw_engine
+                .ingest_external_file_cf(CF_WRITE, &opts, &[sst_path])
+                .unwrap();
+
+            let opts = IterOptions::new(None, None, true);
+            let mut iter = raw_engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
+            let mut valid = iter.seek(SeekKey::Start).unwrap();
+            while valid {
+                let seqno = iter.as_raw().sequence().unwrap();
+                assert!(seqno > 0, "ingested sst's seqno must be greater than 0");
+                valid = iter.next().unwrap();
+            }
+        }
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
