@@ -95,6 +95,7 @@ engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.4"
 failure = "0.1"
+file_system = { path = "components/file_system" }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -229,6 +230,7 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "components/file_system",
 ]
 default-members = ["cmd"]
 

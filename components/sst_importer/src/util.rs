@@ -94,10 +94,10 @@ mod tests {
         CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt,
         IngestExternalFileOptions, Peekable, SstWriter, SstWriterBuilder, TitanDBOptions,
     };
+    use file_system::calc_crc32;
     use std::{fs, path::Path, sync::Arc};
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
-    use tikv_util::file::calc_crc32;
 
     #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
