@@ -5293,4 +5293,128 @@ mod tests {
         });
         res.unwrap_err();
     }
+
+    #[test]
+    fn test_batch_ingest() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (import_dir, importer) = create_tmp_importer("test-delegate");
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        let (tx, _) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let mut cfg = Config::default();
+        cfg.apply_batch_system.pool_size = 1;
+        let cfg = Arc::new(VersionTrack::new(cfg));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine, KvTestWriteBatch> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host,
+            importer: importer.clone(),
+            engine: engine.clone(),
+            router: router.clone(),
+            _phantom: Default::default(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+        let regions = &[
+            (1, 3, b"k1", b"k4"),
+            (2, 5, b"k4", b"k6"),
+            (7, 9, b"k7", b"k9"),
+        ];
+
+        for &(region_id, peer_id, start_key, end_key) in regions {
+            let mut reg = Registration::default();
+            reg.id = peer_id;
+            reg.region.set_id(region_id);
+            reg.region.mut_peers().push(new_peer(1, peer_id));
+            reg.region.set_start_key(start_key.to_vec());
+            reg.region.set_end_key(end_key.to_vec());
+            reg.region.mut_region_epoch().set_conf_ver(1);
+            reg.region.mut_region_epoch().set_version(3);
+            router.schedule_task(region_id, Msg::Registration(reg));
+        }
+
+        let (block_tx, block_rv) = mpsc::channel();
+        let (batch_tx, batch_rv) = mpsc::channel();
+        let put_entry = EntryBuilder::new(1, 1)
+            .put(b"k7", b"k7")
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(
+            7,
+            Msg::apply(apply(
+                9,
+                7,
+                1,
+                vec![put_entry],
+                0,
+                1,
+                1,
+                vec![proposal(
+                    false,
+                    1,
+                    1,
+                    Callback::write(Box::new(move |_| {
+                        batch_tx.send(()).unwrap();
+                        block_rv.recv().unwrap();
+                    })),
+                )],
+            )),
+        );
+        let _ = batch_rv.recv().unwrap();
+        let (capture_tx, capture_rx) = mpsc::channel();
+        for &(region_id, peer_id, start_key, _) in &regions[0..2] {
+            let sst_path = import_dir.path().join(format!("{}-{}", region_id, peer_id));
+            let mut sst_epoch = RegionEpoch::default();
+            sst_epoch.set_conf_ver(1);
+            sst_epoch.set_version(3);
+            let (mut meta, data1) = gen_sst_file_by_db(&sst_path, &[start_key.to_vec()], None);
+            meta.set_region_id(region_id);
+            meta.set_region_epoch(sst_epoch);
+            let mut file = importer.create(&meta).unwrap();
+            file.append(&data1).unwrap();
+            file.finish().unwrap();
+            let ingest = EntryBuilder::new(1, 1)
+                .ingest_sst(&meta)
+                .epoch(1, 3)
+                .build();
+            let entries = vec![ingest];
+            let capture_tx_clone = capture_tx.clone();
+            router.schedule_task(
+                region_id,
+                Msg::apply(apply(
+                    peer_id,
+                    region_id,
+                    1,
+                    entries,
+                    0,
+                    1,
+                    1,
+                    vec![proposal(
+                        false,
+                        1,
+                        1,
+                        Callback::write(Box::new(move |resp: WriteResponse| {
+                            capture_tx_clone.send(resp.response).unwrap();
+                        })),
+                    )],
+                )),
+            );
+        }
+        block_tx.send(()).unwrap();
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        for &(_, _, start_key, _) in regions {
+            let k = keys::data_key(start_key);
+            assert_eq!(engine.get_value(&k).unwrap().unwrap(), start_key);
+        }
+    }
 }

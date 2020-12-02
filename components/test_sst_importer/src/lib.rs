@@ -103,7 +103,7 @@ where
 
 pub fn gen_sst_file_by_db<P: AsRef<Path>>(
     path: P,
-    range: (u8, u8),
+    range: &[Vec<u8>],
     db: Option<&RocksEngine>,
 ) -> (SstMeta, Vec<u8>) {
     let mut builder = RocksSstWriterBuilder::new();
@@ -111,27 +111,36 @@ pub fn gen_sst_file_by_db<P: AsRef<Path>>(
         builder = builder.set_db(db);
     }
     let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
-    for i in range.0..range.1 {
-        let k = keys::data_key(&[i]);
-        w.put(&k, &[i]).unwrap();
+    for i in range {
+        let k = keys::data_key(i);
+        w.put(&k, i).unwrap();
     }
     w.finish().unwrap();
-
-    read_sst_file(path, range)
+    let mut keys = range.to_vec();
+    let mut end_key = keys.last().unwrap().clone();
+    end_key.push(0);
+    keys.push(end_key);
+    read_sst_file(path, &keys)
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
-    gen_sst_file_by_db(path, range, None)
+    let mut ranges = vec![];
+    for i in range.0..range.1 {
+        ranges.push(vec![i]);
+    }
+    gen_sst_file_by_db(path, &ranges, None)
 }
 
-pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
+pub fn read_sst_file<P: AsRef<Path>>(path: P, range: &[Vec<u8>]) -> (SstMeta, Vec<u8>) {
+    assert!(range.len() > 1);
     let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SstMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    meta.mut_range().set_start(vec![range.0]);
-    meta.mut_range().set_end(vec![range.1]);
+    meta.mut_range().set_start(range[0].clone());
+    let l = range.len();
+    meta.mut_range().set_end(range[l - 1].clone());
     meta.set_crc32(crc32);
     meta.set_length(data.len() as u64);
     meta.set_cf_name("default".to_owned());
