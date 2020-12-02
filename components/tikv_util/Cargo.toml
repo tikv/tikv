@@ -21,6 +21,7 @@ crossbeam = "0.7.2"
 error_code = { path = "../error_code" }
 derive_more = "0.99.3"
 fail = "0.4"
+file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 fxhash = "0.2.1"
