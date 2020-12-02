@@ -2,7 +2,8 @@ use std::cell::RefCell;
 
 use engine_traits::{KvEngine, Peekable};
 use kvproto::metapb::*;
-use raftstore::coprocessor::{Cmd, CmdBatch, CmdObserver, Coprocessor};
+use raft::StateRole;
+use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
 
 struct ChangeDataObserver {
@@ -42,5 +43,22 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver {
             let snapshot: Box<dyn Peekable<DBVector = <E::Snapshot as Peekable>::DBVector>> =
                 Box::new(engine.snapshot());
         }
+    }
+}
+
+impl RoleObserver for ChangeDataObserver {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+        if role != StateRole::Leader {}
+    }
+}
+
+impl RegionChangeObserver for ChangeDataObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
+        if let RegionChangeEvent::Destroy = event {}
     }
 }

@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -415,16 +415,11 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
-
-        if let Some(observe_cmd) = &delegate.observe_cmd {
-            let region_id = delegate.region_id();
-            if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(observe_cmd.id, region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
+        match delegate.change_observe.range {
+            ObserveRange::All => self
+                .host
+                .prepare_for_apply(delegate.change_observe.id, delegate.region_id()),
+            ObserveRange::None => (),
         }
     }
 
@@ -773,7 +768,7 @@ where
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
-    observe_cmd: Option<ObserveCmd>,
+    change_observe: ChangeObserve,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -803,7 +798,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            observe_cmd: None,
+            change_observe: ChangeObserve::default(),
         }
     }
 
@@ -1068,10 +1063,15 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            apply_ctx
-                .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
+
+        // TODO(5kbpers): observe lock cf only when change_observe.range == LockOnly
+        match self.change_observe.range {
+            ObserveRange::All => {
+                apply_ctx
+                    .host
+                    .on_apply_cmd(self.change_observe.id, self.region_id(), cmd.clone());
+            }
+            ObserveRange::None => (),
         }
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
@@ -2832,28 +2832,39 @@ impl ObserveID {
     }
 }
 
-struct ObserveCmd {
+struct ChangeObserve {
     id: ObserveID,
-    enabled: Arc<AtomicBool>,
+    range: ObserveRange,
 }
 
-impl Debug for ObserveCmd {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
+impl Default for ChangeObserve {
+    fn default() -> Self {
+        ChangeObserve {
+            id: ObserveID(0),
+            range: ObserveRange::None,
+        }
     }
 }
 
+impl Debug for ChangeObserve {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChangeObserve")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ObserveRange {
+    None,
+    All,
+    // LockOnly,
+}
+
 #[derive(Debug)]
-pub enum ChangeCmd {
-    RegisterObserver {
-        observe_id: ObserveID,
-        region_id: u64,
-        enabled: Arc<AtomicBool>,
-    },
-    Snapshot {
-        observe_id: ObserveID,
-        region_id: u64,
-    },
+pub struct ChangeCmd {
+    region_id: u64,
+    change_observe: ChangeObserve,
 }
 
 pub enum Msg<EK>
@@ -2919,13 +2930,9 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd::RegisterObserver { region_id, .. },
+                cmd: ChangeCmd { region_id, .. },
                 ..
-            } => write!(f, "[region {}] registers cmd observer", region_id),
-            Msg::Change {
-                cmd: ChangeCmd::Snapshot { region_id, .. },
-                ..
-            } => write!(f, "[region {}] cmd snapshot", region_id),
+            } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3272,22 +3279,15 @@ where
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let (observe_id, region_id, enabled) = match cmd {
-            ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id,
-                enabled,
-            } => (observe_id, region_id, Some(enabled)),
-            ChangeCmd::Snapshot {
-                observe_id,
-                region_id,
-            } => (observe_id, region_id, None),
-        };
-        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            if observe_cmd.id > observe_id {
-                notify_stale_req(self.delegate.term, cb);
-                return;
-            }
+        let (observe_id, region_id, range) = (
+            cmd.change_observe.id,
+            cmd.region_id,
+            cmd.change_observe.range,
+        );
+
+        if self.delegate.change_observe.id > observe_id {
+            notify_stale_req(self.delegate.term, cb);
+            return;
         }
 
         assert_eq!(self.delegate.region_id(), region_id);
@@ -3303,12 +3303,16 @@ where
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
-                ReadResponse {
-                    response: Default::default(),
-                    snapshot: Some(RegionSnapshot::from_snapshot(
+                let snapshot = match range {
+                    ObserveRange::All => Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.delegate.region.clone()),
                     )),
+                    ObserveRange::None => None,
+                };
+                ReadResponse {
+                    response: Default::default(),
+                    snapshot,
                     txn_extra_op: TxnExtraOp::Noop,
                 }
             }
@@ -3322,25 +3326,8 @@ where
                 return;
             }
         };
-        if let Some(enabled) = enabled {
-            assert!(
-                !self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                "{} observer already exists {:?} {:?}",
-                self.delegate.tag,
-                self.delegate.observe_cmd,
-                observe_id
-            );
-            // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = Some(ObserveCmd {
-                id: observe_id,
-                enabled,
-            });
-        }
-
+        self.delegate.change_observe.id = observe_id;
+        self.delegate.change_observe.range = range;
         cb.invoke_read(resp);
     }
 
@@ -3677,12 +3664,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd::RegisterObserver { region_id, .. },
-                    cb,
-                    ..
-                }
-                | Msg::Change {
-                    cmd: ChangeCmd::Snapshot { region_id, .. },
+                    cmd: ChangeCmd { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -4732,6 +4714,7 @@ mod tests {
         let region_epoch = reg.region.get_region_epoch().clone();
         router.schedule_task(1, Msg::Registration(reg));
 
+        // Try to put values
         let put_entry = EntryBuilder::new(1, 1)
             .put(b"k1", b"v1")
             .put(b"k2", b"v1")
@@ -4747,6 +4730,8 @@ mod tests {
         cmdbatch_rx
             .recv_timeout(Duration::from_millis(100))
             .unwrap_err();
+        // Block the apply worker to ensure following put cmds and observe cmds
+        // could be applied in the same batch.
         let (block_tx, block_rx) = mpsc::channel::<()>();
         router.schedule_task(
             1,
@@ -4767,21 +4752,22 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 2, vec![put_entry], 1, 2, 2, vec![])),
         );
         // Register cmd observer to region 1.
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: enabled.clone(),
+                    change_observe: ChangeObserve {
+                        id: ObserveID(1),
+                        range: ObserveRange::All,
+                    },
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
+                    // Must get k0 which appiled in the same batch.
                     assert_eq!(snap.get_value(b"k0").unwrap().unwrap(), b"v0");
                 })),
             },
@@ -4789,6 +4775,30 @@ mod tests {
         // Unblock the apply worker
         block_tx.send(()).unwrap();
         fetch_apply_res(&rx);
+
+        // Try to register cmd observer to region 1 with smaller observe id
+        router.schedule_task(
+            1,
+            Msg::Change {
+                region_epoch: region_epoch.clone(),
+                cmd: ChangeCmd {
+                    region_id: 1,
+                    change_observe: ChangeObserve {
+                        id: ObserveID(0),
+                        range: ObserveRange::All,
+                    },
+                },
+                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                    assert!(resp.snapshot.is_none());
+                    assert!(
+                        resp.response.get_header().get_error().has_stale_command(),
+                        "{:?}",
+                        resp
+                    );
+                })),
+            },
+        );
+
         let (capture_tx, capture_rx) = mpsc::channel();
         let put_entry = EntryBuilder::new(3, 2)
             .put_cf(CF_LOCK, b"k1", b"v1")
@@ -4839,7 +4849,22 @@ mod tests {
         assert_eq!(2, cmd_batch.len());
 
         // Stop observer regoin 1.
-        enabled.store(false, Ordering::SeqCst);
+        router.schedule_task(
+            1,
+            Msg::Change {
+                region_epoch: region_epoch.clone(),
+                cmd: ChangeCmd {
+                    region_id: 1,
+                    change_observe: ChangeObserve {
+                        id: ObserveID(2),
+                        range: ObserveRange::None,
+                    },
+                },
+                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                    assert!(resp.snapshot.is_none());
+                })),
+            },
+        );
         let put_entry = EntryBuilder::new(6, 2)
             .put(b"k2", b"v2")
             .epoch(1, 3)
@@ -4858,10 +4883,12 @@ mod tests {
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 2,
-                    enabled,
+                    change_observe: ChangeObserve {
+                        id: ObserveID(3),
+                        range: ObserveRange::All,
+                    },
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(resp
@@ -5027,16 +5054,16 @@ mod tests {
         system.spawn("test-split".to_owned(), builder);
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
-        let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: enabled.clone(),
+                    change_observe: ChangeObserve {
+                        id: ObserveID::new(),
+                        range: ObserveRange::All,
+                    },
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
@@ -5190,15 +5217,16 @@ mod tests {
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
 
         let (tx, rx) = mpsc::channel();
-        enabled.store(false, Ordering::SeqCst);
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: Arc::new(AtomicBool::new(true)),
+                    change_observe: ChangeObserve {
+                        id: ObserveID::new(),
+                        range: ObserveRange::None,
+                    },
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(

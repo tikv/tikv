@@ -3396,6 +3396,7 @@ dependencies = [
  "engine_traits",
  "hex 0.4.2",
  "kvproto",
+ "raft",
  "raftstore",
  "slog",
  "slog-global",
