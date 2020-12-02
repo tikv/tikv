@@ -5278,24 +5278,9 @@ mod tests {
                 true,
             ),
             // will truncated
-            (
-                8376049,
-                0,
-                Ok(None),
-                true,
-            ),
-            (
-                8375960,
-                0,
-                Ok(None),
-                true,
-            ),
-            (
-                8376049,
-                0,
-                Ok(None),
-                true,
-            ),
+            (8376049, 0, Ok(None), true),
+            (8375960, 0, Ok(None), true),
+            (8376049, 0, Ok(None), true),
             (
                 10000000000,
                 0,
