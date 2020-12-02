@@ -75,7 +75,7 @@ where
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
-            tidb_query_vec_executors::runner::build_executors(
+            tidb_query_executors::runner::build_executors(
                 black_box(executors.to_vec()),
                 black_box(TiKVStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),

@@ -13,8 +13,11 @@ mod macros;
 mod runner;
 mod security;
 
+use rand::Rng;
 use std::env;
+use std::sync::atomic::{AtomicU16, Ordering};
 
+pub use crate::encryption::*;
 pub use crate::kv_generator::*;
 pub use crate::logging::*;
 pub use crate::macros::*;
@@ -55,5 +58,29 @@ pub fn setup_for_ci() {
              less than 4096: {:?}",
             e
         );
+    }
+}
+
+static INITIAL_PORT: AtomicU16 = AtomicU16::new(0);
+/// Linux by default use [32768, 61000] for local port.
+const MIN_LOCAL_PORT: u16 = 32767;
+
+/// Allocates a port for testing purpose.
+pub fn alloc_port() -> u16 {
+    let p = INITIAL_PORT.load(Ordering::Relaxed);
+    if p == 0 {
+        INITIAL_PORT.compare_and_swap(
+            0,
+            rand::thread_rng().gen_range(10240, MIN_LOCAL_PORT),
+            Ordering::SeqCst,
+        );
+    }
+    let mut p = INITIAL_PORT.load(Ordering::SeqCst);
+    loop {
+        let next = if p >= MIN_LOCAL_PORT { 10240 } else { p + 1 };
+        match INITIAL_PORT.compare_exchange_weak(p, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return next,
+            Err(e) => p = e,
+        }
     }
 }

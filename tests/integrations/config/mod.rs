@@ -95,6 +95,7 @@ fn test_serde_custom_tikv_config() {
         enable_request_batch: false,
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
+        end_point_slow_log_threshold: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -637,6 +638,7 @@ fn test_serde_custom_tikv_config() {
         region_max_keys: 100000,
         region_split_keys: 100000,
         consistency_check_method: ConsistencyCheckMethod::Raw,
+        perf_level: PerfLevel::EnableTime,
     };
     let mut cert_allowed_cn = HashSet::default();
     cert_allowed_cn.insert("example.tikv.com".to_owned());

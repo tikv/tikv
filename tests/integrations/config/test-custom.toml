@@ -63,6 +63,7 @@ heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
+end-point-slow-log-threshold = "1s"
 
 [server.labels]
 a = "b"
@@ -166,6 +167,7 @@ region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
+perf-level = 5
 
 [rocksdb]
 wal-recovery-mode = 1

@@ -31,6 +31,7 @@ use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::PerfLevel;
 use minitrace::prelude::*;
 use txn_types::Lock;
 
@@ -48,6 +49,9 @@ pub struct Endpoint<E: Engine> {
 
     concurrency_manager: ConcurrencyManager,
 
+    // Perf stats level
+    perf_level: PerfLevel,
+
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
     /// Note that this limit is ignored if we are using Prost.
@@ -59,6 +63,8 @@ pub struct Endpoint<E: Engine> {
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
+
+    slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
 }
@@ -81,6 +87,7 @@ impl<E: Engine> Endpoint<E> {
         cfg: &Config,
         read_pool: ReadPoolHandle,
         concurrency_manager: ConcurrencyManager,
+        perf_level: PerfLevel,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
         // using too much memory. However, if there are a number of large requests, small requests
@@ -95,11 +102,13 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             semaphore,
             concurrency_manager,
+            perf_level,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
         }
     }
@@ -229,6 +238,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(is_desc_scan),
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;
@@ -279,6 +289,7 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;
@@ -316,6 +327,7 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     start_ts.into(),
                     cache_match_version,
+                    self.perf_level,
                 );
 
                 self.check_memory_locks(&req_ctx)?;
@@ -423,7 +435,7 @@ impl<E: Engine> Endpoint<E> {
         let mut storage_stats = Statistics::default();
         handler.collect_scan_statistics(&mut storage_stats);
         tracker.collect_storage_statistics(storage_stats);
-        let exec_details = tracker.get_exec_details();
+        let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
         let mut resp = match result {
@@ -434,6 +446,7 @@ impl<E: Engine> Endpoint<E> {
             Err(e) => make_error_response(e),
         };
         resp.set_exec_details(exec_details);
+        resp.set_exec_details_v2(exec_details_v2);
         Ok(resp)
     }
 
@@ -449,7 +462,7 @@ impl<E: Engine> Endpoint<E> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         let res = self
             .read_pool
@@ -545,12 +558,13 @@ impl<E: Engine> Endpoint<E> {
                     result
                 };
 
-                let exec_details = tracker.get_item_exec_details();
+                let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
 
                 match result {
                     Err(e) => {
                         let mut resp = make_error_response(e);
                         resp.set_exec_details(exec_details);
+                        resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
                         break;
                     },
@@ -558,6 +572,7 @@ impl<E: Engine> Endpoint<E> {
                     Ok((Some(mut resp), finished)) => {
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
+                        resp.set_exec_details_v2(exec_details_v2);
                         yield resp;
                         if finished {
                             break;
@@ -581,7 +596,7 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
 
         self.read_pool
             .spawn(
@@ -676,6 +691,7 @@ mod tests {
     use crate::read_pool::ReadPool;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;
+    use engine_rocks::PerfLevel;
     use protobuf::Message;
     use txn_types::{Key, LockType};
 
@@ -830,7 +846,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         // a normal request
         let handler_builder =
@@ -852,6 +873,7 @@ mod tests {
             None,
             TimeStamp::max(),
             None,
+            PerfLevel::EnableCount,
         );
         assert!(block_on(cop.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
     }
@@ -864,7 +886,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let mut cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
         cop.recursion_limit = 100;
 
         let req = {
@@ -898,7 +925,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -915,7 +947,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -955,7 +992,12 @@ mod tests {
         );
 
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         let (tx, rx) = mpsc::channel();
 
@@ -997,7 +1039,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -1016,7 +1063,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         // Fail immediately
         let handler_builder =
@@ -1063,7 +1115,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = block_on_stream(
@@ -1085,7 +1142,12 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.handle(), cm);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            PerfLevel::EnableCount,
+        );
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1182,6 +1244,7 @@ mod tests {
             },
             read_pool.handle(),
             cm,
+            PerfLevel::EnableCount,
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1241,13 +1304,14 @@ mod tests {
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
         let cm = ConcurrencyManager::new(1.into());
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
+        let cop =
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
-        req_with_exec_detail.context.set_handle_time(true);
+        req_with_exec_detail.context.set_record_time_stat(true);
 
         {
             let mut wait_time: i64 = 0;
@@ -1284,19 +1348,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             wait_time += PAYLOAD_SMALL - SNAPSHOT_DURATION_MS;
@@ -1305,19 +1377,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
@@ -1357,11 +1437,15 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
@@ -1369,11 +1453,15 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
@@ -1428,19 +1516,27 @@ mod tests {
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_process_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             wait_time += PAYLOAD_LARGE - SNAPSHOT_DURATION_MS;
@@ -1452,23 +1548,29 @@ mod tests {
             assert_ge!(
                 resp[0]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
                 resp[0]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[0]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[0]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
@@ -1476,23 +1578,29 @@ mod tests {
             assert_ge!(
                 resp[1]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
                 resp[1]
                     .get_exec_details()
-                    .get_handle_time()
-                    .get_process_ms(),
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
             assert_ge!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[1]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
             assert_lt!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                resp[1]
+                    .get_exec_details()
+                    .get_time_detail()
+                    .get_wait_wall_time_ms(),
                 wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
@@ -1522,7 +1630,8 @@ mod tests {
         });
 
         let config = Config::default();
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm);
+        let cop =
+            Endpoint::<RocksEngine>::new(&config, read_pool.handle(), cm, PerfLevel::EnableCount);
 
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);
