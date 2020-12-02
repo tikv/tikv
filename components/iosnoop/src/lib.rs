@@ -5,11 +5,11 @@ extern crate tikv_util;
 #[macro_use]
 extern crate lazy_static;
 
-#[cfg(all(feature = "bcc", unix))]
+#[cfg(all(feature = "bcc", target_os = "linux"))]
 #[path = "biosnoop.rs"]
 mod imp;
 
-#[cfg(not(all(feature = "bcc", unix)))]
+#[cfg(not(all(feature = "bcc", target_os = "linux")))]
 #[path = "null.rs"]
 mod imp;
 
