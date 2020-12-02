@@ -58,6 +58,20 @@ lazy_static! {
         "Compaction filter meets failure"
     )
     .unwrap();
+
+    // It's relative to a key logic for handling mvcc delete marks.
+    static ref GC_COMPACTION_MVCC_DELETE_SKIP_OLDER: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_mvcc_delete_skip_older",
+        "Counter of skiped versions for bottommost deletes"
+    )
+    .unwrap();
+
+    // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
+    static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_mvcc_rollback",
+        "Compaction of mvcc rollbacks"
+    )
+    .unwrap();
 }
 
 pub trait CompactionFilterInitializer {
@@ -179,6 +193,10 @@ struct WriteCompactionFilter {
     total_deleted: usize,
     versions_hist: LocalHistogram,
     filtered_hist: LocalHistogram,
+
+    // Some metrics about implementation detail.
+    mvcc_delete_skip_older: usize,
+    mvcc_rollback_and_locks: usize,
 }
 
 impl WriteCompactionFilter {
@@ -209,6 +227,8 @@ impl WriteCompactionFilter {
             total_deleted: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
+            mvcc_delete_skip_older: 0,
+            mvcc_rollback_and_locks: 0,
         };
 
         if filter.is_bottommost_level {
@@ -249,7 +269,10 @@ impl WriteCompactionFilter {
         let write = parse_write(value)?;
         if !self.remove_older {
             match write.write_type {
-                WriteType::Rollback | WriteType::Lock => filtered = true,
+                WriteType::Rollback | WriteType::Lock => {
+                    self.mvcc_rollback_and_locks += 1;
+                    filtered = true;
+                }
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
                     self.remove_older = true;
@@ -318,6 +341,9 @@ impl WriteCompactionFilter {
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
                         need_delete = seq > *s;
+                        if !need_delete {
+                            self.mvcc_delete_skip_older += 1;
+                        }
                         let _ = filtered.next().unwrap();
                         break;
                     }
@@ -451,6 +477,8 @@ impl Drop for WriteCompactionFilter {
 
         GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
         GC_COMPACTION_DELETED.inc_by(self.total_deleted as i64);
+        GC_COMPACTION_MVCC_DELETE_SKIP_OLDER.inc_by(self.mvcc_delete_skip_older as i64);
+        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
         if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);
