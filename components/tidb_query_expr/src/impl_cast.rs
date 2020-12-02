@@ -5281,19 +5281,19 @@ mod tests {
             (
                 8376049,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(None),
                 true,
             ),
             (
                 8375960,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(None),
                 true,
             ),
             (
                 8376049,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(None),
                 true,
             ),
             (

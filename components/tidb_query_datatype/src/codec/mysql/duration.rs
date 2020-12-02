@@ -517,8 +517,7 @@ impl Duration {
         let second = (abs % 100) as u32;
 
         if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
-            ctx.handle_truncate_err(Error::truncated_wrong_val("Duration", n))?;
-            return Self::new_from_parts(false, 0, 0, 0, 0, 0);
+            return Err(Error::truncated_wrong_val("Duration", n));
         }
 
         Self::new_from_parts(n.is_negative(), hour, minute, second, 0, fsp)
