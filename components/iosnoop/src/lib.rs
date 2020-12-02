@@ -1,5 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[allow(unused_imports)]
+#[macro_use]
+extern crate tikv_util;
+
 #[cfg(all(feature = "bcc", target_os = "linux"))]
 #[path = "biosnoop.rs"]
 mod imp;

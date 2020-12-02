@@ -9,10 +9,12 @@ impl IOContext {
         IOContext {}
     }
 
+    #[allow(dead_code)]
     fn delta(&self) -> IOStats {
         IOStats::default()
     }
 
+    #[allow(dead_code)]
     fn delta_and_refresh(&mut self) -> IOStats {
         IOStats::default()
     }

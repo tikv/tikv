@@ -1,8 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use]
-extern crate tikv_util;
-
 use crate::IOStats;
 use bcc::{table::Table, Kprobe, BPF};
 use std::ptr;
@@ -46,6 +43,7 @@ impl IOContext {
         }
     }
 
+    #[allow(dead_code)]
     pub fn delta(&self) -> IOStats {
         let stats = unsafe { get_io_stats_of_tid(self.tid) };
         IOStats {
@@ -54,6 +52,7 @@ impl IOContext {
         }
     }
 
+    #[allow(dead_code)]
     pub fn delta_and_refresh(&mut self) -> IOStats {
         let stats = unsafe { get_io_stats_of_tid(self.tid) };
         let read = stats.as_ref().map(|s| s.read).unwrap_or(0);
