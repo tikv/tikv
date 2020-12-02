@@ -481,7 +481,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.try_one_pc,
                         &mut txn,
                         final_min_commit_ts,
-                        rows,
                         lock_manager,
                     ),
                 },
@@ -633,11 +632,9 @@ fn one_pc_commit_ts(
     try_one_pc: bool,
     txn: &mut MvccTxn<impl Snapshot>,
     final_min_commit_ts: TimeStamp,
-    rows: usize,
     lock_manager: &impl LockManager,
 ) -> TimeStamp {
     if try_one_pc {
-        assert_eq!(txn.locks_for_1pc.len(), rows);
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
@@ -892,7 +889,7 @@ mod tests {
         let mut statistics = Statistics::default();
         prewrite_with_cm(
             &engine,
-            cm,
+            cm.clone(),
             &mut statistics,
             mutations,
             key.to_vec(),
@@ -900,6 +897,22 @@ mod tests {
             Some(30),
         )
         .unwrap_err();
+
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
+        ];
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            40,
+            Some(60),
+        )
+        .unwrap();
     }
 
     #[test]
