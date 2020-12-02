@@ -10,7 +10,7 @@ pub(super) mod txn;
 pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};
 pub use self::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 pub use self::reader::*;
-pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, SecondaryLockStatus, MAX_TXN_WRITE_SIZE};
+pub use self::txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE};
 pub use txn_types::{
     Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
@@ -320,7 +320,6 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
-    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;
@@ -374,21 +373,6 @@ pub mod tests {
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
-    }
-
-    pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
-        let mut txn = MvccTxn::for_scan(
-            snapshot,
-            Some(ScanMode::Forward),
-            TimeStamp::zero(),
-            true,
-            cm,
-        );
-        txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
-        write(engine, &Context::default(), txn.into_modifies());
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {

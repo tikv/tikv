@@ -34,10 +34,12 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     let clone = clone.as_ref().to_str().unwrap();
 
     if Path::new(clone).exists() {
-        if let Some(key_manager) = encryption_key_manager {
-            key_manager.delete_file(clone)?;
-        }
         fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+    // always try to remove the file from key manager because the clean up in rocksdb is not atomic,
+    // thus the file may be deleted but key in key manager is not.
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.delete_file(clone)?;
     }
 
     #[cfg(unix)]
@@ -51,11 +53,14 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         // RocksDB must not have this file, we can make a hard link.
         fs::hard_link(path, clone)
             .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
+        File::open(clone)?.sync_all()?;
     } else {
         // RocksDB may have this file, we should make a copy.
         copy_and_sync(path, clone)
             .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
     }
+    // sync clone dir
+    File::open(Path::new(clone).parent().unwrap())?.sync_all()?;
     if let Some(key_manager) = encryption_key_manager {
         key_manager.link_file(path, clone, sync)?;
     }
@@ -90,10 +95,10 @@ mod tests {
         CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt,
         IngestExternalFileOptions, Peekable, SstWriter, SstWriterBuilder, TitanDBOptions,
     };
+    use file_system::calc_crc32;
     use std::{fs, path::Path, sync::Arc};
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
-    use tikv_util::file::calc_crc32;
 
     #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
