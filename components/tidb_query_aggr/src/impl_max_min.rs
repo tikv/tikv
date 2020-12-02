@@ -92,7 +92,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             TT = [
                 Int => &'static Int,
                 Real => &'static Real,
-                Duration => &'static Real,
+                Duration => &'static Duration,
                 Decimal => &'static Decimal,
                 DateTime => &'static DateTime,
                 Json => JsonRef<'static>,
