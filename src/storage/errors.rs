@@ -180,8 +180,7 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     }
 }
 
-/// Return a string representation of the `ErrorHeaderKind` enum that corresponds to the
-/// error in the protobuf message.
+/// Get the metric tag of the error in the protobuf message.
 /// Returns "other" if no match found
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()

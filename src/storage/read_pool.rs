@@ -48,7 +48,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
         .collect()
 }
 
-// Thread pools created for test have different behaviour on tick
+/// Build a thread pool that has default tick behavior for testing.
 pub fn build_read_pool_for_test<E: Engine>(
     config: &StorageReadPoolConfig,
     engine: E,
