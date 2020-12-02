@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::IOStats;
+
 pub struct IOContext;
 
 impl IOContext {
@@ -7,22 +9,15 @@ impl IOContext {
         IOContext {}
     }
 
-    fn delta(&self) -> u64 {
-        0
+    fn delta(&self) -> IOStats {
+        IOStats::default()
+    }
+
+    fn delta_and_refresh(&mut self) -> IOStats {
+        IOStats::default()
     }
 }
 
-pub struct IOSnooper;
-
-impl IOSnooper {
-    pub fn new() -> Self {
-        IOSnooper {}
-    }
-
-    pub fn start(&mut self) -> Result<(), String> {
-        info!("IO snooper is not started due to not compiling with BCC");
-        Ok(())
-    }
-
-    pub fn stop(&mut self) {}
+pub fn init_io_snooper() -> Result<(), String> {
+    Err("IO snooper is not started due to not compiling with BCC".to_string())
 }

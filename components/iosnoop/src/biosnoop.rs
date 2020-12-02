@@ -1,20 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use bcc::{table::Table, Kprobe, BPF};
+#[macro_use]
+extern crate tikv_util;
 
+use crate::IOStats;
+use bcc::{table::Table, Kprobe, BPF};
 use std::ptr;
 
 static mut BPF_TABLE: Option<(BPF, Table)> = None;
 
 unsafe fn set_bpf_table(bpf: BPF, table: Table) {
     BPF_TABLE = Some((bpf, table))
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub struct IOStats {
-    read: u64,
-    write: u64,
 }
 
 fn parse_io_stats(x: &[u8]) -> IOStats {
