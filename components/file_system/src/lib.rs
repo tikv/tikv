@@ -78,11 +78,11 @@ impl Drop for WithIOType {
 }
 
 /// Indicates how large a buffer to pre-allocate before reading the entire file.
-fn initial_buffer_size(file: &File) -> usize {
+fn initial_buffer_size(file: &File) -> io::Result<usize> {
     // Allocate one extra byte so the buffer doesn't need to grow before the
     // final `read` call at the end of the file.  Don't worry about `usize`
     // overflow because reading will fail regardless in that case.
-    file.metadata().map(|m| m.len() as usize + 1).unwrap_or(0)
+    file.metadata().map(|m| m.len() as usize + 1)
 }
 
 /// Write a slice as the entire contents of a file.
@@ -93,7 +93,7 @@ pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result
 /// Read the entire contents of a file into a bytes vector.
 pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
-    let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
+    let mut bytes = Vec::with_capacity(initial_buffer_size(&file)?);
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
 }
@@ -101,7 +101,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
 /// Read the entire contents of a file into a string.
 pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
     let mut file = File::open(path)?;
-    let mut string = String::with_capacity(initial_buffer_size(&file));
+    let mut string = String::with_capacity(initial_buffer_size(&file)?);
     file.read_to_string(&mut string)?;
     Ok(string)
 }
@@ -132,12 +132,12 @@ fn copy_imp(from: &Path, to: &Path, sync: bool) -> io::Result<u64> {
 /// Copies the contents of one file to another. This function will also
 /// copy the permission bits of the original file to the destination file.
 pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    copy_imp(from.as_ref(), to.as_ref(), false)
+    copy_imp(from.as_ref(), to.as_ref(), false /* sync */)
 }
 
 /// Copies the contents and permission bits of one file to another, then synchronizes.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    copy_imp(from.as_ref(), to.as_ref(), true)
+    copy_imp(from.as_ref(), to.as_ref(), true /* sync */)
 }
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
