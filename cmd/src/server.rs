@@ -26,7 +26,6 @@ use engine_traits::{
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use iosnoop::IOSnooper;
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -826,14 +825,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_snooper(&mut self) {
-        let mut io_snooper = Box::new(IOSnooper::new());
-
-        // Start metrics flusher
-        if let Err(e) = io_snooper.start() {
-            error!(%e; "failed to start io snooper");
+        if let Err(e) = iosnoop::init_io_snooper() {
+            error!(%e; "failed to init io snooper");
         }
-
-        self.to_stop.push(io_snooper);
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
@@ -1116,12 +1110,6 @@ where
 }
 
 impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
-    fn stop(mut self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
-impl Stop for IOSnooper {
     fn stop(mut self: Box<Self>) {
         (*self).stop()
     }
