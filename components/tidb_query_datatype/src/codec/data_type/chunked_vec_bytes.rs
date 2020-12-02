@@ -21,36 +21,6 @@ pub struct ChunkedVecBytes {
 /// Otherwise, contents of the `Bytes` are stored, and `var_offset` indicates the starting
 /// position of each element.
 impl ChunkedVecBytes {
-    impl_chunked_vec_common! { Bytes }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            data: Vec::with_capacity(capacity),
-            bitmap: BitVec::with_capacity(capacity),
-            var_offset: vec![0],
-            length: 0,
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<Option<Bytes>> {
-        let mut x = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            x.push(self.get(i).map(|x| x.to_owned()));
-        }
-        x
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    #[inline]
-    pub fn push_data(&mut self, mut value: Bytes) {
-        self.bitmap.push(true);
-        self.data.append(&mut value);
-        self.finish_append();
-    }
-
     #[inline]
     pub fn push_data_ref(&mut self, value: BytesRef) {
         self.bitmap.push(true);
@@ -65,12 +35,6 @@ impl ChunkedVecBytes {
     }
 
     #[inline]
-    pub fn push_null(&mut self) {
-        self.bitmap.push(false);
-        self.finish_append();
-    }
-
-    #[inline]
     pub fn push_ref(&mut self, value: Option<BytesRef>) {
         if let Some(x) = value {
             self.push_data_ref(x);
@@ -78,32 +42,6 @@ impl ChunkedVecBytes {
             self.push_null();
         }
     }
-
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len() {
-            self.data.truncate(self.var_offset[len]);
-            self.bitmap.truncate(len);
-            self.var_offset.truncate(len + 1);
-            self.length = len;
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.data.capacity().max(self.length)
-    }
-
-    pub fn append(&mut self, other: &mut Self) {
-        self.data.append(&mut other.data);
-        self.bitmap.append(&mut other.bitmap);
-        let var_offset_last = *self.var_offset.last().unwrap();
-        for i in 1..other.var_offset.len() {
-            self.var_offset.push(other.var_offset[i] + var_offset_last);
-        }
-        self.length += other.length;
-        other.var_offset = vec![0];
-        other.length = 0;
-    }
-
     #[inline]
     pub fn get(&self, idx: usize) -> Option<BytesRef> {
         assert!(idx < self.len());
@@ -116,6 +54,69 @@ impl ChunkedVecBytes {
 
     pub fn into_writer(self) -> BytesWriter {
         BytesWriter { chunked_vec: self }
+    }
+}
+
+impl ChunkedVec<Bytes> for ChunkedVecBytes {
+    impl_chunked_vec_common! { Bytes }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
+            var_offset: vec![0],
+            length: 0,
+        }
+    }
+
+    #[inline]
+    fn push_data(&mut self, mut value: Bytes) {
+        self.bitmap.push(true);
+        self.data.append(&mut value);
+        self.finish_append();
+    }
+
+    #[inline]
+    fn push_null(&mut self) {
+        self.bitmap.push(false);
+        self.finish_append();
+    }
+
+    fn len(&self) -> usize {
+        self.length
+    }
+
+    fn truncate(&mut self, len: usize) {
+        if len < self.len() {
+            self.data.truncate(self.var_offset[len]);
+            self.bitmap.truncate(len);
+            self.var_offset.truncate(len + 1);
+            self.length = len;
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.data.capacity().max(self.length)
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.data.append(&mut other.data);
+        self.bitmap.append(&mut other.bitmap);
+        let var_offset_last = *self.var_offset.last().unwrap();
+        for i in 1..other.var_offset.len() {
+            self.var_offset.push(other.var_offset[i] + var_offset_last);
+        }
+        self.length += other.length;
+        other.var_offset = vec![0];
+        other.length = 0;
+    }
+
+    fn to_vec(&self) -> Vec<Option<Bytes>> {
+        let mut x = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            x.push(self.get(i).map(|x| x.to_owned()));
+        }
+        x
     }
 }
 
@@ -170,17 +171,6 @@ impl<'a> PartialBytesWriter {
         BytesGuard {
             chunked_vec: self.chunked_vec,
         }
-    }
-}
-
-impl ChunkedVec<Bytes> for ChunkedVecBytes {
-    fn chunked_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(capacity)
-    }
-
-    #[inline]
-    fn chunked_push(&mut self, value: Option<Bytes>) {
-        self.push(value)
     }
 }
 
