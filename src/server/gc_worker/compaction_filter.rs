@@ -58,6 +58,11 @@ lazy_static! {
         "Compaction filter meets failure"
     )
     .unwrap();
+    static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_skip",
+        "Skip to create compaction filter for GC because of table properties"
+    )
+    .unwrap();
 
     // It's relative to a key logic for handling mvcc delete marks.
     static ref GC_COMPACTION_MVCC_DELETE_SKIP_OLDER: IntCounter = register_int_counter!(
@@ -152,6 +157,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
+            GC_COMPACTION_FILTER_SKIP.inc();
             return std::ptr::null_mut();
         }
 
