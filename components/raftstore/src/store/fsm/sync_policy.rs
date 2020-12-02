@@ -266,16 +266,16 @@ impl<A: Action> SyncPolicy<A> {
             ReachDealine(i64),
         };
 
-        let mut reason = None;
-
-        if self.unsynced_regions.len() > UNSYNCED_REGIONS_SIZE_LIMIT {
-            reason = Some(SyncReason::CacheFull);
+        let reason = if self.unsynced_regions.len() > UNSYNCED_REGIONS_SIZE_LIMIT {
+            Some(SyncReason::CacheFull)
         } else {
             let elapsed = before_sync_ts - last_sync_ts;
             if elapsed >= self.delay_sync_us {
-                reason = Some(SyncReason::ReachDealine(elapsed));
+                Some(SyncReason::ReachDealine(elapsed))
+            } else {
+                None
             }
-        }
+        };
 
         if let Some(r) = reason {
             // If it's false, it means another thread is planning to sync, so this thread should do nothing
@@ -298,6 +298,7 @@ impl<A: Action> SyncPolicy<A> {
                 return true;
             }
         }
+
         false
     }
 
