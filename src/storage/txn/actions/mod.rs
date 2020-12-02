@@ -5,14 +5,11 @@
 //! eg. [`MvccTxn::load_lock`], [`MvccTxn::put_write`], which are methods on [`MvccTxn`],
 //! for archiving a certain target
 
-pub(crate) mod shared;
-
 pub mod acquire_pessimistic_lock;
+pub mod check_data_constraint;
 pub mod check_txn_status;
 pub mod cleanup;
 pub mod commit;
-pub mod pessimistic_prewrite;
+pub mod gc;
 pub mod prewrite;
-
-pub mod check_data_constraint;
 pub mod tests;
