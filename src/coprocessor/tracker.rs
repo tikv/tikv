@@ -10,9 +10,6 @@ use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::readpool_impl::*;
 use crate::coprocessor::*;
 
-// If handle time is larger than the lower bound, the query is considered as slow query.
-const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
     /// The tracker is initialized.
@@ -58,6 +55,7 @@ pub struct Tracker {
     total_process_time: Duration,
     total_exec_metrics: ExecutorMetrics,
     total_perf_statistics: PerfStatisticsDelta, // Accumulated perf statistics
+    slow_log_threshold: Duration,
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
@@ -67,7 +65,7 @@ impl Tracker {
     /// Initialize the tracker. Normally it is called outside future pool's factory context,
     /// because the future pool might be full and we need to wait it. This kind of wait time
     /// has to be recorded.
-    pub fn new(req_ctx: ReqContext) -> Tracker {
+    pub fn new(req_ctx: ReqContext, slow_log_threshold: Duration) -> Tracker {
         let now = Instant::now_coarse();
         Tracker {
             request_begin_at: now,
@@ -84,6 +82,7 @@ impl Tracker {
             total_process_time: Duration::default(),
             total_exec_metrics: ExecutorMetrics::default(),
             total_perf_statistics: PerfStatisticsDelta::default(),
+            slow_log_threshold,
 
             req_ctx,
         }
@@ -146,7 +145,7 @@ impl Tracker {
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
         assert_eq!(self.current_stage, TrackerState::ItemFinished);
-        let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
+        let is_slow_query = self.item_process_time > self.slow_log_threshold;
         let mut exec_details = kvrpcpb::ExecDetails::new();
         if self.req_ctx.context.get_handle_time() || is_slow_query {
             let mut handle = kvrpcpb::HandleTime::new();
@@ -177,7 +176,7 @@ impl Tracker {
         }
 
         // Print slow log if *process* time is long.
-        if time::duration_to_sec(self.total_process_time) > SLOW_QUERY_LOWER_BOUND {
+        if self.total_process_time > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 super::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
