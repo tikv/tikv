@@ -40,7 +40,6 @@ impl ClientReceiver {
     }
 }
 
-#[allow(clippy::type_complexity, unused_assignments)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
