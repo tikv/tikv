@@ -364,7 +364,7 @@ where
 
     #[inline]
     fn set_sync_log(&mut self, sync: bool) {
-        self.sync_log |= sync;
+        self.sync_log = sync;
     }
 }
 
