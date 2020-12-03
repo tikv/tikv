@@ -27,8 +27,8 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
-use keys::DATA_PREFIX_KEY;
 use file_system::sync_dir;
+use keys::DATA_PREFIX_KEY;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
