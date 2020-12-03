@@ -108,7 +108,9 @@ fn get_cast_fn_rpn_meta(
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
-            if !from_field_type.is_unsigned() {
+            if from_field_type.tp() == FieldTypeTp::Year {
+                cast_year_as_string_fn_meta()
+            } else if !from_field_type.is_unsigned() {
                 cast_any_as_string_fn_meta::<Int>()
             } else {
                 cast_uint_as_string_fn_meta()
@@ -602,6 +604,21 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
             cast_as_string_helper(ctx, extra, val)
         }
     }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_year_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Int,
+) -> Result<Option<Bytes>> {
+    let cast = if *val == 0 {
+        b"0000".to_vec()
+    } else {
+        val.to_string().into_bytes()
+    };
+    cast_as_string_helper(ctx, extra, cast)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -3573,6 +3590,25 @@ mod tests {
                 cast_uint_as_string(ctx, extra, val.as_ref())
             },
             "cast_uint_as_string",
+        );
+    }
+
+    #[test]
+    fn test_year_as_string() {
+        let cs: Vec<(i64, Vec<u8>, String)> = vec![
+            (0, b"0000".to_vec(), "0000".to_string()),
+            (2000, b"2000".to_vec(), "2000".to_string()),
+        ];
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
+        test_as_string_helper(
+            ref_cs,
+            |ctx, extra, val| {
+                let val = val.map(|x| *x as i64);
+                cast_year_as_string(ctx, extra, &val.unwrap())
+            },
+            "cast_year_as_string",
         );
     }
 
