@@ -1290,9 +1290,9 @@ where
         }
     }
 
-    fn on_leader_changed<T, C>(
+    fn on_leader_changed<T>(
         &mut self,
-        ctx: &mut PollContext<EK, ER, T, C>,
+        ctx: &mut PollContext<EK, ER, T>,
         leader_id: u64,
         term: u64,
     ) {

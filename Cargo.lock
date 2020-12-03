@@ -206,7 +206,7 @@ dependencies = [
  "futures 0.3.7",
  "futures-executor",
  "futures-util",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -457,7 +457,7 @@ dependencies = [
  "fail",
  "failure",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -589,7 +589,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -1207,7 +1207,7 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
- "grpcio 0.7.0",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "raft",
@@ -1574,29 +1574,13 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63fac32f9f74fa1fd78215d04b47f134c1ee5a535c237a54d52bf18cf65ac983"
-dependencies = [
- "bytes 0.5.3",
- "futures 0.3.7",
- "grpcio-sys 0.6.0",
- "libc",
- "log",
- "parking_lot 0.10.0",
- "prost",
- "protobuf",
-]
-
-[[package]]
-name = "grpcio"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
- "grpcio-sys 0.7.1",
+ "grpcio-sys",
  "libc",
  "log",
  "parking_lot 0.11.0",
@@ -1616,21 +1600,6 @@ dependencies = [
  "prost-types",
  "protobuf",
  "tempfile",
-]
-
-[[package]]
-name = "grpcio-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d4e9309f1151c9ebcd07622858c4a504b6ea6cd2821524fe74ccde8ea830d7"
-dependencies = [
- "bindgen",
- "cc",
- "cmake",
- "libc",
- "libz-sys",
- "pkg-config",
- "walkdir",
 ]
 
 [[package]]
@@ -1963,10 +1932,10 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/5kbpers/kvproto?rev=de0cfd0b44dae83392e0adccb7a34ceede60d332#de0cfd0b44dae83392e0adccb7a34ceede60d332"
+source = "git+https://github.com/5kbpers/kvproto?rev=aa4c9280c82785c148bbc07f365c84b126c5edea#aa4c9280c82785c148bbc07f365c84b126c5edea"
 dependencies = [
  "futures 0.3.7",
- "grpcio 0.6.0",
+ "grpcio",
  "lazy_static",
  "prost",
  "prost-derive",
@@ -2720,7 +2689,7 @@ dependencies = [
  "error_code",
  "fail",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -3741,7 +3710,7 @@ name = "security"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "grpcio 0.7.0",
+ "grpcio",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4030,7 +3999,7 @@ dependencies = [
  "file_system",
  "futures 0.3.7",
  "futures-util",
- "grpcio 0.7.0",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4336,7 +4305,7 @@ version = "0.0.1"
 dependencies = [
  "fail",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "kvproto",
  "pd_client",
  "security",
@@ -4356,7 +4325,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -4409,7 +4378,7 @@ version = "0.0.1"
 dependencies = [
  "encryption",
  "fail",
- "grpcio 0.7.0",
+ "grpcio",
  "kvproto",
  "rand",
  "rand_isaac",
@@ -4442,7 +4411,7 @@ dependencies = [
  "external_storage",
  "fail",
  "futures 0.3.7",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "hyper",
  "keys",
@@ -4691,7 +4660,7 @@ dependencies = [
  "futures 0.3.7",
  "futures-executor",
  "futures-util",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "http",
  "hyper",
@@ -4833,7 +4802,7 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "fxhash",
- "grpcio 0.7.0",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",

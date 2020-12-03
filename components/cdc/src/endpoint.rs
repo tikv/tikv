@@ -14,14 +14,14 @@ use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
+use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
-use raftstore::store::util::compare_region_epoch;
 use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
@@ -158,11 +158,6 @@ pub enum Task {
         cb: InitCallback,
     },
     TxnExtra(TxnExtra),
-    CheckLeader {
-        leaders: Vec<LeaderInfo>,
-        ts: u64,
-        cb: Box<dyn FnOnce(Vec<u64>) + Send>,
-    },
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -232,9 +227,6 @@ impl fmt::Debug for Task {
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
-            Task::CheckLeader { ref ts, .. } => {
-                de.field("type", &"check_leader").field("ts", &ts).finish()
-            }
             Task::Validate(region_id, _) => de.field("region_id", &region_id).finish(),
         }
     }
@@ -267,7 +259,7 @@ pub struct Endpoint<T> {
     compatible_hibernate_region: bool,
 
     // store_id -> client
-    cdc_clients: Arc<Mutex<HashMap<u64, ChangeDataClient>>>,
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
@@ -316,7 +308,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_ts_region_id: 0,
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
             compatible_hibernate_region: cfg.compatible_hibernate_region,
-            cdc_clients: Arc::new(Mutex::new(HashMap::default())),
+            tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
         ep.register_min_ts_event();
         ep
@@ -730,7 +722,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let env = self.env.clone();
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
-        let cdc_clients = self.cdc_clients.clone();
+        let tikv_clients = self.tikv_clients.clone();
         let compatible_hibernate_region = self.compatible_hibernate_region;
 
         let fut = async move {
@@ -763,7 +755,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     pd_client,
                     security_mgr,
                     env,
-                    cdc_clients,
+                    tikv_clients,
                     min_ts,
                 )
                 .await
@@ -840,7 +832,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
         env: Arc<Environment>,
-        cdc_clients: Arc<Mutex<HashMap<u64, ChangeDataClient>>>,
+        cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
         let region_has_quorum = |region: &Region, stores: Vec<u64>| {
@@ -939,7 +931,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     cdc_clients
                         .lock()
                         .unwrap()
-                        .insert(store_id, ChangeDataClient::new(channel));
+                        .insert(store_id, TikvClient::new(channel));
                 }
                 let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
                 let mut req = CheckLeaderRequest::default();
@@ -981,40 +973,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
     fn flush_all(&self) {
         self.connections.iter().for_each(|(_, conn)| conn.flush());
-    }
-
-    fn check_region_leader(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
-        let meta = self.store_meta.lock().unwrap();
-        leaders
-            .into_iter()
-            .map(|leader_info| {
-                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
-                    if let Some(region) = meta.regions.get(&leader_info.region_id) {
-                        if *term == leader_info.term
-                            && leader.id == leader_info.peer_id
-                            && compare_region_epoch(
-                                leader_info.get_region_epoch(),
-                                region,
-                                true,
-                                false,
-                                false,
-                            )
-                            .is_ok()
-                        {
-                            return Some(leader_info.region_id);
-                        }
-                        debug!(
-                            "cdc check leader reject region";
-                            "incoming_info" => ?leader_info,
-                            "current_term" => term,
-                            "current_region" => ?region,
-                        );
-                    }
-                }
-                None
-            })
-            .filter_map(|r| r)
-            .collect()
     }
 }
 
@@ -1238,10 +1196,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.cache.insert(k, v);
                 }
-            }
-            Task::CheckLeader { leaders, ts, cb } => {
-                debug!("cdc try to check leader"; "ts" => ts);
-                cb(self.check_region_leader(leaders));
             }
             Task::Validate(region_id, validate) => {
                 validate(self.capture_regions.get(&region_id));

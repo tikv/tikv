@@ -8,25 +8,21 @@ use std::sync::Arc;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use futures::FutureExt;
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, UnarySink, WriteFlags,
+    RpcStatusCode, WriteFlags,
 };
 use kvproto::cdcpb::{
-    ChangeData, ChangeDataEvent, ChangeDataRequest, CheckLeaderRequest, CheckLeaderResponse,
-    Compatibility, Event, ResolvedTs,
+    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
 };
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
-use tikv_util::future::paired_future_callback;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
-use crate::errors::Result;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -394,33 +390,6 @@ impl ChangeData for Service {
                 }
             }
         });
-    }
-
-    fn check_leader(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut request: CheckLeaderRequest,
-        sink: UnarySink<CheckLeaderResponse>,
-    ) {
-        let ts = request.get_ts();
-        let leaders = request.take_regions().into();
-        let scheduler = self.scheduler.clone();
-        let (cb, rx) = paired_future_callback();
-        let task = async move {
-            box_try!(scheduler.schedule(Task::CheckLeader { leaders, ts, cb }));
-            let regions = box_try!(rx.await);
-            let mut resp = CheckLeaderResponse::default();
-            resp.set_ts(ts);
-            resp.set_regions(regions);
-            box_try!(sink.success(resp).await);
-            Result::Ok(())
-        }
-        .map_err(|e| {
-            warn!("cdc call CheckLeader failed"; "err" => ?e);
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
     }
 }
 
