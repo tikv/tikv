@@ -156,7 +156,7 @@ impl Display for ErrorHeaderKind {
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
-/// Return the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
 /// Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
