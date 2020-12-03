@@ -202,6 +202,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "failure",
+ "file_system",
  "futures 0.3.7",
  "futures-executor",
  "futures-util",
@@ -585,6 +586,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
+ "file_system",
  "fs2",
  "futures 0.3.7",
  "grpcio",
@@ -1287,6 +1289,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 
 [[package]]
+name = "file_system"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "fs2",
+ "lazy_static",
+ "openssl",
+ "rand",
+ "tempfile",
+ "tikv_alloc",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1917,7 +1932,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#494a2fb764b7f4118094380d82e29e0440c9bee5"
+source = "git+https://github.com/pingcap/kvproto.git#5dfa7b1325a3bfc07100eb2bcde655950122fa25"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -3148,6 +3163,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "fs2",
  "futures 0.3.7",
  "futures-util",
@@ -3980,6 +3996,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
+ "file_system",
  "futures 0.3.7",
  "futures-util",
  "grpcio",
@@ -4588,6 +4605,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
+ "file_system",
  "hex 0.4.2",
  "match_template",
  "num",
@@ -4637,6 +4655,7 @@ dependencies = [
  "error_code",
  "fail",
  "failure",
+ "file_system",
  "fs2",
  "futures 0.3.7",
  "futures-executor",
@@ -4779,6 +4798,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "file_system",
  "fs2",
  "futures 0.3.7",
  "fxhash",

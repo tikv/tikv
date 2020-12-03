@@ -156,6 +156,12 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>> {
+    Ok(from_time.date_diff(*to_time))
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
@@ -178,6 +184,27 @@ pub fn add_datetime_and_duration(
         return Ok(None);
     }
     Ok(Some(res))
+}
+
+#[rpn_fn(capture=[ctx])]
+#[inline]
+pub fn sub_duration_and_duration(
+    ctx: &mut EvalContext,
+    duration1: &Duration,
+    duration2: &Duration,
+) -> Result<Option<Duration>> {
+    let result = match duration1.checked_sub(*duration2) {
+        Some(result) => result,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "Duration",
+                    format!("({} - {})", duration1, duration2),
+                ))
+                .map(|_| Ok(None))?
+        }
+    };
+    Ok(Some(result))
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -495,6 +522,31 @@ mod tests {
                 .push_param(duration1)
                 .push_param(duration2)
                 .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+    #[test]
+    fn test_sub_duration_and_duration() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration1, duration2, exp) in cases {
+            let expected =
+                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
+            let duration1 =
+                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
+            let duration2 =
+                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration1)
+                .push_param(duration2)
+                .evaluate(ScalarFuncSig::SubDurationAndDuration)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -832,6 +884,53 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToSeconds)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(1),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                Some(1),
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let arg1 = Time::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
+            let arg2 = Time::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::DateDiff)
                 .unwrap();
             assert_eq!(output, exp);
         }
