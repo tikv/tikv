@@ -20,15 +20,18 @@ use crate::io::EncrypterWriter;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
+use dashmap::DashMap;
 use std::collections::vec_deque::VecDeque;
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
+const DEFAULT_FILES_CACHE_CAPACITY: usize = 1024 * 128;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
+    files_cache: DashMap<String, FileInfo>,
     // Lock to make sure there's no concurrent update operations to file dictionary.
     write_queue: Mutex<VecDeque<(ThreadId, Arc<AtomicBool>, Arc<AtomicBool>)>>,
     log_cond: Condvar,
@@ -54,6 +57,7 @@ impl Dicts {
             }),
             current_key_id: AtomicU64::new(0),
             write_queue: Mutex::new(VecDeque::default()),
+            files_cache: DashMap::default(),
             log_cond: Condvar::new(),
             rotation_period,
             base: Path::new(path).to_owned(),
@@ -88,10 +92,15 @@ impl Dicts {
 
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+                let files_cache = DashMap::with_capacity(DEFAULT_FILES_CACHE_CAPACITY);
+                for (k, v) in file_dict.files.iter() {
+                    files_cache.insert(k.clone(), v.clone());
+                }
 
                 Ok(Some(Dicts {
                     file_dict: Mutex::new(file_dict),
                     key_dict: Mutex::new(key_dict),
+                    files_cache,
                     current_key_id,
                     write_queue: Mutex::new(VecDeque::new()),
                     log_cond: Condvar::new(),
@@ -181,8 +190,7 @@ impl Dicts {
     }
 
     fn get_file(&self, fname: &str) -> FileInfo {
-        let dict = self.file_dict.lock().unwrap();
-        let file_info = dict.files.get(fname);
+        let file_info = self.files_cache.get(fname);
         match file_info {
             None => {
                 // Return Plaintext if file not found
@@ -190,7 +198,7 @@ impl Dicts {
                 file.method = compat(EncryptionMethod::Plaintext);
                 file
             }
-            Some(info) => info.clone(),
+            Some(info) => info.value().clone(),
         }
     }
 
@@ -252,6 +260,7 @@ impl Dicts {
         file.method = compat(method);
         {
             let mut file_dict = self.file_dict.lock().unwrap();
+            self.files_cache.insert(fname.to_owned(), file.clone());
             file_dict.files.insert(fname.to_owned(), file.clone());
         }
         self.pipeline_sync()?;
@@ -270,6 +279,7 @@ impl Dicts {
     fn delete_file(&self, fname: &str) -> Result<()> {
         let file = {
             let mut file_dict = self.file_dict.lock().unwrap();
+            self.files_cache.remove(fname);
             match file_dict.files.remove(fname) {
                 Some(file_info) => file_info,
                 None => {
@@ -308,6 +318,7 @@ impl Dicts {
                 )));
             }
             let method = file.method;
+            self.files_cache.insert(dst_fname.to_owned(), file.clone());
             file_dict.files.insert(dst_fname.to_owned(), file);
             method
         };
@@ -324,6 +335,7 @@ impl Dicts {
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         let method = {
             let mut file_dict = self.file_dict.lock().unwrap();
+            self.files_cache.remove(dst_fname);
             let file = match file_dict.files.remove(src_fname) {
                 Some(file_info) => file_info,
                 None => {
@@ -333,7 +345,8 @@ impl Dicts {
                 }
             };
             let method = file.method;
-            file_dict.files.insert(dst_fname.to_owned(), file);
+            file_dict.files.insert(dst_fname.to_owned(), file.clone());
+            self.files_cache.insert(dst_fname.to_owned(), file);
             method
         };
         self.pipeline_sync()?;

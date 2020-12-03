@@ -14,6 +14,7 @@ byteorder = "1.2"
 crossbeam = "0.8"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
+dashmap = "3.11.10"
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.4"
