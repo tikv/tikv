@@ -281,10 +281,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(
         &mut self,
-    ) -> Result<(
-        AnalyzeColumnsResult,
-        Option<AnalyzeIndexResult>,
-    )> {
+    ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
         use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
@@ -387,7 +384,10 @@ impl<S: Snapshot> SampleBuilder<S> {
         }
         let mut idx_res: Option<AnalyzeIndexResult> = None;
         if self.analyze_common_handle {
-            idx_res = Some(AnalyzeIndexResult::new(common_handle_hist, common_handle_cms))
+            idx_res = Some(AnalyzeIndexResult::new(
+                common_handle_hist,
+                common_handle_cms,
+            ))
         }
         Ok((AnalyzeColumnsResult::new(collectors, pk_builder), idx_res))
     }
@@ -466,24 +466,24 @@ impl SampleCollector {
 #[derive(Default)]
 struct AnalyzeColumnsResult {
     sample_collectors: Vec<SampleCollector>,
-    pk_hist: Histogram
+    pk_hist: Histogram,
 }
 
 impl AnalyzeColumnsResult {
-    fn new(
-        sample_collectors: Vec<SampleCollector>,
-        pk_hist: Histogram
-    ) -> AnalyzeColumnsResult {
+    fn new(sample_collectors: Vec<SampleCollector>, pk_hist: Histogram) -> AnalyzeColumnsResult {
         AnalyzeColumnsResult {
             sample_collectors,
-            pk_hist
+            pk_hist,
         }
     }
 
     fn into_proto(self) -> tipb::AnalyzeColumnsResp {
         let hist = self.pk_hist.into_proto();
-        let cols: Vec<tipb::SampleCollector> =
-            self.sample_collectors.into_iter().map(|col| col.into_proto()).collect();
+        let cols: Vec<tipb::SampleCollector> = self
+            .sample_collectors
+            .into_iter()
+            .map(|col| col.into_proto())
+            .collect();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_collectors(cols.into());
         res.set_pk_hist(hist);
@@ -495,18 +495,12 @@ impl AnalyzeColumnsResult {
 #[derive(Default)]
 struct AnalyzeIndexResult {
     hist: Histogram,
-    cms: Option<CmSketch>
+    cms: Option<CmSketch>,
 }
 
 impl AnalyzeIndexResult {
-    fn new(
-        hist: Histogram,
-        cms: Option<CmSketch>
-    ) -> AnalyzeIndexResult {
-        AnalyzeIndexResult {
-            hist,
-            cms
-        }
+    fn new(hist: Histogram, cms: Option<CmSketch>) -> AnalyzeIndexResult {
+        AnalyzeIndexResult { hist, cms }
     }
 
     fn into_proto(self) -> tipb::AnalyzeIndexResp {
@@ -523,18 +517,12 @@ impl AnalyzeIndexResult {
 #[derive(Default)]
 struct AnalyzeMixedResult {
     col_res: AnalyzeColumnsResult,
-    idx_res: AnalyzeIndexResult
+    idx_res: AnalyzeIndexResult,
 }
 
 impl AnalyzeMixedResult {
-    fn new(
-        col_res: AnalyzeColumnsResult,
-        idx_res: AnalyzeIndexResult
-    ) -> AnalyzeMixedResult {
-        AnalyzeMixedResult {
-            col_res,
-            idx_res,
-        }
+    fn new(col_res: AnalyzeColumnsResult, idx_res: AnalyzeIndexResult) -> AnalyzeMixedResult {
+        AnalyzeMixedResult { col_res, idx_res }
     }
 
     fn into_proto(self) -> tipb::AnalyzeMixedResp {
