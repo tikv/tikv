@@ -1042,7 +1042,7 @@ impl VargsRpnFn {
             }
         } else {
             quote! {
-                result.chunked_push(#fn_ident #ty_generics_turbofish(#func_args)?);
+                result.push(#fn_ident #ty_generics_turbofish(#func_args)?);
             }
         };
 
@@ -1070,7 +1070,7 @@ impl VargsRpnFn {
                     vargs_buf[arg_index] = arg;
                 }
                 if has_null {
-                    result.chunked_push(None);
+                    result.push(None);
                 } else {
                     #chunked_push
                 }
@@ -1097,7 +1097,7 @@ impl VargsRpnFn {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, Default::default());
-                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             #arg_loop
                         }
@@ -1229,7 +1229,7 @@ impl RawVargsRpnFn {
                     crate::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                        let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                         for row_index in 0..output_rows {
                             vargs_buf.clear();
                             for arg_index in 0..args_len {
@@ -1242,7 +1242,7 @@ impl RawVargsRpnFn {
                                 };
                                 vargs_buf.push(scalar_arg);
                             }
-                            result.chunked_push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
                         Ok(#vec_type::into_vector_value(result))
                     })
@@ -1452,7 +1452,7 @@ impl NormalRpnFn {
 
         let nonnull_unwrap = if !self.nullable {
             quote! {
-                #(if #extract2.is_none() { result.chunked_push(None); continue; } let #extract2 = #extract2.unwrap());*;
+                #(if #extract2.is_none() { result.push(None); continue; } let #extract2 = #extract2.unwrap());*;
             }
         } else {
             quote! {}
@@ -1489,7 +1489,7 @@ impl NormalRpnFn {
             }
         } else {
             quote! {
-                result.chunked_push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
+                result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
             }
         };
 
@@ -1538,9 +1538,9 @@ impl NormalRpnFn {
 
             if all_null {
                 // there's a scalar column of None, just return None vector
-                let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                 for i in 0..output_rows {
-                    result.chunked_push(None);
+                    result.push(None);
                 }
                 return Ok(#vec_type::into_vector_value(result));
             }
@@ -1556,7 +1556,7 @@ impl NormalRpnFn {
 
             for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
                 if !val {
-                    result.chunked_push(None);
+                    result.push(None);
                     continue;
                 }
                 #(let (#extract_2, arg) = arg.extract(row_index));*;
@@ -1583,7 +1583,7 @@ impl NormalRpnFn {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     #downcast_metadata
                     let arg = &self;
-                    let mut result = <#vec_type as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                    let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     #final_loop
                     Ok(#vec_type::into_vector_value(result))
                 }
@@ -1764,11 +1764,11 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
-                        result.chunked_push(foo(arg0, arg1)?);
+                        result.push(foo(arg0, arg1)?);
                     }
                     Ok(Decimal::into_vector_value(result))
                 }
@@ -1931,10 +1931,10 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = <B as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                    let mut result = <B as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
-                        result.chunked_push(foo::<A, B>(arg0)?);
+                        result.push(foo::<A, B>(arg0)?);
                     }
                     Ok(B::into_vector_value(result))
                 }
@@ -2081,12 +2081,12 @@ mod tests_normal {
                     metadata: &(dyn std::any::Any + Send),
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
-                    let mut result = <Decimal as EvaluableRet>::ChunkedType::chunked_with_capacity(output_rows);
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     for row_index in 0..output_rows {
                         let (arg0, arg) = arg.extract(row_index);
                         let (arg1, arg) = arg.extract(row_index);
                         let (arg2, arg) = arg.extract(row_index);
-                        result.chunked_push(foo(ctx, arg0, arg1, arg2)?);
+                        result.push(foo(ctx, arg0, arg1, arg2)?);
                     }
                     Ok(Decimal::into_vector_value(result))
                 }
