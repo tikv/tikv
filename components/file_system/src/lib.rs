@@ -17,11 +17,11 @@ pub use std::fs::{
     FileType, Metadata, Permissions, ReadDir,
 };
 
-use std::cell::Cell;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+pub use iosnoop::{get_io_type, set_io_type, IOType};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 
@@ -29,34 +29,6 @@ use openssl::hash::{self, Hasher, MessageDigest};
 pub enum IOOp {
     Read,
     Write,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum IOType {
-    Other,
-    Read,
-    Write,
-    Coprocessor,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Import,
-    Export,
-}
-
-thread_local! {
-    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
-}
-
-fn set_io_type(new_io_type: IOType) {
-    IO_TYPE.with(|io_type| {
-        io_type.set(new_io_type);
-    });
-}
-
-fn get_io_type() -> IOType {
-    IO_TYPE.with(|io_type| io_type.get())
 }
 
 pub struct WithIOType {

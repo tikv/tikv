@@ -8,8 +8,22 @@ struct val_t {
     u64 write;
 };
 
+typedef enum {
+    Other,
+    Read,
+    Write,
+    Coprocessor,
+    Flush,
+    Compaction,
+    Replication,
+    LoadBalance,
+    Import,
+    Export,
+} io_type;
+
 BPF_HASH(pidbyreq, struct request *, u32);
-BPF_HASH(statsbypid, u32, struct val_t);
+BPF_HASH(typebypid, u32, io_type*);
+BPF_HASH(statsbytype, io_type, struct val_t);
 
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
 {
@@ -43,10 +57,20 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
 #else
     rwflag = !!((req->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE);
 #endif
-
     u32 p = *pid; // if not copy, bpf verifier will not pass
-    struct val_t zero =  {}, *val;
-    val = statsbypid.lookup_or_init(&p, &zero);
+    bpf_trace_printk("complet pid %d\n", p);
+    io_type** type_ptr = typebypid.lookup(&p);
+    if (type_ptr == 0) return 0;
+    io_type type;
+    bpf_trace_printk("complet pid %d type %d, type %p\n", p, type, *type_ptr);
+    int err= bpf_probe_read(&type, sizeof(type), (void*)*type_ptr);
+    if (err  != 0) {
+        bpf_trace_printk("error %d here\n", err);
+        return 0;
+    }
+
+    struct val_t zero = {}, *val;
+    val = statsbytype.lookup_or_init(&type, &zero);
     if (rwflag == 1) {
         (*val).write += req->__data_len;
     } else {
