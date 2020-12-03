@@ -162,8 +162,6 @@ pub struct Config {
     #[config(hidden)]
     pub hibernate_regions: bool,
     pub hibernate_timeout: ReadableDuration,
-    #[config(hidden)]
-    pub early_apply: bool,
     #[doc(hidden)]
     #[config(hidden)]
     pub dev_assert: bool,
@@ -251,7 +249,6 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             hibernate_timeout: ReadableDuration::minutes(10),
-            early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 

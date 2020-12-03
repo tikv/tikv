@@ -652,13 +652,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
         fail_point!("raft_between_save");
-        if !self.poll_ctx.raft_wb.is_empty() {
-            fail_point!(
-                "raft_before_save_on_store_1",
-                self.poll_ctx.store_id() == 1,
-                |_| {}
-            );
 
+        if !self.poll_ctx.raft_wb.is_empty() {
             self.poll_ctx
                 .engines
                 .raft
