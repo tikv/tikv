@@ -115,6 +115,11 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(&descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                // For TiFlash MPP engine. Not support now.
+                ExecType::TypeJoin
+                | ExecType::TypeKill
+                | ExecType::TypeExchangeSender
+                | ExecType::TypeExchangeReceiver => {}
             }
         }
 
