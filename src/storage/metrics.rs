@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Prometheus metrics for storage functionality
+//! Prometheus metrics for storage functionality.
 
 use prometheus::*;
 use prometheus_static_metric::*;

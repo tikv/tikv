@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Types for storage related errors and associated helper methods
+//! Types for storage related errors and associated helper methods.
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
@@ -17,8 +17,8 @@ use txn_types::{KvPair, TimeStamp};
 
 quick_error! {
     #[derive(Debug)]
-    /// To help simplify pattern matching of storage related errors, and to have
-    /// code for basic error handling functionality in a single place instead of being spread out
+    /// Detailed errors for storage operations. This enum also unifies code for basic error
+    /// handling functionality in a single place instead of being spread out.
     pub enum ErrorInner {
         Engine(err: kv::Error) {
             from()
@@ -63,7 +63,7 @@ quick_error! {
     }
 }
 
-/// Wrapper type to use instead of exposing `ErrorInner` to other modules directly
+/// Errors for storage module. Wrapper type of `ErrorInner`.
 pub struct Error(pub Box<ErrorInner>);
 
 impl fmt::Debug for Error {
@@ -116,7 +116,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
-/// Maps to the error codes in the TiKV wire protocol
+/// Tags of errors for storage module.
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
@@ -157,7 +157,7 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 /// Return the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
-/// Returns `ErrorHeaderKind::Other` if no match found
+/// Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader
@@ -181,7 +181,7 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
 }
 
 /// Get the metric tag of the error in the protobuf message.
-/// Returns "other" if no match found
+/// Returns "other" if no match found.
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
 }

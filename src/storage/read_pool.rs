@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Distinct thread pools to handle read commands having different priority levels
+//! Distinct thread pools to handle read commands having different priority levels.
 
 use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
@@ -19,7 +19,7 @@ impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
     }
 }
 
-/// Create respective thread pools to handle read commands of different priority levels
+/// Build respective thread pools to handle read commands of different priority levels.
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
     reporter: R,
