@@ -895,6 +895,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader)) = meta.leaders.get(&region_id) {
+                        if leader.store_id != meta.store_id.unwrap() {
+                            continue;
+                        }
                         for peer in region.get_peers() {
                             if peer.store_id == store_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
