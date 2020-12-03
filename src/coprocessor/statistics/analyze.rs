@@ -66,42 +66,31 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
     async fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
-        let (collectors, pk_builder, _) = builder.collect_columns_stats().await?;
-
-        let pk_hist = pk_builder.into_proto();
-        let cols: Vec<tipb::SampleCollector> =
-            collectors.into_iter().map(|col| col.into_proto()).collect();
+        let (col_res, _) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let mut res = tipb::AnalyzeColumnsResp::default();
-            res.set_collectors(cols.into());
-            res.set_pk_hist(pk_hist);
+            let res = col_res.into_proto();
             box_try!(res.write_to_bytes())
         };
         Ok(res_data)
     }
 
     async fn handle_mixed(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
-        let (collectors, pk_builder, idx_resp) = builder.collect_columns_stats().await?;
-        let pk_hist = pk_builder.into_proto();
-        let cols: Vec<tipb::SampleCollector> =
-            collectors.into_iter().map(|col| col.into_proto()).collect();
+        let (col_res, idx_res) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let mut res = tipb::AnalyzeMixedResp::default();
-            let mut col_res = tipb::AnalyzeColumnsResp::default();
-            col_res.set_collectors(cols.into());
-            col_res.set_pk_hist(pk_hist);
-            res.set_columns_resp(col_res);
-            match idx_resp {
-                Some(resp) => res.set_index_resp(resp),
+            let resp: tipb::AnalyzeMixedResp;
+            match idx_res {
+                Some(res) => {
+                    resp = AnalyzeMixedResult::new(col_res, res).into_proto();
+                }
                 None => {
                     return Err(Error::Other(
                         "Mixed analyze type should have index response.".into(),
-                    ))
+                    ));
                 }
             }
-            box_try!(res.write_to_bytes())
+            box_try!(resp.write_to_bytes())
         };
         Ok(res_data)
     }
@@ -158,11 +147,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             hist.append(&data);
         }
 
-        let mut res = tipb::AnalyzeIndexResp::default();
-        res.set_hist(hist.into_proto());
-        if let Some(c) = cms {
-            res.set_cms(c.into_proto());
-        }
+        let res = AnalyzeIndexResult::new(hist, cms).into_proto();
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
@@ -249,7 +234,7 @@ struct SampleBuilder<S: Snapshot> {
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
     columns_info: Vec<tipb::ColumnInfo>,
-    common_handle_req: Option<AnalyzeIndexReq>,
+    analyze_common_handle: bool,
     common_handle_col_ids: Vec<i64>,
 }
 
@@ -286,7 +271,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             cm_sketch_width: req.get_cmsketch_width() as usize,
             common_handle_col_ids: req.take_primary_column_ids(),
             columns_info,
-            common_handle_req,
+            analyze_common_handle: common_handle_req != None,
         })
     }
 
@@ -297,9 +282,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(
-        Vec<SampleCollector>,
-        Histogram,
-        Option<tipb::AnalyzeIndexResp>,
+        AnalyzeColumnsResult,
+        Option<AnalyzeIndexResult>,
     )> {
         use tidb_query_datatype::codec::collation::{match_template_collator, Collator};
         let columns_without_handle_len =
@@ -348,7 +332,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 columns_info = &columns_info[1..];
             }
 
-            if self.common_handle_req != None {
+            if self.analyze_common_handle {
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
                     for handle_id in &self.common_handle_col_ids {
@@ -401,16 +385,11 @@ impl<S: Snapshot> SampleBuilder<S> {
                 }
             }
         }
-        let mut idx_res: Option<tipb::AnalyzeIndexResp> = None;
-        if self.common_handle_req != None {
-            let mut res = tipb::AnalyzeIndexResp::default();
-            res.set_hist(common_handle_hist.into_proto());
-            if let Some(c) = common_handle_cms {
-                res.set_cms(c.into_proto());
-            }
-            idx_res = Some(res)
+        let mut idx_res: Option<AnalyzeIndexResult> = None;
+        if self.analyze_common_handle {
+            idx_res = Some(AnalyzeIndexResult::new(common_handle_hist, common_handle_cms))
         }
-        Ok((collectors, pk_builder, idx_res))
+        Ok((AnalyzeColumnsResult::new(collectors, pk_builder), idx_res))
     }
 }
 
@@ -480,6 +459,89 @@ impl SampleCollector {
             self.samples.remove(idx);
             self.samples.push(data);
         }
+    }
+}
+
+/// `AnalyzeColumnsResult` collect the result of analyze columns request.
+#[derive(Default)]
+struct AnalyzeColumnsResult {
+    sample_collectors: Vec<SampleCollector>,
+    pk_hist: Histogram
+}
+
+impl AnalyzeColumnsResult {
+    fn new(
+        sample_collectors: Vec<SampleCollector>,
+        pk_hist: Histogram
+    ) -> AnalyzeColumnsResult {
+        AnalyzeColumnsResult {
+            sample_collectors,
+            pk_hist
+        }
+    }
+
+    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
+        let hist = self.pk_hist.into_proto();
+        let cols: Vec<tipb::SampleCollector> =
+            self.sample_collectors.into_iter().map(|col| col.into_proto()).collect();
+        let mut res = tipb::AnalyzeColumnsResp::default();
+        res.set_collectors(cols.into());
+        res.set_pk_hist(hist);
+        res
+    }
+}
+
+/// `AnalyzeIndexResult` collect the result of analyze index request.
+#[derive(Default)]
+struct AnalyzeIndexResult {
+    hist: Histogram,
+    cms: Option<CmSketch>
+}
+
+impl AnalyzeIndexResult {
+    fn new(
+        hist: Histogram,
+        cms: Option<CmSketch>
+    ) -> AnalyzeIndexResult {
+        AnalyzeIndexResult {
+            hist,
+            cms
+        }
+    }
+
+    fn into_proto(self) -> tipb::AnalyzeIndexResp {
+        let mut res = tipb::AnalyzeIndexResp::default();
+        res.set_hist(self.hist.into_proto());
+        if let Some(c) = self.cms {
+            res.set_cms(c.into_proto());
+        }
+        res
+    }
+}
+
+/// `AnalyzeMixedResult` collect the result of analyze mixed request.
+#[derive(Default)]
+struct AnalyzeMixedResult {
+    col_res: AnalyzeColumnsResult,
+    idx_res: AnalyzeIndexResult
+}
+
+impl AnalyzeMixedResult {
+    fn new(
+        col_res: AnalyzeColumnsResult,
+        idx_res: AnalyzeIndexResult
+    ) -> AnalyzeMixedResult {
+        AnalyzeMixedResult {
+            col_res,
+            idx_res,
+        }
+    }
+
+    fn into_proto(self) -> tipb::AnalyzeMixedResp {
+        let mut res = tipb::AnalyzeMixedResp::default();
+        res.set_index_resp(self.idx_res.into_proto());
+        res.set_columns_resp(self.col_res.into_proto());
+        res
     }
 }
 

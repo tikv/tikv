@@ -119,7 +119,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeJoin
                 | ExecType::TypeKill
                 | ExecType::TypeExchangeSender
-                | ExecType::TypeExchangeReceiver => {}
+                | ExecType::TypeExchangeReceiver => {
+                    return Err(other_err!("Unsupported exec type of TiFlash MPP engine"));
+                }
             }
         }
 
