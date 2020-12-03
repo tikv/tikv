@@ -1484,7 +1484,8 @@ where
             CheckApplyingSnapStatus::Success => {
                 self.post_pending_read_index_on_replica(ctx);
                 // If there is a snapshot, it must belongs to the last ready.
-                self.raft_group.on_persist_ready(self.last_unpersisted_number);
+                self.raft_group
+                    .on_persist_ready(self.last_unpersisted_number);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
