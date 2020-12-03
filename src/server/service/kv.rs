@@ -1018,6 +1018,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     ) {
         unimplemented!()
     }
+
+    fn check_leader(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: CheckLeaderRequest,
+        _sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        unimplemented!()
+    }
 }
 
 fn response_batch_commands_request<F>(

@@ -249,6 +249,7 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_caller_start_ts().into(),
             req.get_current_ts().into(),
             req.get_rollback_if_not_exist(),
+            req.get_rollback_async_commit(),
             req.take_context(),
         )
     }
