@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tikv_util::collections::HashMap;
 use tipb::ColumnInfo;
 use tipb::FieldType;
@@ -64,7 +64,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_indices.push(index);
             } else {
-                if !primary_column_ids_set.contains(&ci.get_column_id()) {
+                if !primary_column_ids_set.contains(&ci.get_column_id())
+                    || (ci.is_string_like() && !ci.flag().contains(FieldTypeFlag::BINARY))
+                {
                     is_key_only = false;
                 }
                 column_id_index.insert(ci.get_column_id(), index);
@@ -1200,10 +1202,14 @@ mod tests {
         ]);
     }
 
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Default)]
     struct Column {
+        // Indicate if this column is a primary column.
         is_primary_column: bool,
+        // Indicate if this column has column information.
         has_column_info: bool,
+        // Indicate if this column need to fetch restore data.
+        need_restore_data: bool,
     }
 
     fn test_common_handle_impl(columns: &[Column]) {
@@ -1222,16 +1228,27 @@ mod tests {
             let Column {
                 is_primary_column,
                 has_column_info,
+                need_restore_data,
             } = column;
 
             if has_column_info {
                 let mut ci = ColumnInfo::default();
 
                 ci.set_column_id(i as i64);
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                if need_restore_data {
+                    ci.as_mut_accessor().set_tp(FieldTypeTp::String);
+
+                    let mut flag = ci.as_accessor().flag();
+                    flag.remove(FieldTypeFlag::BINARY);
+                    ci.as_mut_accessor().set_flag(flag);
+
+                    schema.push(field_type_from_column_info(&ci))
+                } else {
+                    ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                    schema.push(FieldTypeTp::LongLong.into());
+                }
 
                 columns_info.push(ci);
-                schema.push(FieldTypeTp::LongLong.into());
             } else {
                 missed_columns_info.push(i as i64);
             }
@@ -1241,7 +1258,11 @@ mod tests {
                 primary_column_ids.push(i as i64);
             }
 
-            row.push(Datum::I64(i as i64));
+            if need_restore_data {
+                row.push(Datum::Bytes(format!("{}", i).into_bytes()));
+            } else {
+                row.push(Datum::I64(i as i64));
+            }
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
@@ -1282,10 +1303,19 @@ mod tests {
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
                 .unwrap();
 
-            assert_eq!(
-                result.physical_columns[i].decoded().to_int_vec(),
-                &[Some(columns_info[i].get_column_id())]
-            );
+            if columns[i].need_restore_data {
+                assert_eq!(
+                    result.physical_columns[i].decoded().to_bytes_vec(),
+                    &[Some(
+                        format!("{}", columns_info[i].get_column_id()).into_bytes()
+                    )]
+                );
+            } else {
+                assert_eq!(
+                    result.physical_columns[i].decoded().to_int_vec(),
+                    &[Some(columns_info[i].get_column_id())]
+                );
+            }
         }
     }
     #[test]
@@ -1293,16 +1323,19 @@ mod tests {
         test_common_handle_impl(&[Column {
             is_primary_column: true,
             has_column_info: true,
+            ..Default::default()
         }]);
 
         test_common_handle_impl(&[
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                ..Default::default()
             },
         ]);
 
@@ -1310,14 +1343,17 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                ..Default::default()
             },
         ]);
 
@@ -1325,14 +1361,17 @@ mod tests {
             Column {
                 is_primary_column: false,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
         ]);
 
@@ -1340,14 +1379,17 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
         ]);
 
@@ -1355,27 +1397,61 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                ..Default::default()
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                ..Default::default()
             },
         ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                need_restore_data: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: false,
+                ..Default::default()
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                need_restore_data: true,
+            },
+        ])
     }
 }
