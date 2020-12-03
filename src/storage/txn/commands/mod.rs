@@ -517,7 +517,7 @@ impl Command {
         }
     }
 
-    pub(super) fn process_write<S: Snapshot, L: LockManager>(
+    pub(crate) fn process_write<S: Snapshot, L: LockManager>(
         self,
         snapshot: S,
         context: WriteContext<'_, L>,

@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{reader::MvccReader, ErrorInner, Result};
+use crate::storage::mvcc::{reader::MvccReader, Result};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -389,7 +389,12 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 #[cfg(feature = "failpoints")]
-pub(crate) fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInner {
+pub(crate) fn make_txn_error(
+    s: Option<String>,
+    key: &Key,
+    start_ts: TimeStamp,
+) -> crate::storage::mvcc::ErrorInner {
+    use crate::storage::mvcc::ErrorInner;
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {

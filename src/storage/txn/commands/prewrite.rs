@@ -382,7 +382,6 @@ impl<K: PrewriteKind> Prewriter<K> {
     // If it is possibly stale due to leader transfer or region merge, return an error.
     // TODO: Fallback to non-async commit if not synced instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
-        eprintln!("{} {}", self.try_one_pc, snapshot.is_max_ts_synced());
         if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
             Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
