@@ -84,6 +84,9 @@ impl<'a> EnumRef<'a> {
     pub fn is_empty(&self) -> bool {
         self.value == 0
     }
+    pub fn value(&self) -> usize {
+          self.value
+    }
     pub fn as_str(&self) -> Result<&str> {
         if self.value == 0 {
             return Ok("");

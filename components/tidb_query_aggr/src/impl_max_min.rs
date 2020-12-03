@@ -89,13 +89,19 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         }
 
         match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
+            TT = [
+                Int => &'static Int,
+                Real => &'static Real,
+                Duration => &'static Duration,
+                Decimal => &'static Decimal,
+                DateTime => &'static DateTime,
+                Json => JsonRef<'static>,
+                Bytes => BytesRef<'static>,
+                Set => SetRef<'static>,
+            ],
             match eval_type {
-                EvalType::TT => Ok(Box::new(AggFnExtremum::<&'static TT, T>::new())),
-                EvalType::Json => Ok(Box::new(AggFnExtremum::<BytesRef<'static>, T>::new())),
-                EvalType::Bytes => Ok(Box::new(AggFnExtremum::<JsonRef<'static>, T>::new())),
+                EvalType::TT => Ok(Box::new(AggFnExtremum::<TT, T>::new())),
                 EvalType::Enum => Ok(Box::new(AggFnExtremumForEnum::<T>::new())),
-                EvalType::Set => Ok(Box::new(AggFnExtremum::<SetRef<'static>, T>::new())),
             }
         }
     }
