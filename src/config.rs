@@ -2403,6 +2403,11 @@ impl TiKvConfig {
             .into());
         }
 
+        if self.raft_store.hibernate_regions && !self.cdc.hibernate_regions_compatible {
+            warn!("raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
+                was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster");
+        }
+
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.raft_engine.validate()?;
