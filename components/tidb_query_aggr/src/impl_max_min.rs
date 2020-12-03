@@ -248,8 +248,8 @@ where
             && (self.extremum.is_none()
                 || extreme_ref
                     .unwrap()
-                    .to_string()
-                    .cmp(&value.unwrap().to_string())
+                    .as_str()?
+                    .cmp(&value.unwrap().as_str()?)
                     == E::ORD)
         {
             self.extremum = value.map(|x| x.to_owned_value());
