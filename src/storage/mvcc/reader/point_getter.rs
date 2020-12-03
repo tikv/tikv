@@ -345,9 +345,8 @@ mod tests {
     use crate::storage::kv::{
         CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
     };
-    use crate::storage::mvcc::tests::*;
     use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_delete,
+        must_acquire_pessimistic_lock, must_commit, must_gc, must_pessimistic_prewrite_delete,
         must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
     };
 
