@@ -249,6 +249,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
+
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
     pub(crate) fn check_write_and_rollback_lock(

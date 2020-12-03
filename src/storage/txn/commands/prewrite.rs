@@ -382,6 +382,7 @@ impl<K: PrewriteKind> Prewriter<K> {
     // If it is possibly stale due to leader transfer or region merge, return an error.
     // TODO: Fallback to non-async commit if not synced instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
+        eprintln!("{} {}", self.try_one_pc, snapshot.is_max_ts_synced());
         if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.is_max_ts_synced() {
             Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
@@ -674,13 +675,16 @@ fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::storage::{
         mvcc::{
             tests::{must_get, must_get_commit_ts, must_unlocked},
             Error as MvccError, ErrorInner as MvccErrorInner,
         },
         txn::{
-            commands::{test_util::*, FORWARD_MIN_MUTATIONS_NUM},
+            commands::test_util::{
+                commit, pessimsitic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
+            },
             tests::must_acquire_pessimistic_lock,
             Error, ErrorInner,
         },
@@ -974,5 +978,93 @@ mod tests {
             Some(30),
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_out_of_sync_max_ts() {
+        use crate::storage::{
+            kv::Result, CfName, ConcurrencyManager, Cursor, DummyLockManager, IterOptions,
+            ScanMode, Value,
+        };
+        use engine_rocks::RocksEngineIterator;
+        use engine_traits::ReadOptions;
+        use kvproto::kvrpcpb::ExtraOp;
+        #[derive(Clone)]
+        struct MockSnapshot;
+
+        impl Snapshot for MockSnapshot {
+            type Iter = RocksEngineIterator;
+
+            fn get(&self, _: &Key) -> Result<Option<Value>> {
+                unimplemented!()
+            }
+            fn get_cf(&self, _: CfName, _: &Key) -> Result<Option<Value>> {
+                unimplemented!()
+            }
+            fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> Result<Option<Value>> {
+                unimplemented!()
+            }
+            fn iter(&self, _: IterOptions, _: ScanMode) -> Result<Cursor<Self::Iter>> {
+                unimplemented!()
+            }
+            fn iter_cf(
+                &self,
+                _: CfName,
+                _: IterOptions,
+                _: ScanMode,
+            ) -> Result<Cursor<Self::Iter>> {
+                unimplemented!()
+            }
+            fn is_max_ts_synced(&self) -> bool {
+                false
+            }
+        }
+
+        macro_rules! context {
+            () => {
+                WriteContext {
+                    lock_mgr: &DummyLockManager {},
+                    concurrency_manager: ConcurrencyManager::new(10.into()),
+                    extra_op: ExtraOp::Noop,
+                    statistics: &mut Statistics::default(),
+                    async_apply_prewrite: false,
+                }
+            };
+        }
+
+        macro_rules! assert_max_ts_err {
+            ($e: expr) => {
+                match $e {
+                    Err(Error(box ErrorInner::MaxTimestampNotSynced { .. })) => {}
+                    _ => panic!("Should have returned an error"),
+                }
+            };
+        }
+
+        // 2pc should be ok
+        let cmd = Prewrite::with_defaults(vec![], vec![1, 2, 3], 10.into());
+        cmd.cmd.process_write(MockSnapshot, context!()).unwrap();
+        // But 1pc should return an error
+        let cmd = Prewrite::with_1pc(vec![], vec![1, 2, 3], 10.into(), 20.into());
+        assert_max_ts_err!(cmd.cmd.process_write(MockSnapshot, context!()));
+        // And so should async commit
+        let mut cmd = Prewrite::with_defaults(vec![], vec![1, 2, 3], 10.into());
+        if let Command::Prewrite(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        assert_max_ts_err!(cmd.cmd.process_write(MockSnapshot, context!()));
+
+        // And the same for pessimistic prewrites.
+        let cmd = PrewritePessimistic::with_defaults(vec![], vec![1, 2, 3], 10.into(), 15.into());
+        cmd.cmd.process_write(MockSnapshot, context!()).unwrap();
+        let cmd =
+            PrewritePessimistic::with_1pc(vec![], vec![1, 2, 3], 10.into(), 15.into(), 20.into());
+        assert_max_ts_err!(cmd.cmd.process_write(MockSnapshot, context!()));
+        let mut cmd =
+            PrewritePessimistic::with_defaults(vec![], vec![1, 2, 3], 10.into(), 15.into());
+        if let Command::PrewritePessimistic(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        assert_max_ts_err!(cmd.cmd.process_write(MockSnapshot, context!()));
     }
 }
