@@ -4,6 +4,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
 
+use crate::codec::Result;
+
 #[derive(Clone, Debug)]
 pub struct Enum {
     data: Arc<BufferVec>,
@@ -29,14 +31,7 @@ impl Enum {
 
 impl ToString for Enum {
     fn to_string(&self) -> String {
-        if self.value == 0 {
-            return String::new();
-        }
-
-        let buf = &self.data[self.value - 1];
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf).to_string()
+        self.as_ref().to_string()
     }
 }
 
@@ -92,6 +87,29 @@ impl<'a> EnumRef<'a> {
     pub fn value(&self) -> usize {
         self.value
     }
+    pub fn as_str(&self) -> Result<&str> {
+        if self.value == 0 {
+            return Ok("");
+        }
+
+        let buf = &self.data[self.value - 1];
+
+        // TODO: take string collation into consideration here.
+        Ok(std::str::from_utf8(buf)?)
+    }
+}
+
+impl<'a> ToString for EnumRef<'a> {
+    fn to_string(&self) -> String {
+        if self.value == 0 {
+            return String::new();
+        }
+
+        let buf = &self.data[self.value - 1];
+
+        // TODO: Check the requirements and intentions of to_string usage.
+        String::from_utf8_lossy(buf).to_string()
+    }
 }
 
 impl<'a> Eq for EnumRef<'a> {}
@@ -134,6 +152,22 @@ mod tests {
             };
 
             assert_eq!(e.to_string(), expect.to_string())
+        }
+    }
+
+    #[test]
+    fn test_as_str() {
+        let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
+
+        for (data, value, expect) in cases {
+            let mut buf = BufferVec::new();
+            for v in data {
+                buf.push(v)
+            }
+
+            let e = EnumRef { data: &buf, value };
+
+            assert_eq!(e.as_str().expect("get str correctly"), expect)
         }
     }
 
