@@ -572,7 +572,7 @@ fn do_check_allowed(enable: bool, skip_vcheck: bool, cluster_version: &ClusterVe
 
 fn check_need_gc(
     safe_point: TimeStamp,
-    mut ratio_threshold: f64,
+    ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
     if ratio_threshold < 1.0 {
@@ -580,16 +580,13 @@ fn check_need_gc(
     }
 
     let is_bottommost = context.is_bottommost_level();
-    let mut check_props = |props: &MvccProperties| {
+    let check_props = |props: &MvccProperties| {
         if props.min_ts > safe_point {
             return false;
         }
         let num_versions = if is_bottommost {
             props.num_versions as f64
         } else {
-            if ratio_threshold < 1.5 {
-                ratio_threshold = 1.5;
-            }
             (props.num_versions - props.num_deletes) as f64
         };
         if num_versions > props.num_rows as f64 * ratio_threshold {
