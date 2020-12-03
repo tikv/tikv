@@ -406,7 +406,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             (&None, false) => CommitKind::TwoPc,
         };
 
-        let props = TransactionProperties {
+        let mut props = TransactionProperties {
             start_ts: self.start_ts,
             kind: self.kind.txn_kind(),
             commit_kind,
@@ -421,7 +421,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             .as_ref()
             .filter(|keys| !keys.is_empty())
             .map(|_| Key::from_raw(&self.primary));
-        let async_commit_pk = async_commit_pk.as_ref();
+        let mut async_commit_pk = async_commit_pk.as_ref();
 
         let mut final_min_commit_ts = TimeStamp::zero();
         let mut locks = Vec::new();
@@ -441,6 +441,17 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
+                }
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
+                    // fallback to not using async commit or 1pc
+                    props.commit_kind = CommitKind::TwoPc;
+                    async_commit_pk = None;
+                    self.secondary_keys = None;
+                    self.try_one_pc = false;
+                    fallback_1pc_locks(txn);
+                    // release memory locks
+                    txn.guards = Vec::new();
+                    final_min_commit_ts = TimeStamp::zero();
                 }
                 e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                     locks.push(
@@ -672,13 +683,26 @@ fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> 
     released_locks
 }
 
+/// Change all 1pc locks in txn to 2pc locks.
+pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+) -> ReleasedLocks {
+    let mut released_locks = ReleasedLocks::new(txn.start_ts, TimeStamp::zero());
+
+    for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        txn.put_lock(key.clone(), &lock);
+        if delete_pessimistic_lock {
+            released_locks.push(txn.unlock_key(key, true));
+        }
+    }
+
+    released_locks
+}
+
 #[cfg(test)]
 mod tests {
     use crate::storage::{
-        mvcc::{
-            tests::{must_get, must_get_commit_ts, must_unlocked},
-            Error as MvccError, ErrorInner as MvccErrorInner,
-        },
+        mvcc::{tests::*, Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{
             commands::{test_util::*, FORWARD_MIN_MUTATIONS_NUM},
             tests::must_acquire_pessimistic_lock,
@@ -974,5 +998,167 @@ mod tests {
             Some(30),
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_prewrite_async_fallback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(20.into());
+
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
+            Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+        ];
+
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            b"k1".to_vec(),
+            10,
+            None,
+        )
+        .unwrap();
+        must_locked(&engine, b"k1", 10);
+        must_locked(&engine, b"k2", 10);
+
+        commit(
+            &engine,
+            &mut statistics,
+            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+            10,
+            100,
+        )
+        .unwrap();
+        must_unlocked(&engine, b"k1");
+        must_unlocked(&engine, b"k2");
+        must_get(&engine, b"k1", 100, b"v");
+        must_get(&engine, b"k2", 100, b"v");
+    }
+
+    #[test]
+    fn test_prewrite_pessimsitic_async_fallback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
+
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true),
+            (Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())), true),
+        ];
+        let mut statistics = Statistics::default();
+
+        cm.update_max_ts(50.into());
+        pessimsitic_prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            b"k1".to_vec(),
+            10,
+            10,
+            None,
+        )
+        .unwrap();
+        must_locked(&engine, b"k1", 10);
+        must_locked(&engine, b"k2", 10);
+
+        commit(
+            &engine,
+            &mut statistics,
+            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+            10,
+            100,
+        )
+        .unwrap();
+        must_unlocked(&engine, b"k1");
+        must_unlocked(&engine, b"k2");
+        must_get(&engine, b"k1", 100, b"v");
+        must_get(&engine, b"k2", 100, b"v");
+    }
+
+    #[test]
+    fn test_prewrite_1pc_fallback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(20.into());
+
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
+            Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+        ];
+
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            b"k1".to_vec(),
+            10,
+            Some(15),
+        )
+        .unwrap();
+        must_locked(&engine, b"k1", 10);
+        must_locked(&engine, b"k2", 10);
+
+        commit(
+            &engine,
+            &mut statistics,
+            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+            10,
+            100,
+        )
+        .unwrap();
+        must_unlocked(&engine, b"k1");
+        must_unlocked(&engine, b"k2");
+        must_get(&engine, b"k1", 100, b"v");
+        must_get(&engine, b"k2", 100, b"v");
+    }
+
+    #[test]
+    fn test_prewrite_pessimsitic_1pc_fallback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
+
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true),
+            (Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())), true),
+        ];
+        let mut statistics = Statistics::default();
+
+        cm.update_max_ts(50.into());
+        pessimsitic_prewrite_with_cm(
+            &engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            b"k1".to_vec(),
+            10,
+            10,
+            Some(15),
+        )
+        .unwrap();
+        must_locked(&engine, b"k1", 10);
+        must_locked(&engine, b"k2", 10);
+
+        commit(
+            &engine,
+            &mut statistics,
+            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
+            10,
+            100,
+        )
+        .unwrap();
+        must_unlocked(&engine, b"k1");
+        must_unlocked(&engine, b"k2");
+        must_get(&engine, b"k1", 100, b"v");
+        must_get(&engine, b"k2", 100, b"v");
     }
 }
