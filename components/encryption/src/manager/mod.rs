@@ -3,7 +3,9 @@
 use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{current, ThreadId};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
@@ -18,6 +20,7 @@ use crate::io::EncrypterWriter;
 use crate::master_key::{create_backend, Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
+use std::collections::vec_deque::VecDeque;
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
@@ -27,7 +30,8 @@ struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
     // Lock to make sure there's no concurrent update operations to file dictionary.
-    file_lock: Mutex<()>,
+    write_queue: Mutex<VecDeque<(ThreadId, Arc<AtomicBool>, Arc<AtomicBool>)>>,
+    log_cond: Condvar,
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
@@ -49,7 +53,8 @@ impl Dicts {
                 ..Default::default()
             }),
             current_key_id: AtomicU64::new(0),
-            file_lock: Mutex::new(()),
+            write_queue: Mutex::new(VecDeque::default()),
+            log_cond: Condvar::new(),
             rotation_period,
             base: Path::new(path).to_owned(),
         }
@@ -88,7 +93,8 @@ impl Dicts {
                     file_dict: Mutex::new(file_dict),
                     key_dict: Mutex::new(key_dict),
                     current_key_id,
-                    file_lock: Mutex::new(()),
+                    write_queue: Mutex::new(VecDeque::new()),
+                    log_cond: Condvar::new(),
                     rotation_period,
                     base: base.to_owned(),
                 }))
@@ -188,8 +194,57 @@ impl Dicts {
         }
     }
 
+    fn check_write_error(has_error: bool) -> Result<()> {
+        if has_error {
+            return Err(Error::Io(IoError::new(
+                ErrorKind::Other,
+                format!("IoError occurs when save file dict"),
+            )));
+        }
+        Ok(())
+    }
+
+    fn pipeline_sync(&self) -> Result<()> {
+        let currenct_id = current().id();
+        let finished = Arc::new(AtomicBool::new(false));
+        let has_err = Arc::new(AtomicBool::new(false));
+        let writers_len = {
+            let mut write_queue = self.write_queue.lock().unwrap();
+            write_queue.push_back((currenct_id, finished.clone(), has_err.clone()));
+            while !write_queue.is_empty() {
+                let leader = write_queue.front().unwrap();
+                if leader.0 == currenct_id {
+                    break;
+                }
+                write_queue = self.log_cond.wait(write_queue).unwrap();
+                if finished.load(Ordering::Acquire) {
+                    return Self::check_write_error(has_err.load(Ordering::Acquire));
+                }
+            }
+            if finished.load(Ordering::Acquire) {
+                return Self::check_write_error(has_err.load(Ordering::Acquire));
+            }
+            assert!(write_queue.len() > 0);
+            write_queue.len()
+        };
+        let ret = self.save_file_dict();
+        let save_err = ret.is_err();
+        if let Err(e) = ret {
+            error!("encryption: failed to save file dictionary."; "error" => ?e);
+        }
+        let mut write_queue = self.write_queue.lock().unwrap();
+        for _ in 0..writers_len {
+            let w = write_queue.pop_front().unwrap();
+            w.1.store(true, Ordering::Release);
+            if save_err {
+                w.2.store(true, Ordering::Release);
+            }
+        }
+        self.log_cond.notify_all();
+        Self::check_write_error(save_err)
+    }
+
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let _lock = self.file_lock.lock().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
@@ -199,7 +254,7 @@ impl Dicts {
             let mut file_dict = self.file_dict.lock().unwrap();
             file_dict.files.insert(fname.to_owned(), file.clone());
         }
-        self.save_file_dict()?;
+        self.pipeline_sync()?;
 
         if method != EncryptionMethod::Plaintext {
             info!("new encrypted file"; 
@@ -213,7 +268,6 @@ impl Dicts {
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let _lock = self.file_lock.lock().unwrap();
         let file = {
             let mut file_dict = self.file_dict.lock().unwrap();
             match file_dict.files.remove(fname) {
@@ -227,7 +281,7 @@ impl Dicts {
         };
 
         // TOOD GC unused data keys.
-        self.save_file_dict()?;
+        self.pipeline_sync()?;
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
         } else {
@@ -237,8 +291,6 @@ impl Dicts {
     }
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let _lock = self.file_lock.lock().unwrap();
-
         let method = {
             let mut file_dict = self.file_dict.lock().unwrap();
             let file = match file_dict.files.get(src_fname) {
@@ -259,7 +311,7 @@ impl Dicts {
             file_dict.files.insert(dst_fname.to_owned(), file);
             method
         };
-        self.save_file_dict()?;
+        self.pipeline_sync()?;
 
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
@@ -270,7 +322,6 @@ impl Dicts {
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let _lock = self.file_lock.lock().unwrap();
         let method = {
             let mut file_dict = self.file_dict.lock().unwrap();
             let file = match file_dict.files.remove(src_fname) {
@@ -285,7 +336,7 @@ impl Dicts {
             file_dict.files.insert(dst_fname.to_owned(), file);
             method
         };
-        self.save_file_dict()?;
+        self.pipeline_sync()?;
 
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
