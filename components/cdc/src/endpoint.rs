@@ -256,7 +256,7 @@ pub struct Endpoint<T> {
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
     old_value_cache: OldValueCache,
-    hibernate_region_compatible: bool,
+    hibernate_regions_compatible: bool,
 
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
@@ -307,7 +307,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
-            hibernate_region_compatible: cfg.hibernate_region_compatible,
+            hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
         };
         ep.register_min_ts_event();
@@ -723,7 +723,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let security_mgr = self.security_mgr.clone();
         let store_meta = self.store_meta.clone();
         let tikv_clients = self.tikv_clients.clone();
-        let hibernate_region_compatible = self.hibernate_region_compatible;
+        let hibernate_regions_compatible = self.hibernate_regions_compatible;
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -748,7 +748,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
 
-            let regions = if hibernate_region_compatible {
+            let regions = if hibernate_regions_compatible {
                 Self::region_resolved_ts_store(
                     regions,
                     store_meta,

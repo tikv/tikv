@@ -605,4 +605,4 @@ pipelined = false
 [cdc]
 min-ts-interval = "4s"
 old-value-cache-size = 512
-hibernate-region-compatible = false
+hibernate-regions-compatible = false

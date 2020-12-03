@@ -182,7 +182,7 @@ fn test_region_error() {
 fn test_joint_confchange() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
-    cluster.cfg.cdc.hibernate_region_compatible = true;
+    cluster.cfg.cdc.hibernate_regions_compatible = true;
     let mut suite = TestSuite::with_cluster(3, cluster);
 
     let receive_resolved_ts = |receive_event: &Box<dyn Fn(bool) -> ChangeDataEvent + Send>| {
