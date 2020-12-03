@@ -96,6 +96,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 lock,
                 self.current_ts,
                 self.caller_start_ts,
+                self.rollback_async_commit,
             ),
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
