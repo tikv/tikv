@@ -20,15 +20,18 @@ use crate::log_file::LogFile;
 use crate::master_key::{create_backend, Backend};
 use crate::metrics::*;
 use crate::{Error, Result};
+use dashmap::DashMap;
 
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
+const DEFAULT_FILES_CACHE_CAPACITY: usize = 1024 * 128;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
     log_file: Mutex<LogFile>,
+    files_cache: DashMap<String, FileInfo>,
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
@@ -55,6 +58,7 @@ impl Dicts {
                 ..Default::default()
             }),
             current_key_id: AtomicU64::new(0),
+            files_cache: DashMap::default(),
             rotation_period,
             base: Path::new(path).to_owned(),
         })
@@ -84,11 +88,16 @@ impl Dicts {
 
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
                 ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
+                let files_cache = DashMap::with_capacity(DEFAULT_FILES_CACHE_CAPACITY);
+                for (k, v) in file_dict.files.iter() {
+                    files_cache.insert(k.clone(), v.clone());
+                }
 
                 Ok(Some(Dicts {
                     file_dict: Mutex::new(file_dict),
                     log_file: Mutex::new(log_file),
                     key_dict: Mutex::new(key_dict),
+                    files_cache,
                     current_key_id,
                     rotation_period,
                     base: base.to_owned(),
@@ -157,8 +166,7 @@ impl Dicts {
     }
 
     fn get_file(&self, fname: &str) -> FileInfo {
-        let dict = self.file_dict.lock().unwrap();
-        let file_info = dict.files.get(fname);
+        let file_info = self.files_cache.get(fname);
         match file_info {
             None => {
                 // Return Plaintext if file not found
@@ -166,7 +174,7 @@ impl Dicts {
                 file.method = compat(EncryptionMethod::Plaintext);
                 file
             }
-            Some(info) => info.clone(),
+            Some(info) => info.value().clone(),
         }
     }
 
@@ -179,6 +187,7 @@ impl Dicts {
         file.method = compat(method);
         let file_num = {
             let mut file_dict = self.file_dict.lock().unwrap();
+            self.files_cache.insert(fname.to_owned(), file.clone());
             file_dict.files.insert(fname.to_owned(), file.clone());
             file_dict.files.len() as _
         };
@@ -201,7 +210,7 @@ impl Dicts {
         let mut log_file = self.log_file.lock().unwrap();
         let (file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
-
+            self.files_cache.remove(fname);
             match file_dict.files.remove(fname) {
                 Some(file_info) => {
                     let file_num = file_dict.files.len() as _;
@@ -244,6 +253,7 @@ impl Dicts {
                 )));
             }
             let method = file.method;
+            self.files_cache.insert(dst_fname.to_owned(), file.clone());
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
@@ -263,6 +273,7 @@ impl Dicts {
         let mut log_file = self.log_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
+            self.files_cache.remove(dst_fname);
             let file = match file_dict.files.remove(src_fname) {
                 Some(file_info) => file_info,
                 None => {
@@ -273,6 +284,7 @@ impl Dicts {
             };
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
+            self.files_cache.insert(dst_fname.to_owned(), file.clone());
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };

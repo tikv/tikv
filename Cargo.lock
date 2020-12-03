@@ -1075,6 +1075,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "dashmap",
  "engine_traits",
  "error_code",
  "fail",
