@@ -458,10 +458,7 @@ mod tests {
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(
-            result[0].to_enum_vec(),
-            vec![Some(Enum::new(buf.clone(), 1))]
-        );
+        assert_eq!(result[0].to_enum_vec(), vec![Some(Enum::new(buf, 1))]);
     }
 
     #[test]
