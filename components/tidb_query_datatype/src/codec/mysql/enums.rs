@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+
 use tikv_util::buffer_vec::BufferVec;
 
 use crate::codec::Result;
@@ -109,6 +111,12 @@ impl<'a> ToString for EnumRef<'a> {
 
         // TODO: Check the requirements and intentions of to_string usage.
         String::from_utf8_lossy(buf).to_string()
+    }
+}
+
+impl<'a> Display for EnumRef<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.to_string().as_str())
     }
 }
 
