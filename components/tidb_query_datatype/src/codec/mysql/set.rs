@@ -169,7 +169,7 @@ mod tests {
                 value,
             };
 
-            assert_eq!(s.to_string(), expect.to_string())
+            assert_eq!(s.as_ref().to_string(), expect.to_string())
         }
     }
 
