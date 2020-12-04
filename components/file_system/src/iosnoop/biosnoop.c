@@ -8,6 +8,7 @@ struct stats_t {
     u64 write;
 };
 
+// Should be consistent with IOType in `file_system/lib.rs`
 typedef enum {
     Other,
     Read,

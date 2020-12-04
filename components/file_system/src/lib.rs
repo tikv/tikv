@@ -6,6 +6,7 @@ extern crate lazy_static;
 extern crate tikv_alloc;
 
 mod file;
+mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
@@ -21,33 +22,9 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub use iosnoop::{get_io_type, set_io_type, IOType};
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type, IOContext, IOOp, IOType, WithIOType};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-
-#[derive(Debug)]
-pub enum IOOp {
-    Read,
-    Write,
-}
-
-pub struct WithIOType {
-    previous_io_type: IOType,
-}
-
-impl WithIOType {
-    pub fn new(new_io_type: IOType) -> WithIOType {
-        let previous_io_type = get_io_type();
-        set_io_type(new_io_type);
-        WithIOType { previous_io_type }
-    }
-}
-
-impl Drop for WithIOType {
-    fn drop(&mut self) {
-        set_io_type(self.previous_io_type);
-    }
-}
 
 /// Indicates how large a buffer to pre-allocate before reading the entire file.
 fn initial_buffer_size(file: &File) -> io::Result<usize> {

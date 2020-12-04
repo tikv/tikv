@@ -621,7 +621,6 @@ dependencies = [
  "futures 0.3.7",
  "grpcio",
  "hex 0.4.2",
- "iosnoop",
  "keys",
  "kvproto",
  "libc",
@@ -1342,10 +1341,15 @@ checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 name = "file_system"
 version = "0.1.0"
 dependencies = [
+ "bcc",
+ "collections",
  "crc32fast",
+ "crossbeam-utils 0.8.1",
  "fs2",
- "iosnoop",
  "lazy_static",
+ "libc",
+ "maligned",
+ "nix 0.19.0",
  "openssl",
  "rand",
  "tempfile",
@@ -1887,22 +1891,6 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
-]
-
-[[package]]
-name = "iosnoop"
-version = "0.1.0"
-dependencies = [
- "bcc",
- "collections",
- "crossbeam-utils 0.8.1",
- "libc",
- "maligned",
- "nix 0.19.0",
- "slog",
- "slog-global",
- "tempfile",
- "tikv_alloc",
 ]
 
 [[package]]
@@ -4774,7 +4762,6 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "iosnoop",
  "itertools 0.8.2",
  "keys",
  "kvproto",

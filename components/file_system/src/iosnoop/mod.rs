@@ -1,8 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
-
 #[cfg(all(feature = "bcc", target_os = "linux"))]
 #[path = "biosnoop.rs"]
 mod imp;
@@ -21,6 +18,12 @@ pub struct IOStats {
     write: u64,
 }
 
+#[derive(Debug)]
+pub enum IOOp {
+    Read,
+    Write,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IOType {
@@ -34,4 +37,22 @@ pub enum IOType {
     LoadBalance,
     Import,
     Export,
+}
+
+pub struct WithIOType {
+    previous_io_type: IOType,
+}
+
+impl WithIOType {
+    pub fn new(new_io_type: IOType) -> WithIOType {
+        let previous_io_type = get_io_type();
+        set_io_type(new_io_type);
+        WithIOType { previous_io_type }
+    }
+}
+
+impl Drop for WithIOType {
+    fn drop(&mut self) {
+        set_io_type(self.previous_io_type);
+    }
 }

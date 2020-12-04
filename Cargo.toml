@@ -64,7 +64,7 @@ test-engines-panic = [
   "engine_test/test-engine-raft-panic",
 ]
 bcc-iosnoop = [
-  "iosnoop/bcc",
+  "file_system/bcc-iosnoop",
 ]
 
 # for testing configure propegate to other crates
@@ -160,7 +160,6 @@ tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
 collections = { path = "components/collections" }
-iosnoop = { path = "components/iosnoop" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
@@ -230,7 +229,6 @@ members = [
   "components/resolved_ts",
   "components/batch-system",
   "components/cdc",
-  "components/iosnoop",
   "components/raftstore",
   "components/into_other",
   "components/encryption",
