@@ -118,8 +118,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 fn test_region_collection_seek_region() {
     let mut cluster = new_node_cluster(0, 3);
 
-    let worker = Arc::new(Mutex::new(Worker::new("test")));
-    let share_worker = worker.clone();
+    let share_worker = Arc::new(Mutex::new(Worker::new("test")));
     let (tx, rx) = channel();
     cluster
         .sim
