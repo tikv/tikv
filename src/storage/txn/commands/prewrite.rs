@@ -548,12 +548,11 @@ trait PrewriteKind {
     }
 }
 
-/// Information needed for the optimistic variant of `PreWriteKind`.
+/// Optimistic `PreWriteKind`.
 struct Optimistic {
     skip_constraint_check: bool,
 }
 
-/// The optimistic variant of `PreWriteKind`.
 impl PrewriteKind for Optimistic {
     // see the `MutationLock` trait implementation for `Mutation`
     type Mutation = Mutation;
@@ -592,12 +591,11 @@ impl PrewriteKind for Optimistic {
     }
 }
 
-/// Information needed for the pessimistic variant of `PreWriteKind`.
+/// Pessimistic `PreWriteKind`.
 struct Pessimistic {
     for_update_ts: TimeStamp,
 }
 
-/// The pessimistic variant of `PreWriteKind`.
 impl PrewriteKind for Pessimistic {
     // see the `MutationLock` trait implementation for `(Mutation, bool)`
     type Mutation = (Mutation, bool);
@@ -607,17 +605,16 @@ impl PrewriteKind for Pessimistic {
     }
 }
 
-/// Used as an associated type within `PrewriteKind::Mutation` to infer the kind of
-/// prewrite (optimistic/pessimistic).
-/// For optimistic txns, this is implemented on a plain `Mutation` type.
-/// For pessimistic txns, this is implemented on the pair `(Mutation, bool)`, where
-/// the bool indicates whether the mutation takes a pessimistic lock or not.
+/// A placeholder type to indicate whether a `PrewriteKind` is part of an optimistic
+/// or a pessimistic transaction.
+/// For optimistic txns, this is `Mutation`.
+/// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
+/// whether the mutation takes a pessimistic lock or not.
 trait MutationLock {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
 }
 
-/// The `MutationLock` variant for optimistic transactions.
 impl MutationLock for Mutation {
     fn is_pessimistic_lock(&self) -> bool {
         false
@@ -628,8 +625,6 @@ impl MutationLock for Mutation {
     }
 }
 
-/// The `MutationLock` variant for pessimistic transactions. The `bool` indicates the
-/// presence of a pessimistic lock.
 impl MutationLock for (Mutation, bool) {
     fn is_pessimistic_lock(&self) -> bool {
         self.1
