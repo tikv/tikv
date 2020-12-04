@@ -429,9 +429,9 @@ fn test_leader_down_in_joint_state() {
     sleep_ms(500);
 
     // Peer from both configuration can become leader
-    for learder_id in vec![3, 4] {
-        let (k, v) = (format!("k{}", learder_id), format!("v{}", learder_id));
-        cluster.must_transfer_leader(region_id, new_peer(learder_id, learder_id));
+    for leader_id in &[3, 4] {
+        let (k, v) = (format!("k{}", leader_id), format!("v{}", leader_id));
+        cluster.must_transfer_leader(region_id, new_peer(*leader_id, *leader_id));
         cluster.must_put(k.as_bytes(), v.as_bytes());
 
         for i in 2..=5 {
