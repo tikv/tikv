@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::{HashMap, HashMapEntry};
 use kvproto::metapb;
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
-use tikv_util::collections::{HashMap, HashMapEntry};
 
 /// A registry that maps store to a group.
 ///
