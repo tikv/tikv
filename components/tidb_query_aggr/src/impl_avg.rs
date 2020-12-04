@@ -227,7 +227,7 @@ where
         target[1].push(if self.count == 0 {
             None
         } else {
-            Some(self.sum.clone())
+            Some(self.sum)
         });
         Ok(())
     }
@@ -302,7 +302,7 @@ where
         target[1].push(if self.count == 0 {
             None
         } else {
-            Some(self.sum.clone())
+            Some(self.sum)
         });
         Ok(())
     }
