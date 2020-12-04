@@ -36,8 +36,16 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+<<<<<<< HEAD
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
+=======
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    SplitCheckTask,
+>>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
 };
 use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
@@ -407,7 +415,16 @@ pub struct Peer {
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Check whether this proposal can be proposed based on its epoch
+<<<<<<< HEAD
     cmd_epoch_checker: CmdEpochChecker,
+=======
+    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+
+    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
+    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
+    /// task run when there are more than 1 pending tasks.
+    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+>>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
 }
 
 impl Peer {
@@ -491,6 +508,7 @@ impl Peer {
             check_stale_peers: vec![],
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             cmd_epoch_checker: Default::default(),
+            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2819,8 +2837,63 @@ impl Peer {
         None
     }
 
+<<<<<<< HEAD
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
+=======
+    fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
+        if self.replication_mode_version == 0 {
+            return None;
+        }
+        let mut status = RegionReplicationStatus::default();
+        status.state_id = self.replication_mode_version;
+        let state = if !self.replication_sync {
+            if self.dr_auto_sync_state != DrAutoSyncState::Async {
+                let res = self.raft_group.raft.check_group_commit_consistent();
+                if Some(true) != res {
+                    let mut buffer: SmallVec<[(u64, u64, u64); 5]> = SmallVec::new();
+                    if self.get_store().applied_index_term() >= self.term() {
+                        let progress = self.raft_group.raft.prs();
+                        for (id, p) in progress.iter() {
+                            if !progress.conf().voters().contains(*id) {
+                                continue;
+                            }
+                            buffer.push((*id, p.commit_group_id, p.matched));
+                        }
+                    };
+                    info!(
+                        "still not reach integrity over label";
+                        "status" => ?res,
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.id,
+                        "progress" => ?buffer
+                    );
+                } else {
+                    self.replication_sync = true;
+                }
+                match res {
+                    Some(true) => RegionReplicationState::IntegrityOverLabel,
+                    Some(false) => RegionReplicationState::SimpleMajority,
+                    None => RegionReplicationState::Unknown,
+                }
+            } else {
+                RegionReplicationState::SimpleMajority
+            }
+        } else {
+            RegionReplicationState::IntegrityOverLabel
+        };
+        status.set_state(state);
+        Some(status)
+    }
+
+    pub fn is_region_size_or_keys_none(&self) -> bool {
+        fail_point!("region_size_or_keys_none", |_| true);
+        self.approximate_size.is_none() || self.approximate_keys.is_none()
+    }
+
+    pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
+        let task = PdTask::Heartbeat(HeartbeatTask {
+>>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
             term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -2828,16 +2901,62 @@ impl Peer {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
+<<<<<<< HEAD
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
+=======
+            approximate_size: self.approximate_size.unwrap_or_default(),
+            approximate_keys: self.approximate_keys.unwrap_or_default(),
+            replication_status: self.region_replication_status(),
+        });
+        if !self.is_region_size_or_keys_none() {
+            if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                error!(
+                    "failed to notify pd";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "err" => ?e,
+                );
+            }
+            return;
+        }
+
+        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
+            return;
+        }
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let scheduler = ctx.pd_scheduler.clone();
+        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
+            region: self.region().clone(),
+            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
+            cb: Box::new(move |size: u64, keys: u64| {
+                if let PdTask::Heartbeat(mut h) = task {
+                    h.approximate_size = size;
+                    h.approximate_keys = keys;
+                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
+                        error!(
+                            "failed to notify pd";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "err" => ?e,
+                        );
+                    }
+                }
+            }),
+>>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        self.pending_pd_heartbeat_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
             error!(
                 "failed to notify pd";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
+                "region_id" => region_id,
+                "peer_id" => peer_id,
                 "err" => ?e,
             );
+            self.pending_pd_heartbeat_tasks
+                .fetch_sub(1, Ordering::SeqCst);
         }
     }
 

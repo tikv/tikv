@@ -204,3 +204,33 @@ fn test_region_heartbeat_term() {
     }
     panic!("reported term should be updated");
 }
+
+#[test]
+fn test_region_heartbeat_when_size_or_keys_is_none() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.run();
+
+    fail::cfg("region_size_or_keys_none", "return").unwrap();
+    for i in 0..100 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+
+    let region_id = cluster.get_region_id(b"");
+    for _ in 0..10 {
+        sleep_ms(100);
+        let size = cluster
+            .pd_client
+            .get_region_approximate_size(region_id)
+            .unwrap_or_default();
+        let keys = cluster
+            .pd_client
+            .get_region_approximate_keys(region_id)
+            .unwrap_or_default();
+        if size > 0 || keys > 0 {
+            return;
+        }
+    }
+    panic!("reported region keys should be updated");
+}
