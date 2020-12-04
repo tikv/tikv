@@ -40,6 +40,7 @@ impl ClientReceiver {
     }
 }
 
+#[allow(unused_assignments)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
