@@ -68,7 +68,7 @@ fn open_cluster_and_tikv_import_client(
 
 pub fn new_cluster_and_tikv_import_client(
 ) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
-    return open_cluster_and_tikv_import_client(None);
+    open_cluster_and_tikv_import_client(None)
 }
 
 pub fn new_cluster_and_tikv_import_client_tde() -> (
@@ -84,7 +84,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     security.encryption = encryption_cfg;
 
     let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(security));
-    return (tmp_dir, cluster, ctx, tikv, import);
+    (tmp_dir, cluster, ctx, tikv, import)
 }
 
 pub fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {

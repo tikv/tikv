@@ -1671,6 +1671,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_truncate_real() {
         let test_cases = vec![
             (-1.23, 0, false, -1.0),
