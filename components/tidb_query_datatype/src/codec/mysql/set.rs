@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::sync::Arc;
+
 use tikv_util::buffer_vec::BufferVec;
 
 /// `Set` stores set.
@@ -41,22 +42,7 @@ impl Set {
 
 impl ToString for Set {
     fn to_string(&self) -> String {
-        let mut buf: Vec<u8> = Vec::new();
-        if self.value > 0 {
-            for idx in 0..self.data.len() {
-                if !self.as_ref().is_set(idx) {
-                    continue;
-                }
-
-                if !buf.is_empty() {
-                    buf.push(b',');
-                }
-                buf.extend_from_slice(&self.data[idx]);
-            }
-        }
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf.as_slice()).to_string()
+        self.as_ref().to_string()
     }
 }
 
@@ -112,6 +98,30 @@ impl<'a> SetRef<'a> {
     pub fn is_empty(&self) -> bool {
         self.value == 0
     }
+    pub fn value(&self) -> u64 {
+        self.value
+    }
+}
+
+impl<'a> ToString for SetRef<'a> {
+    fn to_string(&self) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        if self.value > 0 {
+            for idx in 0..self.data.len() {
+                if !self.is_set(idx) {
+                    continue;
+                }
+
+                if !buf.is_empty() {
+                    buf.push(b',');
+                }
+                buf.extend_from_slice(&self.data[idx]);
+            }
+        }
+
+        // TODO: Check the requirements and intentions of to_string usage.
+        String::from_utf8_lossy(buf.as_slice()).to_string()
+    }
 }
 
 impl<'a> Eq for SetRef<'a> {}
@@ -158,7 +168,7 @@ mod tests {
                 value,
             };
 
-            assert_eq!(s.to_string(), expect.to_string())
+            assert_eq!(s.as_ref().to_string(), expect.to_string())
         }
     }
 
