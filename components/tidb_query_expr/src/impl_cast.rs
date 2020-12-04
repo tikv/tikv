@@ -2168,6 +2168,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_cast_real_time() {
         let cases = vec![
             ("2019-09-16 10:11:12", 190916101112.111, 0),
@@ -3190,6 +3191,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_time_as_real() {
         let mut ctx = EvalContext::default();
         test_none_with_ctx(cast_any_as_any::<Time, Real>);
