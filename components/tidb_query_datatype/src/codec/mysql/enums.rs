@@ -110,7 +110,7 @@ impl<'a> Display for EnumRef<'a> {
         let buf = &self.data[self.value - 1];
 
         // TODO: Check the requirements and intentions of to_string usage.
-        writeln!(f, "{}", String::from_utf8_lossy(buf))
+        write!(f, "{}", String::from_utf8_lossy(buf))
     }
 }
 
