@@ -16,10 +16,7 @@ use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 
 enum ResolverStatus {
-    Pending {
-        id: ObserveID,
-        locks: Vec<(Key, Lock)>,
-    },
+    Pending(Vec<(Key, Lock)>),
     Ready,
 }
 
@@ -31,16 +28,44 @@ struct ObserveRegion {
     resolver_status: ResolverStatus,
 }
 
+impl ObserveRegion {
+    fn new(meta: Region) -> Self {
+        ObserveRegion {
+            resolver: Resolver::new(meta.id),
+            meta,
+            observe_id: ObserveID::new(),
+            lease: None,
+            resolver_status: ResolverStatus::Pending(vec![]),
+        }
+    }
+}
+
 pub struct Endpoint<T, E> {
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E> Endpoint<T, E> {
-    fn create_region() {}
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
+    fn create_region(&mut self, region: Region) {
+        if let Some(_) = self.regions.get(&region.id) {
+            return;
+        }
+        let observe_region = ObserveRegion::new(region.clone());
+        let scan_task = ScanTask {
+            id: observe_region.observe_id,
+            tag: String::new(),
+            mode: ScanMode::LockOnly,
+            region,
+            checkpoint_ts: TimeStamp::zero(),
+            cancelled: Box::new(|| true),
+            send_entries: Box::new(|_| {}),
+            before_start: None,
+        };
+        self.scanner_pool.spawn_task(scan_task);
+    }
 
-    fn destory_region() {}
+    fn destory_region(&mut self, region: Region) {}
 }
 
 #[derive(Debug)]
@@ -67,7 +92,7 @@ impl fmt::Display for Task {
     }
 }
 
-impl<T: 'static + Send + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {

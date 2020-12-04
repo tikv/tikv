@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_traits::KvEngine;
 use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, IsolationLevel};
-use kvproto::metapb::RegionEpoch;
+use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
@@ -18,6 +18,8 @@ use txn_types::{Key, Lock, TimeStamp};
 
 use crate::errors::{Error, Result};
 
+const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
+
 pub enum ScanMode {
     LockOnly,
     All,
@@ -25,15 +27,14 @@ pub enum ScanMode {
 }
 
 pub struct ScanTask {
-    id: ObserveID,
-    tag: String,
-    mode: ScanMode,
-    region_id: u64,
-    region_epoch: RegionEpoch,
-    checkpoint_ts: TimeStamp,
-    batch_size: usize,
-    cancelled: Box<dyn Fn() -> bool + Send>,
-    before_start: Option<Box<dyn Fn() + Send>>,
+    pub id: ObserveID,
+    pub tag: String,
+    pub mode: ScanMode,
+    pub region: Region,
+    pub checkpoint_ts: TimeStamp,
+    pub cancelled: Box<dyn Fn() -> bool + Send>,
+    pub send_entries: Box<dyn Fn(Vec<ScanEntry>) + Send>,
+    pub before_start: Option<Box<dyn Fn() + Send>>,
 }
 
 pub enum ScanEntry {
@@ -50,7 +51,7 @@ pub struct ScannerPool<T, E> {
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
-    fn spawn_task(&self, mut task: ScanTask) {
+    pub fn spawn_task(&self, mut task: ScanTask) {
         let raft_router = self.raft_router.clone();
         let fut = async move {
             let snap = match Self::get_snapshot(&mut task, raft_router).await {
@@ -74,14 +75,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                         .unwrap();
                     let mut done = false;
                     while !done && !(task.cancelled)() {
-                        let (es, has_remaining) =
-                            match Self::scan_delta(&mut scanner, task.batch_size) {
-                                Ok(rs) => rs,
-                                Err(e) => {
-                                    warn!("resolved_ts scan delta failed"; "err" => ?e);
-                                    return;
-                                }
-                            };
+                        let (es, has_remaining) = match Self::scan_delta(&mut scanner) {
+                            Ok(rs) => rs,
+                            Err(e) => {
+                                warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                return;
+                            }
+                        };
                         done = !has_remaining;
                         entries.push(ScanEntry::TxnEntry(es));
                     }
@@ -96,18 +96,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     let mut done = false;
                     let mut start = None;
                     while !done && !(task.cancelled)() {
-                        let (locks, has_remaining) = match Self::scan_locks(
-                            &mut reader,
-                            start.as_ref(),
-                            task.checkpoint_ts,
-                            task.batch_size,
-                        ) {
-                            Ok(rs) => rs,
-                            Err(e) => {
-                                warn!("resolved_ts scan delta failed"; "err" => ?e);
-                                return;
-                            }
-                        };
+                        let (locks, has_remaining) =
+                            match Self::scan_locks(&mut reader, start.as_ref(), task.checkpoint_ts)
+                            {
+                                Ok(rs) => rs,
+                                Err(e) => {
+                                    warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                    return;
+                                }
+                            };
                         done = !has_remaining;
                         if has_remaining {
                             start = Some(locks.last().unwrap().0.clone())
@@ -116,6 +113,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     }
                 }
             }
+            (task.send_entries)(entries);
         };
         self.workers.spawn(fut);
     }
@@ -127,17 +125,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
         let change_cmd = ChangeCmd {
-            region_id: task.region_id,
+            region_id: task.region.id,
             change_observe: ChangeObserve {
                 id: task.id,
                 range: ObserveRange::All,
             },
         };
         raft_router.significant_send(
-            task.region_id,
+            task.region.id,
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
-                region_epoch: task.region_epoch.clone(),
+                region_epoch: task.region.get_region_epoch().clone(),
                 callback: Callback::Read(Box::new(move |resp| {
                     if let Some(f) = before_start {
                         f();
@@ -157,18 +155,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         reader: &mut MvccReader<S>,
         start: Option<&Key>,
         checkpoint_ts: TimeStamp,
-        batch_size: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
         let (locks, has_remaining) =
-            reader.scan_locks(start, |l| l.ts <= checkpoint_ts, batch_size)?;
+            reader.scan_locks(start, |l| l.ts <= checkpoint_ts, DEFAULT_SCAN_BATCH_SIZE)?;
         Ok((locks, has_remaining))
     }
 
-    fn scan_delta<S: Snapshot>(
-        scanner: &mut DeltaScanner<S>,
-        batch_size: usize,
-    ) -> Result<(Vec<TxnEntry>, bool)> {
-        let mut entries = Vec::with_capacity(batch_size);
+    fn scan_delta<S: Snapshot>(scanner: &mut DeltaScanner<S>) -> Result<(Vec<TxnEntry>, bool)> {
+        let mut entries = Vec::with_capacity(DEFAULT_SCAN_BATCH_SIZE);
         let mut has_remaining = true;
         while entries.len() < entries.capacity() {
             match scanner.next_entry()? {
