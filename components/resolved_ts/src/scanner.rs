@@ -42,8 +42,9 @@ pub enum ScanEntry {
     None,
 }
 
+#[derive(Clone)]
 pub struct ScannerPool<T, E> {
-    workers: Runtime,
+    workers: Arc<Runtime>,
     raft_router: T,
     _phantom: PhantomData<E>,
 }

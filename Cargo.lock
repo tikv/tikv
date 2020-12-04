@@ -3409,6 +3409,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_traits",
  "fail",
  "hex 0.4.2",

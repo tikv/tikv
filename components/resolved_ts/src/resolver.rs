@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crossbeam::atomic::AtomicCell;
 use std::cmp;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use tikv_util::collections::HashSet;
 use txn_types::TimeStamp;
 
@@ -12,28 +14,27 @@ pub struct Resolver {
     // start_ts -> locked keys.
     locks: BTreeMap<TimeStamp, HashSet<Vec<u8>>>,
     // The timestamps that guarantees no more commit will happen before.
-    // None if the resolver is not initialized.
-    resolved_ts: Option<TimeStamp>,
+    resolved_ts: Arc<AtomicCell<TimeStamp>>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
-    pub fn new(region_id: u64) -> Resolver {
+    pub fn from_resolved_ts(region_id: u64, resolved_ts: Arc<AtomicCell<TimeStamp>>) -> Resolver {
         Resolver {
             region_id,
+            resolved_ts,
             locks: BTreeMap::new(),
-            resolved_ts: None,
             min_ts: TimeStamp::zero(),
         }
     }
 
-    pub fn init(&mut self) {
-        self.resolved_ts = Some(TimeStamp::zero());
+    pub fn new(region_id: u64) -> Resolver {
+        Self::from_resolved_ts(region_id, Arc::new(AtomicCell::new(TimeStamp::zero())))
     }
 
-    pub fn resolved_ts(&self) -> Option<TimeStamp> {
-        self.resolved_ts
+    pub fn resolved_ts(&self) -> Arc<AtomicCell<TimeStamp>> {
+        self.resolved_ts.clone()
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Vec<u8>>> {
@@ -65,7 +66,7 @@ impl Resolver {
         );
         if let Some(commit_ts) = commit_ts {
             assert!(
-                self.resolved_ts.map_or(true, |rts| commit_ts > rts),
+                commit_ts > self.resolved_ts.load(),
                 "{}@{}, commit@{} < {:?}, region {}",
                 hex::encode_upper(key),
                 start_ts,
@@ -113,10 +114,7 @@ impl Resolver {
     /// Try to advance resolved ts.
     ///
     /// `min_ts` advances the resolver even if there is no write.
-    /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
-        let old_resolved_ts = self.resolved_ts?;
-
+    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
         // Find the min start ts.
         let min_lock = self.locks.keys().next().cloned();
         let has_lock = min_lock.is_some();
@@ -125,7 +123,18 @@ impl Resolver {
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // Resolved ts never decrease.
-        self.resolved_ts = Some(cmp::max(old_resolved_ts, new_resolved_ts));
+        let mut resolved_ts;
+        loop {
+            let old_resolved_ts = self.resolved_ts.load();
+            resolved_ts = cmp::max(old_resolved_ts, new_resolved_ts);
+            if self
+                .resolved_ts
+                .compare_exchange(old_resolved_ts, resolved_ts)
+                .is_ok()
+            {
+                break;
+            }
+        }
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -138,7 +147,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        self.resolved_ts
+        resolved_ts
     }
 }
 
@@ -208,7 +217,6 @@ mod tests {
 
         for (i, case) in cases.into_iter().enumerate() {
             let mut resolver = Resolver::new(1);
-            resolver.init();
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
@@ -219,28 +227,8 @@ mod tests {
                         commit_ts.map(Into::into),
                         key.into_raw().unwrap(),
                     ),
-                    Event::Resolve(min_ts, expect) => assert_eq!(
-                        resolver.resolve(min_ts.into()).unwrap(),
-                        expect.into(),
-                        "case {}",
-                        i
-                    ),
-                }
-            }
-
-            let mut resolver = Resolver::new(1);
-            for e in case {
-                match e {
-                    Event::Lock(start_ts, key) => {
-                        resolver.track_lock(start_ts.into(), key.into_raw().unwrap())
-                    }
-                    Event::Unlock(start_ts, commit_ts, key) => resolver.untrack_lock(
-                        start_ts.into(),
-                        commit_ts.map(Into::into),
-                        key.into_raw().unwrap(),
-                    ),
-                    Event::Resolve(min_ts, _) => {
-                        assert_eq!(resolver.resolve(min_ts.into()), None, "case {}", i)
+                    Event::Resolve(min_ts, expect) => {
+                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
                 }
             }

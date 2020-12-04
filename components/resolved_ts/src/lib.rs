@@ -12,5 +12,6 @@ mod metrics;
 mod observer;
 mod resolver;
 mod scanner;
+mod util;
 
 pub use resolver::Resolver;

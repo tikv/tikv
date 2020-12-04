@@ -9,6 +9,7 @@ protobuf-codec = ["txn_types/protobuf-codec"]
 prost-codec = ["txn_types/prost-codec"]
 
 [dependencies]
+crossbeam = "0.7"
 engine_traits = { path = "../engine_traits" }
 fail = "0.4"
 hex = "0.4"
