@@ -5,7 +5,7 @@ use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
-use crate::encrypted_file::{Header, Version, TMP_FILE_SUFFIX};
+use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::Result;
 
@@ -20,14 +20,14 @@ enum LogRecord {
     REMOVE,
 }
 
-/// LogFile is used to store log style file dictionary.
+/// FileDictionaryFile is used to store log style file dictionary.
 ///
 /// Layout:
 /// ```text
 /// Encrypted File Header + FileDictionary Content | Record Header + Record Content | etc
 /// ```
 #[derive(Debug)]
-pub struct LogFile {
+pub struct FileDictionaryFile {
     base: PathBuf,
     name: String,
     // Avoid reopening the file every time when append.
@@ -35,13 +35,16 @@ pub struct LogFile {
     // Internal file dictionary to avoid recovery before rewrite and to check if compaction
     // is needed.
     file_dict: FileDictionary,
+    // Whether to enable v2 format to, upon update, append updates as logs, instead of rewrite the
+    // whole file.
+    enable_log: bool,
     // Determine whether compact the log.
     file_rewrite_threshold: u64,
     // Record the number of `REMOVE` to determine whether compact the log.
     removed: u64,
 }
 
-impl LogFile {
+impl FileDictionaryFile {
     /// Header of record.
     ///
     /// ```text
@@ -61,66 +64,75 @@ impl LogFile {
     pub fn new<P: AsRef<Path>>(
         base: P,
         name: &str,
+        enable_log: bool,
         file_rewrite_threshold: u64,
-    ) -> Result<LogFile> {
-        let mut log_file = LogFile {
+    ) -> Result<FileDictionaryFile> {
+        let mut file_dict_file = FileDictionaryFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
             file_dict: FileDictionary::default(),
+            enable_log,
             file_rewrite_threshold,
             removed: 0,
         };
-        log_file.rewrite()?;
-        Ok(log_file)
+        file_dict_file.rewrite()?;
+        Ok(file_dict_file)
     }
 
     pub fn open<P: AsRef<Path>>(
         base: P,
         name: &str,
+        enable_log: bool,
         file_rewrite_threshold: u64,
         skip_rewrite: bool,
-    ) -> Result<(LogFile, FileDictionary)> {
-        let mut log_file = LogFile {
+    ) -> Result<(FileDictionaryFile, FileDictionary)> {
+        let mut file_dict_file = FileDictionaryFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
             append_file: None,
             file_dict: FileDictionary::default(),
+            enable_log,
             file_rewrite_threshold,
             removed: 0,
         };
 
-        let file_dict = log_file.recovery()?;
+        let file_dict = file_dict_file.recovery()?;
         if !skip_rewrite {
-            log_file.rewrite()?;
+            file_dict_file.rewrite()?;
         }
-        Ok((log_file, file_dict))
+        Ok((file_dict_file, file_dict))
     }
 
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
     pub fn rewrite(&mut self) -> Result<()> {
-        let origin_path = self.base.join(&self.name);
-        let mut tmp_path = origin_path.clone();
-        tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
-        let mut tmp_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(&tmp_path)
-            .unwrap();
-
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
-        let header = Header::new(&file_dict_bytes, Version::V2);
-        tmp_file.write_all(&header.to_bytes())?;
-        tmp_file.write_all(&file_dict_bytes)?;
-        tmp_file.sync_all()?;
+        if self.enable_log {
+            let origin_path = self.base.join(&self.name);
+            let mut tmp_path = origin_path.clone();
+            tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
+            let mut tmp_file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&tmp_path)
+                .unwrap();
 
-        // Replace old file with the tmp file aomticlly.
-        rename(&tmp_path, &origin_path)?;
-        let base_dir = File::open(&self.base)?;
-        base_dir.sync_all()?;
-        let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
-        self.append_file.replace(file);
+            let header = Header::new(&file_dict_bytes, Version::V2);
+            tmp_file.write_all(&header.to_bytes())?;
+            tmp_file.write_all(&file_dict_bytes)?;
+            tmp_file.sync_all()?;
 
+            // Replace old file with the tmp file aomticlly.
+            rename(&tmp_path, &origin_path)?;
+            let base_dir = File::open(&self.base)?;
+            base_dir.sync_all()?;
+            let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
+            self.append_file.replace(file);
+        } else {
+            let file = EncryptedFile::new(&self.base, &self.name);
+            file.write(&file_dict_bytes, &PlaintextBackend::default())?;
+        }
+        info!("encryption: rewritten file dictionary.");
         Ok(())
     }
 
@@ -175,14 +187,17 @@ impl LogFile {
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn insert(&mut self, name: &str, info: &FileInfo) -> Result<()> {
-        let file = self.append_file.as_mut().unwrap();
-        let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-
         self.file_dict.files.insert(name.to_owned(), info.clone());
-        self.check_compact()?;
+        if self.enable_log {
+            let file = self.append_file.as_mut().unwrap();
+            let bytes = Self::convert_record_to_bytes(name, LogRecord::INSERT(info.clone()))?;
+            file.write_all(&bytes)?;
 
+            file.sync_all()?;
+            self.check_compact()?;
+        } else {
+            self.rewrite()?;
+        }
         Ok(())
     }
 
@@ -190,15 +205,18 @@ impl LogFile {
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn remove(&mut self, name: &str) -> Result<()> {
-        let file = self.append_file.as_mut().unwrap();
-        let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-
         self.file_dict.files.remove(name);
-        self.removed += 1;
-        self.check_compact()?;
+        if self.enable_log {
+            let file = self.append_file.as_mut().unwrap();
+            let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
 
+            self.removed += 1;
+            self.check_compact()?;
+        } else {
+            self.rewrite()?;
+        }
         Ok(())
     }
 
@@ -207,18 +225,22 @@ impl LogFile {
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn replace(&mut self, src_name: &str, dst_name: &str, info: FileInfo) -> Result<()> {
         assert_ne!(src_name, dst_name);
-        let file = self.append_file.as_mut().unwrap();
-        let mut bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info.clone()))?;
-        let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
-        bytes1.extend_from_slice(&bytes2);
-        file.write_all(&bytes1)?;
-        file.sync_all()?;
-
         self.file_dict.files.remove(src_name);
-        self.file_dict.files.insert(dst_name.to_owned(), info);
-        self.removed += 1;
-        self.check_compact()?;
+        self.file_dict.files.insert(dst_name.to_owned(), info.clone());
+        if self.enable_log {
+            let file = self.append_file.as_mut().unwrap();
+            let mut bytes1 =
+                Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info))?;
+            let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
+            bytes1.extend_from_slice(&bytes2);
+            file.write_all(&bytes1)?;
+            file.sync_all()?;
 
+            self.removed += 1;
+            self.check_compact()?;
+        } else {
+            self.rewrite()?;
+        }
         Ok(())
     }
 
@@ -327,30 +349,31 @@ mod tests {
     use kvproto::encryptionpb::EncryptionMethod;
 
     #[test]
-    fn test_log_file_normal() {
+    fn test_file_dict_file_normal() {
         let tempdir = tempfile::tempdir().unwrap();
-        let mut log_file = LogFile::new(tempdir.path(), "test_log_file", 2).unwrap();
+        let mut file_dict_file =
+            FileDictionaryFile::new(tempdir.path(), "test_file_dict_file", 2).unwrap();
         let info1 = create_file_info(1, EncryptionMethod::Aes256Ctr);
         let info2 = create_file_info(2, EncryptionMethod::Unknown);
         let info3 = create_file_info(3, EncryptionMethod::Aes128Ctr);
         let info4 = create_file_info(4, EncryptionMethod::Aes128Ctr);
 
-        log_file.insert("info1", &info1).unwrap();
-        log_file.insert("info2", &info2).unwrap();
-        log_file.insert("info3", &info3).unwrap();
+        file_dict_file.insert("info1", &info1).unwrap();
+        file_dict_file.insert("info2", &info2).unwrap();
+        file_dict_file.insert("info3", &info3).unwrap();
 
-        let file_dict = log_file.recovery().unwrap();
+        let file_dict = file_dict_file.recovery().unwrap();
 
         assert_eq!(*file_dict.files.get("info1").unwrap(), info1);
         assert_eq!(*file_dict.files.get("info2").unwrap(), info2);
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
         assert_eq!(file_dict.files.len(), 3);
 
-        log_file.remove("info2").unwrap();
-        log_file.remove("info1").unwrap();
-        log_file.insert("info2", &info4).unwrap();
+        file_dict_file.remove("info2").unwrap();
+        file_dict_file.remove("info1").unwrap();
+        file_dict_file.insert("info2", &info4).unwrap();
 
-        let file_dict = log_file.recovery().unwrap();
+        let file_dict = file_dict_file.recovery().unwrap();
         assert_eq!(file_dict.files.get("info1"), None);
         assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
@@ -358,26 +381,28 @@ mod tests {
     }
 
     #[test]
-    fn test_log_file_existed() {
+    fn test_file_dict_file_existed() {
         let tempdir = tempfile::tempdir().unwrap();
-        let mut log_file = LogFile::new(tempdir.path(), "test_log_file", 2).unwrap();
+        let mut file_dict_file =
+            FileDictionaryFile::new(tempdir.path(), "test_file_dict_file", 2).unwrap();
 
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
-        log_file.insert("info", &info).unwrap();
+        file_dict_file.insert("info", &info).unwrap();
 
-        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
+        let (_, file_dict) =
+            FileDictionaryFile::open(tempdir.path(), "test_file_dict_file", 2, false).unwrap();
         assert_eq!(*file_dict.files.get("info").unwrap(), info);
     }
 
     #[test]
-    fn test_log_file_not_existed() {
+    fn test_file_dict_file_not_existed() {
         let tempdir = tempfile::tempdir().unwrap();
-        let ret = LogFile::open(tempdir.path(), "test_log_file", 2, false);
+        let ret = FileDictionaryFile::open(tempdir.path(), "test_file_dict_file", 2, false);
         assert!(matches!(ret, Err(Error::Io(_))));
     }
 
     #[test]
-    fn test_log_file_update_from_v1() {
+    fn test_file_dict_file_update_from_v1() {
         let tempdir = tempfile::tempdir().unwrap();
         let mut file_dict = FileDictionary::default();
 
@@ -386,14 +411,15 @@ mod tests {
         file_dict.files.insert("f1".to_owned(), info1);
         file_dict.files.insert("f2".to_owned(), info2);
 
-        let file = EncryptedFile::new(tempdir.path(), "test_log_file");
+        let file = EncryptedFile::new(tempdir.path(), "test_file_dict_file");
         file.write(
             &file_dict.write_to_bytes().unwrap(),
             &PlaintextBackend::default(),
         )
         .unwrap();
 
-        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
+        let (_, file_dict_read) =
+            FileDictionaryFile::open(tempdir.path(), "test_file_dict_file", 2, false).unwrap();
         assert_eq!(file_dict, file_dict_read);
     }
 
