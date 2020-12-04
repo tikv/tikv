@@ -43,15 +43,18 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
     struct info_t info;
     int err = bpf_probe_read(&info.type, sizeof(io_type), (void*)*type_ptr);
     if (err != 0) {
-        bpf_trace_printk("error %d here\n", err);
-        return 0;
+        info.type = io_type::Other;
+        bpf_trace_printk("pid %d error %d here\n", pid, err);
     }
 
     infobyreq.update(&req, &info);
     return 0;
 }
 
-// output
+// trace_req_completion may be called in interrput context. In that case, 
+// `bpf_get_current_pid_tgid` and `bpf_probe_read` can not work as expected.
+// So caching type in `trace_pid_start` which wouldn't be called in interrupt
+// context and query the type by req in `infobyreq`.
 int trace_req_completion(struct pt_regs *ctx, struct request *req)
 {
     struct info_t* info = infobyreq.lookup(&req);

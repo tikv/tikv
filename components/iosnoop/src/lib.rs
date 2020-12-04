@@ -4,6 +4,9 @@
 // #[macro_use]
 // extern crate tikv_util;
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 #[cfg(all(feature = "bcc", target_os = "linux"))]
 #[path = "biosnoop.rs"]
 mod imp;

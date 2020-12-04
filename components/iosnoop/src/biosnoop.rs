@@ -1,16 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::{IOStats, IOType};
-use bcc::{table::Table, Kprobe, BPF};
+
 use std::collections::HashMap;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use bcc::{table::Table, Kprobe, BPF};
+use crossbeam_utils::CachePadded;
 
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
-
-use crossbeam_utils::CachePadded;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-
 static IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 // For simplicity, just open large enough array. TODO: make it to be Vec
 static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Compaction); 100];
@@ -24,9 +23,7 @@ thread_local! {
         if let Some((_, _, t)) = BPF_TABLE.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx);
-            let io_type_ptr =
-                std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<*const IOType>());
-            t.set(&mut tid.to_ne_bytes(), io_type_ptr).unwrap();
+            t.set(&mut tid.to_ne_bytes(), std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<*const IOType>())).unwrap();
         }
         idx
     }
@@ -167,16 +164,24 @@ mod tests {
         assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
         drop(f);
 
-        let mut f = OpenOptions::new()
-            .read(true)
-            .custom_flags(O_DIRECT)
-            .open(&file_path)
-            .unwrap();
-        let mut r = vec![A512::default(); 2];
-        f.read(&mut r.as_bytes_mut()).unwrap();
+        std::thread::spawn(move || {
+            set_io_type(IOType::Other);
+            let mut f = OpenOptions::new()
+                .read(true)
+                .custom_flags(O_DIRECT)
+                .open(&file_path)
+                .unwrap();
+            let mut r = vec![A512::default(); 2];
+            f.read(&mut r.as_bytes_mut()).unwrap();
+            drop(f);
+        })
+        .join()
+        .unwrap();
+
         let delta = ctx.delta();
         assert_eq!(delta.get(&IOType::Compaction).unwrap().write, 0);
-        assert_ne!(delta.get(&IOType::Compaction).unwrap().read, 0);
-        drop(f);
+        assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
+        assert_eq!(delta.get(&IOType::Other).unwrap().write, 0);
+        assert_ne!(delta.get(&IOType::Other).unwrap().read, 0);
     }
 }
