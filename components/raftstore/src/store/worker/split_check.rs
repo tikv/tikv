@@ -4,10 +4,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-<<<<<<< HEAD
-=======
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
 use std::sync::Arc;
 
 use engine::DB;

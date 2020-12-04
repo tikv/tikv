@@ -10,9 +10,8 @@ use std::time::Duration;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine::rocks::DB;
 use engine_rocks::util::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -77,7 +76,6 @@ pub struct HeartbeatTask {
     pub written_keys: u64,
     pub approximate_size: u64,
     pub approximate_keys: u64,
-    pub replication_status: Option<RegionReplicationStatus>,
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -101,21 +99,7 @@ pub enum Task {
     AutoSplit {
         split_infos: Vec<SplitInfo>,
     },
-<<<<<<< HEAD
-    Heartbeat {
-        term: u64,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        down_peers: Vec<pdpb::PeerStats>,
-        pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
-        approximate_size: Option<u64>,
-        approximate_keys: Option<u64>,
-    },
-=======
     Heartbeat(HeartbeatTask),
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo,
@@ -222,24 +206,11 @@ impl Display for Task {
                 region.get_id(),
                 KeysInfoFormatter(split_keys.iter())
             ),
-<<<<<<< HEAD
-            Task::Heartbeat {
-                ref region,
-                ref peer,
-                ..
-            } => write!(
-                f,
-                "heartbeat for region {:?}, leader {}",
-                region,
-                peer.get_id()
-=======
             Task::Heartbeat(ref hb_task)  => write!(
                 f,
-                "heartbeat for region {:?}, leader {}, replication status {:?}",
+                "heartbeat for region {:?}, leader {}",
                 hb_task.region,
                 hb_task.peer.get_id(),
-                hb_task.replication_status
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -414,12 +385,7 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-<<<<<<< HEAD
     router: RaftRouter<RocksEngine>,
-    db: Arc<DB>,
-=======
-    router: RaftRouter<EK, ER>,
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -439,16 +405,9 @@ impl<T: PdClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-<<<<<<< HEAD
         router: RaftRouter<RocksEngine>,
-        db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
-=======
-        router: RaftRouter<EK, ER>,
-        scheduler: Scheduler<Task<EK>>,
-        store_heartbeat_interval: Duration,
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
         auto_split_controller: AutoSplitController,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
@@ -1005,27 +964,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 }
             }
 
-<<<<<<< HEAD
-            Task::Heartbeat {
-                term,
-                region,
-                peer,
-                down_peers,
-                pending_peers,
-                written_bytes,
-                written_keys,
-                approximate_size,
-                approximate_keys,
-            } => {
-                let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(self.db.c(), &region, 0).unwrap_or_default()
-                });
-                let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(self.db.c(), &region, 0).unwrap_or_default()
-                });
-=======
             Task::Heartbeat(hb_task) => {
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -1059,16 +998,10 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     )
                 };
                 self.handle_heartbeat(
-<<<<<<< HEAD
                     handle,
-                    term,
-                    region,
-                    peer,
-=======
                     hb_task.term,
                     hb_task.region,
                     hb_task.peer,
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
                     RegionStat {
                         down_peers: hb_task.down_peers,
                         pending_peers: hb_task.pending_peers,
@@ -1080,10 +1013,6 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
                     },
-<<<<<<< HEAD
-=======
-                    hb_task.replication_status,
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
                 )
             }
             Task::StoreHeartbeat { stats, store_info } => {

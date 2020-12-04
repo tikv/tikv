@@ -1176,13 +1176,10 @@ impl RaftBatchSystem {
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
     ) -> Result<()> {
-<<<<<<< HEAD
         builder.snap_mgr.init()?;
 
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();
-=======
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
@@ -1264,10 +1261,6 @@ impl RaftBatchSystem {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-<<<<<<< HEAD
-            Arc::clone(&engines.kv),
-=======
->>>>>>> e8e008dd5... raftstore: move get_region_approximate_size to split check worker (#9081)
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
             auto_split_controller,
