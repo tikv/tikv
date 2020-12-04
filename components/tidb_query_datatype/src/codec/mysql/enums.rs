@@ -1,6 +1,10 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 use tikv_util::buffer_vec::BufferVec;
+
+use crate::codec::Result;
 
 #[derive(Clone, Debug)]
 pub struct Enum {
@@ -17,18 +21,17 @@ impl Enum {
     pub fn value(&self) -> usize {
         self.value
     }
+    pub fn as_ref(&self) -> EnumRef<'_> {
+        EnumRef {
+            data: &self.data,
+            value: self.value,
+        }
+    }
 }
 
 impl ToString for Enum {
     fn to_string(&self) -> String {
-        if self.value == 0 {
-            return String::new();
-        }
-
-        let buf = &self.data[self.value - 1];
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf).to_string()
+        self.as_ref().to_string()
     }
 }
 
@@ -71,6 +74,41 @@ pub struct EnumRef<'a> {
 impl<'a> EnumRef<'a> {
     pub fn new(data: &'a BufferVec, value: usize) -> Self {
         Self { data, value }
+    }
+    pub fn to_owned(self) -> Enum {
+        Enum {
+            data: Arc::new(self.data.clone()),
+            value: self.value,
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.value == 0
+    }
+    pub fn value(&self) -> usize {
+        self.value
+    }
+    pub fn as_str(&self) -> Result<&str> {
+        if self.value == 0 {
+            return Ok("");
+        }
+
+        let buf = &self.data[self.value - 1];
+
+        // TODO: take string collation into consideration here.
+        Ok(std::str::from_utf8(buf)?)
+    }
+}
+
+impl<'a> ToString for EnumRef<'a> {
+    fn to_string(&self) -> String {
+        if self.value == 0 {
+            return String::new();
+        }
+
+        let buf = &self.data[self.value - 1];
+
+        // TODO: Check the requirements and intentions of to_string usage.
+        String::from_utf8_lossy(buf).to_string()
     }
 }
 
@@ -115,5 +153,43 @@ mod tests {
 
             assert_eq!(e.to_string(), expect.to_string())
         }
+    }
+
+    #[test]
+    fn test_as_str() {
+        let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
+
+        for (data, value, expect) in cases {
+            let mut buf = BufferVec::new();
+            for v in data {
+                buf.push(v)
+            }
+
+            let e = EnumRef { data: &buf, value };
+
+            assert_eq!(e.as_str().expect("get str correctly"), expect)
+        }
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let mut buf = BufferVec::new();
+        for v in vec!["a", "b", "c"] {
+            buf.push(v)
+        }
+
+        let s = Enum {
+            data: Arc::new(buf),
+            value: 1,
+        };
+
+        assert!(!s.as_ref().is_empty());
+
+        let s = Enum {
+            data: s.data.clone(),
+            value: 0,
+        };
+
+        assert!(s.as_ref().is_empty());
     }
 }
