@@ -28,12 +28,25 @@ const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 const DEFAULT_FILES_CACHE_CAPACITY: usize = 1024 * 128;
 
+struct Writer {
+    id: ThreadId,
+    finished: Arc<AtomicBool>,
+    err: Arc<AtomicBool>,
+}
+
+impl Writer {
+    pub fn new(id: ThreadId, finished: Arc<AtomicBool>, err: Arc<AtomicBool>) -> Self {
+        Self { id, finished, err }
+    }
+}
+
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
+    // Maps data file paths to key id and metadata. But it can be changed concurrently.
     files_cache: DashMap<String, FileInfo>,
     // Lock to make sure there's no concurrent update operations to file dictionary.
-    write_queue: Mutex<VecDeque<(ThreadId, Arc<AtomicBool>, Arc<AtomicBool>)>>,
+    write_queue: Mutex<VecDeque<Writer>>,
     log_cond: Condvar,
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
@@ -206,7 +219,7 @@ impl Dicts {
         if has_error {
             return Err(Error::Io(IoError::new(
                 ErrorKind::Other,
-                format!("IoError occurs when save file dict"),
+                "IoError occurs when save file dict",
             )));
         }
         Ok(())
@@ -217,14 +230,20 @@ impl Dicts {
         let finished = Arc::new(AtomicBool::new(false));
         let has_err = Arc::new(AtomicBool::new(false));
         let writers_len = {
+            // If there is more than 2 threads want to save the `file_dict` on disk, every of them
+            // must wait a long time for other finished. So we only allow the first thread who enter
+            // write_queue persisting 'file_dict' and other thread will wait to be notify.
             let mut write_queue = self.write_queue.lock().unwrap();
-            write_queue.push_back((currenct_id, finished.clone(), has_err.clone()));
+            write_queue.push_back(Writer::new(currenct_id, finished.clone(), has_err.clone()));
             while !write_queue.is_empty() {
                 let leader = write_queue.front().unwrap();
-                if leader.0 == currenct_id {
+                // Current thread will be leader thread and flush 'file_dict' to disk.
+                if leader.id == currenct_id {
                     break;
                 }
+                // Wait to be leader thread or flush by other thread.
                 write_queue = self.log_cond.wait(write_queue).unwrap();
+                // The changes of current thread has been persisted by other thread.
                 if finished.load(Ordering::Acquire) {
                     return Self::check_write_error(has_err.load(Ordering::Acquire));
                 }
@@ -233,6 +252,8 @@ impl Dicts {
                 return Self::check_write_error(has_err.load(Ordering::Acquire));
             }
             assert!(write_queue.len() > 0);
+            // Once one writer enter the `write_thread`, all of its change has been written to
+            // `file_dict`. So their jobs could be finished by current thread.
             write_queue.len()
         };
         let ret = self.save_file_dict();
@@ -243,11 +264,14 @@ impl Dicts {
         let mut write_queue = self.write_queue.lock().unwrap();
         for _ in 0..writers_len {
             let w = write_queue.pop_front().unwrap();
-            w.1.store(true, Ordering::Release);
+            w.finished.store(true, Ordering::Release);
             if save_err {
-                w.2.store(true, Ordering::Release);
+                w.err.store(true, Ordering::Release);
             }
         }
+        // Notify all threads. Some of them will exit directly because their changes have been
+        // persisted by current thread, while the first one of threads which still stay
+        // in write_queue will be the new leader thread.
         self.log_cond.notify_all();
         Self::check_write_error(save_err)
     }
