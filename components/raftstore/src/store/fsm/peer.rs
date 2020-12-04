@@ -2098,13 +2098,14 @@ where
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
-        // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
         let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
         let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
+        // It's not correct anymore, so set it to None to let split checker update it.
+        self.fsm.peer.approximate_size = None;
+        self.fsm.peer.approximate_keys = None;
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
