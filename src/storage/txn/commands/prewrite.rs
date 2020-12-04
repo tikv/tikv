@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This document contains functionality for handling optimistic and pessimistic prewrites. These
-//! are separate commands (although maybe they shouldn't be since there is only one protobuf), but
+//! Functionality for handling optimistic and pessimistic prewrites. These are separate commands
+//! (although maybe they shouldn't be since there is only one protobuf), but
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
@@ -532,6 +532,8 @@ impl<K: PrewriteKind> Prewriter<K> {
 
 /// Encapsulates things which must be done differently for optimistic or pessimistic transactions.
 trait PrewriteKind {
+    /// A placeholder type to indicate whether the prewrite is part of an optimistic
+    /// or a pessimistic transaction.
     type Mutation: MutationLock;
 
     fn txn_kind(&self) -> TransactionKind;
@@ -546,11 +548,14 @@ trait PrewriteKind {
     }
 }
 
+/// Information needed for the optimistic variant of `PreWriteKind`.
 struct Optimistic {
     skip_constraint_check: bool,
 }
 
+/// The optimistic variant of `PreWriteKind`.
 impl PrewriteKind for Optimistic {
+    // see the `MutationLock` trait implementation for `Mutation`
     type Mutation = Mutation;
 
     fn txn_kind(&self) -> TransactionKind {
@@ -587,11 +592,14 @@ impl PrewriteKind for Optimistic {
     }
 }
 
+/// Information needed for the pessimistic variant of `PreWriteKind`.
 struct Pessimistic {
     for_update_ts: TimeStamp,
 }
 
+/// The pessimistic variant of `PreWriteKind`.
 impl PrewriteKind for Pessimistic {
+    // see the `MutationLock` trait implementation for `(Mutation, bool)`
     type Mutation = (Mutation, bool);
 
     fn txn_kind(&self) -> TransactionKind {
@@ -599,15 +607,17 @@ impl PrewriteKind for Pessimistic {
     }
 }
 
-/// See PrewriteKind::Mutation. This is either just a mutation (for optimistic
-/// transactions, since they never include locks) or a mutation and a bool (for
-/// pessimistic transactions, where the bool indicates if the mutation is taking
-/// a pessimistic lock).
+/// Used as an associated type within `PrewriteKind::Mutation` to infer the kind of
+/// prewrite (optimistic/pessimistic).
+/// For optimistic txns, this is implemented on a plain `Mutation` type.
+/// For pessimistic txns, this is implemented on the pair `(Mutation, bool)`, where
+/// the bool indicates whether the mutation takes a pessimistic lock or not.
 trait MutationLock {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
 }
 
+/// The `MutationLock` variant for optimistic transactions.
 impl MutationLock for Mutation {
     fn is_pessimistic_lock(&self) -> bool {
         false
@@ -618,6 +628,8 @@ impl MutationLock for Mutation {
     }
 }
 
+/// The `MutationLock` variant for pessimistic transactions. The `bool` indicates the
+/// presence of a pessimistic lock.
 impl MutationLock for (Mutation, bool) {
     fn is_pessimistic_lock(&self) -> bool {
         self.1
