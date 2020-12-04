@@ -1222,7 +1222,19 @@ fn future_scan<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            match v {
+                Ok(kv_res) => {
+                    resp.set_pairs(map_kv_pairs(kv_res).into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }

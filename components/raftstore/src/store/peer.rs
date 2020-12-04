@@ -429,9 +429,9 @@ where
     /// of peers is greater than the majority of all peers.
     /// There are more details in the annotation above
     /// `test_node_merge_write_data_to_source_region_after_merging`
-    /// The peers who want to rollback merge
+    /// The peers who want to rollback merge.
     pub want_rollback_merge_peers: HashSet<u64>,
-    /// source region is catching up logs for merge
+    /// Source region is catching up logs for merge.
     pub catch_up_logs: Option<CatchUpLogs>,
 
     /// Write Statistics for PD to schedule hot spot.
@@ -1392,8 +1392,9 @@ where
         // could get a newer value, and after that, the leader may read a stale value,
         // which violates linearizability.
         self.get_store().applied_index() >= read_index
-            && !self.is_splitting()
-            && !self.is_merging()
+            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
+            // TODO: Add a test to cover this case
+            && self.pending_merge_state.is_none()
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
             && !self.is_applying_snapshot()
@@ -2423,10 +2424,16 @@ where
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("{} can not read index due to split", self.tag));
+            return Err(Error::ReadIndexNotReady(
+                "can not read index due to split",
+                self.region_id,
+            ));
         }
         if self.is_merging() {
-            return Err(box_err!("{} can not read index due to merge", self.tag));
+            return Err(Error::ReadIndexNotReady(
+                "can not read index due to merge",
+                self.region_id,
+            ));
         }
         Ok(())
     }
@@ -2755,10 +2762,7 @@ where
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!(
-                "{} peer in merging mode, can't do proposal.",
-                self.tag
-            ));
+            return Err(Error::ProposalInMergingMode(self.region_id));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2936,10 +2940,7 @@ where
         req: &RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!(
-                "{} peer in merging mode, can't do proposal.",
-                self.tag
-            ));
+            return Err(Error::ProposalInMergingMode(self.region_id));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
