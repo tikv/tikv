@@ -2832,9 +2832,9 @@ impl ObserveID {
     }
 }
 
-struct ChangeObserve {
-    id: ObserveID,
-    range: ObserveRange,
+pub struct ChangeObserve {
+    pub id: ObserveID,
+    pub range: ObserveRange,
 }
 
 impl Default for ChangeObserve {
@@ -2863,8 +2863,8 @@ pub enum ObserveRange {
 
 #[derive(Debug)]
 pub struct ChangeCmd {
-    region_id: u64,
-    change_observe: ChangeObserve,
+    pub region_id: u64,
+    pub change_observe: ChangeObserve,
 }
 
 pub enum Msg<EK>

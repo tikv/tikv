@@ -3394,13 +3394,17 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
+ "fail",
  "hex 0.4.2",
  "kvproto",
  "raft",
  "raftstore",
  "slog",
  "slog-global",
+ "thiserror",
+ "tikv",
  "tikv_util",
+ "tokio",
  "txn_types",
 ]
 
