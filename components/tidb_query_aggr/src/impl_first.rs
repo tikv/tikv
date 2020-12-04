@@ -55,13 +55,19 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_exp.push(exp);
 
         match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
+            TT = [
+                Int => &'static Int,
+                Real => &'static Real,
+                Duration => &'static Duration,
+                Decimal => &'static Decimal,
+                DateTime => &'static DateTime,
+                Json => JsonRef<'static>,
+                Bytes => BytesRef<'static>,
+                Enum => EnumRef<'static>,
+                Set => SetRef<'static>,
+            ],
             match eval_type {
-                EvalType::TT => Ok(Box::new(AggrFnFirst::<&'static TT>::new())),
-                EvalType::Json => Ok(Box::new(AggrFnFirst::<JsonRef<'static>>::new())),
-                EvalType::Bytes => Ok(Box::new(AggrFnFirst::<BytesRef<'static>>::new())),
-                EvalType::Enum => Ok(Box::new(AggrFnFirst::<EnumRef<'static>>::new())),
-                EvalType::Set => Ok(Box::new(AggrFnFirst::<SetRef<'static>>::new())),
+                EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new())),
             }
         }
     }
@@ -238,10 +244,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
             result[0].to_enum_vec(),
-            vec![
-                Some(Enum::new(buf.clone(), 1)),
-                Some(Enum::new(buf.clone(), 1))
-            ]
+            vec![Some(Enum::new(buf.clone(), 1)), Some(Enum::new(buf, 1))]
         );
     }
 
@@ -269,10 +272,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(
             result[0].to_set_vec(),
-            vec![
-                Some(Set::new(buf.clone(), 0b11)),
-                Some(Set::new(buf.clone(), 0b11))
-            ]
+            vec![Some(Set::new(buf.clone(), 0b11)), Some(Set::new(buf, 0b11))]
         );
     }
 

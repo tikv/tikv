@@ -3,77 +3,120 @@ use crate::storage::mvcc::{
     MVCC_VERSIONS_HISTOGRAM,
 };
 use crate::storage::Snapshot;
-use txn_types::{Key, TimeStamp, WriteType};
+use txn_types::{Key, TimeStamp, Write, WriteType};
 
-pub fn gc<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+pub fn gc(txn: &mut MvccTxn<impl Snapshot>, key: Key, safe_point: TimeStamp) -> MvccResult<GcInfo> {
+    let gc = Gc::new(txn, key);
+    let info = gc.run(safe_point)?;
+    info.report_metrics();
+
+    Ok(info)
+}
+
+/// Iterates over the versions of `key`, see the `run` method.
+struct Gc<'a, S: Snapshot> {
     key: Key,
-    safe_point: TimeStamp,
-) -> MvccResult<GcInfo> {
-    let mut remove_older = false;
-    let mut ts = TimeStamp::max();
-    let mut found_versions = 0;
-    let mut deleted_versions = 0;
-    let mut latest_delete = None;
-    let mut is_completed = true;
-    while let Some((commit, write)) = txn.reader.seek_write(&key, ts)? {
-        ts = commit.prev();
-        found_versions += 1;
+    cur_ts: TimeStamp,
+    info: GcInfo,
+    txn: &'a mut MvccTxn<S>,
+}
 
-        if txn.write_size >= MAX_TXN_WRITE_SIZE {
-            // Cannot remove latest delete when we haven't iterate all versions.
-            latest_delete = None;
-            is_completed = false;
-            break;
-        }
-
-        if remove_older {
-            txn.delete_write(key.clone(), commit);
-            if write.write_type == WriteType::Put && write.short_value.is_none() {
-                txn.delete_value(key.clone(), write.start_ts);
-            }
-            deleted_versions += 1;
-            continue;
-        }
-
-        if commit > safe_point {
-            continue;
-        }
-
-        // Set `remove_older` after we find the latest value.
-        match write.write_type {
-            WriteType::Put | WriteType::Delete => {
-                remove_older = true;
-            }
-            WriteType::Rollback | WriteType::Lock => {}
-        }
-
-        // Latest write before `safe_point` can be deleted if its type is Delete,
-        // Rollback or Lock.
-        match write.write_type {
-            WriteType::Delete => {
-                latest_delete = Some(commit);
-            }
-            WriteType::Rollback | WriteType::Lock => {
-                txn.delete_write(key.clone(), commit);
-                deleted_versions += 1;
-            }
-            WriteType::Put => {}
+impl<'a, S: Snapshot> Gc<'a, S> {
+    fn new(txn: &'a mut MvccTxn<S>, key: Key) -> Gc<'a, S> {
+        Gc {
+            key,
+            cur_ts: TimeStamp::max(),
+            info: GcInfo {
+                found_versions: 0,
+                deleted_versions: 0,
+                is_completed: false,
+            },
+            txn,
         }
     }
-    if let Some(commit) = latest_delete {
-        txn.delete_write(key, commit);
-        deleted_versions += 1;
+
+    fn delete_write(&mut self, write: Write, ts: TimeStamp) {
+        self.txn.delete_write(self.key.clone(), ts);
+        if write.write_type == WriteType::Put && write.short_value.is_none() {
+            self.txn.delete_value(self.key.clone(), write.start_ts);
+        }
+        self.info.deleted_versions += 1;
     }
-    MVCC_VERSIONS_HISTOGRAM.observe(found_versions as f64);
-    if deleted_versions > 0 {
-        GC_DELETE_VERSIONS_HISTOGRAM.observe(deleted_versions as f64);
+
+    fn next_write(&mut self) -> MvccResult<Option<(TimeStamp, Write)>> {
+        let result = self.txn.reader.seek_write(&self.key, self.cur_ts)?;
+        if let Some((commit, _)) = result {
+            self.cur_ts = commit.prev();
+            self.info.found_versions += 1;
+        }
+        Ok(result)
     }
-    Ok(GcInfo {
-        found_versions,
-        deleted_versions,
-        is_completed,
-    })
+
+    fn run(mut self, safe_point: TimeStamp) -> MvccResult<GcInfo> {
+        let mut state = State::Rewind(safe_point);
+
+        while let Some((commit, write)) = self.next_write()? {
+            if self.txn.write_size >= MAX_TXN_WRITE_SIZE {
+                return Ok(self.info);
+            }
+
+            state.step(&mut self, write, commit);
+        }
+
+        if let State::RemoveAll(Some((commit, write))) = state {
+            self.delete_write(write, commit);
+        }
+
+        self.info.is_completed = true;
+        Ok(self.info)
+    }
+}
+
+enum State {
+    // Rewind to TimeStamp.
+    Rewind(TimeStamp),
+    // Remove locks and rollbacks until we get to a put or delete.
+    RemoveIdempotent,
+    // Parameter is the latest delete which can be removed if we complete removal of
+    // everything else.
+    RemoveAll(Option<(TimeStamp, Write)>),
+}
+
+impl State {
+    /// Process a single version of a key/value.
+    fn step(&mut self, gc: &mut Gc<'_, impl Snapshot>, write: Write, commit_ts: TimeStamp) {
+        match self {
+            State::Rewind(safe_point) => {
+                if commit_ts <= *safe_point {
+                    *self = State::RemoveIdempotent;
+                    self.step(gc, write, commit_ts);
+                }
+            }
+            State::RemoveIdempotent => match write.write_type {
+                WriteType::Put => {
+                    *self = State::RemoveAll(None);
+                }
+                WriteType::Delete => {
+                    *self = State::RemoveAll(Some((commit_ts, write)));
+                }
+                WriteType::Rollback | WriteType::Lock => {
+                    gc.delete_write(write, commit_ts);
+                }
+            },
+            State::RemoveAll(_) => {
+                gc.delete_write(write, commit_ts);
+            }
+        }
+    }
+}
+
+impl GcInfo {
+    fn report_metrics(&self) {
+        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
+        if self.deleted_versions > 0 {
+            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
+        }
+    }
 }
 
 pub mod tests {

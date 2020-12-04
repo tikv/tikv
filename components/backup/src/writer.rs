@@ -8,11 +8,12 @@ use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_traits::{ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
+use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
+use tikv_util::{self, box_err, time::Limiter};
 use txn_types::KvPair;
 
 use crate::metrics::*;
