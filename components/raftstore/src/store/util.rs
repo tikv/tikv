@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use collections::HashMap;
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
@@ -13,7 +14,6 @@ use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
+use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -19,7 +20,6 @@ use raftstore::store::{
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
 

@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 

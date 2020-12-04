@@ -194,6 +194,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "concurrency_manager",
  "configuration",
  "crc64fast",
@@ -255,6 +256,7 @@ checksum = "7d5ca2cd0adc3f48f9e9ea5a6bbdf9ccc0bfade884847e484d452414c7ccffb3"
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "criterion",
  "crossbeam",
  "derive_more",
@@ -470,6 +472,7 @@ name = "cdc"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "collections",
  "concurrency_manager",
  "crossbeam",
  "engine_rocks",
@@ -606,6 +609,7 @@ dependencies = [
  "cdc",
  "chrono",
  "clap",
+ "collections",
  "concurrency_manager",
  "crossbeam",
  "encryption",
@@ -663,6 +667,13 @@ dependencies = [
  "rand",
  "static_assertions",
  "tikv_alloc",
+]
+
+[[package]]
+name = "collections"
+version = "0.1.0"
+dependencies = [
+ "fxhash",
 ]
 
 [[package]]
@@ -1162,6 +1173,7 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "configuration",
  "encryption",
  "engine_traits",
@@ -1882,6 +1894,7 @@ name = "iosnoop"
 version = "0.1.0"
 dependencies = [
  "bcc",
+ "collections",
  "crossbeam-utils 0.8.1",
  "libc",
  "maligned",
@@ -2758,6 +2771,7 @@ dependencies = [
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "error_code",
  "fail",
  "futures 0.3.7",
@@ -3189,7 +3203,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#6998aedadab120450b588170e6e36202b1af19df"
+source = "git+https://github.com/tikv/raft-rs#6998aedadab120450b588170e6e36202b1af19df"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3224,6 +3238,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "collections",
  "concurrency_manager",
  "configuration",
  "crc32fast",
@@ -3481,6 +3496,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "hex 0.4.2",
  "slog",
  "slog-global",
@@ -3781,6 +3797,7 @@ checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 name = "security"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "encryption",
  "grpcio",
  "serde",
@@ -4346,6 +4363,7 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "concurrency_manager",
  "engine_rocks",
  "futures 0.3.7",
@@ -4375,6 +4393,7 @@ dependencies = [
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "fail",
  "futures 0.3.7",
  "grpcio",
@@ -4390,6 +4409,7 @@ dependencies = [
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "concurrency_manager",
  "crossbeam",
  "encryption",
@@ -4434,6 +4454,7 @@ dependencies = [
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "futures 0.3.7",
  "kvproto",
  "pd_client",
@@ -4448,6 +4469,7 @@ dependencies = [
 name = "test_util"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "encryption",
  "fail",
  "grpcio",
@@ -4470,6 +4492,7 @@ dependencies = [
  "batch-system",
  "byteorder",
  "cdc",
+ "collections",
  "concurrency_manager",
  "configuration",
  "crc64fast",
@@ -4627,6 +4650,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
+ "collections",
  "error_code",
  "failure",
  "hex 0.4.2",
@@ -4657,6 +4681,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "codec",
+ "collections",
  "fail",
  "failure",
  "hex 0.4.2",
@@ -4722,6 +4747,7 @@ dependencies = [
  "cache-size",
  "chrono",
  "codec",
+ "collections",
  "concurrency_manager",
  "configuration",
  "crc32fast",
@@ -4874,6 +4900,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
+ "collections",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -4883,7 +4910,6 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.7",
- "fxhash",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -5134,6 +5160,7 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "codec",
+ "collections",
  "error_code",
  "farmhash",
  "hex 0.4.2",

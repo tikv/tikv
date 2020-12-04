@@ -59,8 +59,8 @@ use crate::storage::types::{
     TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
+use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use tikv_util::collections::HashMap;
 
 /// Store Transaction scheduler commands.
 ///

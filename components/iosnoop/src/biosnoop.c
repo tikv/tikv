@@ -3,7 +3,7 @@
 #include <uapi/linux/ptrace.h>
 #include <linux/blkdev.h>
 
-struct val_t {
+struct stats_t {
     u64 read;
     u64 write;
 };
@@ -28,6 +28,7 @@ struct info_t {
 BPF_HASH(infobyreq, struct request *, struct info_t);
 BPF_HASH(typebypid, u32, io_type*);
 BPF_HASH(statsbytype, io_type, struct val_t);
+BPF_HISTOGRAM()
 
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
 {

@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
@@ -18,7 +19,6 @@ use raftstore::coprocessor::CoprocessorHost;
 use security::*;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;

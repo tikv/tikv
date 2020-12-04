@@ -159,6 +159,7 @@ tidb_query_aggr = { path = "components/tidb_query_aggr" }
 tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
+collections = { path = "components/collections" }
 iosnoop = { path = "components/iosnoop" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
@@ -236,6 +237,7 @@ members = [
   "components/error_code",
   "components/concurrency_manager",
   "components/file_system",
+  "components/collections",
 ]
 default-members = ["cmd"]
 

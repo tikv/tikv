@@ -14,8 +14,8 @@ use super::mysql::{Duration, Time};
 use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
 use codec::prelude::*;
+use collections::{HashMap, HashSet};
 use tikv_util::codec::BytesSlice;
-use tikv_util::collections::{HashMap, HashSet};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -529,7 +529,7 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
-    use tikv_util::collections::{HashMap, HashSet};
+    use collections::{HashMap, HashSet};
     use tikv_util::map;
 
     use super::*;

@@ -16,6 +16,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
+use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
@@ -30,7 +31,6 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;

@@ -254,6 +254,7 @@ pub mod tests {
     use super::Checker;
     use crate::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
+    use collections::HashSet;
     use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_LOCK;
@@ -268,7 +269,6 @@ pub mod tests {
         u64,
     };
     use tempfile::Builder;
-    use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
     use txn_types::Key;
