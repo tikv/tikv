@@ -532,8 +532,8 @@ impl<K: PrewriteKind> Prewriter<K> {
 
 /// Encapsulates things which must be done differently for optimistic or pessimistic transactions.
 trait PrewriteKind {
-    /// A placeholder type to indicate whether the prewrite is part of an optimistic
-    /// or a pessimistic transaction.
+    /// The type of mutation and, optionally, its extra information, differing for the
+    /// optimistic and pessimistic transaction.
     type Mutation: MutationLock;
 
     fn txn_kind(&self) -> TransactionKind;
