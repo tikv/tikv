@@ -577,7 +577,7 @@ mod tests {
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].to_set_vec(),
-            vec![Some(Set::new(buf.clone(), 0b11))]
+            vec![Some(Set::new(buf, 0b11))]
         );
     }
 
