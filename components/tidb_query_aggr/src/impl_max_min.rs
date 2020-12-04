@@ -394,7 +394,7 @@ where
 #[derive(Debug)]
 pub struct AggFnStateExtremum<T, E>
 where
-    T: EvaluableRef<'static> + 'static,
+    T: EvaluableRef<'static> + 'static + Ord,
     E: Extremum,
     VectorValue: VectorValueExt<T::EvaluableType>,
 {
@@ -575,10 +575,7 @@ mod tests {
         update!(state, &mut ctx, Some(SetRef::new(&buf, 0b11))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(
-            result[0].to_set_vec(),
-            vec![Some(Set::new(buf, 0b11))]
-        );
+        assert_eq!(result[0].to_set_vec(), vec![Some(Set::new(buf, 0b11))]);
     }
 
     #[test]
