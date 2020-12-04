@@ -2098,8 +2098,18 @@ where
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
+        // It's not correct anymore, so set it to None to let split checker update it.
+        self.fsm.peer.approximate_size = None;
+
+        // Roughly estimate the size and keys for new regions.
+        let new_region_count = regions.len() as u64;
+        let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
+        let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
+
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
+            self.fsm.peer.approximate_size = estimated_size;
+            self.fsm.peer.approximate_keys = estimated_keys;
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -2121,23 +2131,6 @@ where
                     "err" => %e,
                 );
             }
-        }
-
-        let last_key = enc_end_key(regions.last().unwrap());
-        if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{} original region should exists", self.fsm.peer.tag);
-        }
-        // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
-        let last_region_id = regions.last().unwrap().get_id();
-
-        // Roughly estimate the size and keys for new regions.
-        let new_region_count = regions.len() as u64;
-        let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
-        let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
-        if is_leader {
-            self.fsm.peer.approximate_size = estimated_size;
-            self.fsm.peer.approximate_keys = estimated_keys;
             if let Err(e) = self.ctx.split_check_scheduler.schedule(
                 SplitCheckTask::GetRegionApproximateSizeAndKeys {
                     region: self.fsm.peer.region().clone(),
@@ -2153,6 +2146,13 @@ where
                 );
             }
         }
+
+        let last_key = enc_end_key(regions.last().unwrap());
+        if meta.region_ranges.remove(&last_key).is_none() {
+            panic!("{} original region should exists", self.fsm.peer.tag);
+        }
+        let last_region_id = regions.last().unwrap().get_id();
+
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
