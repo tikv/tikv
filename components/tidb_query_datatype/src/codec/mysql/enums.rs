@@ -31,9 +31,9 @@ impl Enum {
     }
 }
 
-impl ToString for Enum {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
+impl Display for Enum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
     }
 }
 
@@ -101,22 +101,16 @@ impl<'a> EnumRef<'a> {
     }
 }
 
-impl<'a> ToString for EnumRef<'a> {
-    fn to_string(&self) -> String {
+impl<'a> Display for EnumRef<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.value == 0 {
-            return String::new();
+            return Ok(());
         }
 
         let buf = &self.data[self.value - 1];
 
         // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf).to_string()
-    }
-}
-
-impl<'a> Display for EnumRef<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.to_string().as_str())
+        writeln!(f, "{}", String::from_utf8_lossy(buf))
     }
 }
 
