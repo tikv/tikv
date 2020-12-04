@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_is_set() {
         let mut buf = BufferVec::new();
-        for v in vec!["a", "b", "c"] {
+        for v in &["a", "b", "c"] {
             buf.push(v)
         }
 
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_is_empty() {
         let mut buf = BufferVec::new();
-        for v in vec!["a", "b", "c"] {
+        for v in &["a", "b", "c"] {
             buf.push(v)
         }
 
@@ -194,7 +194,7 @@ mod tests {
         assert!(!s.as_ref().is_empty());
 
         let s = Set {
-            data: s.data.clone(),
+            data: s.data,
             value: 0b000,
         };
 
