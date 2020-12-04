@@ -2152,7 +2152,6 @@ where
             panic!("{} original region should exists", self.fsm.peer.tag);
         }
         let last_region_id = regions.last().unwrap().get_id();
-
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
