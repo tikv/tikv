@@ -210,7 +210,7 @@ impl Display for Task {
                 f,
                 "heartbeat for region {:?}, leader {}",
                 hb_task.region,
-                hb_task.peer.get_id(),
+                hb_task.peer.get_id()
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)

@@ -341,9 +341,9 @@ impl<S: CasualRouter<RocksEngine>> Runnable<Task> for Runner<S> {
                     return;
                 }
                 let size =
-                    get_region_approximate_size(&self.engine, &region, 0).unwrap_or_default();
+                    get_region_approximate_size(self.engine.c(), &region, 0).unwrap_or_default();
                 let keys =
-                    get_region_approximate_keys(&self.engine, &region, 0).unwrap_or_default();
+                    get_region_approximate_keys(self.engine.c(), &region, 0).unwrap_or_default();
                 let _ = self.router.send(
                     region.get_id(),
                     CasualMessage::RegionApproximateSize { size },
