@@ -59,6 +59,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
             EvalType::Decimal => Box::new(AggrFnSum::<Decimal>::new()),
             EvalType::Real => Box::new(AggrFnSum::<Real>::new()),
             EvalType::Enum => Box::new(AggrFnSumForEnum::new()),
+            EvalType::Set => Box::new(AggrFnSumForSet::new()),
             // If we meet unexpected types after rewriting, it is an implementation fault.
             _ => unreachable!(),
         })
