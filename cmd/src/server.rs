@@ -827,6 +827,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_io_snooper(&mut self) {
         if let Err(e) = file_system::init_io_snooper() {
             error!(%e; "failed to init io snooper");
+        } else {
+            info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
         }
     }
 

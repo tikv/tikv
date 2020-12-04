@@ -28,8 +28,7 @@ struct info_t {
 
 BPF_HASH(infobyreq, struct request *, struct info_t);
 BPF_HASH(typebypid, u32, io_type*);
-BPF_HASH(statsbytype, io_type, struct val_t);
-BPF_HISTOGRAM()
+BPF_HASH(statsbytype, io_type, struct stats_t);
 
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
 {
@@ -45,7 +44,7 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
     struct info_t info;
     int err = bpf_probe_read(&info.type, sizeof(io_type), (void*)*type_ptr);
     if (err != 0) {
-        info.type = io_type::Other;
+        info.type = Other;
         bpf_trace_printk("pid %d error %d here\n", pid, err);
     }
 
@@ -77,7 +76,7 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
     rwflag = !!((req->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE);
 #endif
     io_type type = info->type;
-    struct val_t zero = {}, *val;
+    struct stats_t zero = {}, *val;
     val = statsbytype.lookup_or_init(&type, &zero);
     if (rwflag == 1) {
         (*val).write += req->__data_len;

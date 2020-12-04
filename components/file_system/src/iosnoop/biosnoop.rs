@@ -12,7 +12,7 @@ use crossbeam_utils::CachePadded;
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
 static IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 // For simplicity, just open large enough array. TODO: make it to be Vec
-static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Compaction); 100];
+static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Other); 100];
 
 thread_local! {
     static IDX: usize = unsafe {
@@ -127,7 +127,6 @@ pub fn init_io_snooper() -> Result<(), String> {
     unsafe {
         BPF_TABLE = Some((bpf, stats_table, type_table));
     }
-    // info!("init io snooper"; "pid" => nix::unistd::getpid().to_string());
     Ok(())
 }
 
