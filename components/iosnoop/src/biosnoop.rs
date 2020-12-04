@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 
 static IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 // For simplicity, just open large enough array. TODO: make it to be Vec
-static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Other); 100];
+static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Compaction); 100];
 
 thread_local! {
     static IDX: usize = unsafe {
@@ -24,9 +24,6 @@ thread_local! {
         if let Some((_, _, t)) = BPF_TABLE.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx);
-            println!("tid {} ptr is {:?}", tid, IO_TYPE_ARRAY.as_ptr().add(idx));
-            *IO_TYPE_ARRAY[idx] = IOType::Compaction;
-            println!("{:?}", ptr::read(IO_TYPE_ARRAY.as_ptr().add(idx) as *const IOType));
             let io_type_ptr =
                 std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<*const IOType>());
             t.set(&mut tid.to_ne_bytes(), io_type_ptr).unwrap();
@@ -50,11 +47,9 @@ pub fn get_io_type() -> IOType {
 unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
     if let Some((_, t, _)) = BPF_TABLE.as_mut() {
         let mut map = HashMap::new();
-        println!("here");
         for e in t.iter() {
             let typ = ptr::read(e.key.as_ptr() as *const IOType);
             let stats = ptr::read(e.value.as_ptr() as *const IOStats);
-            println!("{:?} ", typ);
             map.insert(typ, stats);
         }
         Some(map)
@@ -80,7 +75,6 @@ impl IOContext {
             if let Some(mut now_map) = unsafe { get_io_stats() } {
                 for (typ, stats) in prev_map {
                     now_map.entry(typ).and_modify(|e| {
-                        println!("{} {}", stats.read, stats.write);
                         e.read -= stats.read;
                         e.write -= stats.write;
                     });
@@ -153,7 +147,7 @@ mod tests {
     #[test]
     fn test_io_context() {
         init_io_snooper().unwrap();
-        // set_io_type(IOType::Compaction);
+        set_io_type(IOType::Compaction);
         assert_eq!(get_io_type(), IOType::Compaction);
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("test_io_context");

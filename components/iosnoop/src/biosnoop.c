@@ -21,7 +21,11 @@ typedef enum {
     Export,
 } io_type;
 
-BPF_HASH(pidbyreq, struct request *, u32);
+struct info_t {
+    io_type type;
+};
+
+BPF_HASH(infobyreq, struct request *, struct info_t);
 BPF_HASH(typebypid, u32, io_type*);
 BPF_HASH(statsbytype, io_type, struct val_t);
 
@@ -33,15 +37,25 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
     if (tgid != ##TGID##) {
         return 0;
     }
-    pidbyreq.update(&req, &pid);
+
+    io_type** type_ptr = typebypid.lookup(&pid);
+    if (type_ptr == 0) return 0;
+    struct info_t info;
+    int err = bpf_probe_read(&info.type, sizeof(io_type), (void*)*type_ptr);
+    if (err != 0) {
+        bpf_trace_printk("error %d here\n", err);
+        return 0;
+    }
+
+    infobyreq.update(&req, &info);
     return 0;
 }
 
 // output
 int trace_req_completion(struct pt_regs *ctx, struct request *req)
 {
-    u32* pid = pidbyreq.lookup(&req);
-    if (pid == 0) return 0;
+    struct info_t* info = infobyreq.lookup(&req);
+    if (info == 0) return 0;
 /*
  * The following deals with a kernel version change (in mainline 4.7, although
  * it may be backported to earlier kernels) with how block request write flags
@@ -57,18 +71,7 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
 #else
     rwflag = !!((req->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE);
 #endif
-    u32 p = *pid; // if not copy, bpf verifier will not pass
-    bpf_trace_printk("complet pid %d\n", p);
-    io_type** type_ptr = typebypid.lookup(&p);
-    if (type_ptr == 0) return 0;
-    io_type type;
-    bpf_trace_printk("complet pid %d type %d, type %p\n", p, type, *type_ptr);
-    int err= bpf_probe_read(&type, sizeof(type), (void*)*type_ptr);
-    if (err  != 0) {
-        bpf_trace_printk("error %d here\n", err);
-        return 0;
-    }
-
+    io_type type = info->type;
     struct val_t zero = {}, *val;
     val = statsbytype.lookup_or_init(&type, &zero);
     if (rwflag == 1) {
@@ -76,6 +79,6 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
     } else {
         (*val).read += req->__data_len;
     }
-    pidbyreq.delete(&req);
+    infobyreq.delete(&req);
     return 0;
 }
