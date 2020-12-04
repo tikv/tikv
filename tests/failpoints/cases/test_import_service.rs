@@ -138,7 +138,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     // Do upload and ingest again, though key manager contains this file, the ingest action should success.
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
+    ingest.set_context(ctx);
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
