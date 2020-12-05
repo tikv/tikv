@@ -193,11 +193,14 @@ mod tests {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 1000000,
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"
         data-key-rotation-period = "14d"
+        enable-file-dictionary-log = true
+        file-dictionary-rewrite-threshold = 1000000
         [previous-master-key]
         type = "plaintext"
         [master-key]
