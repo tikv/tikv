@@ -692,6 +692,7 @@ mod tests {
             &previous_master_key,
             method.unwrap_or(EncryptionMethod::Aes256Ctr),
             Duration::from_secs(60),
+            true, /*enable_file_dictionary_log*/
             2,
             tmp.path().as_os_str().to_str().unwrap(),
         );
