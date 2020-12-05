@@ -554,7 +554,6 @@ struct Optimistic {
 }
 
 impl PrewriteKind for Optimistic {
-    // see the `MutationLock` trait implementation for `Mutation`
     type Mutation = Mutation;
 
     fn txn_kind(&self) -> TransactionKind {
@@ -597,7 +596,6 @@ struct Pessimistic {
 }
 
 impl PrewriteKind for Pessimistic {
-    // see the `MutationLock` trait implementation for `(Mutation, bool)`
     type Mutation = (Mutation, bool);
 
     fn txn_kind(&self) -> TransactionKind {
@@ -605,8 +603,8 @@ impl PrewriteKind for Pessimistic {
     }
 }
 
-/// A placeholder type to indicate whether a `PrewriteKind` is part of an optimistic
-/// or a pessimistic transaction.
+/// The type of mutation and, optionally, its extra information, differing for the
+/// optimistic and pessimistic transaction.
 /// For optimistic txns, this is `Mutation`.
 /// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
 /// whether the mutation takes a pessimistic lock or not.
