@@ -1263,7 +1263,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         pd_client: Arc<C>,
     ) -> Result<()> {
-        let engines = builder.engines.clone();
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
@@ -1319,7 +1318,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-            engines.kv,
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
