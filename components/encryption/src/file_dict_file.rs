@@ -384,6 +384,7 @@ mod tests {
         let info2 = create_file_info(2, EncryptionMethod::Unknown);
         let info3 = create_file_info(3, EncryptionMethod::Aes128Ctr);
         let info4 = create_file_info(4, EncryptionMethod::Aes128Ctr);
+        let info5 = create_file_info(3, EncryptionMethod::Aes128Ctr);
 
         file_dict_file.insert("info1", &info1).unwrap();
         file_dict_file.insert("info2", &info2).unwrap();
@@ -404,6 +405,17 @@ mod tests {
         assert_eq!(file_dict.files.get("info1"), None);
         assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(file_dict.files.len(), 2);
+
+        file_dict_file
+            .replace("info3", "info5", info5.clone())
+            .unwrap();
+
+        let file_dict = file_dict_file.recovery().unwrap();
+        assert_eq!(file_dict.files.get("info1"), None);
+        assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
+        assert_eq!(file_dict.files.get("info3"), None);
+        assert_eq!(*file_dict.files.get("info5").unwrap(), info5);
         assert_eq!(file_dict.files.len(), 2);
     }
 
@@ -451,17 +463,26 @@ mod tests {
         test_file_dict_file_existed(true /*enable_log*/);
     }
 
-    #[test]
-    fn test_file_dict_file_not_existed() {
+    fn test_file_dict_file_not_existed(enable_log: bool) {
         let tempdir = tempfile::tempdir().unwrap();
         let ret = FileDictionaryFile::open(
             tempdir.path(),
             "test_file_dict_file",
-            true,  /*enable_log*/
+            enable_log,
             2,     /*file_rewrite_threshold*/
             false, /*skip_rewrite*/
         );
         assert!(matches!(ret, Err(Error::Io(_))));
+    }
+
+    #[test]
+    fn test_file_dict_file_not_existed_v1() {
+        test_file_dict_file_not_existed(false /*enable_log*/);
+    }
+
+    #[test]
+    fn test_file_dict_file_not_existed_v2() {
+        test_file_dict_file_not_existed(true /*enable_log*/);
     }
 
     #[test]

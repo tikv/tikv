@@ -652,13 +652,14 @@ fn test_serde_custom_tikv_config() {
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
+            enable_file_dictionary_log: false,
+            file_dictionary_rewrite_threshold: 123456,
             master_key: MasterKeyConfig::File {
                 config: FileConfig {
                     path: "/master/key/path".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };
