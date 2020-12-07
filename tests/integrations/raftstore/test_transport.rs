@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use test_raftstore::*;
-use test_util;
 
 fn test_partition_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
