@@ -330,6 +330,12 @@ pub mod tests {
                 false,
                 uncommitted(100, 2, false),
             );
+            // rollback_async_commit = true
+            must_success(&engine, b"k1", 1, 12, TimeStamp::max(), r, true, |s| {
+                s == TtlExpire
+            });
+            must_unlocked(&engine, b"k1");
+            must_get_rollback_protected(&engine, b"k1", 1, false);
 
             // case 2: primary is prewritten (pessimistic)
             must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 15, 15);
@@ -411,6 +417,12 @@ pub mod tests {
                 false,
                 uncommitted(100, 17, false),
             );
+            // rollback_async_commit = true
+            must_success(&engine, b"k2", 15, 20, TimeStamp::max(), r, true, |s| {
+                s == TtlExpire
+            });
+            must_unlocked(&engine, b"k2");
+            must_get_rollback_protected(&engine, b"k2", 15, true);
 
             // case 3: pessimistic transaction with two keys (large txn), secondary is prewritten first
             must_acquire_pessimistic_lock_for_large_txn(&engine, b"k3", b"k3", 20, 20, 100);
