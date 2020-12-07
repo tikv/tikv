@@ -333,7 +333,6 @@ where
     pub sync_log: bool,
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
-    pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -478,7 +477,6 @@ where
                 "region_id" => region_id,
             );
         }
-        self.need_flush_trans = true;
     }
 }
 
@@ -630,11 +628,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.need_flush_trans
+        if self.poll_ctx.trans.need_flush()
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
             self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
@@ -657,13 +654,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
         fail_point!("raft_between_save");
+
         if !self.poll_ctx.raft_wb.is_empty() {
             fail_point!(
                 "raft_before_save_on_store_1",
                 self.poll_ctx.store_id() == 1,
                 |_| {}
             );
-
             self.poll_ctx
                 .engines
                 .raft
@@ -861,9 +858,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
-        if self.poll_ctx.need_flush_trans {
+        if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
         }
     }
 }
@@ -1094,7 +1090,6 @@ where
             sync_log: false,
             has_ready: false,
             ready_res: Vec::new(),
-            need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
@@ -1490,7 +1485,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "region_id" => region_id,
                     );
                 }
-                self.ctx.need_flush_trans = true;
             }
 
             return Ok(CheckMsgStatus::DropMsg);
