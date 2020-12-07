@@ -1942,7 +1942,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#dfe1b7b9d0dfea83fa357ac6cb2cc6ff43599712"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#3c1ff6599f5efb9daa24abe2baffca9b515285bf"
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 dependencies = [
  "futures 0.1.29",
  "grpcio",

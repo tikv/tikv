@@ -123,9 +123,15 @@ fn test_cdc_basic() {
 
     // request again.
     let req = suite.new_changedata_request(1);
+<<<<<<< HEAD
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+=======
+    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -149,7 +155,7 @@ fn test_cdc_basic() {
         .unwrap();
 
     // Drop stream and cancel its server streaming.
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     // Sleep a while to make sure the stream is deregistered.
     sleep_ms(200);
     scheduler
@@ -164,9 +170,15 @@ fn test_cdc_basic() {
     // Stale region epoch.
     let mut req = suite.new_changedata_request(1);
     req.set_region_epoch(Default::default()); // Zero region epoch.
+<<<<<<< HEAD
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
+=======
+    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -286,7 +298,7 @@ fn test_cdc_not_leader() {
         .is_subscribed(1)
         .is_some());
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -313,12 +325,18 @@ fn test_cdc_stale_epoch_after_region_ready() {
 
     let mut req = suite.new_changedata_request(1);
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
+<<<<<<< HEAD
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _resp_rx = event_feed_wrap.as_ref().replace(Some(resp_rx));
     let req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
+=======
+    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let _resp_rx = event_feed_wrap.replace(Some(resp_rx));
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     // Must receive epoch not match error.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -349,7 +367,7 @@ fn test_cdc_stale_epoch_after_region_ready() {
     }
 
     // Cancel event feed before finishing test.
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -428,9 +446,15 @@ fn test_cdc_scan() {
 
     let mut req = suite.new_changedata_request(1);
     req.checkpoint_ts = checkpoint_ts.into_inner();
+<<<<<<< HEAD
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+=======
+    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.to_vec());
@@ -468,7 +492,7 @@ fn test_cdc_scan() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -513,7 +537,7 @@ fn test_cdc_tso_failure() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -611,7 +635,7 @@ fn test_region_split() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -650,7 +674,7 @@ fn test_duplicate_subscribe() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -746,7 +770,7 @@ fn test_cdc_batch_size_limit() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -840,9 +864,15 @@ fn test_old_value_basic() {
         }
     }
 
+<<<<<<< HEAD
     let (req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+=======
+    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     let mut event_count = 0;
     loop {
         let event = receive_event(false);
@@ -874,7 +904,7 @@ fn test_old_value_basic() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -962,7 +992,11 @@ fn test_old_value_multi_changefeeds() {
         }
     }
 
+<<<<<<< HEAD
     event_feed_wrap_1.replace(None);
     event_feed_wrap_2.replace(None);
+=======
+    event_feed_wrap.replace(None);
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     suite.stop();
 }

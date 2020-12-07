@@ -2015,12 +2015,22 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
+<<<<<<< HEAD
+=======
+    pub old_value_cache_size: usize,
+    pub hibernate_regions_compatible: bool,
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 }
 
 impl Default for CdcConfig {
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
+<<<<<<< HEAD
+=======
+            old_value_cache_size: 1024,
+            hibernate_regions_compatible: true,
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         }
     }
 }
@@ -2230,6 +2240,7 @@ impl TiKvConfig {
             .into());
         }
 
+<<<<<<< HEAD
         rollback_or!(
             rb_collector,
             raft_store,
@@ -2254,6 +2265,13 @@ impl TiKvConfig {
             |r| { self.gc.validate_or_rollback(r) },
             self.gc.validate()?
         );
+=======
+        if self.raft_store.hibernate_regions && !self.cdc.hibernate_regions_compatible {
+            warn!("raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
+                was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster");
+        }
+
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         self.rocksdb.validate()?;
         self.raftdb.validate()?;
         self.server.validate()?;

@@ -70,7 +70,7 @@ fn test_failed_pending_batch() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -101,7 +101,7 @@ fn test_region_ready_after_deregister() {
     fail::remove(fp);
     receive_event(false);
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -147,14 +147,19 @@ fn test_connections_register() {
         .unwrap();
     thread::sleep(Duration::from_secs(1));
     // Close conn 1
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     // Conn 2
     let (req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
+<<<<<<< HEAD
     let _req_tx1 = req_tx.send((req, WriteFlags::default())).wait().unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
+=======
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     // Split region.
     suite.cluster.must_split(&region, b"k0");
     fail::remove(fp);
@@ -169,7 +174,7 @@ fn test_connections_register() {
         other => panic!("unknown event {:?}", other),
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -277,8 +282,8 @@ fn test_merge() {
         other => panic!("unknown event {:?}", other),
     }
 
-    source_wrap.as_ref().replace(None);
-    target_wrap.as_ref().replace(None);
+    source_wrap.replace(None);
+    target_wrap.replace(None);
     suite.stop();
 }
 
@@ -303,11 +308,16 @@ fn test_deregister_pending_downstream() {
     // Conn 2
     let (req_tx2, resp_rx2) = suite.get_region_cdc_client(1).event_feed().unwrap();
     req.set_region_epoch(RegionEpoch::default());
+<<<<<<< HEAD
     let req_tx2 = req_tx2
         .send((req.clone(), WriteFlags::default()))
         .wait()
         .unwrap();
     let _resp_rx1 = event_feed_wrap.as_ref().replace(Some(resp_rx2));
+=======
+    block_on(req_tx2.send((req.clone(), WriteFlags::default()))).unwrap();
+    let _resp_rx1 = event_feed_wrap.replace(Some(resp_rx2));
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     // Sleep for a while to make sure the region has been subscribed
     sleep_ms(200);
     fail::remove(build_resolver_fp);
@@ -331,6 +341,6 @@ fn test_deregister_pending_downstream() {
     }
     fail::remove(raft_capture_fp);
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }

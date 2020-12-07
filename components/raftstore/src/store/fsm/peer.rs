@@ -1829,6 +1829,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
         }
+        meta.leaders.remove(&region_id);
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
@@ -1854,7 +1855,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
         }
 
+<<<<<<< HEAD
         let peer_id = cp.peer.get_id();
+=======
+        fail_point!("change_peer_after_update_region");
+
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {

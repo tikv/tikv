@@ -180,6 +180,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
+    pub fn env(&self) -> Arc<Environment> {
+        self.env.clone()
+    }
+
     /// Register a gRPC service.
     /// Register after starting, it fails and returns the service.
     pub fn register_service(&mut self, svc: grpcio::Service) -> Option<grpcio::Service> {

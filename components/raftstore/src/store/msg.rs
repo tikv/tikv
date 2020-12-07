@@ -6,7 +6,7 @@ use std::time::Instant;
 use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -447,6 +447,10 @@ pub enum StoreMsg {
     Start {
         store: metapb::Store,
     },
+    CheckLeader {
+        leaders: Vec<LeaderInfo>,
+        cb: Box<dyn FnOnce(Vec<u64>) + Send>,
+    },
 
     /// Messge only used for test
     #[cfg(any(test, feature = "testexport"))]
@@ -472,6 +476,7 @@ impl fmt::Debug for StoreMsg {
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::CheckLeader { ref leaders, .. } => write!(fmt, "CheckLeader {:?}", leaders),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }

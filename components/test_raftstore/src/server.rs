@@ -76,6 +76,7 @@ pub struct ServerCluster {
     pub importers: HashMap<u64, Arc<SSTImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
+    pub security_mgr: Arc<SecurityManager>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<RaftStoreBlackHole>,
@@ -90,10 +91,21 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+<<<<<<< HEAD
         let raft_client = RaftClient::new(
             env,
             Arc::new(Config::default()),
             security_mgr,
+=======
+        let map = AddressMap::default();
+        // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
+        let worker = LazyWorker::new("snap-worker");
+        let conn_builder = ConnectionBuilder::new(
+            env.clone(),
+            Arc::default(),
+            security_mgr.clone(),
+            map.clone(),
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
             RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
             None,
@@ -102,6 +114,7 @@ impl ServerCluster {
             metas: HashMap::default(),
             addrs: HashMap::default(),
             pd_client,
+            security_mgr,
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),

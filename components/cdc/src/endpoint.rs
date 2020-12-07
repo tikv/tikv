@@ -7,21 +7,29 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
+<<<<<<< HEAD
 use engine_rocks::RocksEngine;
 use futures::future::Future;
 use futures::sink::Sink;
 use futures::stream::Stream;
+=======
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use futures::compat::Future01CompatExt;
+use grpcio::{ChannelBuilder, Environment};
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::Region;
+use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
+use kvproto::metapb::{PeerRole, Region};
+use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
+use security::SecurityManager;
 use tikv::config::CdcConfig;
 use tikv::storage::kv::Snapshot;
 use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
@@ -229,6 +237,16 @@ pub struct Endpoint<T> {
 
     min_resolved_ts: TimeStamp,
     min_ts_region_id: u64,
+<<<<<<< HEAD
+=======
+    old_value_cache: OldValueCache,
+    hibernate_regions_compatible: bool,
+
+    // store_id -> client
+    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+    env: Arc<Environment>,
+    security_mgr: Arc<SecurityManager>,
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 }
 
 impl<T: 'static + RaftStoreRouter> Endpoint<T> {
@@ -239,10 +257,18 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
         raft_router: T,
         observer: CdcObserver,
         store_meta: Arc<Mutex<StoreMeta>>,
+<<<<<<< HEAD
+=======
+        concurrency_manager: ConcurrencyManager,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     ) -> Endpoint<T> {
         let workers = Builder::new().name_prefix("cdcwkr").pool_size(4).build();
         let tso_worker = Builder::new().name_prefix("tso").pool_size(1).build();
         let ep = Endpoint {
+            env,
+            security_mgr,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
@@ -257,6 +283,12 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
+<<<<<<< HEAD
+=======
+            old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
+            hibernate_regions_compatible: cfg.hibernate_regions_compatible,
+            tikv_clients: Arc::new(Mutex::new(HashMap::default())),
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         };
         ep.register_min_ts_event();
         ep
@@ -673,6 +705,7 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
             .collect();
+<<<<<<< HEAD
         let fut = timeout
             .map_err(|_| unreachable!())
             .then(move |_| pd_client.get_tso())
@@ -741,6 +774,261 @@ impl<T: 'static + RaftStoreRouter> Endpoint<T> {
             },
         );
         self.tso_worker.spawn(fut);
+=======
+        let cm: ConcurrencyManager = self.concurrency_manager.clone();
+        let env = self.env.clone();
+        let security_mgr = self.security_mgr.clone();
+        let store_meta = self.store_meta.clone();
+        let tikv_clients = self.tikv_clients.clone();
+        let hibernate_regions_compatible = self.hibernate_regions_compatible;
+
+        let fut = async move {
+            let _ = timeout.compat().await;
+            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+
+            // Sync with concurrency manager so that it can work correctly when optimizations
+            // like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTS` task, and the
+            // resolver must be checked in or after `Task::MinTS`' execution.
+            cm.update_max_ts(min_ts);
+            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+                if min_mem_lock_ts < min_ts {
+                    min_ts = min_mem_lock_ts;
+                }
+            }
+
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+
+            let regions = if hibernate_regions_compatible {
+                Self::region_resolved_ts_store(
+                    regions,
+                    store_meta,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    tikv_clients,
+                    min_ts,
+                )
+                .await
+            } else {
+                Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
+            };
+
+            if !regions.is_empty() {
+                match scheduler.schedule(Task::MinTS { regions, min_ts }) {
+                    Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // advance normally.
+                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                }
+            }
+        };
+        self.tso_worker.spawn(fut);
+    }
+
+    async fn region_resolved_ts_raft(
+        regions: Vec<(u64, ObserveID)>,
+        scheduler: &Scheduler<Task>,
+        raft_router: T,
+        min_ts: TimeStamp,
+    ) -> Vec<u64> {
+        // TODO: send a message to raftstore would consume too much cpu time,
+        // try to handle it outside raftstore.
+        let regions: Vec<_> = regions
+            .iter()
+            .copied()
+            .map(|(region_id, observe_id)| {
+                let scheduler_clone = scheduler.clone();
+                let raft_router_clone = raft_router.clone();
+                async move {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) = raft_router_clone.significant_send(
+                        region_id,
+                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                            let resp = if resp.response.get_header().has_error() {
+                                None
+                            } else {
+                                Some(region_id)
+                            };
+                            if tx.send(resp).is_err() {
+                                error!("cdc send tso response failed"; "region_id" => region_id);
+                            }
+                        }))),
+                    ) {
+                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                        let deregister = Deregister::Region {
+                            observe_id,
+                            region_id,
+                            err: Error::Request(e.into()),
+                        };
+                        if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
+                            error!("schedule cdc task failed"; "error" => ?e);
+                        }
+                        return None;
+                    }
+                    rx.await.unwrap_or(None)
+                }
+            })
+            .collect();
+        let resps = futures::future::join_all(regions).await;
+        resps
+            .into_iter()
+            .filter_map(|resp| resp)
+            .collect::<Vec<u64>>()
+    }
+
+    async fn region_resolved_ts_store(
+        regions: Vec<(u64, ObserveID)>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        pd_client: Arc<dyn PdClient>,
+        security_mgr: Arc<SecurityManager>,
+        env: Arc<Environment>,
+        cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+        min_ts: TimeStamp,
+    ) -> Vec<u64> {
+        let region_has_quorum = |region: &Region, stores: Vec<u64>| {
+            let mut voters = 0;
+            let mut incoming_voters = 0;
+            let mut demoting_voters = 0;
+
+            let mut resp_voters = 0;
+            let mut resp_incoming_voters = 0;
+            let mut resp_demoting_voters = 0;
+
+            region.get_peers().iter().for_each(|peer| {
+                let mut in_resp = false;
+                for store_id in &stores {
+                    if *store_id == peer.store_id {
+                        in_resp = true;
+                        break;
+                    }
+                }
+                match peer.get_role() {
+                    PeerRole::Voter => {
+                        voters += 1;
+                        if in_resp {
+                            resp_voters += 1;
+                        }
+                    }
+                    PeerRole::IncomingVoter => {
+                        incoming_voters += 1;
+                        if in_resp {
+                            resp_incoming_voters += 1;
+                        }
+                    }
+                    PeerRole::DemotingVoter => {
+                        demoting_voters += 1;
+                        if in_resp {
+                            resp_demoting_voters += 1;
+                        }
+                    }
+                    PeerRole::Learner => (),
+                }
+            });
+
+            let has_incoming_majority =
+                (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+            let has_demoting_majority =
+                (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+            has_incoming_majority && has_demoting_majority
+        };
+
+        // store_id -> leaders info, record the request to each stores
+        let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
+        // region_id -> region, cache the information of regions
+        let mut region_map: HashMap<u64, Region> = HashMap::default();
+        // region_id -> peers id, record the responses
+        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+        {
+            let meta = store_meta.lock().unwrap();
+            let store_id = match meta.store_id {
+                Some(id) => id,
+                None => return vec![],
+            };
+            for (region_id, _) in regions {
+                if let Some(region) = meta.regions.get(&region_id) {
+                    if let Some((term, leader)) = meta.leaders.get(&region_id) {
+                        if leader.store_id != meta.store_id.unwrap() {
+                            continue;
+                        }
+                        for peer in region.get_peers() {
+                            if peer.store_id == store_id && peer.id == leader.id {
+                                resp_map.entry(region_id).or_default().push(store_id);
+                                continue;
+                            }
+                            if peer.get_role() == PeerRole::Learner {
+                                continue;
+                            }
+                            let mut leader_info = LeaderInfo::default();
+                            leader_info.set_peer_id(leader.id);
+                            leader_info.set_term(*term);
+                            leader_info.set_region_id(region_id);
+                            leader_info.set_region_epoch(region.get_region_epoch().clone());
+                            store_map
+                                .entry(peer.store_id)
+                                .or_default()
+                                .push(leader_info);
+                        }
+                        region_map.insert(region_id, region.clone());
+                    }
+                }
+            }
+        }
+        let stores = store_map.into_iter().map(|(store_id, regions)| {
+            let cdc_clients = cdc_clients.clone();
+            let env = env.clone();
+            let pd_client = pd_client.clone();
+            let security_mgr = security_mgr.clone();
+            async move {
+                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
+                    let store = box_try!(pd_client.get_store_async(store_id).await);
+                    let cb = ChannelBuilder::new(env.clone());
+                    let channel = security_mgr.connect(cb, &store.address);
+                    cdc_clients
+                        .lock()
+                        .unwrap()
+                        .insert(store_id, TikvClient::new(channel));
+                }
+                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
+                let mut req = CheckLeaderRequest::default();
+                req.set_regions(regions.into());
+                req.set_ts(min_ts.into_inner());
+                let res = box_try!(client.check_leader_async(&req)).await;
+                let resp = box_try!(res);
+                Result::Ok((store_id, resp))
+            }
+        });
+        let resps = futures::future::join_all(stores).await;
+        resps
+            .into_iter()
+            .filter_map(Result::ok)
+            .map(|(store_id, resp)| {
+                resp.regions
+                    .into_iter()
+                    .map(move |region_id| (store_id, region_id))
+            })
+            .flatten()
+            .for_each(|(store_id, region_id)| {
+                resp_map.entry(region_id).or_default().push(store_id);
+            });
+        resp_map
+            .into_iter()
+            .filter_map(|(region_id, stores)| {
+                if region_has_quorum(&region_map[&region_id], stores) {
+                    Some(region_id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -1010,7 +1298,11 @@ mod tests {
     use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
+<<<<<<< HEAD
     use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, Worker};
+=======
+    use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 
     struct ReceiverRunnable<T> {
         tx: Sender<T>,
@@ -1053,6 +1345,33 @@ mod tests {
         };
 
         (receiver_worker, pool, initializer, rx)
+    }
+
+    fn mock_endpoint(
+        cfg: &CdcConfig,
+    ) -> (
+        Endpoint<MockRaftStoreRouter>,
+        MockRaftStoreRouter,
+        ReceiverWrapper<Task>,
+    ) {
+        let (task_sched, task_rx) = dummy_scheduler();
+        let raft_router = MockRaftStoreRouter::new();
+        let observer = CdcObserver::new(task_sched.clone());
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let env = Arc::new(Environment::new(1));
+        let security_mgr = Arc::new(SecurityManager::default());
+        let ep = Endpoint::new(
+            cfg,
+            pd_client,
+            task_sched,
+            raft_router.clone(),
+            observer,
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            ConcurrencyManager::new(1.into()),
+            env,
+            security_mgr,
+        );
+        (ep, raft_router, task_rx)
     }
 
     #[test]
@@ -1142,6 +1461,7 @@ mod tests {
 
     #[test]
     fn test_raftstore_is_busy() {
+<<<<<<< HEAD
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
         let observer = CdcObserver::new(task_sched.clone());
@@ -1154,8 +1474,10 @@ mod tests {
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
+=======
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         let (tx, _rx) = batch::unbounded(1);
-
+        let (mut ep, raft_router, mut task_rx) = mock_endpoint(&CdcConfig::default());
         // Fill the channel.
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
@@ -1200,9 +1522,12 @@ mod tests {
 
     #[test]
     fn test_register() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+<<<<<<< HEAD
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
@@ -1216,6 +1541,8 @@ mod tests {
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
+=======
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx, String::new());
@@ -1286,9 +1613,12 @@ mod tests {
 
     #[test]
     fn test_feature_gate() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        });
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+<<<<<<< HEAD
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
@@ -1302,6 +1632,8 @@ mod tests {
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
+=======
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 
         let (tx, rx) = batch::unbounded(1);
         let mut region = Region::default();
@@ -1416,9 +1748,9 @@ mod tests {
 
     #[test]
     fn test_deregister() {
-        let (task_sched, _task_rx) = dummy_scheduler();
-        let raft_router = MockRaftStoreRouter::new();
+        let (mut ep, raft_router, _task_rx) = mock_endpoint(&CdcConfig::default());
         let _raft_rx = raft_router.add_region(1 /* region id */, 100 /* cap */);
+<<<<<<< HEAD
         let observer = CdcObserver::new(task_sched.clone());
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let mut ep = Endpoint::new(
@@ -1429,6 +1761,8 @@ mod tests {
             observer,
             Arc::new(Mutex::new(StoreMeta::new(0))),
         );
+=======
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         let (tx, rx) = batch::unbounded(1);
 
         let conn = Conn::new(tx, String::new());

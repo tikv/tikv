@@ -521,3 +521,8 @@ pipelined = true
 
 [cdc]
 min-ts-interval = "4s"
+<<<<<<< HEAD
+=======
+old-value-cache-size = 512
+hibernate-regions-compatible = false
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)

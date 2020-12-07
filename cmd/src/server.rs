@@ -610,6 +610,12 @@ impl TiKVServer {
             raft_router,
             cdc_ob,
             engines.store_meta.clone(),
+<<<<<<< HEAD
+=======
+            self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
         );
         let cdc_timer = cdc_endpoint.new_timer();
         cdc_worker

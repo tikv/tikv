@@ -78,6 +78,7 @@ fn test_observe_duplicate_cmd() {
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
+<<<<<<< HEAD
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx
         .send((req.clone(), WriteFlags::default()))
@@ -89,6 +90,16 @@ fn test_observe_duplicate_cmd() {
         .unwrap();
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+=======
+    event_feed_wrap.replace(Some(resp_rx));
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, resp_rx) = suite
+        .get_region_cdc_client(region.get_id())
+        .event_feed()
+        .unwrap();
+    event_feed_wrap.replace(Some(resp_rx));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     fail::remove(fp);
     // Receive Commit response
     commit_resp.wait().unwrap();
@@ -121,7 +132,7 @@ fn test_observe_duplicate_cmd() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -169,8 +180,13 @@ fn test_delayed_change_cmd() {
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
+<<<<<<< HEAD
     event_feed_wrap.as_ref().replace(Some(resp_rx));
     let _req_tx = req_tx.send((req, WriteFlags::default())).wait().unwrap();
+=======
+    event_feed_wrap.replace(Some(resp_rx));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
     sleep_ms(200);
 
     suite
@@ -202,6 +218,6 @@ fn test_delayed_change_cmd() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }

@@ -180,6 +180,7 @@ trait MockKvService {
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
+    unary_call!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
@@ -271,6 +272,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
     unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
+<<<<<<< HEAD
 
     fn batch_coprocessor(
         &mut self,
@@ -280,6 +282,9 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     ) {
         unimplemented!()
     }
+=======
+    unary_call_dispatch!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
+>>>>>>> 0632bd27a... cdc: compatible with hibernate region (#8907)
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>
