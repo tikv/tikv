@@ -891,7 +891,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
         {
             let meta = store_meta.lock().unwrap();
-            let store_id = meta.store_id.unwrap();
+            let store_id = match meta.store_id {
+                Some(id) => id,
+                None => return vec![],
+            };
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
                     if let Some((term, leader)) = meta.leaders.get(&region_id) {
