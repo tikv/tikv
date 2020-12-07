@@ -652,13 +652,14 @@ fn test_serde_custom_tikv_config() {
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
+            enable_file_dictionary_log: false,
+            file_dictionary_rewrite_threshold: 123456,
             master_key: MasterKeyConfig::File {
                 config: FileConfig {
                     path: "/master/key/path".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };
@@ -683,6 +684,7 @@ fn test_serde_custom_tikv_config() {
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
+        hibernate_regions_compatible: false,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -702,13 +704,13 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
     let rhs_str = format!("{:?}", rhs);
 
     fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
-        let mut it = l
+        let it = l
             .enumerate()
             .take_while(|(_, (l, r))| l == r)
             .filter(|(_, (l, _))| *l == b' ');
         let mut last = None;
         let mut second = None;
-        while let Some(a) = it.next() {
+        for a in it {
             second = last;
             last = Some(a);
         }

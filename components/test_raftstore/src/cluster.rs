@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
@@ -274,8 +275,16 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-        self.store_metas.insert(node_id, store_meta.clone());
+        let store_meta = match self.store_metas.entry(node_id) {
+            Entry::Occupied(o) => {
+                let mut meta = o.get().lock().unwrap();
+                *meta = StoreMeta::new(PENDING_MSG_CAP);
+                o.get().clone()
+            }
+            Entry::Vacant(v) => v
+                .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
+                .clone(),
+        };
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim

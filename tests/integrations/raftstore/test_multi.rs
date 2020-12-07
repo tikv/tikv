@@ -5,7 +5,6 @@ use std::sync::*;
 use std::thread;
 use std::time::Duration;
 
-use rand;
 use rand::Rng;
 
 use kvproto::raft_cmdpb::RaftCmdResponse;

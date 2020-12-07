@@ -38,9 +38,10 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
-use crate::store::worker::{ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    SplitCheckTask,
 };
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
@@ -469,12 +470,18 @@ where
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
     /// The number of the last persisted ready.
     last_persisted_number: u64,
     /// Outside code use it to notify new persisted number to this peer.
     persisted_notifier: Arc<AtomicU64>,
+
+    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
+    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
+    /// task run when there are more than 1 pending tasks.
+    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -569,6 +576,7 @@ where
             last_unpersisted_number: 0,
             last_persisted_number: 0,
             persisted_notifier: Arc::new(AtomicU64::new(0)),
+            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1290,6 +1298,7 @@ where
                 }
                 _ => {}
             }
+            self.on_leader_changed(ctx, ss.leader_id, self.term());
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
@@ -1348,6 +1357,20 @@ where
                     // To prevent unsafe local read, we suspect its leader lease.
                     self.leader_lease.suspect(monotonic_raw_now());
                 }
+            }
+        }
+    }
+
+    fn on_leader_changed<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        leader_id: u64,
+        term: u64,
+    ) {
+        for peer in self.region().get_peers() {
+            if peer.id == leader_id {
+                let mut meta = ctx.store_meta.lock().unwrap();
+                meta.leaders.insert(self.region_id, (term, peer.clone()));
             }
         }
     }
@@ -1591,7 +1614,9 @@ where
         }
 
         if !ready.messages().is_empty() {
-            ctx.need_flush_trans = true;
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
             for vec_msg in ready.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
             }
@@ -1806,7 +1831,9 @@ where
         }
 
         if !light_rd.messages().is_empty() {
-            ctx.need_flush_trans = true;
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
             for vec_msg in light_rd.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
             }
@@ -3159,8 +3186,13 @@ where
         Some(status)
     }
 
+    pub fn is_region_size_or_keys_none(&self) -> bool {
+        fail_point!("region_size_or_keys_none", |_| true);
+        self.approximate_size.is_none() || self.approximate_keys.is_none()
+    }
+
     pub fn heartbeat_pd<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        let task = PdTask::Heartbeat {
+        let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -3168,17 +3200,57 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.approximate_size,
-            approximate_keys: self.approximate_keys,
+            approximate_size: self.approximate_size.unwrap_or_default(),
+            approximate_keys: self.approximate_keys.unwrap_or_default(),
             replication_status: self.region_replication_status(),
+        });
+        if !self.is_region_size_or_keys_none() {
+            if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                error!(
+                    "failed to notify pd";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "err" => ?e,
+                );
+            }
+            return;
+        }
+
+        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
+            return;
+        }
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let scheduler = ctx.pd_scheduler.clone();
+        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
+            region: self.region().clone(),
+            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
+            cb: Box::new(move |size: u64, keys: u64| {
+                if let PdTask::Heartbeat(mut h) = task {
+                    h.approximate_size = size;
+                    h.approximate_keys = keys;
+                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
+                        error!(
+                            "failed to notify pd";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "err" => ?e,
+                        );
+                    }
+                }
+            }),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        self.pending_pd_heartbeat_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
             error!(
                 "failed to notify pd";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
+                "region_id" => region_id,
+                "peer_id" => peer_id,
                 "err" => ?e,
             );
+            self.pending_pd_heartbeat_tasks
+                .fetch_sub(1, Ordering::SeqCst);
         }
     }
 
@@ -3284,8 +3356,6 @@ where
                 "target_peer_id" => peer.get_id(),
                 "target_store_id" => peer.get_store_id(),
             );
-        } else {
-            ctx.need_flush_trans = true;
         }
     }
 
@@ -3316,8 +3386,6 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                 );
-            } else {
-                ctx.need_flush_trans = true;
             }
         }
     }
@@ -3366,8 +3434,6 @@ where
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
             );
-        } else {
-            ctx.need_flush_trans = true;
         }
     }
 

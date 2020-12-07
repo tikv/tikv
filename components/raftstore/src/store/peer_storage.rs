@@ -546,10 +546,12 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
     let last_index = raft_state.get_last_index();
     let mut commit_index = raft_state.get_hard_state().get_commit();
     let recorded_commit_index = apply_state.get_commit_index();
-    let state_str = format!(
-        "region {}, raft state {:?}, apply state {:?}",
-        region_id, raft_state, apply_state
-    );
+    let state_str = || -> String {
+        format!(
+            "region {}, raft state {:?}, apply state {:?}",
+            region_id, raft_state, apply_state
+        )
+    };
     // The commit index of raft state may be less than the recorded commit index.
     // If so, forward the commit index.
     if commit_index < recorded_commit_index {
@@ -559,7 +561,7 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
                 "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
                 apply_state.get_commit_term(),
                 recorded_commit_index,
-                state_str
+                state_str()
             ));
         }
         info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
@@ -569,14 +571,14 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
     if apply_state.get_applied_index() > commit_index {
         return Err(box_err!(
             "applied index > max(commit index, recorded commit index), {}",
-            state_str
+            state_str()
         ));
     }
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {
         return Err(box_err!(
             "max(commit index, recorded commit index) > last index, {}",
-            state_str
+            state_str()
         ));
     }
     // Since the entries must be persisted before applying, the term of raft state should also
@@ -584,7 +586,7 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
     if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
         return Err(box_err!(
             "term of raft state < commit term of apply state, {}",
-            state_str
+            state_str()
         ));
     }
 
@@ -853,9 +855,8 @@ where
 
     #[inline]
     pub fn set_commit_index(&mut self, commit: u64) {
-        if commit > self.commit_index() {
-            self.raft_state.mut_hard_state().set_commit(commit);
-        }
+        assert!(commit >= self.commit_index());
+        self.raft_state.mut_hard_state().set_commit(commit);
     }
 
     #[inline]
@@ -1008,6 +1009,8 @@ where
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
+    // WARNING: If this function returns error, the caller must panic otherwise the entry cache may
+    // be wrong and break correctness.
     pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
@@ -1033,17 +1036,14 @@ where
             (e.get_index(), e.get_term())
         };
 
-        let update_cache = if let Some(ref mut cache) = self.cache {
-            Some((cache, entries.clone()))
-        } else {
-            None
-        };
+        // WARNING: This code is correct based on the assumption that
+        // if this function returns error, the TiKV will panic soon,
+        // otherwise, the entry cache may be wrong and break correctness.
+        if let Some(ref mut cache) = self.cache {
+            cache.append(&self.tag, &entries);
+        }
 
         ready_ctx.raft_wb_mut().append(region_id, entries)?;
-
-        if let Some((cache, e)) = update_cache {
-            cache.append(&self.tag, &e);
-        }
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
@@ -1359,6 +1359,7 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
+    /// WARNING: If this function returns error, the caller must panic(details in `append` function).
     pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         ready_ctx: &mut H,
