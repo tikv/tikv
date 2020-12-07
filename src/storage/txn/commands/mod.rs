@@ -69,7 +69,6 @@ use tikv_util::collections::HashMap;
 ///
 /// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
 /// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
-// Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),
