@@ -212,8 +212,18 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
 ///
 /// `PartialEq` between `Value`'s result could be wrong.
 pub trait ChunkedVec<T> {
-    fn chunked_with_capacity(capacity: usize) -> Self;
-    fn chunked_push(&mut self, value: Option<T>);
+    fn from_slice(slice: &[Option<T>]) -> Self;
+    fn from_vec(data: Vec<Option<T>>) -> Self;
+    fn push(&mut self, value: Option<T>);
+    fn is_empty(&self) -> bool;
+    fn with_capacity(capacity: usize) -> Self;
+    fn push_data(&mut self, value: T);
+    fn push_null(&mut self);
+    fn len(&self) -> usize;
+    fn truncate(&mut self, len: usize);
+    fn capacity(&self) -> usize;
+    fn append(&mut self, other: &mut Self);
+    fn to_vec(&self) -> Vec<Option<T>>;
 }
 
 macro_rules! impl_evaluable_type {

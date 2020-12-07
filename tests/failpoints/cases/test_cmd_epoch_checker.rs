@@ -86,12 +86,11 @@ fn test_reject_proposal_during_region_split() {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
     cluster.run();
-    cluster.must_transfer_leader(1, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k", b"v");
 
     // Pause on applying so that region split is not finished.
-    let fp = "apply_before_split_1_3";
-    // let fp = "apply_before_split";
+    let fp = "apply_before_split";
     fail::cfg(fp, "pause").unwrap();
 
     // Try to split region.
@@ -111,7 +110,7 @@ fn test_reject_proposal_during_region_split() {
     cluster
         .sim
         .rl()
-        .async_command_on_node(3, write_req, cb)
+        .async_command_on_node(1, write_req, cb)
         .unwrap();
     // The write request should be blocked until split is finished.
     cb_receivers.assert_not_ready();
@@ -133,7 +132,7 @@ fn test_reject_proposal_during_region_split() {
     cluster
         .sim
         .rl()
-        .async_command_on_node(3, write_req, cb)
+        .async_command_on_node(1, write_req, cb)
         .unwrap();
     cb_receivers.assert_ok();
 }

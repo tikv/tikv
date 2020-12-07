@@ -115,6 +115,10 @@ impl Transport for ChannelTransport {
         }
     }
 
+    fn need_flush(&self) -> bool {
+        false
+    }
+
     fn flush(&mut self) {}
 }
 

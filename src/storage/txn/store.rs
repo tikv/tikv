@@ -590,7 +590,9 @@ mod tests {
         SnapContext, TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use crate::storage::txn::{commit, prewrite};
+    use crate::storage::txn::{
+        commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+    };
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CfName;
     use engine_traits::{IterOptions, ReadOptions};
@@ -640,14 +642,17 @@ mod tests {
                     let key = key.as_bytes();
                     prewrite(
                         &mut txn,
+                        &TransactionProperties {
+                            start_ts: START_TS,
+                            kind: TransactionKind::Optimistic(false),
+                            commit_kind: CommitKind::TwoPc,
+                            primary: pk,
+                            txn_size: 0,
+                            lock_ttl: 0,
+                            min_commit_ts: TimeStamp::default(),
+                        },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
-                        pk,
                         &None,
-                        false,
-                        0,
-                        0,
-                        TimeStamp::default(),
-                        TimeStamp::default(),
                         false,
                     )
                     .unwrap();
