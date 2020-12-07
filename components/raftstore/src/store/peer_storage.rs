@@ -1009,6 +1009,8 @@ where
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
+    // WARNING: If this function returns error, the caller must panic otherwise the entry cache may
+    // be wrong and break correctness.
     pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
@@ -1034,6 +1036,9 @@ where
             (e.get_index(), e.get_term())
         };
 
+        // WARNING: This code is correct based on the assumption that
+        // if this function returns error, the TiKV will panic soon,
+        // otherwise, the entry cache may be wrong and break correctness.
         if let Some(ref mut cache) = self.cache {
             cache.append(&self.tag, &entries);
         }
@@ -1354,6 +1359,7 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
+    /// WARNING: If this function returns error, the caller must panic(details in `append` function).
     pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         ready_ctx: &mut H,
