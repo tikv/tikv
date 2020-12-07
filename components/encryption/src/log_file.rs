@@ -7,6 +7,7 @@ use rand::{thread_rng, RngCore};
 
 use crate::encrypted_file::{Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
+use crate::metrics::*;
 use crate::Result;
 
 use std::fs::{rename, File, OpenOptions};
@@ -34,7 +35,7 @@ pub struct LogFile {
     append_file: Option<File>,
     // Internal file dictionary to avoid recovery before rewrite and to check if compaction
     // is needed.
-    file_dict: FileDictionary,
+    pub(crate) file_dict: FileDictionary,
     // Determine whether compact the log.
     file_rewrite_threshold: u64,
     // Record the number of `REMOVE` to determine whether compact the log.
@@ -80,7 +81,7 @@ impl LogFile {
         name: &str,
         file_rewrite_threshold: u64,
         skip_rewrite: bool,
-    ) -> Result<(LogFile, FileDictionary)> {
+    ) -> Result<LogFile> {
         let mut log_file = LogFile {
             base: base.as_ref().to_path_buf(),
             name: name.to_owned(),
@@ -90,11 +91,11 @@ impl LogFile {
             removed: 0,
         };
 
-        let file_dict = log_file.recovery()?;
+        log_file.recovery()?;
         if !skip_rewrite {
             log_file.rewrite()?;
         }
-        Ok((log_file, file_dict))
+        Ok(log_file)
     }
 
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
@@ -125,7 +126,7 @@ impl LogFile {
     }
 
     /// Recovery from the log file and return `FileDictionary`.
-    pub fn recovery(&mut self) -> Result<FileDictionary> {
+    pub fn recovery(&mut self) -> Result<()> {
         let mut f = OpenOptions::new()
             .read(true)
             .open(self.base.join(&self.name))?;
@@ -167,8 +168,9 @@ impl LogFile {
                 }
             }
         }
-        self.file_dict = file_dict.clone();
-        Ok(file_dict)
+        self.file_dict = file_dict;
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
+        Ok(())
     }
 
     /// Append an insert operation to the log file.
@@ -183,6 +185,7 @@ impl LogFile {
         self.file_dict.files.insert(name.to_owned(), info.clone());
         self.check_compact()?;
 
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
         Ok(())
     }
 
@@ -190,15 +193,15 @@ impl LogFile {
     ///
     /// Warning: `self.write(file_dict)` must be called before.
     pub fn remove(&mut self, name: &str) -> Result<()> {
+        self.file_dict.files.remove(name);
         let file = self.append_file.as_mut().unwrap();
         let bytes = Self::convert_record_to_bytes(name, LogRecord::REMOVE)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
-
-        self.file_dict.files.remove(name);
         self.removed += 1;
         self.check_compact()?;
 
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
         Ok(())
     }
 
@@ -216,6 +219,7 @@ impl LogFile {
 
         self.file_dict.files.remove(src_name);
         self.file_dict.files.insert(dst_name.to_owned(), info);
+        ENCRYPTION_FILE_NUM_GAUGE.set(self.file_dict.files.len() as _);
         self.removed += 1;
         self.check_compact()?;
 
@@ -339,22 +343,22 @@ mod tests {
         log_file.insert("info2", &info2).unwrap();
         log_file.insert("info3", &info3).unwrap();
 
-        let file_dict = log_file.recovery().unwrap();
+        log_file.recovery().unwrap();
 
-        assert_eq!(*file_dict.files.get("info1").unwrap(), info1);
-        assert_eq!(*file_dict.files.get("info2").unwrap(), info2);
-        assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
-        assert_eq!(file_dict.files.len(), 3);
+        assert_eq!(*log_file.file_dict.files.get("info1").unwrap(), info1);
+        assert_eq!(*log_file.file_dict.files.get("info2").unwrap(), info2);
+        assert_eq!(*log_file.file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(log_file.file_dict.files.len(), 3);
 
         log_file.remove("info2").unwrap();
         log_file.remove("info1").unwrap();
         log_file.insert("info2", &info4).unwrap();
 
-        let file_dict = log_file.recovery().unwrap();
-        assert_eq!(file_dict.files.get("info1"), None);
-        assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
-        assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
-        assert_eq!(file_dict.files.len(), 2);
+        log_file.recovery().unwrap();
+        assert_eq!(log_file.file_dict.files.get("info1"), None);
+        assert_eq!(*log_file.file_dict.files.get("info2").unwrap(), info4);
+        assert_eq!(*log_file.file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(log_file.file_dict.files.len(), 2);
     }
 
     #[test]
@@ -365,8 +369,8 @@ mod tests {
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
         log_file.insert("info", &info).unwrap();
 
-        let (_, file_dict) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
-        assert_eq!(*file_dict.files.get("info").unwrap(), info);
+        let f = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
+        assert_eq!(*f.file_dict.files.get("info").unwrap(), info);
     }
 
     #[test]
@@ -393,8 +397,8 @@ mod tests {
         )
         .unwrap();
 
-        let (_, file_dict_read) = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
-        assert_eq!(file_dict, file_dict_read);
+        let f = LogFile::open(tempdir.path(), "test_log_file", 2, false).unwrap();
+        assert_eq!(file_dict, f.file_dict);
     }
 
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {

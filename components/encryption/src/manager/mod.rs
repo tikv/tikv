@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
-use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
+use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileInfo, KeyDictionary};
 use protobuf::Message;
 
 use crate::config::{EncryptionConfig, MasterKeyConfig};
@@ -29,8 +29,9 @@ const DEFAULT_FILES_CACHE_CAPACITY: usize = 1024 * 128;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
-    file_dict: Mutex<FileDictionary>,
     log_file: Mutex<LogFile>,
+    // A concurrency HashMap which stores data in log_file. All updates to files_cache must be
+    // executed during lock of log_file.
     files_cache: DashMap<String, FileInfo>,
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
@@ -47,7 +48,6 @@ struct Dicts {
 impl Dicts {
     fn new(path: &str, rotation_period: Duration, file_rewrite_threshold: u64) -> Result<Dicts> {
         Ok(Dicts {
-            file_dict: Mutex::new(FileDictionary::default()),
             log_file: Mutex::new(LogFile::new(
                 Path::new(path).to_owned(),
                 FILE_DICT_NAME,
@@ -80,21 +80,19 @@ impl Dicts {
 
         match (log_content, key_bytes) {
             // Both files are found.
-            (Ok((log_file, file_dict)), Ok(key_bytes)) => {
+            (Ok(log_file), Ok(key_bytes)) => {
                 info!("encryption: found both of key dictionary and file dictionary.");
                 let mut key_dict = KeyDictionary::default();
                 key_dict.merge_from_bytes(&key_bytes)?;
                 let current_key_id = AtomicU64::new(key_dict.current_key_id);
 
                 ENCRYPTION_DATA_KEY_GAUGE.set(key_dict.keys.len() as _);
-                ENCRYPTION_FILE_NUM_GAUGE.set(file_dict.files.len() as _);
                 let files_cache = DashMap::with_capacity(DEFAULT_FILES_CACHE_CAPACITY);
-                for (k, v) in file_dict.files.iter() {
+                for (k, v) in log_file.file_dict.files.iter() {
                     files_cache.insert(k.clone(), v.clone());
                 }
 
                 Ok(Some(Dicts {
-                    file_dict: Mutex::new(file_dict),
                     log_file: Mutex::new(log_file),
                     key_dict: Mutex::new(key_dict),
                     files_cache,
@@ -185,15 +183,9 @@ impl Dicts {
         file.iv = iv.as_slice().to_vec();
         file.key_id = self.current_key_id.load(Ordering::SeqCst);
         file.method = compat(method);
-        let file_num = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            self.files_cache.insert(fname.to_owned(), file.clone());
-            file_dict.files.insert(fname.to_owned(), file.clone());
-            file_dict.files.len() as _
-        };
 
+        self.files_cache.insert(fname.to_owned(), file.clone());
         log_file.insert(fname, &file)?;
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
             info!("new encrypted file"; 
@@ -208,24 +200,16 @@ impl Dicts {
 
     fn delete_file(&self, fname: &str) -> Result<()> {
         let mut log_file = self.log_file.lock().unwrap();
-        let (file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            self.files_cache.remove(fname);
-            match file_dict.files.remove(fname) {
-                Some(file_info) => {
-                    let file_num = file_dict.files.len() as _;
-                    (file_info, file_num)
-                }
-                None => {
-                    // Could be a plaintext file not tracked by file dictionary.
-                    info!("delete untracked plaintext file"; "fname" => fname);
-                    return Ok(());
-                }
+        let file = match self.files_cache.remove(fname) {
+            Some((_, file_info)) => file_info.clone(),
+            None => {
+                // Could be a plaintext file not tracked by file dictionary.
+                info!("delete untracked plaintext file"; "fname" => fname);
+                return Ok(());
             }
         };
 
         log_file.remove(fname)?;
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
         } else {
@@ -236,9 +220,8 @@ impl Dicts {
 
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         let mut log_file = self.log_file.lock().unwrap();
-        let (method, file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            let file = match file_dict.files.get(src_fname) {
+        let (method, file) = {
+            let file = match log_file.file_dict.files.get(src_fname) {
                 Some(file_info) => file_info.clone(),
                 None => {
                     // Could be a plaintext file not tracked by file dictionary.
@@ -246,7 +229,7 @@ impl Dicts {
                     return Ok(());
                 }
             };
-            if file_dict.files.get(dst_fname).is_some() {
+            if log_file.file_dict.files.get(dst_fname).is_some() {
                 return Err(Error::Io(IoError::new(
                     ErrorKind::AlreadyExists,
                     format!("file already exists, {}", dst_fname),
@@ -254,12 +237,9 @@ impl Dicts {
             }
             let method = file.method;
             self.files_cache.insert(dst_fname.to_owned(), file.clone());
-            file_dict.files.insert(dst_fname.to_owned(), file.clone());
-            let file_num = file_dict.files.len() as _;
-            (method, file, file_num)
+            (method, file)
         };
         log_file.insert(dst_fname, &file)?;
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != compat(EncryptionMethod::Plaintext) {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
@@ -271,11 +251,9 @@ impl Dicts {
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         let mut log_file = self.log_file.lock().unwrap();
-        let (method, file, file_num) = {
-            let mut file_dict = self.file_dict.lock().unwrap();
-            self.files_cache.remove(dst_fname);
-            let file = match file_dict.files.remove(src_fname) {
-                Some(file_info) => file_info,
+        let (method, file) = {
+            let file = match self.files_cache.remove(src_fname) {
+                Some((_, file_info)) => file_info,
                 None => {
                     // Could be a plaintext file not tracked by file dictionary.
                     info!("rename untracked plaintext file"; "src" => src_fname, "dst" => dst_fname);
@@ -283,15 +261,10 @@ impl Dicts {
                 }
             };
             let method = file.method;
-            file_dict.files.insert(dst_fname.to_owned(), file.clone());
             self.files_cache.insert(dst_fname.to_owned(), file.clone());
-            let file_num = file_dict.files.len() as _;
-            (method, file, file_num)
+            (method, file)
         };
         log_file.replace(src_fname, dst_fname, file)?;
-
-        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-
         if method != compat(EncryptionMethod::Plaintext) {
             info!("rename encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
@@ -563,13 +536,13 @@ impl DataKeyManager {
     }
 
     pub fn dump_file_dict(dict_path: &str, file_path: Option<&str>) -> Result<()> {
-        let (_, file_dict) = LogFile::open(dict_path, FILE_DICT_NAME, 1, true)?;
+        let f = LogFile::open(dict_path, FILE_DICT_NAME, 1, true)?;
         if let Some(file_path) = file_path {
-            if let Some(info) = file_dict.files.get(file_path) {
+            if let Some(info) = f.file_dict.files.get(file_path) {
                 println!("{}: {:?}", file_path, info);
             }
         } else {
-            for (path, info) in file_dict.files.iter() {
+            for (path, info) in f.file_dict.files.iter() {
                 println!("{}: {:?}", path, info);
             }
         }
@@ -863,9 +836,10 @@ mod tests {
         file.key_id = 7; // Not exists.
         manager
             .dicts
-            .file_dict
+            .log_file
             .lock()
             .unwrap()
+            .file_dict
             .files
             .insert("foo".to_owned(), file);
         manager.get_file("foo").unwrap_err();
@@ -964,7 +938,7 @@ mod tests {
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
 
-        let files = manager.dicts.file_dict.lock().unwrap().clone();
+        let files = manager.dicts.log_file.lock().unwrap().file_dict.clone();
         let keys = manager.dicts.key_dict.lock().unwrap().clone();
 
         // Close and re-open.
@@ -972,7 +946,7 @@ mod tests {
         let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
         let manager1 = manager1.unwrap().unwrap();
 
-        let files1 = manager1.dicts.file_dict.lock().unwrap().clone();
+        let files1 = manager1.dicts.log_file.lock().unwrap().file_dict.clone();
         let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
         assert_eq!(files, files1);
         assert_eq!(keys, keys1);
