@@ -41,7 +41,7 @@ command! {
             rollback_if_not_exist: bool,
             // This field is set to true only if the transaction is known to fall back from async commit.
             // CheckTxnStatus treats the transaction as non-async-commit if this field is true.
-            async_commit_fallback: bool,
+            force_sync_commit: bool,
         }
 }
 
@@ -96,7 +96,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 lock,
                 self.current_ts,
                 self.caller_start_ts,
-                self.async_commit_fallback,
+                self.force_sync_commit,
             ),
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
@@ -153,7 +153,7 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
-        async_commit_fallback: bool,
+        force_sync_commit: bool,
         status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
         let ctx = Context::default();
@@ -168,7 +168,7 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
-            async_commit_fallback,
+            force_sync_commit,
         };
         let result = command
             .process_write(
@@ -197,7 +197,7 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
-        async_commit_fallback: bool,
+        force_sync_commit: bool,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -211,7 +211,7 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
-            async_commit_fallback,
+            force_sync_commit,
         };
         assert!(command
             .process_write(
@@ -330,7 +330,7 @@ pub mod tests {
                 false,
                 uncommitted(100, 2, false),
             );
-            // rollback_async_commit = true
+            // force_sync_commit = true
             must_success(&engine, b"k1", 1, 12, TimeStamp::max(), r, true, |s| {
                 s == TtlExpire
             });
@@ -417,7 +417,7 @@ pub mod tests {
                 false,
                 uncommitted(100, 17, false),
             );
-            // rollback_async_commit = true
+            // force_sync_commit = true
             must_success(&engine, b"k2", 15, 20, TimeStamp::max(), r, true, |s| {
                 s == TtlExpire
             });
