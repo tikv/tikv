@@ -17,6 +17,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -94,6 +95,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
+    /// region_id -> (term, leader)
+    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -123,6 +126,7 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
+            leaders: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
@@ -583,6 +587,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
+                StoreMsg::CheckLeader { leaders, cb } => self.on_check_leader(leaders, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -2355,6 +2360,40 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let scheduler = &self.ctx.raftlog_gc_scheduler;
         let _ = scheduler.schedule(RaftlogGcTask::Purge);
         self.register_raft_engine_purge_tick();
+    }
+
+    fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let regions = leaders
+            .into_iter()
+            .map(|leader_info| {
+                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                    if let Some(region) = meta.regions.get(&leader_info.region_id) {
+                        if *term == leader_info.term
+                            && leader.id == leader_info.peer_id
+                            && util::compare_region_epoch(
+                                leader_info.get_region_epoch(),
+                                region,
+                                true,
+                                true,
+                                false,
+                            )
+                            .is_ok()
+                        {
+                            return Some(leader_info.region_id);
+                        }
+                        debug!("check leader failed";
+                            "leader_info" => ?leader_info,
+                            "current_term" => term,
+                            "current_region" => ?region,
+                        );
+                    }
+                }
+                None
+            })
+            .filter_map(|r| r)
+            .collect();
+        cb(regions);
     }
 }
 
