@@ -703,13 +703,13 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
     let rhs_str = format!("{:?}", rhs);
 
     fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
-        let mut it = l
+        let it = l
             .enumerate()
             .take_while(|(_, (l, r))| l == r)
             .filter(|(_, (l, _))| *l == b' ');
         let mut last = None;
         let mut second = None;
-        while let Some(a) = it.next() {
+        for a in it {
             second = last;
             last = Some(a);
         }
