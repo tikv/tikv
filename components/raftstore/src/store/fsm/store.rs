@@ -2375,7 +2375,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                                 leader_info.get_region_epoch(),
                                 region,
                                 true,
-                                false,
+                                true,
                                 false,
                             )
                             .is_ok()
