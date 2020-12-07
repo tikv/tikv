@@ -128,6 +128,7 @@ impl Filter for DelayFilter {
 pub struct SimulateTransport<C> {
     filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
+    need_flush: bool,
 }
 
 impl<C> SimulateTransport<C> {
@@ -135,6 +136,7 @@ impl<C> SimulateTransport<C> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
             ch,
+            need_flush: false,
         }
     }
 
@@ -182,11 +184,17 @@ where
 
 impl<C: Transport> Transport for SimulateTransport<C> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
+        self.need_flush = true;
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
     }
 
+    fn need_flush(&self) -> bool {
+        self.need_flush
+    }
+
     fn flush(&mut self) {
+        self.need_flush = false;
         self.ch.flush();
     }
 }

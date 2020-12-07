@@ -1595,7 +1595,6 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            ctx.need_flush_trans = true;
             for vec_msg in ready.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
             }
@@ -1791,7 +1790,6 @@ where
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
             }
-            ctx.need_flush_trans = true;
             for vec_msg in light_rd.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
             }
@@ -3289,8 +3287,6 @@ where
                 "target_peer_id" => peer.get_id(),
                 "target_store_id" => peer.get_store_id(),
             );
-        } else {
-            ctx.need_flush_trans = true;
         }
     }
 
@@ -3321,8 +3317,6 @@ where
                     "target_peer_id" => peer.get_id(),
                     "target_store_id" => peer.get_store_id(),
                 );
-            } else {
-                ctx.need_flush_trans = true;
             }
         }
     }
@@ -3371,8 +3365,6 @@ where
                 "target_peer_id" => to_peer.get_id(),
                 "target_store_id" => to_peer.get_store_id(),
             );
-        } else {
-            ctx.need_flush_trans = true;
         }
     }
 

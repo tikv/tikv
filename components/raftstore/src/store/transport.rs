@@ -11,6 +11,8 @@ use std::sync::mpsc;
 pub trait Transport: Send + Clone {
     fn send(&mut self, msg: RaftMessage) -> Result<()>;
 
+    fn need_flush(&self) -> bool;
+
     fn flush(&mut self);
 }
 
