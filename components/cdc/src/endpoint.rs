@@ -899,7 +899,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             continue;
                         }
                         for peer in region.get_peers() {
-                            if peer.store_id == store_id {
+                            if peer.store_id == store_id && peer.id == leader.id {
                                 resp_map.entry(region_id).or_default().push(store_id);
                                 continue;
                             }

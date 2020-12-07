@@ -255,7 +255,7 @@ fn test_joint_confchange() {
         receive_resolved_ts(&receive_event);
         tx.send(()).unwrap();
     });
-    assert!(rx.recv_timeout(Duration::from_secs(1)).is_err());
+    assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
 
     fail::remove(update_region_fp);
     fail::remove(deregister_fp);
