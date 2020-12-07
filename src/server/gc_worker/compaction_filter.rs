@@ -27,7 +27,7 @@ use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
-const NEAR_SEEK_LIMIT: usize = 16;
+const NEAR_SEEK_LIMIT: usize = 8;
 
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
@@ -63,6 +63,16 @@ lazy_static! {
     static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_skip",
         "Skip to create compaction filter for GC because of table properties"
+    )
+    .unwrap();
+    static ref GC_COMPACTION_FILTER_SEEK: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_seek",
+        "Seek times for the compaction filter internal iterator"
+    )
+    .unwrap();
+    static ref GC_COMPACTION_FILTER_NEXT: IntCounter = register_int_counter!(
+        "tikv_gc_compaction_filter_next",
+        "Next times for the compaction filter internal iterator"
     )
     .unwrap();
 
@@ -217,6 +227,8 @@ struct WriteCompactionFilter {
     filtered_hist: LocalHistogram,
 
     // Some metrics about implementation detail.
+    seek_times: usize,
+    next_times: usize,
     mvcc_delete_skip_older: usize,
     mvcc_rollback_and_locks: usize,
 
@@ -252,6 +264,8 @@ impl WriteCompactionFilter {
             total_deleted: 0,
             versions_hist: MVCC_VERSIONS_HISTOGRAM.local(),
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
+            seek_times: 0,
+            next_times: 0,
             mvcc_delete_skip_older: 0,
             mvcc_rollback_and_locks: 0,
             #[cfg(test)]
@@ -315,25 +329,18 @@ impl WriteCompactionFilter {
             deleting_filtered.1.push((commit_ts, sequence));
         }
 
-        let decision = match (filtered, self.remove_older) {
-            (true, true) => {
-                self.filtered += 1;
-                self.handle_filtered_write(write)?;
-                let prefix = Key::from_encoded_slice(key_prefix);
-                let skip_until = if self.deleting_filtered.is_some() {
-                    debug_assert!(commit_ts > 0);
-                    prefix.append_ts((commit_ts - 1).into()).into_encoded()
-                } else {
-                    prefix.append_ts(0.into()).into_encoded()
-                };
-                CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
-            }
-            (true, false) => {
-                self.filtered += 1;
-                self.handle_filtered_write(write)?;
-                CompactionFilterDecision::Remove
-            }
-            (false, _) => CompactionFilterDecision::Keep,
+        if !filtered {
+            return Ok(CompactionFilterDecision::Keep);
+        }
+        self.filtered += 1;
+        self.handle_filtered_write(write)?;
+        let decision = if self.remove_older {
+            debug_assert!(commit_ts > 0);
+            let prefix = Key::from_encoded_slice(key_prefix);
+            let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
+            CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
+        } else {
+            CompactionFilterDecision::Remove
         };
         Ok(decision)
     }
@@ -402,6 +409,7 @@ impl WriteCompactionFilter {
         if self.near_seek_distance >= NEAR_SEEK_LIMIT {
             self.near_seek_distance = 0;
             let valid = write_iter.seek(SeekKey::Key(mark))?;
+            self.seek_times += 1;
             return Ok(valid);
         }
 
@@ -415,10 +423,12 @@ impl WriteCompactionFilter {
             valid = write_iter.next()?;
             next_count += 1;
         }
+        self.next_times += next_count;
 
         if valid && !found {
             // Fallback to `seek` after some `next`s.
             valid = write_iter.seek(SeekKey::Key(mark))?;
+            self.seek_times += 1;
         }
         self.near_seek_distance = 0;
         Ok(valid)
@@ -512,6 +522,8 @@ impl Drop for WriteCompactionFilter {
 
         GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
         GC_COMPACTION_DELETED.inc_by(self.total_deleted as i64);
+        GC_COMPACTION_FILTER_SEEK.inc_by(self.seek_times as i64);
+        GC_COMPACTION_FILTER_NEXT.inc_by(self.next_times as i64);
         GC_COMPACTION_MVCC_DELETE_SKIP_OLDER.inc_by(self.mvcc_delete_skip_older as i64);
         GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
         if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
