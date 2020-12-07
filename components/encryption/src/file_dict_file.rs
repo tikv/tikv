@@ -471,7 +471,10 @@ mod tests {
             2,     /*file_rewrite_threshold*/
             false, /*skip_rewrite*/
         );
-        assert!(matches!(ret, Err(Error::Io(_))));
+        match ret {
+            Err(Error::Io(_)) => {}
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -540,10 +543,10 @@ mod tests {
         // Try open as v1 file. Should fail.
         {
             let file_dict_file = EncryptedFile::new(tempdir.path(), "test_file_dict_file");
-            assert!(matches!(
-                file_dict_file.read(&PlaintextBackend::default()),
-                Err(Error::Other(_))
-            ));
+            match file_dict_file.read(&PlaintextBackend::default()) {
+                Err(Error::Other(_)) => {}
+                _ => unreachable!(),
+            }
         }
         // Try open as v2 file.
         {
