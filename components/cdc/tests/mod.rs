@@ -40,7 +40,7 @@ impl ClientReceiver {
     }
 }
 
-#[allow(unused_assignments)]
+#[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
@@ -53,7 +53,7 @@ pub fn new_event_feed(
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
     let receive_event = move |keep_resolved_ts: bool| loop {
-        let mut events = None;
+        let mut events;
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
             events = (*event_feed).take();
