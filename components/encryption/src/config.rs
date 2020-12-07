@@ -33,6 +33,7 @@ impl Default for EncryptionConfig {
         EncryptionConfig {
             data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
+            // The option is available since TiKV 4.0.9.
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 1000000,
             master_key: MasterKeyConfig::default(),

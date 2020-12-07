@@ -141,7 +141,6 @@ impl FileDictionaryFile {
         }
         // rough size, excluding EncryptedFile meta.
         self.file_size = file_dict_bytes.len();
-        info!("encryption: rewritten file dictionary.");
         Ok(())
     }
 
