@@ -28,7 +28,7 @@ impl Transport for MockTransport {
         unimplemented!()
     }
     fn need_flush(&self) -> bool {
-        unimplemented!()
+        false
     }
     fn flush(&mut self) {
         unimplemented!()
