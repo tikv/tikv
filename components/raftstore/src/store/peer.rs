@@ -1592,6 +1592,9 @@ where
         }
 
         if !ready.messages().is_empty() {
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
             ctx.need_flush_trans = true;
             for vec_msg in ready.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
@@ -1785,6 +1788,9 @@ where
         }
 
         if !light_rd.messages().is_empty() {
+            if !self.is_leader() {
+                fail_point!("raft_before_follower_send");
+            }
             ctx.need_flush_trans = true;
             for vec_msg in light_rd.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
