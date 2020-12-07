@@ -40,8 +40,8 @@ command! {
             /// rollbacks that transaction; otherwise returns an error.
             rollback_if_not_exist: bool,
             // This field is set to true only if the transaction is known to fall back from async commit.
-            // CheckTxnStatus rolls back async-commit primary locks only if this field is true.
-            rollback_async_commit: bool,
+            // CheckTxnStatus treats the transaction as non-async-commit if this field is true.
+            async_commit_fallback: bool,
         }
 }
 
@@ -96,7 +96,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 lock,
                 self.current_ts,
                 self.caller_start_ts,
-                self.rollback_async_commit,
+                self.async_commit_fallback,
             ),
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
@@ -153,7 +153,7 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
-        rollback_async_commit: bool,
+        async_commit_fallback: bool,
         status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
         let ctx = Context::default();
@@ -168,7 +168,7 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
-            rollback_async_commit,
+            async_commit_fallback,
         };
         let result = command
             .process_write(
@@ -197,7 +197,7 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
-        rollback_async_commit: bool,
+        async_commit_fallback: bool,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -211,7 +211,7 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
-            rollback_async_commit,
+            async_commit_fallback,
         };
         assert!(command
             .process_write(

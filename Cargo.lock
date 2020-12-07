@@ -1932,7 +1932,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto.git?branch=check-txn-status-rollback-async-commit#0599ca68618d52d343f84e7bb2e2b2faf80e62c9"
+source = "git+https://github.com/sticnarf/kvproto.git?branch=check-txn-status-rollback-async-commit#2932f1492fd724b8a54dfbb2868093c1340b95b3"
 dependencies = [
  "futures 0.3.7",
  "grpcio",

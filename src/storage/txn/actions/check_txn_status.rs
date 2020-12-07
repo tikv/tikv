@@ -17,11 +17,11 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
     mut lock: Lock,
     current_ts: TimeStamp,
     caller_start_ts: TimeStamp,
-    rollback_async_commit: bool,
+    async_commit_fallback: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     // Never rollback or push forward min_commit_ts in check_txn_status if it's using async commit.
     // Rollback of async-commit locks are done during ResolveLock.
-    if lock.use_async_commit && !rollback_async_commit {
+    if lock.use_async_commit && !async_commit_fallback {
         return Ok((TxnStatus::uncommitted(lock, false), None));
     }
 
@@ -36,7 +36,7 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
     // Although we won't really push forward min_commit_ts when caller_start_ts is max,
     // we should return MinCommitTsPushed result to the client to keep backward
     // compatibility.
-    let mut min_commit_ts_pushed = caller_start_ts.is_max();
+    let mut min_commit_ts_pushed = caller_start_ts.is_max() && !lock.use_async_commit;
 
     // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
     // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
