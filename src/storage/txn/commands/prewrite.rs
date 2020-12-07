@@ -712,7 +712,7 @@ mod tests {
     };
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
-    use txn_types::{Key, Mutation};
+    use txn_types::{Key, Mutation, TimeStamp};
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
@@ -914,7 +914,7 @@ mod tests {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        prewrite_with_cm(
+        let res = prewrite_with_cm(
             &engine,
             cm,
             &mut statistics,
@@ -923,7 +923,10 @@ mod tests {
             20,
             Some(30),
         )
-        .unwrap_err();
+        .unwrap();
+        assert!(res.min_commit_ts.is_zero());
+        assert!(res.one_pc_commit_ts.is_zero());
+        must_locked(&engine, key, 20);
     }
 
     #[test]
@@ -987,7 +990,7 @@ mod tests {
 
         let mutations = vec![(Mutation::Put((Key::from_raw(k1), v1.to_vec())), true)];
         statistics = Statistics::default();
-        pessimsitic_prewrite_with_cm(
+        let res = pessimsitic_prewrite_with_cm(
             &engine,
             cm,
             &mut statistics,
@@ -997,168 +1000,136 @@ mod tests {
             20,
             Some(30),
         )
-        .unwrap_err();
+        .unwrap();
+        assert!(res.min_commit_ts.is_zero());
+        assert!(res.one_pc_commit_ts.is_zero());
+        must_locked(&engine, k1, 20);
     }
 
     #[test]
-    fn test_prewrite_async_fallback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(20.into());
-
-        let mutations = vec![
-            Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-            Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
-        ];
-
-        let mut statistics = Statistics::default();
-        prewrite_with_cm(
-            &engine,
-            cm,
-            &mut statistics,
-            mutations,
-            b"k1".to_vec(),
-            10,
-            None,
-        )
-        .unwrap();
-        must_locked(&engine, b"k1", 10);
-        must_locked(&engine, b"k2", 10);
-
-        commit(
-            &engine,
-            &mut statistics,
-            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
-            10,
-            100,
-        )
-        .unwrap();
-        must_unlocked(&engine, b"k1");
-        must_unlocked(&engine, b"k2");
-        must_get(&engine, b"k1", 100, b"v");
-        must_get(&engine, b"k2", 100, b"v");
-    }
-
-    #[test]
-    fn test_prewrite_pessimsitic_async_fallback() {
+    fn test_prewrite_async_commit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
-        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
-        must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
+        let key = b"k";
+        let value = b"v";
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
-        let mutations = vec![
-            (Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true),
-            (Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())), true),
-        ];
         let mut statistics = Statistics::default();
+        let cmd = super::Prewrite::new(
+            mutations,
+            key.to_vec(),
+            10.into(),
+            0,
+            false,
+            1,
+            TimeStamp::default(),
+            TimeStamp::default(),
+            Some(vec![]),
+            false,
+            Context::default(),
+        );
+
+        let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        assert!(!res.min_commit_ts.is_zero());
+        assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
+        must_locked(&engine, key, 10);
 
         cm.update_max_ts(50.into());
-        pessimsitic_prewrite_with_cm(
-            &engine,
-            cm,
-            &mut statistics,
-            mutations,
-            b"k1".to_vec(),
-            10,
-            10,
-            None,
-        )
-        .unwrap();
-        must_locked(&engine, b"k1", 10);
-        must_locked(&engine, b"k2", 10);
 
-        commit(
-            &engine,
-            &mut statistics,
-            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
-            10,
-            100,
-        )
-        .unwrap();
-        must_unlocked(&engine, b"k1");
-        must_unlocked(&engine, b"k2");
-        must_get(&engine, b"k1", 100, b"v");
-        must_get(&engine, b"k2", 100, b"v");
-    }
-
-    #[test]
-    fn test_prewrite_1pc_fallback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(20.into());
+        let (k1, v1) = (b"k1", b"v1");
+        let (k2, v2) = (b"k2", b"v2");
 
         let mutations = vec![
-            Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())),
-            Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())),
+            Mutation::Put((Key::from_raw(k1), v1.to_vec())),
+            Mutation::Put((Key::from_raw(k2), v2.to_vec())),
         ];
-
         let mut statistics = Statistics::default();
-        prewrite_with_cm(
-            &engine,
-            cm,
-            &mut statistics,
+        // calculated_ts > max_commit_ts
+        let cmd = super::Prewrite::new(
             mutations,
-            b"k1".to_vec(),
-            10,
-            Some(15),
-        )
-        .unwrap();
-        must_locked(&engine, b"k1", 10);
-        must_locked(&engine, b"k2", 10);
+            k1.to_vec(),
+            20.into(),
+            0,
+            false,
+            2,
+            TimeStamp::default(),
+            40.into(),
+            Some(vec![k2.to_vec()]),
+            false,
+            Context::default(),
+        );
 
-        commit(
-            &engine,
-            &mut statistics,
-            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
-            10,
-            100,
-        )
-        .unwrap();
-        must_unlocked(&engine, b"k1");
-        must_unlocked(&engine, b"k2");
-        must_get(&engine, b"k1", 100, b"v");
-        must_get(&engine, b"k2", 100, b"v");
+        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
+        assert!(res.min_commit_ts.is_zero());
+        assert!(res.one_pc_commit_ts.is_zero());
+        assert!(!must_locked(&engine, k1, 20).use_async_commit);
+        assert!(!must_locked(&engine, k2, 20).use_async_commit);
     }
 
     #[test]
-    fn test_prewrite_pessimsitic_1pc_fallback() {
+    fn test_prewrite_pessimsitic_async_commit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
-        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
-        must_acquire_pessimistic_lock(&engine, b"k2", b"k1", 10, 10);
+        let key = b"k";
+        let value = b"v";
 
-        let mutations = vec![
-            (Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec())), true),
-            (Mutation::Put((Key::from_raw(b"k2"), b"v".to_vec())), true),
-        ];
+        must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
+
+        let mutations = vec![(Mutation::Put((Key::from_raw(key), value.to_vec())), true)];
         let mut statistics = Statistics::default();
+        let cmd = super::PrewritePessimistic::new(
+            mutations,
+            key.to_vec(),
+            10.into(),
+            0,
+            10.into(),
+            1,
+            TimeStamp::default(),
+            TimeStamp::default(),
+            Some(vec![]),
+            false,
+            Context::default(),
+        );
+
+        let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        assert!(!res.min_commit_ts.is_zero());
+        assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
+        must_locked(&engine, key, 10);
 
         cm.update_max_ts(50.into());
-        pessimsitic_prewrite_with_cm(
-            &engine,
-            cm,
-            &mut statistics,
-            mutations,
-            b"k1".to_vec(),
-            10,
-            10,
-            Some(15),
-        )
-        .unwrap();
-        must_locked(&engine, b"k1", 10);
-        must_locked(&engine, b"k2", 10);
 
-        commit(
-            &engine,
-            &mut statistics,
-            vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
-            10,
-            100,
-        )
-        .unwrap();
-        must_unlocked(&engine, b"k1");
-        must_unlocked(&engine, b"k2");
-        must_get(&engine, b"k1", 100, b"v");
-        must_get(&engine, b"k2", 100, b"v");
+        let (k1, v1) = (b"k1", b"v1");
+        let (k2, v2) = (b"k2", b"v2");
+
+        must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
+        must_acquire_pessimistic_lock(&engine, k2, k1, 20, 20);
+
+        let mutations = vec![
+            (Mutation::Put((Key::from_raw(k1), v1.to_vec())), true),
+            (Mutation::Put((Key::from_raw(k2), v2.to_vec())), true),
+        ];
+        let mut statistics = Statistics::default();
+        // calculated_ts > max_commit_ts
+        let cmd = super::PrewritePessimistic::new(
+            mutations,
+            k1.to_vec(),
+            20.into(),
+            0,
+            20.into(),
+            2,
+            TimeStamp::default(),
+            40.into(),
+            Some(vec![k2.to_vec()]),
+            false,
+            Context::default(),
+        );
+
+        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
+        assert!(res.min_commit_ts.is_zero());
+        assert!(res.one_pc_commit_ts.is_zero());
+        assert!(!must_locked(&engine, k1, 20).use_async_commit);
+        assert!(!must_locked(&engine, k2, 20).use_async_commit);
     }
 }
