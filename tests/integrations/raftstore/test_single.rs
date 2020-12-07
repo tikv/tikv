@@ -190,7 +190,7 @@ fn test_node_apply_no_op() {
     let timer = Instant::now();
     loop {
         let state = cluster.apply_state(1, 1);
-        if state.get_applied_index() >= RAFT_INIT_LOG_INDEX + 1 {
+        if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
             break;
         }
         if timer.elapsed() > Duration::from_secs(3) {
