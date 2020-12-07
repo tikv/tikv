@@ -1021,13 +1021,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn check_leader(
         &mut self,
-<<<<<<< HEAD
-        _ctx: RpcContext<'_>,
-        _req: CheckLeaderRequest,
-        _sink: UnarySink<CheckLeaderResponse>,
-    ) {
-        unimplemented!()
-=======
         ctx: RpcContext<'_>,
         mut request: CheckLeaderRequest,
         sink: UnarySink<CheckLeaderResponse>,
@@ -1051,7 +1044,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         .map(|_| ());
 
         ctx.spawn(task);
->>>>>>> upstream/master
     }
 }
 
