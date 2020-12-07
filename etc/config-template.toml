@@ -807,7 +807,7 @@
 ## compatible with TiKV <= 4.0.8. In order to downgrade to TiKV <= 4.0.8, one can turn off this
 ## option and restart TiKV, after which TiKV will convert the data format to be compatible with
 ## previous versions.
-# enable-file-dictionary-log = true
+# enable-file-dictionary-log = false
 
 ## Specifies master key if encryption is enabled. There are three types of master key:
 ##

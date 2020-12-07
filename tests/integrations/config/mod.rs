@@ -582,7 +582,7 @@ fn test_serde_custom_tikv_config() {
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
-            enable_file_dictionary_log: false,
+            enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 123456,
             master_key: MasterKeyConfig::File {
                 config: FileConfig {

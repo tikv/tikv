@@ -489,7 +489,7 @@ cert-allowed-cn = [
 [security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
-enable-file-dictionary-log = false
+enable-file-dictionary-log = true
 file-dictionary-rewrite-threshold = 123456
 
 [security.encryption.master-key]

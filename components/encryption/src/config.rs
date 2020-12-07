@@ -33,7 +33,7 @@ impl Default for EncryptionConfig {
         EncryptionConfig {
             data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
-            enable_file_dictionary_log: true,
+            enable_file_dictionary_log: false,
             file_dictionary_rewrite_threshold: 1000000,
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
