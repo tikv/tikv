@@ -51,6 +51,7 @@ encryption = { path = "../components/encryption" }
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
 error_code = { path = "../components/error_code" }
+file_system = { path = "../components/file_system" }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }

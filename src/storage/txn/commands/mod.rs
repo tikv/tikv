@@ -13,7 +13,6 @@ pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
 pub(crate) mod pessimistic_rollback;
 pub(crate) mod prewrite;
-pub(crate) mod prewrite_pessimistic;
 pub(crate) mod resolve_lock;
 pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
@@ -30,8 +29,7 @@ pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::Prewrite;
-pub use prewrite_pessimistic::PrewritePessimistic;
+pub use prewrite::{Prewrite, PrewritePessimistic};
 pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
@@ -71,7 +69,6 @@ use tikv_util::collections::HashMap;
 ///
 /// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
 /// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
-// Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),

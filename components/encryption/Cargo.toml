@@ -7,6 +7,7 @@ publish = false
 [features]
 protobuf-codec = ["kvproto/protobuf-codec"]
 prost-codec = ["kvproto/prost-codec"]
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 byteorder = "1.2"
@@ -16,6 +17,7 @@ configuration = { path = "../configuration" }
 crc32fast = "1.2"
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
+fail = "0.4"
 failure = "0.1"
 futures = "0.3"
 lazy_static = "1.3"

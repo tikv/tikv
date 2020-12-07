@@ -63,6 +63,7 @@ heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
+end-point-slow-log-threshold = "1s"
 
 [server.labels]
 a = "b"
@@ -572,6 +573,8 @@ cert-allowed-cn = [
 [security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
+enable-file-dictionary-log = false
+file-dictionary-rewrite-threshold = 123456
 
 [security.encryption.master-key]
 type = "file"

@@ -465,7 +465,8 @@ mod tests {
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
     use crate::storage::txn::{
-        acquire_pessimistic_lock, cleanup, commit, pessimistic_prewrite, prewrite,
+        acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
+        TransactionProperties,
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -532,6 +533,28 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
+        fn txn_props(
+            start_ts: TimeStamp,
+            primary: &[u8],
+            pessimistic: bool,
+        ) -> TransactionProperties {
+            let kind = if pessimistic {
+                TransactionKind::Pessimistic(TimeStamp::default())
+            } else {
+                TransactionKind::Optimistic(false)
+            };
+
+            TransactionProperties {
+                start_ts,
+                kind,
+                commit_kind: CommitKind::TwoPc,
+                primary,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            }
+        }
+
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
@@ -541,14 +564,9 @@ mod tests {
 
             prewrite(
                 &mut txn,
+                &Self::txn_props(start_ts, pk, false),
                 m,
-                pk,
                 &None,
-                false,
-                0,
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
                 false,
             )
             .unwrap();
@@ -567,18 +585,12 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            pessimistic_prewrite(
+            prewrite(
                 &mut txn,
+                &Self::txn_props(start_ts, pk, true),
                 m,
-                pk,
                 &None,
                 true,
-                0,
-                TimeStamp::default(),
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
-                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -655,7 +667,7 @@ mod tests {
                     self.region.clone(),
                 );
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
-                txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
+                gc(&mut txn, Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;

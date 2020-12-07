@@ -105,6 +105,8 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
     pub background_thread_count: usize,
+    // If handle time is larger than the threshold, it will print slow log in end point.
+    pub end_point_slow_log_threshold: ReadableDuration,
 
     // Test only.
     #[doc(hidden)]
@@ -181,6 +183,7 @@ impl Default for Config {
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
+            end_point_slow_log_threshold: ReadableDuration::secs(1),
         }
     }
 }

@@ -499,6 +499,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
+
         gc_worker
     }
 
@@ -510,10 +516,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         >,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Gc,
-            Box::new(gc_worker.get_config_manager()),
-        );
 
         let lock_mgr = LockManager::new();
 
