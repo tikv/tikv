@@ -45,6 +45,8 @@ pub enum IOType {
     Export,
 }
 
+pub const IO_TYPE_VARIANTS: usize = 10;
+
 thread_local! {
     static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
 }

@@ -1294,11 +1294,15 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "fs2",
+ "futures 0.3.7",
  "lazy_static",
+ "libc",
  "openssl",
  "rand",
  "tempfile",
  "tikv_alloc",
+ "time 0.1.42",
+ "tokio",
 ]
 
 [[package]]
