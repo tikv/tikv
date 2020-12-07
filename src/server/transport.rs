@@ -15,7 +15,6 @@ where
     S: StoreAddrResolver + 'static,
 {
     raft_client: RaftClient<S, T>,
-    need_flush: bool,
 }
 
 impl<T, S> Clone for ServerTransport<T, S>
@@ -26,7 +25,6 @@ where
     fn clone(&self) -> Self {
         ServerTransport {
             raft_client: self.raft_client.clone(),
-            need_flush: false,
         }
     }
 }
@@ -35,10 +33,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
     ServerTransport<T, S>
 {
     pub fn new(raft_client: RaftClient<S, T>) -> ServerTransport<T, S> {
-        ServerTransport {
-            raft_client,
-            need_flush: false,
-        }
+        ServerTransport { raft_client }
     }
 }
 
@@ -49,20 +44,16 @@ where
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
         match self.raft_client.send(msg) {
-            Ok(()) => {
-                self.need_flush = true;
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(reason) => Err(raftstore::Error::Transport(reason)),
         }
     }
 
     fn need_flush(&self) -> bool {
-        self.need_flush
+        self.raft_client.need_flush()
     }
 
     fn flush(&mut self) {
-        self.need_flush = false;
         self.raft_client.flush();
     }
 }
