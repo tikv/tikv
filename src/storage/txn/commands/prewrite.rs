@@ -1013,7 +1013,7 @@ mod tests {
         let mut statistics = Statistics::default();
         prewrite_with_cm(
             &engine,
-            cm.clone(),
+            cm,
             &mut statistics,
             mutations,
             b"k1".to_vec(),
@@ -1055,7 +1055,7 @@ mod tests {
         cm.update_max_ts(50.into());
         pessimsitic_prewrite_with_cm(
             &engine,
-            cm.clone(),
+            cm,
             &mut statistics,
             mutations,
             b"k1".to_vec(),
@@ -1094,7 +1094,7 @@ mod tests {
         let mut statistics = Statistics::default();
         prewrite_with_cm(
             &engine,
-            cm.clone(),
+            cm,
             &mut statistics,
             mutations,
             b"k1".to_vec(),
@@ -1136,7 +1136,7 @@ mod tests {
         cm.update_max_ts(50.into());
         pessimsitic_prewrite_with_cm(
             &engine,
-            cm.clone(),
+            cm,
             &mut statistics,
             mutations,
             b"k1".to_vec(),
