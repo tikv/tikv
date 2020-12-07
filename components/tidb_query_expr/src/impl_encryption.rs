@@ -82,10 +82,10 @@ pub fn compress(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     match e.read_to_end(&mut vec) {
         Ok(_) => {
             // according to MySQL doc: append "." if ends with space
-            if vec.last().unwrap() == b' ' {
+            if *vec.last().unwrap() == b' ' {
                 vec.push(b'.');
             }
-            Ok(writer.begin().partial_write(vec.as_ref()))
+            Ok(writer.write_ref(Some(vec.as_ref())))
         }
         _ => Ok(writer.write(None)),
     }
@@ -119,7 +119,7 @@ pub fn uncompress(
     //     a data corrupted warning
     match d.read_to_end(&mut vec) {
         Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => {
-            Ok(writer.begin().partial_write(vec.as_ref()))
+            Ok(writer.write_ref(Some(vec.as_ref())))
         }
         Ok(decoded_len) if len < decoded_len => {
             ctx.warnings.append_warning(Error::zlib_length_corrupted());
