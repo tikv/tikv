@@ -186,6 +186,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
         filter_send(&self.filters, m, |m| ch.send(m))
     }
 
+    fn need_flush(&self) -> bool {
+        self.ch.need_flush()
+    }
+
     fn flush(&mut self) {
         self.ch.flush();
     }

@@ -196,7 +196,6 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         hibernate_timeout: ReadableDuration::hours(1),
-        early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
@@ -684,6 +683,7 @@ fn test_serde_custom_tikv_config() {
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
+        hibernate_regions_compatible: false,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

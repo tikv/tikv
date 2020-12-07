@@ -1,7 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
@@ -30,31 +28,64 @@ pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
 }
 
+#[derive(Clone)]
+pub struct ClientReceiver {
+    receiver: Arc<Mutex<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
+}
+
+impl ClientReceiver {
+    pub fn replace(&self, rx: Option<ClientDuplexReceiver<ChangeDataEvent>>) {
+        let mut receiver = self.receiver.lock().unwrap();
+        *receiver = rx;
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
-    Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> ChangeDataEvent,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
-    let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
+    let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
     let receive_event = move |keep_resolved_ts: bool| loop {
-        let event_feed = event_feed_wrap_clone.as_ref();
-        let mut events = event_feed.replace(None).unwrap();
-        let change_data = block_on(events.next());
-        event_feed.set(Some(events));
-        let change_data_event = change_data.unwrap().unwrap();
+        let mut events;
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            events = (*event_feed).take();
+        }
+        let events_rx = if let Some(events_rx) = events.as_mut() {
+            events_rx
+        } else {
+            return ChangeDataEvent::default();
+        };
+        let change_data = if let Some(event) = block_on(events_rx.next()) {
+            event
+        } else {
+            return ChangeDataEvent::default();
+        };
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            *event_feed = events;
+        }
+        let change_data_event = change_data.unwrap_or_default();
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
         tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
-    (req_tx, event_feed_wrap, receive_event)
+    (
+        req_tx,
+        ClientReceiver {
+            receiver: event_feed_wrap,
+        },
+        Box::new(receive_event),
+    )
 }
 
 pub struct TestSuite {
@@ -114,6 +145,7 @@ impl TestSuite {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
             let cm = ConcurrencyManager::new(1.into());
+            let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
                 &CdcConfig::default(),
                 pd_cli.clone(),
@@ -122,6 +154,8 @@ impl TestSuite {
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
+                env,
+                sim.security_mgr.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
