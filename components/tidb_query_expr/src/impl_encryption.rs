@@ -419,7 +419,7 @@ mod tests {
                 .push_param(arg)
                 .evaluate::<Bytes>(ScalarFuncSig::Uncompress)
                 .unwrap();
-            let expect = expect.map(|s| Bytes::from(s));
+            let expect = expect.map(Bytes::from);
             assert_eq!(output, expect);
         }
         test_unary_func_ok_none::<BytesRef, Bytes>(ScalarFuncSig::Uncompress);
