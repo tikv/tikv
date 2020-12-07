@@ -1290,9 +1290,24 @@ where
                 }
                 _ => {}
             }
+            self.on_leader_changed(ctx, ss.leader_id, self.term());
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
+        }
+    }
+
+    fn on_leader_changed<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        leader_id: u64,
+        term: u64,
+    ) {
+        for peer in self.region().get_peers() {
+            if peer.id == leader_id {
+                let mut meta = ctx.store_meta.lock().unwrap();
+                meta.leaders.insert(self.region_id, (term, peer.clone()));
+            }
         }
     }
 

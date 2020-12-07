@@ -37,7 +37,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage};
+use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
@@ -1021,11 +1021,37 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn check_leader(
         &mut self,
+<<<<<<< HEAD
         _ctx: RpcContext<'_>,
         _req: CheckLeaderRequest,
         _sink: UnarySink<CheckLeaderResponse>,
     ) {
         unimplemented!()
+=======
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        let ts = request.get_ts();
+        let leaders = request.take_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::CheckLeader { leaders, cb })?;
+            let regions = resp.await?;
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("cdc call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+>>>>>>> upstream/master
     }
 }
 
