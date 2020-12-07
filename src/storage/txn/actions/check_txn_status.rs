@@ -44,7 +44,7 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
     // Although we won't really push forward min_commit_ts when caller_start_ts is max,
     // we should return MinCommitTsPushed result to the client to keep backward
     // compatibility.
-    let mut min_commit_ts_pushed = caller_start_ts.is_max() && !lock.use_async_commit;
+    let mut min_commit_ts_pushed = caller_start_ts.is_max();
 
     // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
     // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
