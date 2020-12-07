@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This document contains functionality for handling optimistic and pessimistic prewrites. These
-//! are separate commands (although maybe they shouldn't be since there is only one protobuf), but
+//! Functionality for handling optimistic and pessimistic prewrites. These are separate commands
+//! (although maybe they shouldn't be since there is only one protobuf), but
 //! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
 //! kinds of prewrite.
 
@@ -543,6 +543,8 @@ impl<K: PrewriteKind> Prewriter<K> {
 
 /// Encapsulates things which must be done differently for optimistic or pessimistic transactions.
 trait PrewriteKind {
+    /// The type of mutation and, optionally, its extra information, differing for the
+    /// optimistic and pessimistic transaction.
     type Mutation: MutationLock;
 
     fn txn_kind(&self) -> TransactionKind;
@@ -557,6 +559,7 @@ trait PrewriteKind {
     }
 }
 
+/// Optimistic `PreWriteKind`.
 struct Optimistic {
     skip_constraint_check: bool,
 }
@@ -598,6 +601,7 @@ impl PrewriteKind for Optimistic {
     }
 }
 
+/// Pessimistic `PreWriteKind`.
 struct Pessimistic {
     for_update_ts: TimeStamp,
 }
@@ -610,10 +614,11 @@ impl PrewriteKind for Pessimistic {
     }
 }
 
-/// See PrewriteKind::Mutation. This is either just a mutation (for optimistic
-/// transactions, since they never include locks) or a mutation and a bool (for
-/// pessimistic transactions, where the bool indicates if the mutation is taking
-/// a pessimistic lock).
+/// The type of mutation and, optionally, its extra information, differing for the
+/// optimistic and pessimistic transaction.
+/// For optimistic txns, this is `Mutation`.
+/// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
+/// whether the mutation takes a pessimistic lock or not.
 trait MutationLock {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
