@@ -30,14 +30,9 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
-            match eval_tp {
-                EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                EvalType::Json => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
-                EvalType::Bytes => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity)),
-                EvalType::Enum => VectorValue::Enum(ChunkedVecEnum::with_capacity(capacity)),
-                EvalType::Set => VectorValue::Set(ChunkedVecSet::with_capacity(capacity)),
+        match_template_evaluable! {
+            TT, match eval_tp {
+                EvalType::TT => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
         }
     }
@@ -45,14 +40,9 @@ impl VectorValue {
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
-            match self {
-                VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                VectorValue::Json(_) => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
-                VectorValue::Bytes(_) => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity)),
-                VectorValue::Enum(_) => VectorValue::Enum(ChunkedVecEnum::with_capacity(capacity)),
-                VectorValue::Set(_) => VectorValue::Set(ChunkedVecSet::with_capacity(capacity)),
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(_) => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
         }
     }
