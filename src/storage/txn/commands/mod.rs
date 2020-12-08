@@ -37,9 +37,6 @@ pub use rollback::Rollback;
 pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
-#[cfg(test)]
-pub(crate) use prewrite::FORWARD_MIN_MUTATIONS_NUM;
-
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
@@ -519,7 +516,7 @@ impl Command {
         }
     }
 
-    pub(super) fn process_write<S: Snapshot, L: LockManager>(
+    pub(crate) fn process_write<S: Snapshot, L: LockManager>(
         self,
         snapshot: S,
         context: WriteContext<'_, L>,

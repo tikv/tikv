@@ -1,8 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-#[allow(unused_imports)]
-use crate::storage::mvcc::ErrorInner;
 use crate::storage::mvcc::{reader::MvccReader, Result};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -251,6 +249,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
+
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
     pub(crate) fn check_write_and_rollback_lock(
@@ -390,7 +389,12 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 #[cfg(feature = "failpoints")]
-pub(crate) fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInner {
+pub(crate) fn make_txn_error(
+    s: Option<String>,
+    key: &Key,
+    start_ts: TimeStamp,
+) -> crate::storage::mvcc::ErrorInner {
+    use crate::storage::mvcc::ErrorInner;
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {

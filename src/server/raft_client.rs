@@ -887,6 +887,10 @@ where
         Err(DiscardReason::Disconnected)
     }
 
+    pub fn need_flush(&self) -> bool {
+        !self.need_flush.is_empty()
+    }
+
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
         if self.need_flush.is_empty() {
