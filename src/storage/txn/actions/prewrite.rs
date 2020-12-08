@@ -611,7 +611,7 @@ pub mod tests {
         assert!(!lock.use_async_commit);
         assert!(lock.secondaries.is_empty());
 
-        // deny overwrites with async commit prewrit
+        // deny overwrites with async commit prewrite
         must_prewrite_put_async_commit(&engine, b"k", b"v", b"k", &Some(vec![vec![1]]), 10, 20);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
