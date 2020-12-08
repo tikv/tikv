@@ -2126,6 +2126,113 @@ mod tests_normal {
         );
     }
 
+    fn enum_fn() -> NormalRpnFn {
+        let item_fn = parse_str(
+            r#"
+            #[inline]
+            fn foo(arg0: EnumRef) -> Result<Option<Decimal>> {
+                Ok(None)
+            }
+        "#,
+        )
+        .unwrap();
+        NormalRpnFn::new(
+            RpnFnAttr {
+                is_varg: false,
+                is_raw_varg: false,
+                max_args: None,
+                min_args: None,
+                extra_validator: None,
+                metadata_mapper: None,
+                metadata_type: None,
+                captures: Vec::new(),
+                nullable: false,
+                writer: false,
+            },
+            item_fn,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_enum_fn_generate_real_fn_trait_impl() {
+        let gen = enum_fn();
+        let expected: TokenStream = quote! {
+            impl<'arg_, Arg0_: crate::function::RpnFnArg<Type = Option<EnumRef<'arg_>>>> Foo_Fn
+                for crate::function::Arg<Arg0_, crate::function::Null>
+            {
+                default fn eval(
+                    self,
+                    ctx: &mut tidb_query_datatype::expr::EvalContext,
+                    output_rows: usize,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
+                    metadata: &(dyn std::any::Any + Send),
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    let arg = &self;
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
+                    use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
+                    let (vecs, fastpath, all_null) = {
+                        let mut vecs: Vec<&BitVec> = vec![];
+                        let mut fastpath = true;
+                        let mut all_null = false;
+                        let ((arg0, scalar_val), arg) = arg.get_bit_vec();
+                        if let Some(x) = arg0 {
+                            vecs.push(x);
+                            if !scalar_val {
+                                fastpath = false;
+                            }
+                        } else {
+                            if !scalar_val {
+                                all_null = true;
+                            }
+                        };
+                        if all_null {
+                            (vec![], false, true)
+                        } else if !fastpath {
+                            (vec![], false, false)
+                        } else {
+                            (vecs, true, false)
+                        }
+                    };
+                    if all_null {
+                        let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
+                        for i in 0..output_rows {
+                            result.push(None);
+                        }
+                        return Ok(Decimal::into_vector_value(result));
+                    }
+                    if !fastpath {
+                        for row_index in 0..output_rows {
+                            let (arg0, arg) = arg.extract(row_index);
+                            if arg0.is_none() {
+                                result.push(None);
+                                continue;
+                            }
+                            let arg0 = arg0.unwrap();
+                            result.push(foo(arg0)?);
+                        }
+                        return Ok(Decimal::into_vector_value(result));
+                    }
+                    for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
+                        if !val {
+                            result.push(None);
+                            continue;
+                        }
+                        let (arg0, arg) = arg.extract(row_index);
+                        let arg0 = arg0.unwrap();
+                        result.push(foo(arg0)?);
+                    }
+                    Ok(Decimal::into_vector_value(result))
+                }
+            }
+        };
+        assert_eq!(
+            expected.to_string(),
+            gen.generate_real_fn_trait_impl().to_string()
+        );
+    }
+
     #[test]
     fn test_get_type_path_ref() {
         let input = quote! { &Int };
