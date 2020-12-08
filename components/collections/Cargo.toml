@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 fxhash = "0.2.1"
+tikv_alloc = { path = "../tikv_alloc" }

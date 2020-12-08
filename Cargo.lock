@@ -673,6 +673,7 @@ name = "collections"
 version = "0.1.0"
 dependencies = [
  "fxhash",
+ "tikv_alloc",
 ]
 
 [[package]]
