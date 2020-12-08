@@ -1721,14 +1721,16 @@ mod tests_normal {
     use proc_macro2::TokenTree;
 
     /// Compare TokenStream with all white chars trimmed.
-    fn assert_token_stream_equal(l: TokenStream, r: TokenStream) -> bool {
+    fn assert_token_stream_equal(l: TokenStream, r: TokenStream) {
         let result = l
             .clone()
             .into_iter()
             .eq_by(r.clone().into_iter(), |x, y| match x {
                 TokenTree::Group(x) => {
                     if let TokenTree::Group(y) = y {
-                        assert_token_stream_equal(x.stream(), y.stream())
+                        assert_token_stream_equal(x.stream(), y.stream());
+
+                        true
                     } else {
                         false
                     }
@@ -1757,8 +1759,6 @@ mod tests_normal {
             });
 
         assert!(result, "expect: {}, actual: {}", &l, &r);
-
-        true
     }
 
     fn no_generic_fn() -> NormalRpnFn {
