@@ -340,7 +340,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                             &mut EvalContext::default(),
                             &mut handle_col_val,
                         )?;
-                        data.extend_from_slice(&handle_col_val);
+                        data.append(&mut handle_col_val);
                         if let Some(common_handle_cms) = common_handle_cms.as_mut() {
                             common_handle_cms.insert(&data);
                         }
@@ -382,13 +382,15 @@ impl<S: Snapshot> SampleBuilder<S> {
                 }
             }
         }
-        let mut idx_res: Option<AnalyzeIndexResult> = None;
+        let idx_res =
         if self.analyze_common_handle {
-            idx_res = Some(AnalyzeIndexResult::new(
+            Some(AnalyzeIndexResult::new(
                 common_handle_hist,
                 common_handle_cms,
             ))
-        }
+        } else {
+            None
+        };
         Ok((AnalyzeColumnsResult::new(collectors, pk_builder), idx_res))
     }
 }
