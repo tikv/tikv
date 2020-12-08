@@ -2204,6 +2204,7 @@ impl Default for BackupConfig {
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub old_value_cache_size: usize,
+    pub hibernate_regions_compatible: bool,
 }
 
 impl Default for CdcConfig {
@@ -2211,6 +2212,7 @@ impl Default for CdcConfig {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
             old_value_cache_size: 1024,
+            hibernate_regions_compatible: true,
         }
     }
 }
@@ -2429,6 +2431,11 @@ impl TiKvConfig {
                 duration_to_sec(expect_keepalive)
             )
             .into());
+        }
+
+        if self.raft_store.hibernate_regions && !self.cdc.hibernate_regions_compatible {
+            warn!("raftstore.hibernate-regions was enabled but cdc.hibernate-regions-compatible \
+                was disabled, hibernate regions may be broken up if you want to deploy a cdc cluster");
         }
 
         self.rocksdb.validate()?;

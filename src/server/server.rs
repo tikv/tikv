@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
-use grpcio::{
-    ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
-};
+use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
@@ -80,6 +78,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E, T>,
+        env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
     ) -> Result<Self> {
@@ -100,12 +99,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let readpool_normal_thread_load =
             Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .build(),
-        );
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
@@ -180,6 +173,10 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
     pub fn transport(&self) -> ServerTransport<T, S> {
         self.trans.clone()
+    }
+
+    pub fn env(&self) -> Arc<Environment> {
+        self.env.clone()
     }
 
     /// Register a gRPC service.
@@ -363,11 +360,12 @@ mod tests {
     use crate::coprocessor::{self, readpool_impl};
     use crate::server::TestRaftStoreRouter;
     use crate::storage::TestStorageBuilder;
+    use grpcio::EnvBuilder;
     use raftstore::store::transport::Transport;
     use raftstore::store::*;
 
     use crate::storage::lock_manager::DummyLockManager;
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
     use security::SecurityConfig;
     use tokio::runtime::Builder as TokioBuilder;
@@ -421,6 +419,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+        let env = Arc::new(
+            EnvBuilder::new()
+                .cq_count(1)
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .build(),
+        );
 
         let mut gc_worker = GcWorker::new(
             storage.get_engine(),
@@ -442,6 +446,7 @@ mod tests {
             &cfg,
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
+            PerfLevel::EnableCount,
         );
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
@@ -464,6 +469,7 @@ mod tests {
             },
             SnapManager::new(""),
             gc_worker,
+            env,
             None,
             debug_thread_pool,
         )

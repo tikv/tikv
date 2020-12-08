@@ -10,6 +10,7 @@ use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::*;
+use security::SecurityConfig;
 use uuid::Uuid;
 
 use test_raftstore::*;
@@ -17,12 +18,15 @@ use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
-pub fn new_cluster() -> (Cluster<ServerCluster>, Context) {
+pub fn new_cluster(security_conf: Option<SecurityConfig>) -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
     cluster.cfg.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
     cluster.cfg.server.grpc_concurrency = 1;
+    if let Some(cfg) = security_conf {
+        cluster.cfg.security = cfg;
+    }
     cluster.run();
 
     let region_id = 1;
@@ -36,23 +40,51 @@ pub fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     (cluster, ctx)
 }
 
-pub fn new_cluster_and_tikv_import_client(
+fn open_cluster_and_tikv_import_client(
+    security_cfg: Option<SecurityConfig>,
 ) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
-    let (cluster, ctx) = new_cluster();
+    let (cluster, ctx) = new_cluster(security_cfg.clone());
 
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        ChannelBuilder::new(env)
+        let builder = ChannelBuilder::new(env)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
-            .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into())
-            .connect(&cluster.sim.rl().get_addr(node))
+            .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
+
+        if security_cfg.is_some() {
+            let creds = test_util::new_channel_cred();
+            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
+        } else {
+            builder.connect(&cluster.sim.rl().get_addr(node))
+        }
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch);
 
     (cluster, ctx, tikv, import)
+}
+
+pub fn new_cluster_and_tikv_import_client(
+) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
+    open_cluster_and_tikv_import_client(None)
+}
+
+pub fn new_cluster_and_tikv_import_client_tde() -> (
+    tempfile::TempDir,
+    Cluster<ServerCluster>,
+    Context,
+    TikvClient,
+    ImportSstClient,
+) {
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let encryption_cfg = test_util::new_file_security_config(&tmp_dir);
+    let mut security = test_util::new_security_cfg(None);
+    security.encryption = encryption_cfg;
+
+    let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(security));
+    (tmp_dir, cluster, ctx, tikv, import)
 }
 
 pub fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {

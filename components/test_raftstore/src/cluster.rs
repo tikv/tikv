@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::Entry;
 use std::error::Error as StdError;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::*;
@@ -274,8 +275,16 @@ impl<T: Simulator> Cluster<T> {
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
         }
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-        self.store_metas.insert(node_id, store_meta.clone());
+        let store_meta = match self.store_metas.entry(node_id) {
+            Entry::Occupied(o) => {
+                let mut meta = o.get().lock().unwrap();
+                *meta = StoreMeta::new(PENDING_MSG_CAP);
+                o.get().clone()
+            }
+            Entry::Vacant(v) => v
+                .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
+                .clone(),
+        };
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
@@ -1269,7 +1278,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
@@ -1277,13 +1286,29 @@ impl<T: Simulator> Cluster<T> {
         let source_region = block_on(self.pd_client.get_region_by_id(source))
             .unwrap()
             .unwrap();
-        let req = new_admin_request(
+        new_admin_request(
             source_region.get_id(),
             source_region.get_region_epoch(),
             prepare_merge,
-        );
-        self.call_command_on_leader(req, Duration::from_secs(5))
-            .unwrap()
+        )
+    }
+
+    pub fn merge_region(&mut self, source: u64, target: u64, cb: Callback<RocksSnapshot>) {
+        let mut req = self.new_prepare_merge(source, target);
+        let leader = self.leader_of_region(source).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .rl()
+            .async_command_on_node(leader.get_store_id(), req, cb)
+            .unwrap();
+    }
+
+    pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
+        self.call_command_on_leader(
+            self.new_prepare_merge(source, target),
+            Duration::from_secs(5),
+        )
+        .unwrap()
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {
@@ -1383,7 +1408,7 @@ impl<T: Simulator> Cluster<T> {
             &router,
             region_id,
             CasualMessage::AccessPeer(Box::new(move |peer: &mut dyn AbstractPeer| {
-                let idx = peer.raft_committed_index();
+                let idx = peer.raft_commit_index();
                 peer.raft_request_snapshot(idx);
                 debug!("{} request snapshot at {:?}", idx, peer.meta_peer());
                 request_tx.send(idx).unwrap();
