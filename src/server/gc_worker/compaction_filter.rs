@@ -400,7 +400,7 @@ impl WriteCompactionFilter {
                     CmpOrdering::Equal => {
                         // It's possible that there are multiple `key_ts` in different levels.
                         // A potential case is that a snapshot has been ingested.
-                        let seq = write_iter.as_raw().sequence().unwrap();
+                        let seq = write_iter.sequence().unwrap();
                         assert!(seq >= *filtered_seqno);
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
@@ -601,14 +601,14 @@ impl CompactionFilter for WriteCompactionFilter {
 fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
-        Err(_) => Err(format!("invalid write cf key: {}", log_wrapper::Value(key))),
+        Err(_) => Err(format!("invalid write cf key: {}", log_wrappers::Value(key))),
     }
 }
 
 fn truncate_ts(key: &[u8]) -> Result<&[u8], String> {
     match Key::truncate_ts_for(key) {
         Ok(prefix) => Ok(prefix),
-        Err(_) => Err(format!("invalid write cf key: {}", log_wrapper::Value(key))),
+        Err(_) => Err(format!("invalid write cf key: {}", log_wrappers::Value(key))),
     }
 }
 
@@ -617,7 +617,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
             "invalid write cf value: {}",
-            log_wrapper::Value(value)
+            log_wrappers::Value(value)
         )),
     }
 }
