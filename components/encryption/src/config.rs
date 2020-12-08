@@ -19,7 +19,9 @@ pub struct EncryptionConfig {
     #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
     #[config(skip)]
-    pub file_rewrite_threshold: u64,
+    pub enable_file_dictionary_log: bool,
+    #[config(skip)]
+    pub file_dictionary_rewrite_threshold: u64,
     #[config(skip)]
     pub master_key: MasterKeyConfig,
     #[config(skip)]
@@ -31,9 +33,11 @@ impl Default for EncryptionConfig {
         EncryptionConfig {
             data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
+            // The option is available since TiKV 4.0.9.
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 1000000,
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
-            file_rewrite_threshold: 1000000,
         }
     }
 }
@@ -190,11 +194,14 @@ mod tests {
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 1000000,
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"
         data-key-rotation-period = "14d"
+        enable-file-dictionary-log = true
+        file-dictionary-rewrite-threshold = 1000000
         [previous-master-key]
         type = "plaintext"
         [master-key]

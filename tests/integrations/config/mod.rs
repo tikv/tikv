@@ -196,7 +196,6 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         hibernate_timeout: ReadableDuration::hours(1),
-        early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
@@ -652,13 +651,14 @@ fn test_serde_custom_tikv_config() {
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
+            enable_file_dictionary_log: false,
+            file_dictionary_rewrite_threshold: 123456,
             master_key: MasterKeyConfig::File {
                 config: FileConfig {
                     path: "/master/key/path".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         },
     };
     value.backup = BackupConfig { num_threads: 456 };
@@ -683,6 +683,7 @@ fn test_serde_custom_tikv_config() {
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
+        hibernate_regions_compatible: false,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
