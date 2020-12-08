@@ -689,19 +689,10 @@ fn handle_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>, commit_ts: TimeStamp) -> 
 }
 
 /// Change all 1pc locks in txn to 2pc locks.
-pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
-) -> ReleasedLocks {
-    let mut released_locks = ReleasedLocks::new(txn.start_ts, TimeStamp::zero());
-
-    for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+pub(in crate::storage::txn) fn fallback_1pc_locks<S: Snapshot>(txn: &mut MvccTxn<S>) {
+    for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
         txn.put_lock(key.clone(), &lock);
-        if delete_pessimistic_lock {
-            released_locks.push(txn.unlock_key(key, true));
-        }
     }
-
-    released_locks
 }
 
 #[cfg(test)]
