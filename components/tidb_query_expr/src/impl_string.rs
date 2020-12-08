@@ -108,9 +108,9 @@ pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
     let offset = if C::IS_CASE_INSENSITIVE {
-        find_str(&s, &substr)
-    } else {
         find_str(&s.to_lowercase(), &substr.to_lowercase())
+    } else {
+        find_str(&s, &substr)
     };
     Ok(Some(offset.map_or(0, |i| 1 + i as i64)))
 }
@@ -143,9 +143,9 @@ pub fn locate_3_args_utf8<C: Collator>(
         None => return Ok(Some(0)),
     };
     let offset = if C::IS_CASE_INSENSITIVE {
-        find_str(&s[start..], &substr)
-    } else {
         find_str(&s[start..].to_lowercase(), &substr.to_lowercase())
+    } else {
+        find_str(&s[start..], &substr)
     };
     Ok(Some(offset.map_or(0, |i| pos + i as i64)))
 }
