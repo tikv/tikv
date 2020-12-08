@@ -1380,8 +1380,8 @@ mod tests {
                         .collation(Collation::Utf8Mb4Bin)
                         .build(),
                 )
-                .push_param(substr.map(|substr| substr))
-                .push_param(s.map(|s| s))
+                .push_param(substr)
+                .push_param(s)
                 .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
             {
                 Ok(output) => assert_eq!(output, exp),
@@ -1519,8 +1519,8 @@ mod tests {
                         .collation(Collation::Utf8Mb4Bin)
                         .build(),
                 )
-                .push_param(substr.map(|substr| substr))
-                .push_param(s.map(|s| s))
+                .push_param(substr)
+                .push_param(s)
                 .push_param(pos)
                 .evaluate(ScalarFuncSig::Locate3ArgsUtf8)
             {
