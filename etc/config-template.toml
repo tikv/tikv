@@ -802,6 +802,13 @@
 ## Specifies how often TiKV rotates data encryption key.
 # data-key-rotation-period = "7d"
 
+## Enable an optimization to reduce IO and mutex contention for encryption metadata management.
+## Once the option is turned on (which is the default after 4.0.9), the data format is not
+## compatible with TiKV <= 4.0.8. In order to downgrade to TiKV <= 4.0.8, one can turn off this
+## option and restart TiKV, after which TiKV will convert the data format to be compatible with
+## previous versions.
+# enable-file-dictionary-log = true
+
 ## Specifies master key if encryption is enabled. There are three types of master key:
 ##
 ##   * "plaintext":
