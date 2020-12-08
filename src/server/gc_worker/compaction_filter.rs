@@ -34,6 +34,8 @@ const NEAR_SEEK_LIMIT: usize = 8;
 // of GC are distributed to other replicas by Raft.
 const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
 
+// Global context to create a compaction filter for write CF. It's necessary as these fields are
+// not available when construcing `WriteCompactionFilterFactory`.
 struct GcContext {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
@@ -45,26 +47,34 @@ struct GcContext {
 
 lazy_static! {
     static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
+
+    // Filtered keys in `WriteCompactionFilter::filter_v2`.
     static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filtered",
         "Filtered versions by compaction"
     )
     .unwrap();
+    // Deleted keys in `WriteCompactionFilter::filter_v2`. It only happends when handling
+    // MVCC-delete marks at the bottommost level.
     static ref GC_COMPACTION_DELETED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_deleted",
         "Deleted versions by compaction"
     )
     .unwrap();
+    // A counter for errors met by `WriteCompactionFilter`.
     static ref GC_COMPACTION_FAILURE: IntCounter = register_int_counter!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure"
     )
     .unwrap();
+    // A counter for skip performing GC in compactions.
     static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_skip",
         "Skip to create compaction filter for GC because of table properties"
     )
     .unwrap();
+
+    // When handling MVCC-delete marks an iterator is used to scan all elder versions.
     static ref GC_COMPACTION_FILTER_SEEK: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_seek",
         "Seek times for the compaction filter internal iterator"
@@ -77,6 +87,8 @@ lazy_static! {
     .unwrap();
 
     // It's relative to a key logic for handling mvcc delete marks.
+    // When handling a MVCC-delete mark all elder versions should be deleted explicitly. However if
+    // some of them are already filtered by the compaction, it's unnecessary to delete them again.
     static ref GC_COMPACTION_MVCC_DELETE_SKIP_OLDER: IntCounter = register_int_counter!(
         "tikv_gc_compaction_mvcc_delete_skip_older",
         "Counter of skiped versions for bottommost deletes"
@@ -153,8 +165,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         if safe_point == 0 {
-            debug!("skip gc in compaction filter because of no safe point");
             // Safe point has not been initialized yet.
+            debug!("skip gc in compaction filter because of no safe point");
             return std::ptr::null_mut();
         }
 
@@ -214,6 +226,9 @@ struct WriteCompactionFilter {
     // Layout: (delete_mark, vec![(ts, sequence), ...]).
     #[allow(clippy::type_complexity)]
     deleting_filtered: Option<(Vec<u8>, Vec<(u64, u64)>)>,
+    // To determine whether use `seek` or `next` to find the next MVCC-delete mark.
+    // If `near_seek_distance` is less then `NEAR_SEEK_LIMIT`, `next` will be used
+    // instead of `seek`.
     near_seek_distance: usize,
     write_iter: Option<RocksEngineIterator>,
 
@@ -276,6 +291,8 @@ impl WriteCompactionFilter {
         };
 
         if filter.is_bottommost_level {
+            // MVCC-delete marks can only be handled in the bottommost level.
+            // PTAL at test case `test_remove_and_skip_until`.
             let db = filter.engine.as_inner();
             let cf = db.cf_handle(CF_WRITE).unwrap();
             let iter = DBIterator::new_cf(db.clone(), cf, ReadOptions::new());
@@ -335,6 +352,8 @@ impl WriteCompactionFilter {
         self.filtered += 1;
         self.handle_filtered_write(write)?;
         let decision = if self.remove_older {
+            // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
+            // leaving tombstones, which can only be freed at the bottommost level.
             debug_assert!(commit_ts > 0);
             let prefix = Key::from_encoded_slice(key_prefix);
             let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
@@ -347,12 +366,13 @@ impl WriteCompactionFilter {
 
     fn meet_a_key_in_filter(&mut self) {
         if self.is_bottommost_level && self.deleting_filtered.is_none() {
-            // The compaction hasn't met the next MVCC delete mark.
+            // The compaction hasn't met the next MVCC-delete mark.
             self.near_seek_distance += 1;
         }
     }
 
-    // Do gc before a delete mark.
+    // It's possible that elder versions than a MVCC-delete mark occurs in a higher level.
+    // So those versions needs to be handled by scan + delete.
     fn handle_delete_mark(&mut self) -> Result<(), String> {
         let (mark, mut filtered) = match self.deleting_filtered.take() {
             Some((x, y)) => (x, y.into_iter().peekable()),
@@ -372,17 +392,19 @@ impl WriteCompactionFilter {
             if truncate_ts(key)? != self.key_prefix.as_slice() {
                 break;
             }
-            let (_, commit_ts) = split_ts(key)?;
+            let (_, current_ts) = split_ts(key)?;
             let mut need_delete = true;
-            while let Some((ts, s)) = filtered.peek() {
-                match commit_ts.cmp(ts) {
+            while let Some((ts, filtered_seqno)) = filtered.peek() {
+                match current_ts.cmp(ts) {
                     CmpOrdering::Less => break,
                     CmpOrdering::Equal => {
+                        // It's possible that there are multiple `key_ts` in different levels.
+                        // A potential case is that a snapshot has been ingested.
                         let seq = write_iter.as_raw().sequence().unwrap();
-                        assert!(seq >= *s);
+                        assert!(seq >= *filtered_seqno);
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
-                        need_delete = seq > *s;
+                        need_delete = seq > *filtered_seqno;
                         if !need_delete {
                             self.mvcc_delete_skip_older += 1;
                         }
@@ -511,6 +533,8 @@ thread_local! {
 }
 
 impl Drop for WriteCompactionFilter {
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
+    // becomes installed into the DB instance.
     fn drop(&mut self) {
         self.handle_delete_mark().unwrap();
         self.switch_key_metrics();
@@ -577,14 +601,14 @@ impl CompactionFilter for WriteCompactionFilter {
 fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
-        Err(_) => Err(format!("invalid write cf key: {}", hex::encode_upper(key))),
+        Err(_) => Err(format!("invalid write cf key: {}", log_wrapper::Value(key))),
     }
 }
 
 fn truncate_ts(key: &[u8]) -> Result<&[u8], String> {
     match Key::truncate_ts_for(key) {
         Ok(prefix) => Ok(prefix),
-        Err(_) => Err(format!("invalid write cf key: {}", hex::encode_upper(key))),
+        Err(_) => Err(format!("invalid write cf key: {}", log_wrapper::Value(key))),
     }
 }
 
@@ -593,7 +617,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef, String> {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
             "invalid write cf value: {}",
-            hex::encode_upper(value)
+            log_wrapper::Value(value)
         )),
     }
 }
@@ -1005,14 +1029,14 @@ pub mod tests {
             let mut iter = raw_engine.iterator_cf_opt(CF_WRITE, opts).unwrap();
             let mut valid = iter.seek(SeekKey::Start).unwrap();
             while valid {
-                let seqno = iter.as_raw().sequence().unwrap();
+                let seqno = iter.sequence().unwrap();
                 assert!(seqno > 0, "ingested sst's seqno must be greater than 0");
                 valid = iter.next().unwrap();
             }
         }
     }
 
-    // When handling MVCC delete marks at the bottommost level, filtered keys won't
+    // When handling MVCC-delete marks at the bottommost level, filtered keys won't
     // be rewritten again by DB::delete.
     #[test]
     fn test_mvcc_delete_skip_filtered() {
