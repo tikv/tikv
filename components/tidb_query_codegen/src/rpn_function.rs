@@ -1758,7 +1758,7 @@ mod tests_normal {
 
         assert!(result, "expect: {}, actual: {}", &l, &r);
 
-        result
+        true
     }
 
     fn no_generic_fn() -> NormalRpnFn {
