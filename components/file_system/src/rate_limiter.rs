@@ -63,6 +63,10 @@ mod inner {
     }
 }
 
+fn sub(a: Timespec, b: Timespec) -> Duration {
+    (a - b).to_std().unwrap()
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum IOPriority {
     Limited,
@@ -91,86 +95,107 @@ impl PerTypeIORateLimiter {
         }
     }
 
+    #[inline]
+    fn request_fast(&self, bytes: usize) -> Option<usize> {
+        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        if self.consumed.load(Ordering::Acquire) < cached_bytes_per_refill {
+            let after = self.consumed.fetch_add(bytes, Ordering::Relaxed);
+            let exceeded = std::cmp::max(0, after - cached_bytes_per_refill);
+            if exceeded < bytes {
+                return Some(bytes - exceeded);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn refill_and_request(&self, bytes: usize) -> usize {
+        let token = std::cmp::min(self.bytes_per_refill.load(Ordering::Relaxed), bytes);
+        self.consumed.store(token, Ordering::Relaxed);
+        self.condv.notify_all();
+        token
+    }
+
     pub fn request(&self, bytes: usize, priority: IOPriority) -> usize {
         if priority == IOPriority::NotLimited {
             self.consumed.fetch_add(bytes as usize, Ordering::Relaxed);
             return bytes;
         }
-        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
-        let mut cached_consumed = self.consumed.load(Ordering::Relaxed);
         loop {
-            if cached_consumed < cached_bytes_per_refill {
-                let after = self.consumed.fetch_add(bytes, Ordering::Relaxed);
-                let exceeded = std::cmp::max(0, after - cached_bytes_per_refill);
-                if exceeded < bytes {
-                    break bytes - exceeded;
-                }
+            if let Some(bytes) = self.request_fast(bytes) {
+                break bytes;
+            }
+            let mut last_refill_time = self.last_refill_time.lock().unwrap();
+            // double check
+            if self.consumed.load(Ordering::Relaxed) < self.bytes_per_refill.load(Ordering::Relaxed)
+            {
+                continue;
             }
             let now = monotonic_raw_now();
-            let mut last_refill_time = self.last_refill_time.lock().unwrap();
-            if (now - *last_refill_time).to_std().unwrap() >= self.refill_period {
-                *last_refill_time = now;
-                let token = std::cmp::min(cached_bytes_per_refill, bytes);
-                self.consumed.store(token, Ordering::Relaxed);
-                self.condv.notify_all();
-                break token;
-            }
-            let cached_last_refill_time = *last_refill_time;
-            cached_consumed = self.consumed.load(Ordering::Relaxed);
-            if cached_consumed >= cached_bytes_per_refill {
-                let mut last_refill_time = self
-                    .condv
-                    .wait_timeout(last_refill_time, self.refill_period);
-                if *last_refill_time == cached_last_refill_time {
-                    *last_refill_time = monotonic_raw_now();
-                    let token = std::cmp::min(cached_bytes_per_refill, bytes);
-                    self.consumed.store(token, Ordering::Relaxed);
-                    break token;
+            if now > *last_refill_time {
+                let since_last_refill = sub(now, *last_refill_time);
+                if since_last_refill >= self.refill_period {
+                    *last_refill_time = now;
+                    break self.refill_and_request(bytes);
+                } else {
+                    let cached_last_refill_time = *last_refill_time;
+                    let (mut last_refill_time, timed_out) = self
+                        .condv
+                        .wait_timeout(last_refill_time, self.refill_period - since_last_refill);
+                    let now = monotonic_raw_now();
+                    if timed_out && *last_refill_time == cached_last_refill_time {
+                        // timeout, try do the refill myself
+                        if sub(now, cached_last_refill_time) >= self.refill_period {
+                            *last_refill_time = now;
+                            break self.refill_and_request(bytes);
+                        }
+                        // assume supirous wakeup is rare
+                    }
                 }
             }
         }
     }
 
-    async fn async_request(&self, bytes: usize, priority: IOPriority) -> usize {
+    pub async fn async_request(&self, bytes: usize, priority: IOPriority) -> usize {
         if priority == IOPriority::NotLimited {
             self.consumed.fetch_add(bytes as usize, Ordering::Relaxed);
             return bytes;
         }
-        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
-        let mut cached_consumed = self.consumed.load(Ordering::Relaxed);
         loop {
-            if cached_consumed < cached_bytes_per_refill {
-                let after = self.consumed.fetch_add(bytes, Ordering::Relaxed);
-                let exceeded = std::cmp::max(0, after - cached_bytes_per_refill);
-                if exceeded < bytes {
-                    break bytes - exceeded;
-                }
+            if let Some(bytes) = self.request_fast(bytes) {
+                break bytes;
+            }
+            let mut last_refill_time = self.last_refill_time.lock().unwrap();
+            // double check
+            if self.consumed.load(Ordering::Relaxed) < self.bytes_per_refill.load(Ordering::Relaxed)
+            {
+                continue;
             }
             let now = monotonic_raw_now();
-            let mut last_refill_time = self.last_refill_time.lock().unwrap();
-            if (now - *last_refill_time).to_std().unwrap() >= self.refill_period {
-                *last_refill_time = now;
-                let token = std::cmp::min(cached_bytes_per_refill, bytes);
-                self.consumed.store(token, Ordering::Relaxed);
-                self.condv.notify_all();
-                break token;
-            }
-            let cached_last_refill_time = *last_refill_time;
-            cached_consumed = self.consumed.load(Ordering::Relaxed);
-            if cached_consumed >= cached_bytes_per_refill {
-                let mut last_refill_time = self
-                    .condv
-                    .async_wait_timeout(
-                        &self.last_refill_time,
-                        last_refill_time,
-                        self.refill_period,
-                    )
-                    .await;
-                if *last_refill_time == cached_last_refill_time {
-                    *last_refill_time = monotonic_raw_now();
-                    let token = std::cmp::min(cached_bytes_per_refill, bytes);
-                    self.consumed.store(token, Ordering::Relaxed);
-                    break token;
+            if now > *last_refill_time {
+                let since_last_refill = sub(now, *last_refill_time);
+                if since_last_refill >= self.refill_period {
+                    *last_refill_time = now;
+                    break self.refill_and_request(bytes);
+                } else {
+                    let cached_last_refill_time = *last_refill_time;
+                    let (mut last_refill_time, timed_out) = self
+                        .condv
+                        .async_wait_timeout(
+                            &self.last_refill_time,
+                            last_refill_time,
+                            self.refill_period - since_last_refill,
+                        )
+                        .await;
+                    let now = monotonic_raw_now();
+                    if timed_out && *last_refill_time == cached_last_refill_time {
+                        // timeout, try do the refill myself
+                        if sub(now, cached_last_refill_time) >= self.refill_period {
+                            *last_refill_time = now;
+                            break self.refill_and_request(bytes);
+                        }
+                        // assume supirous wakeup is rare
+                    }
                 }
             }
         }

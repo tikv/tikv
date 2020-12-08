@@ -7,16 +7,16 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::Semaphore as AsyncSemaphore;
 
-trait Notifiable {
+trait LinkedNotifiable {
     fn notify(&self);
-    fn get_next(&self) -> Option<*mut dyn Notifiable>;
-    fn set_next(&self, next: Option<*mut dyn Notifiable>);
+    fn get_next(&self) -> Option<*mut dyn LinkedNotifiable>;
+    fn set_next(&self, next: Option<*mut dyn LinkedNotifiable>);
 }
 
 #[derive(Debug)]
 struct SyncCondvarNode {
     condv: StdCondvar,
-    next: Cell<Option<*mut dyn Notifiable>>,
+    next: Cell<Option<*mut dyn LinkedNotifiable>>,
 }
 
 impl SyncCondvarNode {
@@ -28,14 +28,14 @@ impl SyncCondvarNode {
     }
 }
 
-impl Notifiable for SyncCondvarNode {
+impl LinkedNotifiable for SyncCondvarNode {
     fn notify(&self) {
         self.condv.notify_one();
     }
-    fn get_next(&self) -> Option<*mut dyn Notifiable> {
+    fn get_next(&self) -> Option<*mut dyn LinkedNotifiable> {
         self.next.get()
     }
-    fn set_next(&self, next: Option<*mut dyn Notifiable>) {
+    fn set_next(&self, next: Option<*mut dyn LinkedNotifiable>) {
         self.next.set(next);
     }
 }
@@ -43,7 +43,7 @@ impl Notifiable for SyncCondvarNode {
 #[derive(Debug)]
 struct AsyncCondvarNode {
     sem: AsyncSemaphore,
-    next: Cell<Option<*mut dyn Notifiable>>,
+    next: Cell<Option<*mut dyn LinkedNotifiable>>,
 }
 
 impl AsyncCondvarNode {
@@ -55,22 +55,22 @@ impl AsyncCondvarNode {
     }
 }
 
-impl Notifiable for AsyncCondvarNode {
+impl LinkedNotifiable for AsyncCondvarNode {
     fn notify(&self) {
         self.sem.add_permits(1);
     }
-    fn get_next(&self) -> Option<*mut dyn Notifiable> {
+    fn get_next(&self) -> Option<*mut dyn LinkedNotifiable> {
         self.next.get()
     }
-    fn set_next(&self, next: Option<*mut dyn Notifiable>) {
+    fn set_next(&self, next: Option<*mut dyn LinkedNotifiable>) {
         self.next.set(next);
     }
 }
 
 #[derive(Debug)]
 pub struct Condvar {
-    head: Cell<Option<*mut dyn Notifiable>>,
-    tail: Cell<Option<*mut dyn Notifiable>>,
+    head: Cell<Option<*mut dyn LinkedNotifiable>>,
+    tail: Cell<Option<*mut dyn LinkedNotifiable>>,
 }
 
 unsafe impl Send for Condvar {}
@@ -88,7 +88,7 @@ impl Condvar {
         &self,
         guard: MutexGuard<'a, T>,
         timeout: Duration,
-    ) -> MutexGuard<'a, T> {
+    ) -> (MutexGuard<'a, T>, bool) {
         let mut node = SyncCondvarNode::new();
         let raw_tail: *mut _ = &mut node;
         if let Some(tail) = self.tail.get() {
@@ -100,9 +100,9 @@ impl Condvar {
         }
         self.tail.set(Some(raw_tail));
         // Alternative: use std::thread::park_timeout
-        let guard = node.condv.wait_timeout(guard, timeout).unwrap().0;
-        self.notify_next();
-        guard
+        let (guard, res) = node.condv.wait_timeout(guard, timeout).unwrap();
+        self.notify_head();
+        (guard, res.timed_out())
     }
 
     pub async fn async_wait_timeout<'a, 'b, T>(
@@ -110,7 +110,7 @@ impl Condvar {
         mu: &'a Mutex<T>,
         guard: MutexGuard<'b, T>,
         timeout: Duration,
-    ) -> MutexGuard<'a, T> {
+    ) -> (MutexGuard<'a, T>, bool) {
         // drop early
         std::mem::drop(guard);
         let mut node = AsyncCondvarNode::new();
@@ -125,30 +125,30 @@ impl Condvar {
         self.tail.set(Some(raw_tail));
         let f = node.sem.acquire().fuse();
         pin_mut!(f);
-        select! {
-            _ = f => (),
-            _ = tokio::time::delay_for(timeout).fuse() => (),
-        }
+        let timed_out = select! {
+            _ = f => false,
+            _ = tokio::time::delay_for(timeout).fuse() => true,
+        };
         let guard = mu.lock().unwrap();
-        self.notify_next();
-        guard
+        self.notify_head();
+        (guard, timed_out)
     }
 
-    fn notify_next(&self) {
+    fn notify_head(&self) {
         if let Some(head) = self.head.get() {
             unsafe {
                 let ref node = *head;
                 node.notify();
                 self.head.set(node.get_next());
             }
-        }
-        if self.head.get().is_none() {
-            self.tail.set(None);
+            if self.head.get().is_none() {
+                self.tail.set(None);
+            }
         }
     }
 
     pub fn notify_all(&self) {
-        self.notify_next();
+        self.notify_head();
     }
 }
 
