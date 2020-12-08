@@ -1710,7 +1710,7 @@ mod tests {
         assert!(w.has_overlapped_rollback);
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
-        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, |s| {
+        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, false, |s| {
             s == TxnStatus::LockNotExist
         });
         must_commit(&engine, k, 20, 25);
