@@ -184,7 +184,6 @@
 //!     // Your RPN function logic
 //! }
 //! ```
-
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
@@ -1719,6 +1718,48 @@ impl NormalRpnFn {
 mod tests_normal {
     use super::*;
 
+    use proc_macro2::TokenTree;
+
+    /// Compare TokenStream with all white chars trimmed.
+    fn assert_token_stream_equal(l: TokenStream, r: TokenStream) -> bool {
+        let result = l
+            .clone()
+            .into_iter()
+            .eq_by(r.clone().into_iter(), |x, y| match x {
+                TokenTree::Group(x) => {
+                    if let TokenTree::Group(y) = y {
+                        assert_token_stream_equal(x.stream(), y.stream())
+                    } else {
+                        false
+                    }
+                }
+                TokenTree::Ident(x) => {
+                    if let TokenTree::Ident(y) = y {
+                        x == y
+                    } else {
+                        false
+                    }
+                }
+                TokenTree::Literal(x) => {
+                    if let TokenTree::Literal(y) = y {
+                        x.to_string() == y.to_string()
+                    } else {
+                        false
+                    }
+                }
+                TokenTree::Punct(x) => {
+                    if let TokenTree::Punct(y) = y {
+                        x.to_string() == y.to_string()
+                    } else {
+                        false
+                    }
+                }
+            });
+
+        assert!(result, "expect: {}, actual: {}", &l, &r);
+        return result;
+    }
+
     fn no_generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
@@ -2223,18 +2264,13 @@ mod tests_normal {
                         let arg0 = arg0.unwrap();
                         result.push(foo(arg0)?);
                     }
+
                     Ok(Decimal::into_vector_value(result))
                 }
             }
         };
 
-        // NOTE: Test via trim all space between code
-        assert_eq!(
-            expected.to_string().replace(" ", ""),
-            gen.generate_real_fn_trait_impl()
-                .to_string()
-                .replace(" ", "")
-        );
+        assert_token_stream_equal(expected, gen.generate_real_fn_trait_impl());
     }
 
     #[test]
