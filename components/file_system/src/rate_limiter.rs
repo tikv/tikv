@@ -2,7 +2,6 @@
 
 use super::{condvar::Condvar, IOOp, IOType, IO_TYPE_VARIANTS};
 
-use futures::executor::block_on;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -206,7 +205,18 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
-        block_on(self.async_request(io_type, io_op, bytes))
+        let bytes = self.total_limiters[0].request(bytes, IOPriority::Limited);
+        let bytes = self.total_limiters[io_type as usize].request(bytes, IOPriority::Limited);
+        match io_op {
+            IOOp::Write => {
+                let bytes = self.write_limiters[0].request(bytes, IOPriority::Limited);
+                self.write_limiters[io_type as usize].request(bytes, IOPriority::Limited)
+            }
+            IOOp::Read => {
+                let bytes = self.read_limiters[0].request(bytes, IOPriority::Limited);
+                self.read_limiters[io_type as usize].request(bytes, IOPriority::Limited)
+            }
+        }
     }
 
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
