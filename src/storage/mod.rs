@@ -1742,6 +1742,44 @@ mod tests {
     use txn_types::Mutation;
 
     #[test]
+    fn test_prewrite_blocks_read() {
+        use kvproto::kvrpcpb::ExtraOp;
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+
+        // We have to do the prewrite manually so that the mem locks don't get released.
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let mutations = vec![Mutation::Put((Key::from_raw(b"x"), b"z".to_vec()))];
+        let mut cmd = commands::Prewrite::with_defaults(mutations, vec![1, 2, 3], 10.into());
+        if let Command::Prewrite(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        let wr = cmd
+            .cmd
+            .process_write(
+                snapshot,
+                commands::WriteContext {
+                    lock_mgr: &DummyLockManager {},
+                    concurrency_manager: storage.concurrency_manager.clone(),
+                    extra_op: ExtraOp::Noop,
+                    statistics: &mut Statistics::default(),
+                    async_apply_prewrite: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(wr.lock_guards.len(), 1);
+
+        let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
+        assert!(matches!(
+            result,
+            Err(Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
+                ..
+            }))))
+        ));
+    }
+
+    #[test]
     fn test_get_put() {
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()
