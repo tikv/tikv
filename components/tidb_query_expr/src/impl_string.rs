@@ -99,17 +99,18 @@ fn find_str(text: &str, pattern: &str) -> Option<usize> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    let substr = match String::from_utf8(C::sort_key(substr)?) {
+    let substr = match String::from_utf8(substr.to_vec()) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match String::from_utf8(C::sort_key(s)?) {
+    let s = match String::from_utf8(s.to_vec()) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let offset = match C::IS_CASE_INSENSITIVE {
-        true => find_str(&s, &substr),
-        false => find_str(&s.to_lowercase(), &substr.to_lowercase()),
+    let offset = if C::IS_CASE_INSENSITIVE {
+        find_str(&s, &substr)
+    } else {
+        find_str(&s.to_lowercase(), &substr.to_lowercase())
     };
     Ok(Some(offset.map_or(0, |i| 1 + i as i64)))
 }
@@ -124,26 +125,27 @@ pub fn locate_3_args_utf8<C: Collator>(
     if *pos < 1 {
         return Ok(Some(0));
     }
-    let substr = match String::from_utf8(C::sort_key(substr)?) {
+    let substr = match String::from_utf8(substr.to_vec()) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match String::from_utf8(C::sort_key(s)?) {
+    let s = match String::from_utf8(s.to_vec()) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let offset = match s
+    let start = match s
         .char_indices()
         .map(|(i, _)| i)
         .chain(iter::once(s.len()))
         .nth(*pos as usize - 1)
     {
-        Some(offset) => offset,
+        Some(start) => start,
         None => return Ok(Some(0)),
     };
-    let offset = match C::IS_CASE_INSENSITIVE {
-        true => find_str(&s[offset..], &substr),
-        false => find_str(&s[offset..].to_lowercase(), &substr.to_lowercase()),
+    let offset = if C::IS_CASE_INSENSITIVE {
+        find_str(&s[start..], &substr)
+    } else {
+        find_str(&s[start..].to_lowercase(), &substr.to_lowercase())
     };
     Ok(Some(offset.map_or(0, |i| pos + i as i64)))
 }
