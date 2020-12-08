@@ -2231,7 +2231,9 @@ mod tests_normal {
         // NOTE: Test via trim all space between code
         assert_eq!(
             expected.to_string().replace(" ", ""),
-            gen.generate_real_fn_trait_impl().to_string().replace(" ", "")
+            gen.generate_real_fn_trait_impl()
+                .to_string()
+                .replace(" ", "")
         );
     }
 
