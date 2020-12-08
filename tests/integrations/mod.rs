@@ -9,8 +9,6 @@ extern crate test;
 
 extern crate encryption;
 #[macro_use]
-extern crate more_asserts;
-#[macro_use]
 extern crate tikv_util;
 extern crate pd_client;
 
