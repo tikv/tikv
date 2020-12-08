@@ -373,8 +373,8 @@ fn async_commit_timestamps<S: Snapshot>(
     let final_min_commit_ts = key_guard.with_lock(|l| {
         let max_ts = txn.concurrency_manager.max_ts();
         fail_point!("before-set-lock-in-memory");
-        let mut min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
-        min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
+        let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
+        let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
         let max_commit_ts = max_commit_ts;
         if !max_commit_ts.is_zero() && min_commit_ts > max_commit_ts {
