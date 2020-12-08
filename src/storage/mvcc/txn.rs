@@ -531,6 +531,29 @@ impl<S: Snapshot> MvccTxn<S> {
         )
         .into()));
 
+        // Check write conflict first to make the transaction fail or retry fast.
+        let mut prev_write: Option<(TimeStamp, Write)> = None;
+        if !skip_constraint_check {
+            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
+                // Abort on writes after our start timestamp ...
+                // If exists a commit version whose commit timestamp is larger than or equal to
+                // current start timestamp, we should abort current prewrite, even if the commit
+                // type is Rollback.
+                if commit_ts >= self.start_ts {
+                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                    return Err(ErrorInner::WriteConflict {
+                        start_ts: self.start_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit_ts,
+                        key: key.into_raw()?,
+                        primary: primary.to_vec(),
+                    }
+                    .into());
+                }
+                prev_write = Some((commit_ts, write));
+            }
+        }
+
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
@@ -550,36 +573,19 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        let mut prev_write = None;
-        // Check whether there is a newer version.
         if !skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit_ts >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(ErrorInner::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    }
-                    .into());
-                }
-                // Should check it when no lock exists, otherwise it can report error when there is
-                // a lock belonging to a committed transaction which deletes the key.
-                self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
-                prev_write = Some(write);
+            // Should check it when no lock exists, otherwise it can report error when there is
+            // a lock belonging to a committed transaction which deletes the key.
+            if let Some((commit_ts, write)) = &prev_write {
+                self.check_data_constraint(should_not_exist, write, *commit_ts, &key)?;
             }
         }
+
         if should_not_write {
             return Ok(());
         }
 
-        self.check_extra_op(&key, mutation_type, prev_write)?;
+        self.check_extra_op(&key, mutation_type, prev_write.map(|v| v.1))?;
         self.prewrite_key_value(
             key,
             lock_type.unwrap(),
@@ -1274,6 +1280,12 @@ mod tests {
         // There is a lock, returns KeyIsLocked error.
         expect_error(try_prewrite_insert(&engine, k1, v2, k1, 6), |e| match e {
             Error(box ErrorInner::KeyIsLocked(_)) => (),
+            _ => panic!("unexpected error: {:?}", e),
+        });
+
+        // Check write conflict before lock.
+        expect_error(try_prewrite_insert(&engine, k1, v2, k1, 1), |e| match e {
+            Error(box ErrorInner::WriteConflict { .. }) => (),
             _ => panic!("unexpected error: {:?}", e),
         });
 
