@@ -601,14 +601,20 @@ impl CompactionFilter for WriteCompactionFilter {
 fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
-        Err(_) => Err(format!("invalid write cf key: {}", log_wrappers::Value(key))),
+        Err(_) => Err(format!(
+            "invalid write cf key: {}",
+            log_wrappers::Value(key)
+        )),
     }
 }
 
 fn truncate_ts(key: &[u8]) -> Result<&[u8], String> {
     match Key::truncate_ts_for(key) {
         Ok(prefix) => Ok(prefix),
-        Err(_) => Err(format!("invalid write cf key: {}", log_wrappers::Value(key))),
+        Err(_) => Err(format!(
+            "invalid write cf key: {}",
+            log_wrappers::Value(key)
+        )),
     }
 }
 
