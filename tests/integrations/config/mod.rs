@@ -363,7 +363,7 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
-            zstd_dict_size : 1024,
+            zstd_dict_size: 1024,
             zstd_sample_size: 1024,
         },
         lockcf: LockCfConfig {
