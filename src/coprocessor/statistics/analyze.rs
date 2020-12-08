@@ -382,8 +382,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 }
             }
         }
-        let idx_res =
-        if self.analyze_common_handle {
+        let idx_res = if self.analyze_common_handle {
             Some(AnalyzeIndexResult::new(
                 common_handle_hist,
                 common_handle_cms,
