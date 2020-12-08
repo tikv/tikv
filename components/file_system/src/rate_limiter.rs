@@ -1,15 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{IOOp, IOType, IO_TYPE_VARIANTS};
+use super::{condvar::Condvar, IOOp, IOType, IO_TYPE_VARIANTS};
 
 use futures::executor::block_on;
-use std::cell::Cell;
-use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LockResult, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use time::Timespec;
-use tokio::sync::Semaphore as AsyncSemaphore;
 
 use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
@@ -67,76 +64,6 @@ mod inner {
     }
 }
 
-#[derive(Debug)]
-struct AsyncCondvNode {
-    sem: AsyncSemaphore,
-    next: Cell<*mut AsyncCondvNode>,
-}
-
-impl AsyncCondvNode {
-    pub fn new() -> AsyncCondvNode {
-        AsyncCondvNode {
-            sem: AsyncSemaphore::new(0),
-            next: Cell::new(ptr::null_mut()),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct AsyncCondvar {
-    head: Cell<*mut AsyncCondvNode>,
-    tail: Cell<*mut AsyncCondvNode>,
-}
-
-unsafe impl Send for AsyncCondvar {}
-unsafe impl Sync for AsyncCondvar {}
-
-impl AsyncCondvar {
-    pub fn new() -> AsyncCondvar {
-        AsyncCondvar {
-            head: Cell::new(ptr::null_mut()),
-            tail: Cell::new(ptr::null_mut()),
-        }
-    }
-
-    pub async fn wait<'a, 'b, T>(
-        &self,
-        mu: &'a Mutex<T>,
-        guard: MutexGuard<'b, T>,
-    ) -> LockResult<MutexGuard<'a, T>> {
-        let mut node = AsyncCondvNode::new();
-        let raw_tail: *mut _ = &mut node;
-        if !self.tail.get().is_null() {
-            unsafe {
-                (*self.tail.get()).next.set(raw_tail);
-            }
-        } else {
-            self.head.set(raw_tail);
-        }
-        self.tail.set(raw_tail);
-        std::mem::drop(guard);
-        let _ = node.sem.acquire().await;
-        let guard = mu.lock();
-        self.notify_next();
-        guard
-    }
-
-    fn notify_next(&self) {
-        unsafe {
-            let ref node = *self.head.get();
-            node.sem.add_permits(1);
-            self.head.set(node.next.get());
-        }
-        if self.head.get().is_null() {
-            self.tail.set(ptr::null_mut());
-        }
-    }
-
-    pub fn notify_all(&self) {
-        self.notify_next();
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum IOPriority {
     Limited,
@@ -149,7 +76,7 @@ struct PerTypeIORateLimiter {
     consumed: AtomicUsize,
     refill_period: Duration,
     last_refill_time: Mutex<Timespec>,
-    condv: AsyncCondvar,
+    condv: Condvar,
 }
 
 impl PerTypeIORateLimiter {
@@ -161,12 +88,48 @@ impl PerTypeIORateLimiter {
             consumed: AtomicUsize::new(0),
             refill_period,
             last_refill_time: Mutex::new(monotonic_raw_now()),
-            condv: AsyncCondvar::new(),
+            condv: Condvar::new(),
         }
     }
 
     pub fn request(&self, bytes: usize, priority: IOPriority) -> usize {
-        block_on(self.async_request(bytes, priority))
+        if priority == IOPriority::NotLimited {
+            self.consumed.fetch_add(bytes as usize, Ordering::Relaxed);
+            return bytes;
+        }
+        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        let mut cached_consumed = self.consumed.load(Ordering::Relaxed);
+        loop {
+            if cached_consumed < cached_bytes_per_refill {
+                let after = self.consumed.fetch_add(bytes, Ordering::Relaxed);
+                let exceeded = std::cmp::max(0, after - cached_bytes_per_refill);
+                if exceeded < bytes {
+                    break bytes - exceeded;
+                }
+            }
+            let now = monotonic_raw_now();
+            let mut last_refill_time = self.last_refill_time.lock().unwrap();
+            if (now - *last_refill_time).to_std().unwrap() >= self.refill_period {
+                *last_refill_time = now;
+                let token = std::cmp::min(cached_bytes_per_refill, bytes);
+                self.consumed.store(token, Ordering::Relaxed);
+                self.condv.notify_all();
+                break token;
+            }
+            let cached_last_refill_time = *last_refill_time;
+            cached_consumed = self.consumed.load(Ordering::Relaxed);
+            if cached_consumed >= cached_bytes_per_refill {
+                let mut last_refill_time = self
+                    .condv
+                    .wait_timeout(last_refill_time, self.refill_period);
+                if *last_refill_time == cached_last_refill_time {
+                    *last_refill_time = monotonic_raw_now();
+                    let token = std::cmp::min(cached_bytes_per_refill, bytes);
+                    self.consumed.store(token, Ordering::Relaxed);
+                    break token;
+                }
+            }
+        }
     }
 
     async fn async_request(&self, bytes: usize, priority: IOPriority) -> usize {
@@ -193,15 +156,17 @@ impl PerTypeIORateLimiter {
                 self.condv.notify_all();
                 break token;
             }
-            // double check
             let cached_last_refill_time = *last_refill_time;
             cached_consumed = self.consumed.load(Ordering::Relaxed);
             if cached_consumed >= cached_bytes_per_refill {
                 let mut last_refill_time = self
                     .condv
-                    .wait(&self.last_refill_time, last_refill_time)
-                    .await
-                    .unwrap();
+                    .async_wait_timeout(
+                        &self.last_refill_time,
+                        last_refill_time,
+                        self.refill_period,
+                    )
+                    .await;
                 if *last_refill_time == cached_last_refill_time {
                     *last_refill_time = monotonic_raw_now();
                     let token = std::cmp::min(cached_bytes_per_refill, bytes);
