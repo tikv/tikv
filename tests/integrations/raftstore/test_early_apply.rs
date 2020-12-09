@@ -69,7 +69,7 @@ where
 ///
 /// If TiKV is shutdown, apply state may go ahead of raft
 /// state. TiKV should be able to recognize the situation and start normally.
-fn test_restart(mode: DataLost) {
+fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
@@ -115,19 +115,19 @@ fn test_restart(mode: DataLost) {
 /// Tests whether the cluster can recover from leader lost its commit index.
 #[test]
 fn test_leader_early_apply() {
-    test_restart(DataLost::LeaderCommit)
+    test_early_apply(DataLost::LeaderCommit)
 }
 
 /// Tests whether the cluster can recover from follower lost its commit index.
 #[test]
 fn test_follower_commit_early_apply() {
-    test_restart(DataLost::FollowerCommit)
+    test_early_apply(DataLost::FollowerCommit)
 }
 
 /// Tests whether the cluster can recover from all nodes lost their commit index.
 #[test]
 fn test_all_node_crash() {
-    test_restart(DataLost::AllLost)
+    test_early_apply(DataLost::AllLost)
 }
 
 /// Tests if apply index inside raft is updated correctly.

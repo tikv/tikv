@@ -4,6 +4,7 @@ mod test_bootstrap;
 mod test_cmd_epoch_checker;
 mod test_conf_change;
 mod test_coprocessor;
+mod test_early_apply;
 mod test_gc_worker;
 mod test_import_service;
 mod test_kv_service;

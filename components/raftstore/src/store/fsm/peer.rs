@@ -917,13 +917,13 @@ where
         &mut self,
         ready: Ready,
         invoke_ctx: InvokeContext,
-        current_ts: Option<i64>,
+        unsynced_version: Option<u64>,
     ) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         let res = self.fsm.peer.post_raft_ready_append(self.ctx, invoke_ctx);
         self.fsm
             .peer
-            .handle_raft_ready_advance(self.ctx, ready, current_ts);
+            .handle_raft_ready_advance(self.ctx, ready, unsynced_version);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             if is_merging {

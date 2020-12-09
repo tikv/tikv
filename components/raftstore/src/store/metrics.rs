@@ -473,14 +473,6 @@ lazy_static! {
         )
         .unwrap();
 
-    pub static ref PEER_SYNC_DELAY_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_peer_sync_delay_microseconds",
-            "Bucketed histogram of peer sync delay microseconds",
-            // 100us ~ 100s
-            exponential_buckets(100.0, 2.0, 21).unwrap()
-        ).unwrap();
-
     pub static ref PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_thread_check_sync_delay_microseconds",

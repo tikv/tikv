@@ -1535,6 +1535,11 @@ where
                 return None;
             }
 
+            if self.last_unpersisted_number != self.last_persisted_number {
+                debug!("not ready to apply snapshot because some unpersisted readies were not persisted yet");
+                return None;
+            }
+
             let meta = ctx.store_meta.lock().unwrap();
             // For merge process, the stale source peer is destroyed asynchronously when applying
             // snapshot or creating new peer. So here checks whether there is any overlap, if so,
@@ -1776,7 +1781,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         ready: Ready,
-        current_ts: Option<i64>,
+        unsynced_version: Option<u64>,
     ) {
         assert_eq!(ready.number(), self.last_unpersisted_number);
         if !ready.snapshot().is_empty() {
@@ -1794,13 +1799,13 @@ where
             return;
         }
 
-        if let Some(ts) = current_ts {
+        if let Some(version) = unsynced_version {
             if ready.must_sync() || self.last_persisted_number + 1 < ready.number() {
                 ctx.sync_policy.mark_region_unsynced(
+                    version,
                     self.region_id,
                     ready.number(),
                     self.persisted_notifier.clone(),
-                    ts,
                 );
                 self.raft_group.advance_append_async(ready);
                 return;

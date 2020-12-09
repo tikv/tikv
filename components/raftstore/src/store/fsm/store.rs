@@ -696,10 +696,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         fail_point!("raft_after_save");
 
         if ready_cnt != 0 {
-            let current_ts = if synced {
+            let unsynced_version = if synced {
                 None
             } else {
-                Some(self.poll_ctx.sync_policy.current_ts())
+                Some(self.poll_ctx.sync_policy.new_unsynced_version())
             };
             let mut batch_pos = 0;
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
@@ -712,7 +712,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     }
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx, current_ts);
+                    .post_raft_ready_append(ready, invoke_ctx, unsynced_version);
             }
         }
         let dur = self.timer.elapsed();
@@ -797,7 +797,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.update_ticks_timeout();
         }
-        self.poll_ctx.sync_policy.try_flush_regions();
+        self.poll_ctx.sync_policy.try_flush_readies();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
@@ -866,7 +866,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         self.flush_ticks();
-        self.poll_ctx.sync_policy.try_flush_regions();
+        self.poll_ctx.sync_policy.try_flush_readies();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
