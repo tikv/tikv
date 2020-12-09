@@ -32,6 +32,7 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 txn_types = { path = "../txn_types" }
 concurrency_manager = { path = "../concurrency_manager" }

@@ -5,7 +5,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::collections::HashMap;
+use collections::HashMap;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
