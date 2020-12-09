@@ -396,7 +396,8 @@ impl WriteCompactionFilter {
             let mut need_delete = true;
             while let Some((ts, filtered_seqno)) = filtered.peek() {
                 match current_ts.cmp(ts) {
-                    CmpOrdering::Less => break,
+                    CmpOrdering::Greater => break,
+                    CmpOrdering::Less => unreachable!(),
                     CmpOrdering::Equal => {
                         // It's possible that there are multiple `key_ts` in different levels.
                         // A potential case is that a snapshot has been ingested.
@@ -405,20 +406,16 @@ impl WriteCompactionFilter {
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
                         need_delete = seq > *filtered_seqno;
-                        if !need_delete {
-                            self.mvcc_delete_skip_older += 1;
-                        }
                         let _ = filtered.next().unwrap();
                         break;
-                    }
-                    CmpOrdering::Greater => {
-                        let _ = filtered.next().unwrap();
                     }
                 }
             }
             if need_delete {
                 self.delete_write_key(key)?;
                 self.handle_filtered_write(parse_write(value)?)?;
+            } else {
+                self.mvcc_delete_skip_older += 1;
             }
             valid = write_iter.next()?;
         }
@@ -706,82 +703,89 @@ pub mod tests {
         ImportExt, IngestExternalFileOptions, IterOptions, Iterable, MiscExt, Peekable, SstWriter,
         SstWriterBuilder, SyncMutable,
     };
+    use tikv_util::config::VersionTrack;
 
-    // Use a lock to protect concurrent compactions.
+    /// Do a global GC with the given safe point.
+    pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
+        let engine = engine.get_rocksdb();
+        // Put a new key-value pair to ensure compaction can be triggered correctly.
+        engine.delete_cf("write", b"znot-exists-key").unwrap();
+
+        let mut runner = TestGCRunner::default();
+        runner.safe_point = safe_point;
+        runner.gc(&engine);
+    }
+
     lazy_static! {
+        // Use a lock to protect concurrent compactions.
         static ref LOCK: Mutex<()> = std::sync::Mutex::new(());
     }
 
-    fn compact_options() -> CompactOptions {
+    fn default_compact_options() -> CompactOptions {
         let mut compact_opts = CompactOptions::new();
         compact_opts.set_exclusive_manual_compaction(false);
         compact_opts.set_max_subcompactions(1);
         compact_opts
     }
 
-    fn do_gc_by_compact(
-        engine: &RocksEngine,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
+    #[derive(Default)]
+    struct TestGCRunner<'a> {
         safe_point: u64,
+        ratio_threshold: Option<f64>,
+        start: Option<&'a [u8]>,
+        end: Option<&'a [u8]>,
         target_level: Option<usize>,
-        stats_checker: Option<fn(&WriteCompactionFilter)>,
-    ) {
-        let _guard = LOCK.lock().unwrap();
-        if let Some(stats_checker) = stats_checker {
-            add_drop_callback(engine, stats_checker);
+        callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
+    }
+
+    impl<'a> TestGCRunner<'a> {
+        fn safe_point(&mut self, sp: u64) -> &mut Self {
+            self.safe_point = sp;
+            self
+        }
+        fn prepare_gc(&self, raw_engine: &RocksEngine) {
+            let mut gc_cfg = GcConfig::default();
+            if let Some(ratio_threshold) = self.ratio_threshold {
+                gc_cfg.ratio_threshold = ratio_threshold;
+            }
+            gc_cfg.enable_compaction_filter = true;
+            raw_engine.init_compaction_filter(
+                Arc::new(AtomicU64::new(self.safe_point)),
+                GcWorkerConfigManager(Arc::new(VersionTrack::new(gc_cfg))),
+                ClusterVersion::new(semver::Version::new(5, 0, 0)),
+            );
+
+            let mut gc_context = GC_CONTEXT.lock().unwrap();
+            let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
+            callbacks.clear();
+            for callback in &self.callbacks_on_drop {
+                callbacks.push(callback.clone());
+            }
         }
 
-        let safe_point = Arc::new(AtomicU64::new(safe_point));
-        let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
-        cfg.0.update(|v| v.enable_compaction_filter = true);
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
-        engine.init_compaction_filter(safe_point, cfg, cluster_version);
+        fn gc(&self, raw_engine: &RocksEngine) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(raw_engine);
 
-        let db = engine.as_inner();
-        let handle = get_cf_handle(db, CF_WRITE).unwrap();
-        let mut compact_opts = compact_options();
-        if let Some(target_level) = target_level {
-            compact_opts.set_change_level(true);
-            compact_opts.set_target_level(target_level as i32);
+            let db = raw_engine.as_inner();
+            let handle = get_cf_handle(db, CF_WRITE).unwrap();
+            let mut compact_opts = default_compact_options();
+            if let Some(target_level) = self.target_level {
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(target_level as i32);
+            }
+            db.compact_range_cf_opt(handle, &compact_opts, self.start, self.end);
         }
-        db.compact_range_cf_opt(handle, &compact_opts, start, end);
-        clear_all_drop_callbacks();
-    }
 
-    fn do_gc_by_compact_with_ratio_threshold(
-        engine: &RocksEngine,
-        safe_point: u64,
-        ratio_threshold: f64,
-    ) {
-        let _guard = LOCK.lock().unwrap();
-
-        let safe_point = Arc::new(AtomicU64::new(safe_point));
-        let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
-        cfg.0.update(|v| {
-            v.enable_compaction_filter = true;
-            v.ratio_threshold = ratio_threshold;
-        });
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
-        engine.init_compaction_filter(safe_point, cfg, cluster_version);
-
-        let db = engine.as_inner();
-        let handle = get_cf_handle(db, CF_WRITE).unwrap();
-        db.compact_range_cf_opt(handle, &compact_options(), None, None);
-    }
-
-    pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
-        let engine = engine.get_rocksdb();
-        // Put a new key-value pair to ensure compaction can be triggered correctly.
-        engine.delete_cf("write", b"znot-exists-key").unwrap();
-        do_gc_by_compact(&engine, None, None, safe_point, None, None);
-    }
-
-    fn compact_files(engine: &RocksEngine, cf: &str, input_files: &[String], output_level: i32) {
-        let db = engine.as_inner();
-        let handle = db.cf_handle(cf).unwrap();
-        db.compact_files_cf(handle, &CompactionOptions::new(), input_files, output_level)
-            .unwrap();
+        fn gc_on_files(&self, raw_engine: &RocksEngine, input_files: &[String]) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(raw_engine);
+            let db = raw_engine.as_inner();
+            let handle = get_cf_handle(db, CF_WRITE).unwrap();
+            let level = self.target_level.unwrap() as i32;
+            db.compact_files_cf(handle, &CompactionOptions::new(), input_files, level)
+                .unwrap();
+        }
     }
 
     fn rocksdb_level_files(engine: &RocksEngine, cf: &str) -> Vec<Vec<String>> {
@@ -808,27 +812,6 @@ pub mod tests {
         res
     }
 
-    fn add_drop_callback<F>(raw_engine: &RocksEngine, callback: F)
-    where
-        F: Fn(&WriteCompactionFilter) + Send + Sync + 'static,
-    {
-        if GC_CONTEXT.lock().unwrap().is_none() {
-            raw_engine.init_compaction_filter(
-                Arc::new(AtomicU64::new(0)),
-                GcWorkerConfigManager(Arc::new(Default::default())),
-                ClusterVersion::new(semver::Version::new(5, 0, 0)),
-            );
-        }
-        let mut gc_context = GC_CONTEXT.lock().unwrap();
-        let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
-        callbacks.push(Arc::new(callback));
-    }
-
-    fn clear_all_drop_callbacks() {
-        let mut gc_context = GC_CONTEXT.lock().unwrap();
-        *gc_context = None;
-    }
-
     #[test]
     fn test_is_compaction_filter_allowed() {
         let cluster_version = ClusterVersion::new(semver::Version::new(4, 1, 0));
@@ -852,26 +835,27 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::default();
 
         // GC can't delete keys after the given safe point.
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
-        do_gc_by_compact(&raw_engine, None, None, 50, None, None);
+        gc_runner.safe_point(50).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
-        do_gc_by_compact(&raw_engine, None, None, 200, None, None);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
 
         // GC can't delete the latest version before the safe ponit.
-        do_gc_by_compact(&raw_engine, None, None, 115, None, None);
+        gc_runner.safe_point(115).gc(&raw_engine);
         must_get(&engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
-        do_gc_by_compact(&raw_engine, None, None, 200, None, None);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 110);
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
@@ -884,13 +868,15 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::default();
 
-        // Delete mark and masked versions can be handled in `drop`.
+        // No key switch after the delete mark.
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
         must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
-        do_gc_by_compact(&raw_engine, None, None, 200, None, None);
+
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 110);
 
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -899,7 +885,7 @@ pub mod tests {
         must_commit(&engine, b"zkey", 120, 130);
         must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 120);
         must_commit(&engine, b"zkey1", 120, 130);
-        do_gc_by_compact(&raw_engine, None, None, 200, None, None);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 110);
     }
 
@@ -910,6 +896,8 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
+        let mut gc_runner = TestGCRunner::default();
+        gc_runner.ratio_threshold = Some(10.0);
 
         for start_ts in &[100, 110, 120, 130] {
             must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
@@ -919,7 +907,7 @@ pub mod tests {
         must_commit(&engine, b"zkey", 140, 145);
 
         // Can't GC stale versions because of the threshold.
-        do_gc_by_compact_with_ratio_threshold(&raw_engine, 200, 10.0);
+        gc_runner.gc(&raw_engine);
         for commit_ts in &[105, 115, 125, 135] {
             must_get(&engine, b"zkey", commit_ts, &value);
         }
@@ -936,18 +924,19 @@ pub mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.dynamic_level_bytes = false;
+
         let dir = tempfile::TempDir::new().unwrap();
-        let engine = TestEngineBuilder::new()
-            .path(dir.path())
-            .build_with_cfg(&cfg)
-            .unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
+        let mut gc_runner = TestGCRunner::default();
 
         // So the construction of SST files will be:
         // L6: |key_110|
         must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
         must_commit(&engine, b"zkey", 100, 110);
-        do_gc_by_compact(&raw_engine, None, None, 50, Some(6), None);
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(50).gc(&raw_engine);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
         // So the construction of SST files will be:
@@ -965,13 +954,15 @@ pub mod tests {
         let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
         let l0_file = dir.path().join(&level_files[0][0]);
         let files = &[l0_file.to_str().unwrap().to_owned()];
-        compact_files(&raw_engine, CF_WRITE, files, 5);
+        gc_runner.target_level = Some(5);
+        gc_runner.safe_point(200).gc_on_files(&raw_engine, files);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[5], 1);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
         must_get_none(&engine, b"zkey", 200);
 
         // Compact the mvcc delete mark to L6, the stale version shouldn't be exposed.
-        do_gc_by_compact(&raw_engine, None, None, 200, Some(6), None);
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&engine, b"zkey", 200);
     }
 
@@ -987,11 +978,10 @@ pub mod tests {
             cfg.writecf.disable_auto_compactions = true;
             cfg.writecf.dynamic_level_bytes = false;
             let dir = tempfile::TempDir::new().unwrap();
-            let engine = TestEngineBuilder::new()
-                .path(dir.path())
-                .build_with_cfg(&cfg)
-                .unwrap();
+            let builder = TestEngineBuilder::new().path(dir.path());
+            let engine = builder.build_with_cfg(&cfg).unwrap();
             let raw_engine = engine.get_rocksdb();
+
             must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
             must_commit(&engine, b"zkey", 100, 110);
 
@@ -1000,7 +990,7 @@ pub mod tests {
             } else {
                 let db = raw_engine.as_inner();
                 let handle = get_cf_handle(db, CF_WRITE).unwrap();
-                let mut compact_opts = compact_options();
+                let mut compact_opts = default_compact_options();
                 compact_opts.set_change_level(true);
                 compact_opts.set_target_level(level as i32);
                 db.compact_range_cf_opt(handle, &compact_opts, None, None);
@@ -1046,32 +1036,99 @@ pub mod tests {
     // be rewritten again by DB::delete.
     #[test]
     fn test_mvcc_delete_skip_filtered() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        // cfg.writecf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
+        let mut gc_runner = TestGCRunner::default();
+        gc_runner.ratio_threshold = Some(0.9);
 
         // So the construction of SST files will be:
-        // L6: |key_110|
-        must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zkey1", b"zvalue", b"zkey1", 100);
-        must_commit(&engine, b"zkey1", 100, 110);
-        do_gc_by_compact(&raw_engine, None, None, 50, None, None);
+        // L6: |key_106, key_104, key_102|
+        must_prewrite_put(&engine, b"zkey", b"zvalue1", b"zkey", 101);
+        must_commit(&engine, b"zkey", 101, 102);
+        must_prewrite_put(&engine, b"zkey", b"zvalue2", b"zkey", 103);
+        must_commit(&engine, b"zkey", 103, 104);
+        must_prewrite_put(&engine, b"zkey", b"zvalue3", b"zkey", 105);
+        must_commit(&engine, b"zkey", 105, 106);
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(50).gc(&raw_engine);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
-        must_commit(&engine, b"zkey", 120, 130);
-        must_prewrite_put(&engine, b"zkey1", b"zvalue1", b"zkey1", 120);
-        must_commit(&engine, b"zkey1", 120, 130);
+        // So the construction of SST files will be:
+        // L5: |key_112, key1_112|
+        // L6: |key_106, key_104, key_102|
+        must_prewrite_put(&engine, b"zkey", b"zvalue4", b"zkey", 111);
+        must_commit(&engine, b"zkey", 111, 112);
+        must_prewrite_put(&engine, b"zkey1", b"zvalue4", b"zkey1", 111);
+        must_commit(&engine, b"zkey1", 111, 112);
         raw_engine.flush_cf(CF_WRITE, true).unwrap();
-
-        let checker = |filter: &WriteCompactionFilter| {
-            assert_eq!(filter.total_filtered, 3);
-            assert_eq!(filter.total_deleted, 0);
-            assert_eq!(filter.mvcc_delete_skip_older, 1);
-        };
-        do_gc_by_compact(&raw_engine, None, None, 200, Some(6), Some(checker));
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 1);
+        let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
+        let f = dir.path().join(&level_files[0][0]);
+        let f = f.to_str().unwrap().to_owned();
+        gc_runner.target_level = Some(5);
+        gc_runner.safe_point(50).gc_on_files(&raw_engine, &[f]);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[5], 1);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
-        must_get(&engine, b"zkey1", 150, b"zvalue1");
+
+        // So the construction of SST files will be:
+        // L0: |key_122, key1_122|
+        // L5: |key_112, key1_112|
+        // L6: |key_106, key_104, key_102|
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 121);
+        must_commit(&engine, b"zkey", 121, 122);
+        must_prewrite_delete(&engine, b"zkey1", b"zkey1", 121);
+        must_commit(&engine, b"zkey1", 121, 122);
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 1);
+
+        let key_112 = Key::from_raw(b"zkey").append_ts(112.into()).into_encoded();
+        let value = raw_engine
+            .get_value_cf(CF_WRITE, &key_112)
+            .unwrap()
+            .unwrap();
+
+        // So the construction of SST files will be:
+        // L5: |key_122, key1_122|
+        // L6: |key_106, key_104, key_102|
+        let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
+        let f = dir.path().join(&level_files[0][0]);
+        let f = f.to_str().unwrap().to_owned();
+        gc_runner.target_level = Some(5);
+        gc_runner.safe_point(130).gc_on_files(&raw_engine, &[f]);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 0);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[5], 1);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
+        // key_112 must be cleared by the compaction.
+        must_get(&engine, b"zkey", 120, b"zvalue3");
+
+        // Put the cleaned key back to simulate it hasn't been compacted.
+        raw_engine.put_cf(CF_WRITE, &key_112, &value).unwrap();
+
+        // Do the last compaction:
+        // [key_112] will be deleted.
+        // [key_122, key_106, key_104, key_102, key1_122] will be filtered.
+        let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
+        let mut files = Vec::with_capacity(2);
+        for &level in &[5, 6] {
+            let f = dir.path().join(&level_files[level][0]);
+            files.push(f.to_str().unwrap().to_owned());
+        }
+        gc_runner.target_level = Some(6);
+        gc_runner
+            .callbacks_on_drop
+            .push(Arc::new(|filter: &WriteCompactionFilter| {
+                assert_eq!(filter.total_filtered, 5);
+                assert_eq!(filter.total_deleted, 1);
+                assert_eq!(filter.mvcc_delete_skip_older, 3);
+            }));
+        gc_runner.safe_point(130).gc_on_files(&raw_engine, &files);
+        // key_112 must be cleared by the compaction.
+        must_get_none(&engine, b"zkey", 120)
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.
@@ -1082,6 +1139,7 @@ pub mod tests {
         fn at_bottommost_level() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let raw_engine = engine.get_rocksdb();
+            let mut gc_runner = TestGCRunner::default();
 
             let split_key = Key::from_raw(b"zkey")
                 .append_ts(TimeStamp::from(135))
@@ -1091,7 +1149,7 @@ pub mod tests {
             // L6: |key_110|
             must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
             must_commit(&engine, b"zkey", 100, 110);
-            do_gc_by_compact(&raw_engine, None, None, 50, None, None);
+            gc_runner.safe_point(50).gc(&raw_engine);
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
             // So the construction of SST files will be:
@@ -1100,14 +1158,16 @@ pub mod tests {
             must_commit(&engine, b"zkey", 120, 130);
             must_prewrite_delete(&engine, b"zkey", b"zkey", 140);
             must_commit(&engine, b"zkey", 140, 150);
-            do_gc_by_compact(&raw_engine, None, Some(&split_key), 50, None, None);
+            gc_runner.end = Some(&split_key);
+            gc_runner.safe_point(50).gc(&raw_engine);
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 2);
 
             // Put more key/value pairs so that 1 file in L0 and 1 file in L6 can be merged.
             must_prewrite_put(&engine, b"zkex", b"zvalue", b"zkex", 100);
             must_commit(&engine, b"zkex", 100, 110);
 
-            do_gc_by_compact(&raw_engine, None, Some(&split_key), 200, None, None);
+            gc_runner.end = Some(&split_key);
+            gc_runner.safe_point(200).gc(&raw_engine);
 
             // There are still 2 files in L6 because the SST contains key_110 is not touched.
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 2);
@@ -1127,6 +1187,7 @@ pub mod tests {
             cfg.writecf.dynamic_level_bytes = false;
             let engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
             let raw_engine = engine.get_rocksdb();
+            let mut gc_runner = TestGCRunner::default();
 
             // So the construction of SST files will be:
             // L6: |AAAAA_101, BBBBB_101, CCCCC_111|
@@ -1136,7 +1197,8 @@ pub mod tests {
             must_commit(&engine, b"zBBBBB", 100, 101);
             must_prewrite_put(&engine, b"zCCCCC", b"zvalue", b"zkey", 110);
             must_commit(&engine, b"zCCCCC", 110, 111);
-            do_gc_by_compact(&raw_engine, None, None, 50, Some(6), None);
+            gc_runner.target_level = Some(6);
+            gc_runner.safe_point(50).gc(&raw_engine);
             assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
             // So the construction of SST files will be:
@@ -1167,7 +1229,10 @@ pub mod tests {
             // Compact |AAAAA_111, BBBBB_111| at L0 and |AAAA_101, BBBBB_101, CCCCC_111| at L6.
             let start = Key::from_raw(b"zAAAAA").into_encoded();
             let end = Key::from_raw(b"zAAAAAA").into_encoded();
-            do_gc_by_compact(&raw_engine, Some(&start), Some(&end), 200, Some(6), None);
+            gc_runner.start = Some(&start);
+            gc_runner.end = Some(&end);
+            gc_runner.target_level = Some(6);
+            gc_runner.safe_point(200).gc(&raw_engine);
             must_get_none(&engine, b"zBBBBB", 101);
         }
     }
