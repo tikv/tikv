@@ -1171,14 +1171,17 @@ fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    let start_ts = req.get_version();
     let v = storage.get(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_version().into(),
     );
+    info!("future_get"; "start_ts" => start_ts);
 
     async move {
         let v = v.await;
+        info!("future_get response"; "start_ts" => start_ts);
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);

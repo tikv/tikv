@@ -284,9 +284,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     &bypass_locks,
                     &concurrency_manager,
                 )?;
+                info!("snapshot get"; "start_ts" => start_ts);
+
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
+                    info!("snapshot get res"; "start_ts" => start_ts);
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
