@@ -401,7 +401,7 @@ impl WriteCompactionFilter {
                         // It's possible that there are multiple `key_ts` in different levels.
                         // A potential case is that a snapshot has been ingested.
                         let seq = write_iter.sequence().unwrap();
-                        assert!(seq >= *filtered_seqno);
+                        debug_assert!(seq >= *filtered_seqno);
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
                         need_delete = seq > *filtered_seqno;
