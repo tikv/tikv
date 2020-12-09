@@ -1726,6 +1726,13 @@ mod tests_normal {
             .clone()
             .into_iter()
             .eq_by(r.clone().into_iter(), |x, y| match x {
+                TokenTree::Ident(x) => matches!(y, TokenTree::Ident(y) if x == y),
+                TokenTree::Literal(x) => {
+                    matches!(y, TokenTree::Literal(y) if x.to_string() == y.to_string())
+                }
+                TokenTree::Punct(x) => {
+                    matches!(y, TokenTree::Punct(y) if x.to_string() == y.to_string())
+                }
                 TokenTree::Group(x) => {
                     if let TokenTree::Group(y) = y {
                         assert_token_stream_equal(x.stream(), y.stream());
@@ -1735,30 +1742,9 @@ mod tests_normal {
                         false
                     }
                 }
-                TokenTree::Ident(x) => {
-                    if let TokenTree::Ident(y) = y {
-                        x == y
-                    } else {
-                        false
-                    }
-                }
-                TokenTree::Literal(x) => {
-                    if let TokenTree::Literal(y) = y {
-                        x.to_string() == y.to_string()
-                    } else {
-                        false
-                    }
-                }
-                TokenTree::Punct(x) => {
-                    if let TokenTree::Punct(y) = y {
-                        x.to_string() == y.to_string()
-                    } else {
-                        false
-                    }
-                }
             });
 
-        assert!(result, "expect: {}, actual: {}", &l, &r);
+        assert!(result, "expect: {:#?}, actual: {:#?}", &l, &r);
     }
 
     fn no_generic_fn() -> NormalRpnFn {
