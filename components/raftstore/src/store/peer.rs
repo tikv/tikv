@@ -471,17 +471,16 @@ where
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
-    /// The number of the last unpersisted ready.
-    last_unpersisted_number: u64,
-    /// The number of the last persisted ready.
-    last_persisted_number: u64,
-    /// Outside code use it to notify new persisted number to this peer.
-    persisted_notifier: Arc<AtomicU64>,
-
     /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    unpersisted_numbers: VecDeque<(u64, u64)>,
+    /// (whether the last ready has a snapshot, whether the snapshot is persisted)
+    last_snapshot_ready: (bool, bool),
+    /// Outside code use it to notify the latest persisted number to this peer.
+    persisted_notifier: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -573,10 +572,10 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
-            last_unpersisted_number: 0,
-            last_persisted_number: 0,
-            persisted_notifier: Arc::new(AtomicU64::new(0)),
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            unpersisted_numbers: VecDeque::default(),
+            last_snapshot_ready: (false, false),
+            persisted_notifier: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1513,9 +1512,13 @@ where
             CheckApplyingSnapStatus::Success => {
                 self.post_pending_read_index_on_replica(ctx);
                 // If there is a snapshot, it must belongs to the last ready.
-                self.persisted_notifier
-                    .store(self.last_unpersisted_number, Ordering::Release);
-                self.persisted_ready(self.last_unpersisted_number);
+                assert_eq!(self.last_snapshot_ready, (true, false));
+                self.last_snapshot_ready = (true, true);
+                if self.unpersisted_numbers.is_empty() {
+                    let number = self.persisted_notifier.load(Ordering::Acquire);
+                    self.raft_group.on_persist_ready(number);
+                    self.last_snapshot_ready = (false, false);
+                }
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1528,15 +1531,20 @@ where
                     "not ready to apply snapshot";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "apply_index" => self.get_store().applied_index(),
+                    "applied_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
                     "pending_request_snapshot_count" => count,
                 );
                 return None;
             }
 
-            if self.last_unpersisted_number != self.last_persisted_number {
-                debug!("not ready to apply snapshot because some unpersisted readies were not persisted yet");
+            if !self.unpersisted_numbers.is_empty() {
+                debug!(
+                    "not ready to apply snapshot because some unpersisted readies have not persisted yet";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "unpersisted_numbers" => ?self.unpersisted_numbers,
+                );
                 return None;
             }
 
@@ -1592,8 +1600,6 @@ where
         );
 
         let mut ready = self.raft_group.ready();
-
-        self.last_unpersisted_number = ready.number();
 
         if !ready.must_sync() {
             // If this ready need not to sync, the term, vote must not be changed,
@@ -1783,11 +1789,45 @@ where
         ready: Ready,
         unsynced_version: Option<u64>,
     ) {
-        assert_eq!(ready.number(), self.last_unpersisted_number);
+        let is_synced = if let Some(version) = unsynced_version {
+            if ready.must_sync() {
+                ctx.sync_policy.mark_region_unsynced(
+                    version,
+                    self.region_id,
+                    ready.number(),
+                    self.persisted_notifier.clone(),
+                );
+                self.unpersisted_numbers
+                    .push_back((ready.number(), ready.number()));
+                false
+            } else if let Some(last) = self.unpersisted_numbers.back_mut() {
+                // Attach to the last unpersisted ready so that it can be considered to be
+                // persisted with the last ready at the same time.
+                last.1 = ready.number();
+                false
+            } else {
+                // If this ready need not to sync and there is no previous unpersisted ready,
+                // we can safely consider it is persisted.
+                // It's probably the case that the follower of a cold region receives a heartbeat.
+                true
+            }
+        } else {
+            true
+        };
+
+        if is_synced {
+            self.unpersisted_numbers.clear();
+            self.persisted_notifier
+                .store(ready.number(), Ordering::Release);
+        }
+
         if !ready.snapshot().is_empty() {
+            self.last_snapshot_ready = (true, false);
+            // Although `is_synced` may be true, `advance_append_async` must be called because
+            // the snapshot has not applied yet.
+            self.raft_group.advance_append_async(ready);
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
-            self.raft_group.advance_append_async(ready);
             // Because we only handle raft ready when not applying snapshot, so following
             // line won't be called twice for the same snapshot.
             self.raft_group.advance_apply_to(self.last_applying_idx);
@@ -1796,82 +1836,89 @@ where
                 self.term(),
                 self.raft_group.store().region(),
             );
-            return;
-        }
+        } else if !is_synced {
+            self.raft_group.advance_append_async(ready);
+        } else {
+            let mut light_rd = self.raft_group.advance_append(ready);
 
-        if let Some(version) = unsynced_version {
-            if ready.must_sync() || self.last_persisted_number + 1 < ready.number() {
-                ctx.sync_policy.mark_region_unsynced(
-                    version,
-                    self.region_id,
-                    ready.number(),
-                    self.persisted_notifier.clone(),
-                );
-                self.raft_group.advance_append_async(ready);
-                return;
+            self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
+            if let Some(commit_index) = light_rd.commit_index() {
+                let pre_commit_index = self.get_store().commit_index();
+                assert!(commit_index >= pre_commit_index);
+                // No need to persist the commit index but the one in memory
+                // (i.e. commit of hardstate in PeerStorage) should be updated.
+                self.mut_store().set_commit_index(commit_index);
+                if self.is_leader() {
+                    self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+                }
             }
-            // If this ready need not to sync and there is no previous unpersisted ready,
-            // we can safely consider it is persisted.
-            // It's probably the case that the follower of a cold region receives a heartbeat.
-            assert_eq!(self.last_persisted_number + 1, ready.number());
-        }
 
-        self.last_persisted_number = ready.number();
-        self.persisted_notifier
-            .store(ready.number(), Ordering::Release);
-
-        let mut light_rd = self.raft_group.advance_append(ready);
-
-        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
-
-        if let Some(commit_index) = light_rd.commit_index() {
-            let pre_commit_index = self.get_store().commit_index();
-            assert!(commit_index >= pre_commit_index);
-            // No need to persist the commit index but the one in memory
-            // (i.e. commit of hardstate in PeerStorage) should be updated.
-            self.mut_store().set_commit_index(commit_index);
-            if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+            if !light_rd.messages().is_empty() {
+                if !self.is_leader() {
+                    fail_point!("raft_before_follower_send");
+                }
+                for vec_msg in light_rd.take_messages() {
+                    self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                }
             }
-        }
 
-        if !light_rd.messages().is_empty() {
-            if !self.is_leader() {
-                fail_point!("raft_before_follower_send");
+            if !light_rd.committed_entries().is_empty() {
+                self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
             }
-            for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
-            }
-        }
-
-        if !light_rd.committed_entries().is_empty() {
-            self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
         }
     }
 
+    /// Returns if there are new persisted readies.
     pub fn check_new_persisted(&mut self) -> bool {
-        if self.last_unpersisted_number == self.last_persisted_number {
+        if self.unpersisted_numbers.is_empty() {
             return false;
         }
         let number = self.persisted_notifier.load(Ordering::Acquire);
+        if number < self.unpersisted_numbers.front().unwrap().0 {
+            return false;
+        }
+        let last_unpersisted_number = self.unpersisted_numbers.back().unwrap().0;
         assert!(
-            number <= self.last_unpersisted_number,
-            "{} persisted number {} > last unpersisted number {}",
+            number <= last_unpersisted_number,
+            "{} persisted number {} > last_unpersisted_number {}, unpersisted numbers {:?}",
             self.tag,
             number,
-            self.last_unpersisted_number
+            last_unpersisted_number,
+            self.unpersisted_numbers
         );
-        if number > self.last_persisted_number {
-            self.persisted_ready(number);
-            true
-        } else {
-            false
+        // There must be a match in `self.unpersisted_numbers`
+        let mut persisted_number = 0;
+        while let Some(v) = self.unpersisted_numbers.front() {
+            if number < v.0 {
+                break;
+            }
+            let v = self.unpersisted_numbers.pop_front().unwrap();
+            if number == v.0 {
+                persisted_number = v.1;
+                break;
+            }
         }
-    }
+        if persisted_number == 0 {
+            panic!(
+                "{} no match of persisted number {}, unpersisted numbers {:?}",
+                self.tag, number, self.unpersisted_numbers
+            );
+        }
 
-    fn persisted_ready(&mut self, number: u64) {
-        self.last_persisted_number = number;
-        self.raft_group.on_persist_ready(number);
+        if self.last_snapshot_ready.0 {
+            if self.last_snapshot_ready.1 && self.unpersisted_numbers.is_empty() {
+                self.raft_group.on_persist_ready(persisted_number);
+                self.last_snapshot_ready = (false, false);
+                true
+            } else {
+                // Should wait for applying snapshot or persisting the last ready
+                false
+            }
+        } else {
+            self.raft_group.on_persist_ready(persisted_number);
+            true
+        }
     }
 
     fn response_read<T>(
