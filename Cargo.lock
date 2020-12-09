@@ -1308,6 +1308,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
 
 [[package]]
+name = "flate2"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2adaffba6388640136149e18ed080b77a78611c1e1d6de75aedcdf78df5d4682"
+dependencies = [
+ "crc32fast",
+ "libc",
+ "libz-sys",
+ "miniz_oxide",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1932,7 +1944,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3c1ff6599f5efb9daa24abe2baffca9b515285bf"
+source = "git+https://github.com/pingcap/kvproto.git#923c9609272ce0526dd5acc048fb7e5df0e01231"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2234,6 +2246,15 @@ dependencies = [
  "proc-macro-error",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791daaae1ed6889560f8c4359194f56648355540573244a5448a83ba1ecc7435"
+dependencies = [
+ "adler32",
 ]
 
 [[package]]
@@ -4606,6 +4627,7 @@ dependencies = [
  "chrono",
  "codec",
  "file_system",
+ "flate2",
  "hex 0.4.2",
  "match_template",
  "num",
