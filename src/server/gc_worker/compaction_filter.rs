@@ -318,7 +318,7 @@ impl WriteCompactionFilter {
 
         self.versions += 1;
         if self.key_prefix != key_prefix {
-            self.handle_delete_mark()?;
+            self.handle_delete_mark();
             self.switch_key_metrics();
             self.key_prefix.clear();
             self.key_prefix.extend_from_slice(key_prefix);
@@ -373,7 +373,18 @@ impl WriteCompactionFilter {
 
     // It's possible that elder versions than a MVCC-delete mark occurs in a higher level.
     // So those versions needs to be handled by scan + delete.
-    fn handle_delete_mark(&mut self) -> Result<(), String> {
+    fn handle_delete_mark(&mut self) {
+        if let Err(e) = self.handle_delete_mark_impl() {
+            error!(
+                "WriteCompactionFilter meets a fatal error and can't recover";
+                "err" => ?e,
+            );
+            // Because the section is executed in RocksDB compaction threads,
+            // `exit` seems better than `panic`.
+            unsafe { libc::exit(-1) };
+        }
+    }
+    fn handle_delete_mark_impl(&mut self) -> Result<(), String> {
         let (mark, mut filtered) = match self.deleting_filtered.take() {
             Some((x, y)) => (x, y.into_iter().peekable()),
             None => return Ok(()),
@@ -397,7 +408,9 @@ impl WriteCompactionFilter {
             while let Some((ts, filtered_seqno)) = filtered.peek() {
                 match current_ts.cmp(ts) {
                     CmpOrdering::Greater => break,
-                    CmpOrdering::Less => unreachable!(),
+                    CmpOrdering::Less => {
+                        let _ = filtered.next().unwrap();
+                    },
                     CmpOrdering::Equal => {
                         // It's possible that there are multiple `key_ts` in different levels.
                         // A potential case is that a snapshot has been ingested.
@@ -533,7 +546,7 @@ impl Drop for WriteCompactionFilter {
     // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
     // becomes installed into the DB instance.
     fn drop(&mut self) {
-        self.handle_delete_mark().unwrap();
+        self.handle_delete_mark();
         self.switch_key_metrics();
         if !self.write_batch.is_empty() {
             self.engine.write(&self.write_batch).unwrap();
