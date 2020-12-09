@@ -37,6 +37,7 @@ pub struct ScanTask {
     pub before_start: Option<Box<dyn Fn() + Send>>,
 }
 
+#[derive(Debug)]
 pub enum ScanEntry {
     TxnEntry(Vec<TxnEntry>),
     Lock(Vec<(Key, Lock)>),

@@ -6,6 +6,7 @@ extern crate tikv_util;
 #[macro_use(fail_point)]
 extern crate fail;
 
+mod cmd;
 mod endpoint;
 mod errors;
 mod metrics;

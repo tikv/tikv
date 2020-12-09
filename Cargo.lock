@@ -3414,6 +3414,7 @@ dependencies = [
  "fail",
  "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "raft",
  "raftstore",
  "slog",
