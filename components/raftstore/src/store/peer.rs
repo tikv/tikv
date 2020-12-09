@@ -476,8 +476,10 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
+    /// The number of unpersisted readies: (ready number, the number of following ready
+    /// whose must-sync is false)
     unpersisted_numbers: VecDeque<(u64, u64)>,
-    /// (whether the last ready has a snapshot, whether the snapshot is persisted)
+    /// (Whether the last ready has a snapshot, Whether this snapshot is persisted)
     last_snapshot_ready: (bool, bool),
     /// Outside code use it to notify the latest persisted number to this peer.
     persisted_notifier: Arc<AtomicU64>,
@@ -1482,13 +1484,9 @@ where
             && !self.replication_sync
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-    ) -> Option<(Ready, InvokeContext)> {
-        if self.pending_remove {
-            return None;
-        }
+    /// Check current snapshot status.
+    /// Returns whether it's valid to handle raft ready.
+    fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         match self.mut_store().check_applying_snap() {
             CheckApplyingSnapStatus::Applying => {
                 // If this peer is applying snapshot, we should not get a new ready.
@@ -1507,7 +1505,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
-                return None;
+                false
             }
             CheckApplyingSnapStatus::Success => {
                 self.post_pending_read_index_on_replica(ctx);
@@ -1518,9 +1516,35 @@ where
                     let number = self.persisted_notifier.load(Ordering::Acquire);
                     self.raft_group.on_persist_ready(number);
                     self.last_snapshot_ready = (false, false);
+                    true
+                } else {
+                    false
                 }
             }
-            CheckApplyingSnapStatus::Idle => {}
+            CheckApplyingSnapStatus::Idle => {
+                if self.last_snapshot_ready.0 {
+                    // If the `last_snapshot_ready.0` is true, it means
+                    // the last ready has not been persisted yet.
+                    assert_eq!(self.last_snapshot_ready, (true, true));
+                    assert!(!self.unpersisted_numbers.is_empty());
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
+    pub fn handle_raft_ready_append<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> Option<(Ready, InvokeContext)> {
+        if self.pending_remove {
+            return None;
+        }
+
+        if !self.check_snap_status(ctx) {
+            return None;
         }
 
         let mut destroy_regions = vec![];
@@ -1806,8 +1830,8 @@ where
                 last.1 = ready.number();
                 false
             } else {
-                // If this ready need not to sync and there is no previous unpersisted ready,
-                // we can safely consider it is persisted.
+                // If this ready need not to be synced and there is no previous unpersisted ready,
+                // we can safely consider it is persisted and call `advance_append` latter.
                 // It's probably the case that the follower of a cold region receives a heartbeat.
                 true
             }

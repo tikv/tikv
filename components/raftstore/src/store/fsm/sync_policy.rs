@@ -192,7 +192,9 @@ impl<A: Action> SyncPolicy<A> {
             self.metrics.sync_events.sync_raftdb_with_no_ready += 1;
         }
 
-        self.update_status_after_synced(current_ts);
+        self.update_ts_after_synced(current_ts);
+
+        self.local_synced_version = version;
         self.flush_unsynced_readies(version, true);
 
         true
@@ -230,8 +232,8 @@ impl<A: Action> SyncPolicy<A> {
             .push_back(UnsyncedReady::new(version, region_id, number, notifier));
     }
 
-    /// Update the global status(last_sync_ts, last_plan_ts).
-    fn update_status_after_synced(&mut self, before_sync_ts: i64) {
+    /// Update the global timestamps(last_sync_ts, last_plan_ts).
+    fn update_ts_after_synced(&mut self, before_sync_ts: i64) {
         let last_sync_ts = self.global_last_sync_ts.load(Ordering::Acquire);
         let plan_sync_ts = self.global_plan_sync_ts.load(Ordering::Acquire);
         assert_eq!(
@@ -361,8 +363,6 @@ pub fn new_sync_policy<EK: KvEngine, ER: RaftEngine>(
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{self, AssertUnwindSafe};
-
     use super::*;
 
     use tikv_util::collections::HashSet;
