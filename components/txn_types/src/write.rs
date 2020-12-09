@@ -5,7 +5,7 @@ use crate::timestamp::TimeStamp;
 use crate::types::{Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -21,6 +21,7 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 const FLAG_OVERLAPPED_ROLLBACK: u8 = b'R';
+const FLAG_GC_FENCE: u8 = b'F';
 
 /// The short value for rollback records which are protected from being collapsed.
 const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
@@ -60,6 +61,7 @@ pub struct Write {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
     pub short_value: Option<Value>,
+
     /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
     /// records in the same CF where Commit records is, and Rollback records are saved with
     /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
@@ -68,6 +70,47 @@ pub struct Write {
     /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
     /// should be protected.
     pub has_overlapped_rollback: bool,
+
+    /// Records the next version after this version when overlapping rollback happens on an already
+    /// existed commit record.
+    ///
+    /// When a rollback flag is written on an already-written commit record, it causes rewriting
+    /// the commit record. It may cause problems with the GC compaction filter. Consider this case:
+    ///
+    /// ```text
+    /// Key_100_put, Key_120_del
+    /// ```
+    ///
+    /// and a rollback on `100` happens:
+    ///
+    /// ```text
+    /// Key_100_put_R, Key_120_del
+    /// ```
+    ///
+    /// Then GC with safepoint = 130 may happen. However a follower may not have finished applying
+    /// the change. So on the follower, it's possible that:
+    ///
+    /// 1. `Key_100_put`, `Key_120_del` applied
+    /// 2. GC with safepoint = 130 started and `Key_100_put`, `Key_120_del` are deleted
+    /// 3. Finished applying `Key_100_put_R`, which means to rewrite `Key_100_put`
+    /// 4. Read at `140` should get nothing (since it's MVCC-deleted at 120) but finds `Key_100_put`
+    ///
+    /// To solve the problem, when marking `has_overlapped_rollback` on an already-existed commit
+    /// record, add a special field `gc_fence` on it. If there is a newer version after the record
+    /// being rewritten, the next version's `commit_ts` will be recorded. When MVCC reading finds
+    /// a commit record with a GC fence timestamp but the corresponding version that matches that ts
+    /// doesn't exest, the current version will be believed to be already GC-ed and ignored.
+    ///
+    /// For CDC and TiFlash, when they receives a commit record with `gc_fence` field set, it can
+    /// determine that it must be caused by an overlapped rollback instead of an actual commit.
+    ///
+    /// The meaning of the field:
+    /// * `None`: A record that haven't been rewritten
+    /// * `Some(0)`: A commit record that has been rewritten due to overlapping rollback, but it
+    ///   doesn't have an newer version.
+    /// * `Some(ts)`: A commit record that has been rewritten due to overlapping rollback,
+    ///   and it's next version's `commit_ts` is `ts`
+    pub gc_fence: Option<TimeStamp>,
 }
 
 impl std::fmt::Debug for Write {
@@ -97,6 +140,7 @@ impl Write {
             start_ts,
             short_value,
             has_overlapped_rollback: false,
+            gc_fence: None,
         }
     }
 
@@ -113,12 +157,18 @@ impl Write {
             start_ts,
             short_value,
             has_overlapped_rollback: false,
+            gc_fence: None,
         }
     }
 
     #[inline]
-    pub fn set_overlapped_rollback(mut self, has_overlapped_rollback: bool) -> Self {
+    pub fn set_overlapped_rollback(
+        mut self,
+        has_overlapped_rollback: bool,
+        gc_fence: Option<TimeStamp>,
+    ) -> Self {
         self.has_overlapped_rollback = has_overlapped_rollback;
+        self.gc_fence = gc_fence;
         self
     }
 
@@ -137,6 +187,7 @@ impl Write {
             start_ts: self.start_ts,
             short_value: self.short_value.as_deref(),
             has_overlapped_rollback: self.has_overlapped_rollback,
+            gc_fence: self.gc_fence,
         }
     }
 }
@@ -154,6 +205,12 @@ pub struct WriteRef<'a> {
     /// Also note that `has_overlapped_rollback` field is only necessary when the Rollback record
     /// should be protected.
     pub has_overlapped_rollback: bool,
+
+    /// Records the next version after this version when overlapping rollback happens on an already
+    /// existed commit record.
+    ///
+    /// See [`Write::gc_fence`] for more detail.
+    pub gc_fence: Option<TimeStamp>,
 }
 
 impl WriteRef<'_> {
@@ -170,6 +227,7 @@ impl WriteRef<'_> {
 
         let mut short_value = None;
         let mut has_overlapped_rollback = false;
+        let mut gc_fence = None;
 
         while !b.is_empty() {
             match b
@@ -193,6 +251,7 @@ impl WriteRef<'_> {
                 FLAG_OVERLAPPED_ROLLBACK => {
                     has_overlapped_rollback = true;
                 }
+                FLAG_GC_FENCE => gc_fence = Some(number::decode_u64(&mut b)?.into()),
                 flag => panic!("invalid flag [{}] in write", flag),
             }
         }
@@ -202,6 +261,7 @@ impl WriteRef<'_> {
             start_ts,
             short_value,
             has_overlapped_rollback,
+            gc_fence,
         })
     }
 
@@ -216,6 +276,10 @@ impl WriteRef<'_> {
         }
         if self.has_overlapped_rollback {
             b.push(FLAG_OVERLAPPED_ROLLBACK);
+        }
+        if let Some(ts) = self.gc_fence {
+            b.push(FLAG_GC_FENCE);
+            b.encode_u64(ts.into_inner()).unwrap();
         }
         b
     }
@@ -237,7 +301,7 @@ impl WriteRef<'_> {
             self.start_ts,
             self.short_value.map(|v| v.to_owned()),
         )
-        .set_overlapped_rollback(self.has_overlapped_rollback)
+        .set_overlapped_rollback(self.has_overlapped_rollback, self.gc_fence)
     }
 }
 
@@ -285,9 +349,17 @@ mod tests {
             Write::new(WriteType::Delete, (1 << 20).into(), None),
             Write::new_rollback((1 << 40).into(), true),
             Write::new(WriteType::Rollback, (1 << 41).into(), None),
-            Write::new(WriteType::Put, 123.into(), None).set_overlapped_rollback(true),
+            Write::new(WriteType::Put, 123.into(), None).set_overlapped_rollback(true, None),
+            Write::new(WriteType::Put, 123.into(), None)
+                .set_overlapped_rollback(true, Some(1234567.into())),
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
-                .set_overlapped_rollback(true),
+                .set_overlapped_rollback(true, None),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
+                .set_overlapped_rollback(true, Some(0.into())),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
+                .set_overlapped_rollback(true, Some(2345678.into())),
+            Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
+                .set_overlapped_rollback(true, Some(421397468076048385.into())),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();
