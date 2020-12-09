@@ -581,6 +581,15 @@ pub struct FsStats {
 }
 
 #[repr(C)]
+pub struct StoreStats {
+    pub fs_stats: FsStats,
+    pub engine_bytes_written: u64,
+    pub engine_keys_written: u64,
+    pub engine_bytes_read: u64,
+    pub engine_keys_read: u64,
+}
+
+#[repr(C)]
 pub struct CppStrWithView {
     inner: RawCppPtr,
     pub view: BaseBuffView,
@@ -629,7 +638,7 @@ pub struct TiFlashServerHelper {
     handle_destroy: extern "C" fn(TiFlashServerPtr, RegionId),
     handle_ingest_sst: extern "C" fn(TiFlashServerPtr, SnapshotViewArray, RaftCmdHeader) -> u32,
     handle_check_terminated: extern "C" fn(TiFlashServerPtr) -> u8,
-    handle_compute_fs_stats: extern "C" fn(TiFlashServerPtr) -> FsStats,
+    handle_compute_store_stats: extern "C" fn(TiFlashServerPtr) -> StoreStats,
     handle_get_tiflash_status: extern "C" fn(TiFlashServerPtr) -> u8,
     pre_handle_snapshot: extern "C" fn(
         TiFlashServerPtr,
@@ -681,8 +690,8 @@ impl TiFlashServerHelper {
         (self.handle_get_table_sync_status)(self.inner, table_id)
     }
 
-    pub fn handle_compute_fs_stats(&self) -> FsStats {
-        (self.handle_compute_fs_stats)(self.inner)
+    pub fn handle_compute_store_stats(&self) -> StoreStats {
+        (self.handle_compute_store_stats)(self.inner)
     }
 
     pub fn handle_write_raft_cmd(
@@ -705,7 +714,7 @@ impl TiFlashServerHelper {
     pub fn check(&self) {
         assert_eq!(std::mem::align_of::<Self>(), std::mem::align_of::<u64>());
         const MAGIC_NUMBER: u32 = 0x13579BDF;
-        const VERSION: u32 = 401002;
+        const VERSION: u32 = 401003;
 
         if self.magic_number != MAGIC_NUMBER {
             eprintln!(

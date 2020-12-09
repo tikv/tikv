@@ -648,17 +648,19 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
-        let fs_stats = get_tiflash_server_helper().handle_compute_fs_stats();
-        if fs_stats.ok == 0 {
+        let store_stats = get_tiflash_server_helper().handle_compute_store_stats();
+        if store_stats.fs_stats.ok == 0 {
             return;
         }
-        let capacity = fs_stats.capacity_size;
-        let available = fs_stats.avail_size;
-        stats.set_used_size(fs_stats.used_size);
+        let capacity = store_stats.fs_stats.capacity_size;
+        let available = store_stats.fs_stats.avail_size;
+        stats.set_used_size(store_stats.fs_stats.used_size);
         stats.set_capacity(capacity);
         stats.set_available(available);
-
-        // TODO: report `bytes_written`, `keys_written`, `bytes_read`, `keys_read` to PD
+        stats.set_bytes_written(store_stats.engine_bytes_written);
+        stats.set_keys_written(store_stats.engine_keys_written);
+        stats.set_bytes_read(store_stats.engine_bytes_read);
+        stats.set_keys_read(store_stats.engine_keys_read);
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
