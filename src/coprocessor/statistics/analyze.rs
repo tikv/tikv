@@ -32,8 +32,8 @@ use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
-const VERSION1: i32 = 1;
-const VERSION2: i32 = 2;
+const ANALYZE_VERSION_V1: i32 = 1;
+const ANALYZE_VERSION_V2: i32 = 2;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -104,7 +104,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut topn_heap = BinaryHeap::new();
         let mut cur_v: (i32, Vec<u8>) = (0, Vec::from(""));
         let top_n_size = req.get_top_n_size() as usize;
-        let mut stats_version = VERSION1;
+        let mut stats_version = ANALYZE_VERSION_V1;
         if req.has_version() {
             stats_version = req.get_version();
         }
@@ -142,7 +142,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cms.insert(&data);
                 }
             }
-            if stats_version == VERSION2 {
+            if stats_version == ANALYZE_VERSION_V2 {
                 let vec_data = data.to_vec();
                 if cur_v.1 == vec_data {
                     cur_v.0 += 1;
@@ -159,7 +159,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             hist.append(&data);
         }
 
-        if stats_version == VERSION2 {
+        if stats_version == ANALYZE_VERSION_V2 {
             if cur_v.0 > 0 {
                 topn_heap.push(Reverse(cur_v.clone()));
                 if topn_heap.len() > top_n_size {
