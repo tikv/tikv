@@ -1308,76 +1308,133 @@ mod tests {
             (
                 Some(b"bar".to_vec()),
                 Some(b"foobarbar".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(4i64),
             ),
-            (Some(b"xbar".to_vec()), Some(b"foobar".to_vec()), Some(0i64)),
-            (Some(b"".to_vec()), Some(b"foobar".to_vec()), Some(1i64)),
-            (Some(b"foobar".to_vec()), Some(b"".to_vec()), Some(0i64)),
-            (Some(b"".to_vec()), Some(b"".to_vec()), Some(1i64)),
+            (
+                Some(b"xbar".to_vec()),
+                Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1i64),
+            ),
             (
                 Some("好世".as_bytes().to_vec()),
                 Some("你好世界".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(2i64),
             ),
             (
                 Some("界面".as_bytes().to_vec()),
                 Some("你好世界".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(0i64),
             ),
             (
                 Some(b"b".to_vec()),
                 Some("中a英b文".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(4i64),
+            ),
+            // Case-sensitive cases
+            (
+                Some(b"BaR".to_vec()),
+                Some(b"foobArbar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
             ),
             (
                 Some(b"BaR".to_vec()),
                 Some(b"foobArbar".to_vec()),
+                Collation::Utf8Mb4GeneralCi,
                 Some(4i64),
             ),
             // null cases
-            (None, Some(b"".to_vec()), None),
-            (None, Some(b"foobar".to_vec()), None),
-            (Some(b"".to_vec()), None, None),
-            (Some(b"foobar".to_vec()), None, None),
-            (None, None, None),
+            (None, Some(b"".to_vec()), Collation::Utf8Mb4Bin, None),
+            (None, Some(b"foobar".to_vec()), Collation::Utf8Mb4Bin, None),
+            (Some(b"".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (Some(b"foobar".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, None, Collation::Utf8Mb4Bin, None),
             // invalid cases: use invalid value to sign error result
             (
                 Some(b"bar".to_vec()),
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(b"foobar".to_vec()),
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
                 Some(b"foo".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
-            (None, Some(vec![0x00, 0x9f, 0x92, 0x96]), None),
-            (None, Some(b"Hello\xF0\x90\x80World".to_vec()), None),
-            (Some(vec![0x00, 0x9f, 0x92, 0x96]), None, None),
-            (Some(b"Hello\xF0\x90\x80World".to_vec()), None, None),
+            (
+                None,
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                None,
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                None,
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
         ];
 
-        for (substr, s, exp) in cases {
+        for (substr, s, collation, exp) in cases {
             match RpnFnScalarEvaluator::new()
                 .return_field_type(
                     FieldTypeBuilder::new()
                         .tp(FieldTypeTp::LongLong)
-                        .collation(Collation::Utf8Mb4Bin)
+                        .collation(collation)
                         .build(),
                 )
                 .push_param(substr)
@@ -1398,125 +1455,210 @@ mod tests {
                 Some(b"bar".to_vec()),
                 Some(b"foobarbar".to_vec()),
                 Some(5),
+                Collation::Utf8Mb4Bin,
                 Some(7),
             ),
             (
                 Some(b"xbar".to_vec()),
                 Some(b"foobar".to_vec()),
                 Some(1),
+                Collation::Utf8Mb4Bin,
                 Some(0),
             ),
             (
                 Some(b"".to_vec()),
                 Some(b"foobar".to_vec()),
                 Some(2),
+                Collation::Utf8Mb4Bin,
                 Some(2),
             ),
             (
                 Some(b"foobar".to_vec()),
                 Some(b"".to_vec()),
                 Some(1),
+                Collation::Utf8Mb4Bin,
                 Some(0),
             ),
-            (Some(b"".to_vec()), Some(b"".to_vec()), Some(2), Some(0)),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
             (
                 Some(b"A".to_vec()),
                 Some("大A写的A".as_bytes().to_vec()),
                 Some(0),
+                Collation::Utf8Mb4Bin,
                 Some(0),
             ),
             (
                 Some(b"A".to_vec()),
                 Some("大A写的A".as_bytes().to_vec()),
                 Some(-1),
+                Collation::Utf8Mb4Bin,
                 Some(0),
             ),
             (
                 Some(b"A".to_vec()),
                 Some("大A写的A".as_bytes().to_vec()),
                 Some(1),
+                Collation::Utf8Mb4Bin,
                 Some(2),
             ),
             (
                 Some(b"A".to_vec()),
                 Some("大A写的A".as_bytes().to_vec()),
                 Some(2),
+                Collation::Utf8Mb4Bin,
                 Some(2),
             ),
             (
                 Some(b"A".to_vec()),
                 Some("大A写的A".as_bytes().to_vec()),
                 Some(3),
+                Collation::Utf8Mb4Bin,
                 Some(5),
+            ),
+            // Case-sensitive cases
+            (
+                Some(b"bAr".to_vec()),
+                Some(b"foobarBaR".to_vec()),
+                Some(5),
+                Collation::Utf8Mb4Bin,
+                Some(0),
             ),
             (
                 Some(b"bAr".to_vec()),
                 Some(b"foobarBaR".to_vec()),
                 Some(5),
+                Collation::Utf8Mb4GeneralCi,
                 Some(7),
             ),
-            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(2), Some(2)),
-            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(3), Some(3)),
-            (Some(b"".to_vec()), Some(b"aa".to_vec()), Some(4), Some(0)),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(2),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(3),
+                Collation::Utf8Mb4Bin,
+                Some(3),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(4),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
             // null case
-            (None, None, Some(1), None),
-            (Some(b"".to_vec()), None, Some(1), None),
-            (None, Some(b"".to_vec()), Some(1), None),
-            (Some(b"foo".to_vec()), None, Some(-1), None),
-            (None, Some(b"bar".to_vec()), Some(0), None),
+            (None, None, Some(1), Collation::Utf8Mb4Bin, None),
+            (
+                Some(b"".to_vec()),
+                None,
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"".to_vec()),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(b"foo".to_vec()),
+                None,
+                Some(-1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"bar".to_vec()),
+                Some(0),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
             // invalid cases: use invalid value to sign error result
             (
                 Some(b"bar".to_vec()),
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
                 Some(1),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(b"foobar".to_vec()),
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 Some(2),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
                 Some(b"foo".to_vec()),
                 Some(3),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 Some(b"foobar".to_vec()),
                 Some(4),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
             (
                 Some(vec![0x00, 0x9f, 0x92, 0x96]),
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 Some(5),
+                Collation::Utf8Mb4Bin,
                 Some(-1i64),
             ),
-            (None, Some(vec![0x00, 0x9f, 0x92, 0x96]), Some(6), None),
+            (
+                None,
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(6),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
             (
                 None,
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 Some(7),
+                Collation::Utf8Mb4Bin,
                 None,
             ),
-            (Some(vec![0x00, 0x9f, 0x92, 0x96]), None, Some(8), None),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                None,
+                Some(8),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
             (
                 Some(b"Hello\xF0\x90\x80World".to_vec()),
                 None,
                 Some(9),
+                Collation::Utf8Mb4Bin,
                 None,
             ),
         ];
 
-        for (substr, s, pos, exp) in cases {
+        for (substr, s, pos, collation, exp) in cases {
             match RpnFnScalarEvaluator::new()
                 .return_field_type(
                     FieldTypeBuilder::new()
                         .tp(FieldTypeTp::LongLong)
-                        .collation(Collation::Utf8Mb4Bin)
+                        .collation(collation)
                         .build(),
                 )
                 .push_param(substr)
