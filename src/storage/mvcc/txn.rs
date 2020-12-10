@@ -35,25 +35,26 @@ impl<'a, S: Snapshot> GcFenceGetter<'a, S> {
 
     pub fn get(&self, ts: TimeStamp) -> Result<TimeStamp> {
         let key = self.key;
-        let start = key.clone().append_ts(TimeStamp::from(ts.into_inner() + 1));
-        let end = key.clone().append_ts(u64::MAX.into());
+        let start = key.clone().append_ts(u64::MAX.into());
+        let end = key.clone().append_ts(0.into());
         let iter_opt = IterOptions::new(
-            Some(KeyBuilder::from_vec(start.as_encoded().to_vec(), 0, 0)),
+            Some(KeyBuilder::from_vec(start.into_encoded(), 0, 0)),
             Some(KeyBuilder::from_vec(end.into_encoded(), 0, 0)),
             false, /*fill_cache*/
         );
+        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
 
-        let scan_mode = ScanMode::Backward;
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
         let mut cf_stats = CfStatistics::default();
-        let mut valid = cursor.reverse_seek(&start, &mut cf_stats)?;
+        let mut valid = cursor.seek(&key.clone().append_ts(ts), &mut cf_stats)?;
+        debug_assert!(valid, "the key must keep valid in one snapshot");
+        valid = cursor.prev(&mut cf_stats);
         while valid {
             let key = cursor.key(&mut cf_stats);
             let value = cursor.value(&mut cf_stats);
             let write_ref = WriteRef::parse(value)?;
             match write_ref.write_type {
                 WriteType::Put | WriteType::Delete => return Ok(Key::decode_ts_from(key)?),
-                _ => valid = cursor.next(&mut cf_stats),
+                _ => valid = cursor.prev(&mut cf_stats),
             }
         }
         Ok(0.into())
@@ -1810,5 +1811,62 @@ mod tests {
         let l = must_locked(&engine, k, 70);
         assert_eq!(l.min_commit_ts, 75.into());
         assert_eq!(l.rollback_ts, vec![75.into()]);
+    }
+
+    #[test]
+    fn test_gc_fence_getter() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Get gc fence without any newer versions.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 101);
+        must_commit(&engine, b"k1", 101, 102);
+        must_cleanup(&engine, b"k1", 102, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 102, 101, WriteType::Put, Some(0));
+
+        // Get gc fence with a newer put.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 103);
+        must_commit(&engine, b"k1", 103, 104);
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 105);
+        must_commit(&engine, b"k1", 105, 106);
+        must_cleanup(&engine, b"k1", 104, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 104, 103, WriteType::Put, Some(106));
+
+        // Get gc fence with a newer delete.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 107);
+        must_commit(&engine, b"k1", 107, 108);
+        must_prewrite_delete(&engine, b"k1", b"k1", 109);
+        must_commit(&engine, b"k1", 109, 110);
+        must_cleanup(&engine, b"k1", 108, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 108, 107, WriteType::Put, Some(110));
+
+        // Get gc fence with a newer rollback and lock.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 111);
+        must_commit(&engine, b"k1", 111, 112);
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 113);
+        must_rollback(&engine, b"k1", 113);
+        must_prewrite_lock(&engine, b"k1", b"k1", 115);
+        must_commit(&engine, b"k1", 115, 116);
+        must_cleanup(&engine, b"k1", 112, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 112, 111, WriteType::Put, Some(0));
+
+        // Get gc fence with a newer put after some rollbacks and locks.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 121);
+        must_commit(&engine, b"k1", 121, 122);
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 123);
+        must_rollback(&engine, b"k1", 123);
+        must_prewrite_lock(&engine, b"k1", b"k1", 125);
+        must_commit(&engine, b"k1", 125, 126);
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 127);
+        must_commit(&engine, b"k1", 127, 128);
+        must_cleanup(&engine, b"k1", 122, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 122, 121, WriteType::Put, Some(128));
+
+        // A key's gc fence won't be another MVCC key.
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 131);
+        must_commit(&engine, b"k1", 131, 132);
+        must_prewrite_put(&engine, b"k2", b"v1", b"k2", 133);
+        must_commit(&engine, b"k2", 133, 134);
+        must_cleanup(&engine, b"k1", 132, 0);
+        must_get_overlapped_rollback(&engine, b"k1", 132, 131, WriteType::Put, Some(0));
     }
 }
