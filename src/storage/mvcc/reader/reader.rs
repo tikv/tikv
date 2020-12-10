@@ -67,7 +67,7 @@ impl TxnCommitRecord {
 }
 
 pub struct MvccReader<S: Snapshot> {
-    snapshot: S,
+    pub snapshot: S,
     pub statistics: Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,
