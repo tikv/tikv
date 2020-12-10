@@ -903,6 +903,9 @@ fn cast_int_as_duration(
                 if err.is_overflow() {
                     ctx.handle_overflow_err(err)?;
                     Ok(None)
+                } else if err.is_truncate() {
+                    ctx.handle_truncate_err(err)?;
+                    Ok(None)
                 } else {
                     Err(err.into())
                 }

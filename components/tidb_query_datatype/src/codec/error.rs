@@ -118,6 +118,10 @@ impl Error {
         self.code() == ERR_DATA_OUT_OF_RANGE
     }
 
+    pub fn is_truncate(&self) -> bool {
+        self.code() == ERR_TRUNCATE_WRONG_VALUE
+    }
+
     pub fn unexpected_eof() -> Error {
         tikv_util::codec::Error::unexpected_eof().into()
     }

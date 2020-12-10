@@ -518,7 +518,7 @@ impl Duration {
 
         if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
             return Err(Error::Eval(
-                format!("invalid time format: '{}'", n),
+                format!("Truncated incorrect time value: '{}'", n),
                 ERR_TRUNCATE_WRONG_VALUE,
             ));
         }
