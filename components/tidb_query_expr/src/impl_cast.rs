@@ -2158,7 +2158,15 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![-11111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            100_000_000,
+            100_000_101_000_000,
+            73,
+        ];
 
         for case in should_fail {
             let actual = RpnFnScalarEvaluator::new()
