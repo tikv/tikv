@@ -3,9 +3,9 @@
 #[macro_use(debug)]
 extern crate tikv_util;
 
+use collections::HashSet;
 use std::cmp;
 use std::collections::BTreeMap;
-use tikv_util::collections::HashSet;
 use txn_types::TimeStamp;
 
 // Resolver resolves timestamps that guarantee no more commit will happen before

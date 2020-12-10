@@ -94,7 +94,6 @@ endpoints = [
 job = "tikv_1"
 
 [raftstore]
-sync-log = false
 prevote = false
 raftdb-path = "/var"
 capacity = 123
@@ -155,7 +154,6 @@ store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
 hibernate-timeout = "1h"
-early-apply = false
 dev-assert = true
 perf-level = 5
 
@@ -573,6 +571,8 @@ cert-allowed-cn = [
 [security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
+enable-file-dictionary-log = false
+file-dictionary-rewrite-threshold = 123456
 
 [security.encryption.master-key]
 type = "file"
@@ -605,3 +605,4 @@ pipelined = false
 [cdc]
 min-ts-interval = "4s"
 old-value-cache-size = 512
+hibernate-regions-compatible = false
