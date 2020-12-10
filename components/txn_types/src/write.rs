@@ -299,8 +299,7 @@ impl WriteRef<'_> {
     }
 
     fn pre_allocate_size(&self) -> usize {
-        // write_type + start_ts + has_overlapped_rollback
-        let mut size = 1 + MAX_VAR_U64_LEN + 1;
+        let mut size = 1 + MAX_VAR_U64_LEN + self.has_overlapped_rollback as usize;
 
         if let Some(v) = &self.short_value {
             size += 2 + v.len();
