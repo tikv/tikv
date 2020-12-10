@@ -333,12 +333,13 @@ pub mod tests {
     }
 
     pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+        let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert_eq!(
             reader
-                .get(&Key::from_raw(key), ts.into(), false)
+                .get(&Key::from_raw(key), ts, Some(ts), false)
                 .unwrap()
                 .unwrap(),
             expect
@@ -346,12 +347,13 @@ pub mod tests {
     }
 
     pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+        let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Rc);
         assert_eq!(
             reader
-                .get(&Key::from_raw(key), ts.into(), false)
+                .get(&Key::from_raw(key), ts, Some(ts), false)
                 .unwrap()
                 .unwrap(),
             expect
@@ -359,20 +361,24 @@ pub mod tests {
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+        let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         assert!(reader
-            .get(&Key::from_raw(key), ts.into(), false)
+            .get(&Key::from_raw(key), ts, Some(ts), false)
             .unwrap()
             .is_none());
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+        let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader.get(&Key::from_raw(key), ts.into(), false).is_err());
+        assert!(reader
+            .get(&Key::from_raw(key), ts, Some(ts), false)
+            .is_err());
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {

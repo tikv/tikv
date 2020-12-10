@@ -249,7 +249,7 @@ impl<S: Snapshot> MvccReader<S> {
             match self.seek_write(key, ts)? {
                 Some((commit_ts, write)) => {
                     if let Some(limit) = gc_fence_limit {
-                        if !write.check_gc_fence_as_latest_version(limit) {
+                        if !write.as_ref().check_gc_fence_as_latest_version(limit) {
                             return Ok(None);
                         }
                     }
@@ -1352,40 +1352,40 @@ mod tests {
         //                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
-        assert!(reader.get_write(&key, 1.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 2.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 2.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 5.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 5.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 7.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 7.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        assert!(reader.get_write(&key, 9.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 9.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 14.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 14.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 16.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 16.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 20.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 20.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        let write = reader.get_write(&key, 24.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 24.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
         assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into())
+            .get_write(&Key::from_raw(b"j"), 100.into(), None)
             .unwrap()
             .is_none());
     }
@@ -1598,21 +1598,24 @@ mod tests {
 
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 2.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 2.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 5.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 5.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 7.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 7.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
-            assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+            assert_eq!(
+                reader.get(&key, 9.into(), None, skip_lock_check).unwrap(),
+                None
+            );
 
-            assert!(reader.get(&key, 11.into(), false).is_err());
-            assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
+            assert!(reader.get(&key, 11.into(), None, false).is_err());
+            assert_eq!(reader.get(&key, 9.into(), None, true).unwrap(), None);
         }
 
         // Commit the long value
@@ -1621,7 +1624,7 @@ mod tests {
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 11.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 11.into(), None, skip_lock_check).unwrap(),
                 Some(long_value.to_vec())
             );
         }

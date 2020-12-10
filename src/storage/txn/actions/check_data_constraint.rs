@@ -14,10 +14,7 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
 ) -> MvccResult<()> {
     // Here we assume `write` is the latest version of the key. So it should not contain a
     // GC fence ts. Otherwise, it must be an already-deleted version.
-    let write_is_invalid = match write.gc_fence {
-        Some(gc_fence_ts) if !gc_fence_ts.is_zero() => true,
-        _ => false,
-    };
+    let write_is_invalid = matches!(write.gc_fence, Some(gc_fence_ts) if !gc_fence_ts.is_zero());
 
     if !should_not_exist || write.write_type == WriteType::Delete || write_is_invalid {
         return Ok(());
