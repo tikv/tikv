@@ -31,6 +31,7 @@ use tikv_util::time::{Instant, ThreadReadId};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
+use crate::Error;
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -146,6 +147,7 @@ pub struct ReadDelegate {
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
+    safe_read_ts: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
@@ -164,6 +166,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            safe_read_ts: peer.safe_read_ts.clone(),
         }
     }
 
@@ -264,7 +267,7 @@ where
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
-    delegates: HashMap<u64, Option<ReadDelegate>>,
+    delegates: HashMap<u64, ReadDelegate>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
@@ -365,20 +368,26 @@ where
 
         // Check region id.
         let region_id = req.get_header().get_region_id();
-        let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => match delegate.take() {
+        let delegate = {
+            // The region's read delegate is removed here, if the request
+            // is handled successfully, we need to insert it back
+            match self.delegates.remove(&region_id) {
                 Some(d) => d,
-                None => return Ok(None),
-            },
-            None => {
-                self.metrics.rejected_by_cache_miss += 1;
-                debug!("rejected by cache miss"; "region_id" => region_id);
-                return Ok(None);
+                None => {
+                    let meta = self.store_meta.lock().unwrap();
+                    match meta.readers.get(&region_id).cloned() {
+                        Some(reader) => reader,
+                        None => {
+                            self.metrics.rejected_by_no_region += 1;
+                            debug!("rejected by no region"; "region_id" => region_id);
+                            return Ok(None);
+                        }
+                    }
+                }
             }
         };
 
         if delegate.invalid.load(Ordering::Acquire) {
-            self.delegates.remove(&region_id);
             return Ok(None);
         }
 
@@ -409,19 +418,10 @@ where
             return Ok(None);
         }
 
-        let mut inspector = Inspector {
-            delegate: &delegate,
-            metrics: &mut self.metrics,
-        };
-        match inspector.inspect(req) {
-            Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
-            // It can not handle other policies.
-            Ok(_) => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(Some(delegate))
     }
 
-    pub fn propose_raft_command(
+    pub fn propose_raft_command1(
         &mut self,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
@@ -494,6 +494,104 @@ where
         // Forward to raftstore.
         let cmd = RaftCommand::new(req, cb);
         self.redirect(cmd);
+    }
+
+    pub fn propose_raft_command(
+        &mut self,
+        mut read_id: Option<ThreadReadId>,
+        req: RaftCmdRequest,
+        cb: Callback<E::Snapshot>,
+    ) {
+        let region_id = req.get_header().get_region_id();
+        let res = match self.pre_propose_raft_command(&req) {
+            // Do more checking
+            Ok(Some(delegate)) => {
+                let mut inspector = Inspector {
+                    delegate: &delegate,
+                    metrics: &mut self.metrics,
+                };
+                match inspector.inspect(&req) {
+                    Ok(RequestPolicy::ReadLocal) => {
+                        let snapshot_ts = match read_id.as_mut() {
+                            // If this peer became Leader not long ago and just after the cached
+                            // snapshot was created, this snapshot can not see all data of the peer.
+                            Some(id) => {
+                                if id.create_time <= delegate.last_valid_ts {
+                                    id.create_time = monotonic_raw_now();
+                                }
+                                id.create_time
+                            }
+                            None => monotonic_raw_now(),
+                        };
+                        // Leader can read local if and only if it is in lease.
+                        if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                            Ok(Some(delegate))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    Ok(RequestPolicy::StaleRead) => {
+                        let read_ts = req.get_header().get_read_ts();
+                        let safe_ts = delegate.safe_read_ts.load(Ordering::Relaxed);
+                        assert!(read_ts > 0);
+                        if safe_ts >= read_ts {
+                            Ok(Some(delegate))
+                        } else {
+                            self.metrics.rejected_by_safe_timestamp += 1;
+                            debug!(
+                                "rejected by safe timestamp";
+                                "safe ts" => safe_ts,
+                                "read ts" => read_ts,
+                                "tag" => &delegate.tag
+                            );
+                            let (peer_id, epoch) =
+                                (delegate.peer_id, delegate.region.get_region_epoch().clone());
+                            // Insert read delegate back
+                            self.delegates.insert(region_id, delegate);
+                            Err(Error::DataIsNotReady(region_id, peer_id, epoch, safe_ts))
+                        }
+                    }
+                    // It can not handle other policies.
+                    Ok(_) => Ok(None),
+                    Err(e) => {
+                        // Invalid request but delegate can be reuse
+                        self.delegates.insert(region_id, delegate);
+                        Err(e)
+                    }
+                }
+            }
+            res => res,
+        };
+        match res {
+            Ok(Some(delegate)) => {
+                // Cache snapshot_time for remaining requests in the same batch.
+                let mut response = self.execute(&req, &delegate.region, None, read_id);
+                cmd_resp::bind_term(&mut response.response, delegate.term);
+                if let Some(snap) = response.snapshot.as_mut() {
+                    snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                }
+                response.txn_extra_op = delegate.txn_extra_op.load();
+                cb.invoke_read(response);
+                // Put the delegate back
+                self.delegates.insert(region_id, delegate);
+            }
+            Ok(None) => {
+                // Forward to raftstore.
+                let cmd = RaftCommand::new(req, cb);
+                self.redirect(cmd);
+            }
+            Err(e) => {
+                let mut response = cmd_resp::new_error(e);
+                if let Some(ref delegate) = self.delegates.get(&region_id) {
+                    cmd_resp::bind_term(&mut response, delegate.term);
+                }
+                cb.invoke_read(ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+            }
+        }
     }
 
     /// If read requests are received at the same RPC request, we can create one snapshot for all
@@ -589,6 +687,7 @@ struct ReadMetrics {
     rejected_by_appiled_term: i64,
     rejected_by_channel_full: i64,
     rejected_by_cache_miss: i64,
+    rejected_by_safe_timestamp: i64,
 
     last_flush_time: Instant,
 }
@@ -608,6 +707,7 @@ impl Default for ReadMetrics {
             rejected_by_appiled_term: 0,
             rejected_by_channel_full: 0,
             rejected_by_cache_miss: 0,
+            rejected_by_safe_timestamp: 0,
             last_flush_time: Instant::now(),
         }
     }
@@ -671,6 +771,12 @@ impl ReadMetrics {
                 .channel_full
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
+        }
+        if self.rejected_by_safe_timestamp > 0 {
+            LOCAL_READ_REJECT
+                .safe_ts
+                .inc_by(self.rejected_by_safe_timestamp);
+            self.rejected_by_safe_timestamp = 0;
         }
         if self.local_executed_snapshot_cache_hit > 0 {
             LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);

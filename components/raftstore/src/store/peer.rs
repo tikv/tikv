@@ -470,6 +470,9 @@ where
 
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+
+    pending_ts: VecDeque<(u64, u64)>,
+    pub safe_read_ts: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -562,6 +565,8 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
+            pending_ts: VecDeque::new(),
+            safe_read_ts: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1941,6 +1946,8 @@ where
         }
         self.pending_reads.gc();
 
+        self.handle_pending_ts();
+
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
@@ -2062,7 +2069,7 @@ where
 
         let policy = self.inspect(&req);
         let res = match policy {
-            Ok(RequestPolicy::ReadLocal) => {
+            Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
                 self.read_local(ctx, req, cb);
                 return false;
             }
@@ -2980,6 +2987,30 @@ where
                 };
             }
         }
+        if req.get_header().get_read_ts() > 0 {
+            let read_ts = req.get_header().get_read_ts();
+            let safe_ts = self.safe_read_ts.load(Ordering::Relaxed);
+            if safe_ts < read_ts {
+                debug!(
+                    "read rejected by safe timestamp";
+                    "safe ts" => safe_ts,
+                    "read ts" => read_ts,
+                    "tag" => &self.tag
+                );
+                let mut response = cmd_resp::new_error(Error::DataIsNotReady(
+                    region.get_id(),
+                    self.peer_id(),
+                    region.get_region_epoch().clone(),
+                    safe_ts,
+                ));
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
@@ -3165,6 +3196,15 @@ where
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
+
+        if self.is_leader()
+            && msg.get_msg_type() == MessageType::MsgHeartbeat
+            && self.has_applied_to_current_term()
+        {
+            send_msg.set_applied_index(self.get_store().applied_index());
+            send_msg.set_read_ts(self.safe_read_ts.load(Ordering::Relaxed));
+        }
+
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
@@ -3187,6 +3227,38 @@ where
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
+    }
+
+    pub fn forward_safe_read_ts(&mut self, applied_index: u64, ts: u64) {
+        if self.get_store().applied_index() < applied_index {
+            if let Some(item) = self.pending_ts.back_mut() {
+                if item.0 >= applied_index && item.1 < ts {
+                    item.1 = ts;
+                    return;
+                }
+                if *item >= (applied_index, ts) {
+                    return;
+                }
+            }
+            self.pending_ts.push_back((applied_index, ts));
+            return;
+        }
+        self.safe_read_ts.fetch_max(ts, Ordering::Relaxed);
+    }
+
+    pub fn handle_pending_ts(&mut self) {
+        let applied_index = self.get_store().applied_index();
+        let mut ts_to_update = self.safe_read_ts.load(Ordering::Relaxed);
+        while let Some((idx, ts)) = self.pending_ts.pop_front() {
+            if applied_index < idx {
+                self.pending_ts.push_front((idx, ts));
+                return;
+            }
+            if ts_to_update < ts {
+                ts_to_update = ts;
+            }
+        }
+        self.safe_read_ts.fetch_max(ts_to_update, Ordering::Relaxed);
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
@@ -3335,6 +3407,7 @@ where
 pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
+    StaleRead,
     // Handle the read request via raft's SafeReadIndex mechanism.
     ReadIndex,
     ProposeNormal,
@@ -3385,6 +3458,10 @@ pub trait RequestInspector {
 
         if has_write {
             return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        if req.get_header().get_read_ts() > 0 {
+            return Ok(RequestPolicy::StaleRead);
         }
 
         if req.get_header().get_read_quorum() {

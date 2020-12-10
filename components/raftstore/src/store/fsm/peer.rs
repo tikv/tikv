@@ -1218,9 +1218,12 @@ where
             return Ok(());
         }
 
-        if util::is_vote_msg(&msg.get_message())
-            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
-        {
+        let (msg_type, msg_term) = (
+            msg.get_message().get_msg_type(),
+            msg.get_message().get_term(),
+        );
+
+        if util::is_vote_msg(&msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
             if self.fsm.group_state != GroupState::Chaos {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
@@ -1233,6 +1236,12 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
+
+        if msg_type == MessageType::MsgHeartbeat && msg_term == self.fsm.peer.term() {
+            self.fsm
+                .peer
+                .forward_safe_read_ts(msg.get_applied_index(), msg.get_read_ts());
+        }
 
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {

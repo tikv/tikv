@@ -104,6 +104,8 @@ pub enum TsSet {
     Vec(Arc<[TimeStamp]>),
     /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
     Set(Arc<HashSet<TimeStamp>>),
+    /// `Upper` represent all timestamps that less or equal to it
+    Upper(TimeStamp),
 }
 
 impl Default for TsSet {
@@ -153,6 +155,19 @@ impl TsSet {
         }
     }
 
+    #[inline]
+    pub fn upper(ts: TimeStamp) -> Self {
+        TsSet::Upper(ts)
+    }
+    
+    #[inline]
+    pub fn contains_all_below(&self, ts: TimeStamp) -> bool {
+        match self {
+            TsSet::Upper(upper) => *upper >= ts,
+            _ => false
+        }
+    }
+
     /// Query whether the given timestamp is contained in the set.
     #[inline]
     pub fn contains(&self, ts: TimeStamp) -> bool {
@@ -160,6 +175,7 @@ impl TsSet {
             TsSet::Empty => false,
             TsSet::Vec(vec) => vec.contains(&ts),
             TsSet::Set(set) => set.contains(&ts),
+            TsSet::Upper(upper) => *upper >= ts,
         }
     }
 }

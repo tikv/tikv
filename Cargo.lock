@@ -1917,7 +1917,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#5dfa7b1325a3bfc07100eb2bcde655950122fa25"
+source = "git+https://github.com/NingLin-P/kvproto.git?branch=stale-read#285c3a8b54d8b3403430f727d0a9511f5c0f3f49"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -3102,7 +3102,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#6998aedadab120450b588170e6e36202b1af19df"
+source = "git+https://github.com/tikv/raft-rs#6998aedadab120450b588170e6e36202b1af19df"
 dependencies = [
  "lazy_static",
  "prost",

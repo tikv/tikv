@@ -273,9 +273,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
-                // here.
-                let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+                let bypass_locks = if ctx.get_resolved() {
+                    // `start_ts` is resolved, bypass locks that less or equal to `start_ts`
+                    TsSet::upper(start_ts)
+                } else {
+                    // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
+                    // here.
+                    TsSet::vec_from_u64s(ctx.take_resolved_locks())
+                };
 
                 let snap_ctx = prepare_snap_ctx(
                     &ctx,
@@ -365,8 +370,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let mut ctx = req.take_context();
                         let isolation_level = ctx.get_isolation_level();
                         let fill_cache = !ctx.get_not_fill_cache();
-                        let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
+                        let bypass_locks = if ctx.get_resolved() {
+                            TsSet::upper(start_ts)
+                        } else {
+                            TsSet::vec_from_u64s(ctx.take_resolved_locks())
+                        };
 
                         let snap_ctx = match prepare_snap_ctx(
                             &ctx,
@@ -376,7 +385,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &concurrency_manager,
                         ) {
                             Ok(mut snap_ctx) => {
-                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx.read_id = if ctx.get_stale_read() {
+                                    None
+                                } else {
+                                    read_id.clone()
+                                };
                                 snap_ctx
                             }
                             Err(e) => {
@@ -487,7 +500,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+                let bypass_locks = if ctx.get_resolved() {
+                    TsSet::upper(start_ts)
+                } else {
+                    TsSet::from_u64s(ctx.take_resolved_locks())
+                };
 
                 let snap_ctx =
                     prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
@@ -595,11 +612,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
-                let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
+                let bypass_locks = if ctx.get_resolved() {
+                    // `start_ts` is resolved, bypass locks that less or equal to `start_ts`
+                    TsSet::upper(start_ts)
+                } else {
+                    TsSet::from_u64s(ctx.take_resolved_locks())
+                };
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 concurrency_manager.update_max_ts(start_ts);
-                if ctx.get_isolation_level() == IsolationLevel::Si {
+                if ctx.get_isolation_level() == IsolationLevel::Si
+                    && !bypass_locks.contains_all_below(start_ts)
+                {
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
                             Lock::check_ts_conflict(
@@ -1463,7 +1487,7 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
-    if isolation_level == IsolationLevel::Si {
+    if isolation_level == IsolationLevel::Si && !bypass_locks.contains_all_below(start_ts) {
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
@@ -1488,7 +1512,9 @@ fn prepare_snap_ctx<'a>(
 }
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
-    ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
+    ctx.get_replica_read()
+        && !ctx.get_stale_read()
+        && ctx.get_isolation_level() == IsolationLevel::Si
 }
 
 fn point_key_range(key: Key) -> KeyRange {

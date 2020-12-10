@@ -153,6 +153,11 @@ pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
         || (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)
 }
 
+#[inline]
+pub fn is_heartbeat_msg(msg: &eraftpb::Message, term: u64) -> bool {
+    msg.get_msg_type() == MessageType::MsgHeartbeat && msg.get_term() >= term
+}
+
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
