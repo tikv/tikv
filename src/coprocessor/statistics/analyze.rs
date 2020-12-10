@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
@@ -29,6 +31,9 @@ use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
 use crate::storage::{Snapshot, SnapshotStore, Statistics};
+
+const VERSION1: i32 = 1;
+const VERSION2: i32 = 2;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -96,6 +101,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
+        let mut topn_heap = BinaryHeap::new();
+        let mut cur_v: (i32, Vec<u8>) = (0, Vec::from(""));
+        let top_n_size = req.get_top_n_size() as usize;
+        let mut stats_version = VERSION1;
+        if req.has_version() {
+            stats_version = req.get_version();
+        }
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
@@ -130,7 +142,36 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cms.insert(&data);
                 }
             }
+            if stats_version == VERSION2 {
+                let vec_data = data.to_vec();
+                if cur_v.1 == vec_data {
+                    cur_v.0 += 1;
+                } else {
+                    if cur_v.0 > 0 {
+                        topn_heap.push(Reverse(cur_v.clone()));
+                    }
+                    if topn_heap.len() > top_n_size {
+                        topn_heap.pop();
+                    }
+                    cur_v = (1, vec_data);
+                }
+            }
             hist.append(&data);
+        }
+
+        if stats_version == VERSION2 {
+            if cur_v.0 > 0 {
+                topn_heap.push(Reverse(cur_v.clone()));
+                if topn_heap.len() > top_n_size {
+                    topn_heap.pop();
+                }
+            }
+            if let Some(c) = cms.as_mut() {
+                for heap_data in topn_heap {
+                    c.sub(&(heap_data.0).1, (heap_data.0).0 as u32);
+                    c.push_to_top_n((heap_data.0).1, (heap_data.0).0 as u64);
+                }
+            }
         }
 
         let mut res = tipb::AnalyzeIndexResp::default();
@@ -180,6 +221,9 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
+            AnalyzeType::TypeSampleIndex | AnalyzeType::TypeMixed => Err(Error::Other(
+                "Analyze of this kind not implemented".to_string(),
+            )),
         };
         match ret {
             Ok(data) => {

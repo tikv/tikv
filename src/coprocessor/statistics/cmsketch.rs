@@ -10,6 +10,7 @@ pub struct CmSketch {
     width: usize,
     count: u32,
     table: Vec<Vec<u32>>,
+    top_n: Vec<(Vec<u8>, u64)>,
 }
 
 impl CmSketch {
@@ -22,6 +23,7 @@ impl CmSketch {
                 width: w,
                 count: 0,
                 table: vec![vec![0; w]; d],
+                top_n: vec![],
             })
         }
     }
@@ -44,13 +46,32 @@ impl CmSketch {
         }
     }
 
+    pub fn sub(&mut self, bytes: &[u8], cnt: u32) {
+        self.count -= cnt;
+        let (h1, h2) = CmSketch::hash(bytes);
+        for (i, row) in self.table.iter_mut().enumerate() {
+            let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
+            row[j] = row[j].saturating_sub(cnt);
+        }
+    }
+
+    pub fn push_to_top_n(&mut self, b: Vec<u8>, cnt: u64) {
+        self.top_n.push((b.to_vec(), cnt))
+    }
+
     pub fn into_proto(self) -> tipb::CmSketch {
         let mut proto = tipb::CmSketch::default();
-        let mut rows = vec![tipb::CmSketchRow::default(); self.depth];
-        for (i, row) in self.table.iter().enumerate() {
-            rows[i].set_counters(row.to_vec());
+        let mut rows = vec![tipb::CmSketchRow::default(); self.table.len()];
+        for (pb_row, row) in rows.iter_mut().zip(self.table) {
+            pb_row.set_counters(row);
         }
         proto.set_rows(rows.into());
+        let mut top_n_data = vec![tipb::CmSketchTopN::default(); self.top_n.len()];
+        for (pb_top_n_data, (data, cnt)) in top_n_data.iter_mut().zip(self.top_n) {
+            pb_top_n_data.set_data(data);
+            pb_top_n_data.set_count(cnt);
+        }
+        proto.set_top_n(top_n_data.into());
         proto
     }
 }
