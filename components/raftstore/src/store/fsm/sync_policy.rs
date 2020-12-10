@@ -65,19 +65,19 @@ impl<EK: KvEngine, ER: RaftEngine> Action for SyncAction<EK, ER> {
 
 #[derive(Default)]
 pub struct UnsyncedReady {
-    version: u64,
-    region_id: u64,
     number: u64,
+    region_id: u64,
     notifier: Arc<AtomicU64>,
+    version: u64,
 }
 
 impl UnsyncedReady {
-    fn new(version: u64, region_id: u64, number: u64, notifier: Arc<AtomicU64>) -> UnsyncedReady {
+    fn new(number: u64, region_id: u64, notifier: Arc<AtomicU64>, version: u64) -> UnsyncedReady {
         UnsyncedReady {
-            version,
-            region_id,
             number,
+            region_id,
             notifier,
+            version,
         }
     }
 }
@@ -165,7 +165,7 @@ impl<A: Action> SyncPolicy<A> {
         let version = self.global_synced_version.load(Ordering::Acquire);
         if self.local_synced_version < version {
             self.local_synced_version = version;
-            self.flush_unsynced_readies(version, false)
+            self.flush_unsynced_readies(Some(version))
         } else {
             false
         }
@@ -185,7 +185,11 @@ impl<A: Action> SyncPolicy<A> {
         }
 
         let version = self.global_unsynced_version.load(Ordering::Acquire);
+
         self.sync_action.sync_raft_engine();
+
+        self.local_synced_version = version;
+        self.global_synced_version.store(version, Ordering::Release);
 
         self.metrics.sync_events.sync_raftdb_count += 1;
         if !for_ready {
@@ -194,8 +198,7 @@ impl<A: Action> SyncPolicy<A> {
 
         self.update_ts_after_synced(current_ts);
 
-        self.local_synced_version = version;
-        self.flush_unsynced_readies(version, true);
+        self.flush_unsynced_readies(None);
 
         true
     }
@@ -218,18 +221,18 @@ impl<A: Action> SyncPolicy<A> {
         self.sync_if_needed(false)
     }
 
-    pub fn mark_region_unsynced(
+    pub fn mark_ready_unsynced(
         &mut self,
-        version: u64,
-        region_id: u64,
         number: u64,
+        region_id: u64,
         notifier: Arc<AtomicU64>,
+        version: u64,
     ) {
         if !self.delay_sync_enabled {
             return;
         }
         self.unsynced_readies
-            .push_back(UnsyncedReady::new(version, region_id, number, notifier));
+            .push_back(UnsyncedReady::new(number, region_id, notifier, version));
     }
 
     /// Update the global timestamps(last_sync_ts, last_plan_ts).
@@ -315,11 +318,14 @@ impl<A: Action> SyncPolicy<A> {
     }
 
     /// Return if all unsynced readies are flushed.
-    fn flush_unsynced_readies(&mut self, synced_version: u64, flush_all: bool) -> bool {
+    /// If synced_version is None, it means all unsynced readies should be flushed.
+    fn flush_unsynced_readies(&mut self, synced_version: Option<u64>) -> bool {
         let mut need_notify_regions = HashMap::default();
         while let Some(r) = self.unsynced_readies.front() {
-            if !flush_all && synced_version < r.version {
-                break;
+            if let Some(version) = synced_version {
+                if version < r.version {
+                    break;
+                }
             }
             let ready = self.unsynced_readies.pop_front().unwrap();
 
@@ -429,7 +435,7 @@ mod tests {
         }
         while let Ok(v) = router_rx.try_recv() {
             if !msg_set.remove(&v) {
-                panic!("router msg {:?} not in expected msg", v);
+                panic!("router msg {:?} not in expected msg {:?}", v, msg_set);
             }
         }
         assert!(
@@ -449,30 +455,34 @@ mod tests {
         assert!(!sync_policy.sync_if_needed(true));
         assert!(sync_policy.try_sync_and_flush());
 
-        sync_policy.mark_region_unsynced(1, 1, 1, Arc::new(AtomicU64::new(1)));
+        sync_policy.mark_ready_unsynced(1, 1, Arc::new(AtomicU64::new(1)), 1);
         assert!(sync_policy.unsynced_readies.is_empty());
     }
 
     #[test]
-    fn test_try_flush_regions() {
+    fn test_try_flush_readies() {
         let test = new_test_sync_policy(true, 10);
         let mut sync_policy = test.sync_policy.clone();
 
         let notifier_1 = Arc::new(AtomicU64::new(0));
         let notifier_2 = Arc::new(AtomicU64::new(0));
         let notifier_3 = Arc::new(AtomicU64::new(2));
-        sync_policy.mark_region_unsynced(2, 1, 1, notifier_1.clone());
-        sync_policy.mark_region_unsynced(5, 1, 3, notifier_1.clone());
-        sync_policy.mark_region_unsynced(6, 2, 1, notifier_2.clone());
-        sync_policy.mark_region_unsynced(6, 3, 4, notifier_3.clone());
-        sync_policy.mark_region_unsynced(8, 2, 4, notifier_2.clone());
-        sync_policy.mark_region_unsynced(11, 1, 5, notifier_1.clone());
-        sync_policy.mark_region_unsynced(12, 3, 6, notifier_3.clone());
+        sync_policy.mark_ready_unsynced(1, 1, notifier_1.clone(), 2);
+        sync_policy.mark_ready_unsynced(3, 1, notifier_1.clone(), 5);
+        sync_policy.mark_ready_unsynced(1, 2, notifier_2.clone(), 6);
+        sync_policy.mark_ready_unsynced(4, 3, notifier_3.clone(), 6);
+        sync_policy.mark_ready_unsynced(4, 2, notifier_2.clone(), 8);
+        sync_policy.mark_ready_unsynced(5, 1, notifier_1.clone(), 11);
+        sync_policy.mark_ready_unsynced(6, 3, notifier_3.clone(), 12);
 
-        // plan_sync_ts is no use for this case so set it just for the invariant
-        sync_policy.global_plan_sync_ts.store(10, Ordering::Release);
-        sync_policy.global_last_sync_ts.store(10, Ordering::Release);
-        // So version = 6, region_id = 3, number = 4 should not be notified
+        sync_policy
+            .global_unsynced_version
+            .store(12, Ordering::Release);
+        sync_policy.local_synced_version = 1;
+        sync_policy
+            .global_synced_version
+            .store(8, Ordering::Release);
+        // So number = 4, region_id = 3, version = 6 should not be notified
         notifier_3.store(5, Ordering::Release);
 
         sync_policy.try_flush_readies();
@@ -516,7 +526,7 @@ mod tests {
         sync_policy.global_last_sync_ts.store(40, Ordering::Release);
         let notify_1 = Arc::new(AtomicU64::new(0));
         for i in 0..(UNSYNCED_REGIONS_SIZE_LIMIT + 1) {
-            sync_policy.mark_region_unsynced(41, 1, i as u64, notify_1.clone());
+            sync_policy.mark_ready_unsynced(i as u64, 1, notify_1.clone(), 41);
         }
         // Reach limit of `UNSYNCED_REGIONS_SIZE_LIMIT`
         assert_eq!(sync_policy.check_sync_internal(41), true);
@@ -530,15 +540,18 @@ mod tests {
         let notifier_1 = Arc::new(AtomicU64::new(0));
         let notifier_2 = Arc::new(AtomicU64::new(0));
         let notifier_3 = Arc::new(AtomicU64::new(2));
-        sync_policy.mark_region_unsynced(2, 1, 1, notifier_1.clone());
-        sync_policy.mark_region_unsynced(5, 1, 3, notifier_1.clone());
-        sync_policy.mark_region_unsynced(6, 2, 1, notifier_2.clone());
-        sync_policy.mark_region_unsynced(6, 3, 4, notifier_3.clone());
-        sync_policy.mark_region_unsynced(8, 2, 4, notifier_2.clone());
-        sync_policy.mark_region_unsynced(11, 1, 5, notifier_1.clone());
-        sync_policy.mark_region_unsynced(12, 3, 6, notifier_3.clone());
+        sync_policy.mark_ready_unsynced(1, 1, notifier_1.clone(), 2);
+        sync_policy.mark_ready_unsynced(3, 1, notifier_1.clone(), 5);
+        sync_policy.mark_ready_unsynced(1, 2, notifier_2.clone(), 6);
+        sync_policy.mark_ready_unsynced(4, 3, notifier_3.clone(), 6);
+        sync_policy.mark_ready_unsynced(4, 2, notifier_2.clone(), 8);
+        sync_policy.mark_ready_unsynced(5, 1, notifier_1.clone(), 11);
+        sync_policy.mark_ready_unsynced(6, 3, notifier_3.clone(), 12);
 
-        test.time.store(15, Ordering::Release);
+        sync_policy
+            .global_unsynced_version
+            .store(12, Ordering::Release);
+        test.time.store(10, Ordering::Release);
 
         assert!(sync_policy.sync_if_needed(true));
 
@@ -548,20 +561,24 @@ mod tests {
         assert_eq!(notifier_2.load(Ordering::Acquire), 4);
         assert_eq!(notifier_3.load(Ordering::Acquire), 6);
         assert_eq!(sync_policy.unsynced_readies.len(), 0);
-        assert_eq!(sync_policy.global_plan_sync_ts.load(Ordering::Acquire), 15);
-        assert_eq!(sync_policy.global_last_sync_ts.load(Ordering::Acquire), 15);
+        assert_eq!(
+            sync_policy.global_synced_version.load(Ordering::Acquire),
+            12
+        );
+        assert_eq!(sync_policy.global_plan_sync_ts.load(Ordering::Acquire), 10);
+        assert_eq!(sync_policy.global_last_sync_ts.load(Ordering::Acquire), 10);
     }
 
     #[test]
-    fn test_mark_region_unsynced() {
+    fn test_mark_ready_unsynced() {
         let test = new_test_sync_policy(true, 10);
         let mut sync_policy = test.sync_policy.clone();
 
         let notifier_1 = Arc::new(AtomicU64::new(0));
         let notifier_2 = Arc::new(AtomicU64::new(0));
-        sync_policy.mark_region_unsynced(2, 1, 1, notifier_1.clone());
-        sync_policy.mark_region_unsynced(5, 1, 3, notifier_1.clone());
-        sync_policy.mark_region_unsynced(6, 2, 1, notifier_2);
+        sync_policy.mark_ready_unsynced(1, 1, notifier_1.clone(), 2);
+        sync_policy.mark_ready_unsynced(3, 1, notifier_1.clone(), 5);
+        sync_policy.mark_ready_unsynced(1, 2, notifier_2, 6);
         assert_eq!(sync_policy.unsynced_readies.len(), 3);
     }
 }

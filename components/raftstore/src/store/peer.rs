@@ -476,11 +476,11 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
-    /// The number of unpersisted readies: (ready number, the number of following ready
+    /// The number of unpersisted readies: (ready number, the max number of following ready
     /// whose must-sync is false)
     unpersisted_numbers: VecDeque<(u64, u64)>,
-    /// (Whether the last ready has a snapshot, Whether this snapshot is persisted)
-    last_snapshot_ready: (bool, bool),
+    /// (The number of ready which has a snapshot, Whether this snapshot has been applied)
+    snapshot_ready_status: (u64, bool),
     /// Outside code use it to notify the latest persisted number to this peer.
     persisted_notifier: Arc<AtomicU64>,
 }
@@ -576,7 +576,7 @@ where
             cmd_epoch_checker: Default::default(),
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
             unpersisted_numbers: VecDeque::default(),
-            last_snapshot_ready: (false, false),
+            snapshot_ready_status: (0, false),
             persisted_notifier: Arc::new(AtomicU64::new(0)),
         };
 
@@ -1484,6 +1484,25 @@ where
             && !self.replication_sync
     }
 
+    fn persisted_ready_snapshot(&mut self) {
+        assert!(self.unpersisted_numbers.is_empty());
+        assert!(self.snapshot_ready_status.1);
+        assert!(self.snapshot_ready_status.0 != 0);
+
+        self.raft_group
+            .on_persist_ready(self.snapshot_ready_status.0);
+        self.snapshot_ready_status = (0, false);
+
+        // Snapshot's has been applied.
+        self.last_applying_idx = self.get_store().truncated_index();
+        self.raft_group.advance_apply_to(self.last_applying_idx);
+        self.cmd_epoch_checker.advance_apply(
+            self.last_applying_idx,
+            self.term(),
+            self.raft_group.store().region(),
+        );
+    }
+
     /// Check current snapshot status.
     /// Returns whether it's valid to handle raft ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
@@ -1509,23 +1528,28 @@ where
             }
             CheckApplyingSnapStatus::Success => {
                 self.post_pending_read_index_on_replica(ctx);
-                // If there is a snapshot, it must belongs to the last ready.
-                assert_eq!(self.last_snapshot_ready, (true, false));
-                self.last_snapshot_ready = (true, true);
-                if self.unpersisted_numbers.is_empty() {
-                    let number = self.persisted_notifier.load(Ordering::Acquire);
-                    self.raft_group.on_persist_ready(number);
-                    self.last_snapshot_ready = (false, false);
+
+                if self.snapshot_ready_status.0 == 0 {
+                    // If `snapshot_ready_status.0` is 0, it means this snapshot does not
+                    // come from the ready but comes from the unfinished snapshot task
+                    // after restarting.
                     true
                 } else {
-                    false
+                    assert!(!self.snapshot_ready_status.1);
+                    self.snapshot_ready_status.1 = true;
+                    // The snapshot must belong to the last ready.
+                    if self.unpersisted_numbers.is_empty() {
+                        self.persisted_ready_snapshot();
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
             CheckApplyingSnapStatus::Idle => {
-                if self.last_snapshot_ready.0 {
-                    // If the `last_snapshot_ready.0` is true, it means
-                    // the last ready has not been persisted yet.
-                    assert_eq!(self.last_snapshot_ready, (true, true));
+                if self.snapshot_ready_status.0 != 0 {
+                    // The last ready has not been persisted yet.
+                    assert!(self.snapshot_ready_status.1);
                     assert!(!self.unpersisted_numbers.is_empty());
                     false
                 } else {
@@ -1815,11 +1839,11 @@ where
     ) {
         let is_synced = if let Some(version) = unsynced_version {
             if ready.must_sync() {
-                ctx.sync_policy.mark_region_unsynced(
-                    version,
-                    self.region_id,
+                ctx.sync_policy.mark_ready_unsynced(
                     ready.number(),
+                    self.region_id,
                     self.persisted_notifier.clone(),
+                    version,
                 );
                 self.unpersisted_numbers
                     .push_back((ready.number(), ready.number()));
@@ -1846,20 +1870,11 @@ where
         }
 
         if !ready.snapshot().is_empty() {
-            self.last_snapshot_ready = (true, false);
-            // Although `is_synced` may be true, `advance_append_async` must be called because
-            // the snapshot has not applied yet.
+            assert!(ready.must_sync());
+            self.snapshot_ready_status = (ready.number(), false);
+            // Although `is_synced` may be true, `advance_append_async` must be called
+            // because the snapshot has not applied yet.
             self.raft_group.advance_append_async(ready);
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
-            // Because we only handle raft ready when not applying snapshot, so following
-            // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply_to(self.last_applying_idx);
-            self.cmd_epoch_checker.advance_apply(
-                self.last_applying_idx,
-                self.term(),
-                self.raft_group.store().region(),
-            );
         } else if !is_synced {
             self.raft_group.advance_append_async(ready);
         } else {
@@ -1930,10 +1945,10 @@ where
             );
         }
 
-        if self.last_snapshot_ready.0 {
-            if self.last_snapshot_ready.1 && self.unpersisted_numbers.is_empty() {
-                self.raft_group.on_persist_ready(persisted_number);
-                self.last_snapshot_ready = (false, false);
+        if self.snapshot_ready_status.0 != 0 {
+            if self.snapshot_ready_status.1 && self.unpersisted_numbers.is_empty() {
+                assert_eq!(self.snapshot_ready_status.0, number);
+                self.persisted_ready_snapshot();
                 true
             } else {
                 // Should wait for applying snapshot or persisting the last ready

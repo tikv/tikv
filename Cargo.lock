@@ -3085,7 +3085,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/gengliqi/raft-rs?branch=change-snapshot-persisted#34829a8152c845ab642a8094a9ad5887dc64c85e"
 dependencies = [
  "fxhash",
  "getset",
@@ -3117,7 +3117,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/gengliqi/raft-rs?branch=change-snapshot-persisted#34829a8152c845ab642a8094a9ad5887dc64c85e"
 dependencies = [
  "lazy_static",
  "prost",
