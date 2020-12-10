@@ -7,7 +7,7 @@ use engine_traits::{KvEngine, Peekable};
 use kvproto::metapb::*;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::{ObserveID, StoreMeta};
+use raftstore::store::fsm::ObserveID;
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;
@@ -17,7 +17,6 @@ pub type ChangeDataSnapshot<S> = Box<dyn Peekable<DBVector = <S as Peekable>::DB
 struct ChangeDataObserver<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<E: KvEngine> ChangeDataObserver<E> {
@@ -48,9 +47,13 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
     fn on_flush_apply(&self, engine: E) {
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
-            let mut region = Region::default();
-            region.mut_peers().push(Peer::default());
             let snapshot: ChangeDataSnapshot<E::Snapshot> = Box::new(engine.snapshot());
+            if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
+                cmd_batch: batches,
+                snapshot,
+            }) {
+                info!(""; "err" => ?e);
+            }
         }
     }
 }

@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, Snapshot};
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -46,14 +47,14 @@ struct ObserveRegion {
     meta: Region,
     observe_id: ObserveID,
     lease: Option<RemoteLease>,
-    resolver: Option<Resolver>,
+    resolver: Resolver,
     resolver_status: ResolverStatus,
 }
 
 impl ObserveRegion {
-    fn new(meta: Region) -> Self {
+    fn new(meta: Region, resolved_ts: Arc<AtomicCell<TimeStamp>>) -> Self {
         ObserveRegion {
-            resolver: None,
+            resolver: Resolver::from_resolved_ts(meta.id, resolved_ts),
             meta,
             observe_id: ObserveID::new(),
             lease: None,
@@ -62,10 +63,6 @@ impl ObserveRegion {
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
         }
-    }
-
-    fn mut_resolver(&mut self) -> &mut Resolver {
-        self.resolver.as_mut().unwrap()
     }
 
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) {
@@ -94,16 +91,14 @@ impl ObserveRegion {
                 for log in change_logs {
                     log.rows.iter().for_each(|row| match row {
                         ChangeRow::Prewrite { key, lock, .. } => {
-                            self.mut_resolver().track_lock(lock.ts, key)
+                            self.resolver.track_lock(lock.ts, key)
                         }
                         ChangeRow::Commit {
                             key,
                             commit_ts,
                             write,
                             ..
-                        } => self
-                            .mut_resolver()
-                            .untrack_lock(write.start_ts, *commit_ts, key),
+                        } => self.resolver.untrack_lock(write.start_ts, *commit_ts, key),
                     })
                 }
             }
@@ -118,7 +113,7 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.mut_resolver().track_lock(lock.ts, &key);
+                        self.resolver.track_lock(lock.ts, &key);
                     }
                 }
                 ScanEntry::None => {
@@ -128,13 +123,13 @@ impl ObserveRegion {
                         ResolverStatus::Pending { locks, .. } => {
                             locks.into_iter().for_each(|lock| match lock {
                                 PendingLock::Track { key, start_ts } => {
-                                    self.mut_resolver().track_lock(start_ts, &key)
+                                    self.resolver.track_lock(start_ts, &key)
                                 }
                                 PendingLock::Untrack {
                                     key,
                                     start_ts,
                                     commit_ts,
-                                } => self.mut_resolver().untrack_lock(start_ts, commit_ts, &key),
+                                } => self.resolver.untrack_lock(start_ts, commit_ts, &key),
                             })
                         }
                         ResolverStatus::Ready => {
@@ -148,17 +143,16 @@ impl ObserveRegion {
     }
 }
 
-pub trait CmdSinker: Send {
-    fn sink_cmd<S: Snapshot>(
+pub trait CmdSinker<S: Snapshot>: Send {
+    fn sink_cmd(
         &mut self,
-        observe_id: ObserveID,
-        change_logs: Vec<ChangeLog>,
+        change_logs: Vec<(ObserveID, Vec<ChangeLog>)>,
         snapshot: ChangeDataSnapshot<S>,
     );
 }
 
 pub struct Endpoint<T, E: KvEngine, S> {
-    store_meta: StoreMeta,
+    store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -166,11 +160,15 @@ pub struct Endpoint<T, E: KvEngine, S> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker> Endpoint<T, E, S> {
+impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> Endpoint<T, E, S> {
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
-        let observe_region = ObserveRegion::new(region.clone());
+        let observe_region = {
+            let store_meta = self.store_meta.lock().unwrap();
+            let reader = store_meta.readers.get(&region_id).expect("");
+            ObserveRegion::new(region.clone(), reader.resolved_ts.clone())
+        };
         let observe_id = observe_region.observe_id;
         let cancelled = match observe_region.resolver_status {
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
@@ -238,36 +236,46 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker> Endpoint<T, E, 
         for region_id in regions {
             if let Some(observe_region) = self.regions.get_mut(&region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    observe_region.mut_resolver().resolve(ts);
+                    observe_region.resolver.resolve(ts);
                 }
             }
         }
     }
 
-    fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
-        for mut batch in cmd_batch {
-            batch.filter_admin();
-            if !batch.is_empty() {
-                let observe_region = self
-                    .regions
-                    .get_mut(&batch.region_id)
-                    .expect("cannot find region to handle change log");
-                if observe_region.observe_id == batch.observe_id {
-                    let change_logs: Vec<_> = batch
-                        .into_iter(observe_region.meta.id)
-                        .map(|cmd| ChangeLog::encode_change_log(cmd))
-                        .collect();
-                    observe_region.track_change_log(&change_logs);
-                    self.sinker.sink_cmd(observe_region.observe_id, change_logs);
-                } else {
-                    debug!("resolved ts CmdBatch discarded";
-                        "region_id" => batch.region_id,
-                        "observe_id" => ?batch.observe_id,
-                        "current" => ?observe_region.observe_id,
-                    );
+    fn handle_change_log(
+        &mut self,
+        cmd_batch: Vec<CmdBatch>,
+        snapshot: ChangeDataSnapshot<E::Snapshot>,
+    ) {
+        let logs = cmd_batch
+            .into_iter()
+            .map(|mut batch| {
+                batch.filter_admin();
+                if !batch.is_empty() {
+                    let observe_region = self
+                        .regions
+                        .get_mut(&batch.region_id)
+                        .expect("cannot find region to handle change log");
+                    if observe_region.observe_id == batch.observe_id {
+                        let change_logs: Vec<_> = batch
+                            .into_iter(observe_region.meta.id)
+                            .map(|cmd| ChangeLog::encode_change_log(cmd))
+                            .collect();
+                        observe_region.track_change_log(&change_logs);
+                        return Some((observe_region.observe_id, change_logs));
+                    } else {
+                        debug!("resolved ts CmdBatch discarded";
+                            "region_id" => batch.region_id,
+                            "observe_id" => ?batch.observe_id,
+                            "current" => ?observe_region.observe_id,
+                        );
+                    }
                 }
-            }
-        }
+                None
+            })
+            .filter_map(|v| v)
+            .collect();
+        self.sinker.sink_cmd(logs, snapshot);
     }
 
     fn handle_scan_locks(
@@ -374,7 +382,12 @@ impl<S: Snapshot> fmt::Display for Task<S> {
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker> Runnable for Endpoint<T, E, S> {
+impl<T, E, S> Runnable for Endpoint<T, E, S>
+where
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    S: CmdSinker<E::Snapshot>,
+{
     type Task = Task<E::Snapshot>;
 
     fn run(&mut self, task: Task<E::Snapshot>) {
@@ -392,7 +405,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker> Runnable for En
             Task::ChangeLog {
                 cmd_batch,
                 snapshot,
-            } => self.handle_change_log(cmd_batch),
+            } => self.handle_change_log(cmd_batch, snapshot),
             Task::ScanLocks {
                 region_id,
                 observe_id,
