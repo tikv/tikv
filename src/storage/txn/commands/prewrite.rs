@@ -702,7 +702,7 @@ mod tests {
             commands::test_util::{
                 commit, pessimsitic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
-            tests::must_acquire_pessimistic_lock,
+            tests::{must_acquire_pessimistic_lock, must_rollback},
             Error, ErrorInner,
         },
         Engine, Snapshot, Statistics, TestEngineBuilder,
@@ -925,6 +925,7 @@ mod tests {
         assert!(res.one_pc_commit_ts.is_zero());
         must_locked(&engine, key, 20);
 
+        must_rollback(&engine, key, 20);
         let mutations = vec![
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
