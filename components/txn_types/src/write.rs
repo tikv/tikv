@@ -1,11 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::prelude::NumberDecoder;
+use std::mem::size_of;
+use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+
 use crate::lock::LockType;
 use crate::timestamp::TimeStamp;
-use crate::types::{Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::types::{Value, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
-use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -21,7 +23,8 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 const FLAG_OVERLAPPED_ROLLBACK: u8 = b'R';
-const FLAG_GC_FENCE: u8 = b'F';
+
+const GC_FENCE_PREFIX: u8 = b'F';
 
 /// The short value for rollback records which are protected from being collapsed.
 const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
@@ -99,7 +102,17 @@ pub struct Write {
     /// record, add a special field `gc_fence` on it. If there is a newer version after the record
     /// being rewritten, the next version's `commit_ts` will be recorded. When MVCC reading finds
     /// a commit record with a GC fence timestamp but the corresponding version that matches that ts
-    /// doesn't exest, the current version will be believed to be already GC-ed and ignored.
+    /// doesn't exist, the current version will be believed to be already GC-ed and ignored.
+    ///
+    /// Therefore, for the example above, in the 3rd step it will record the version `120` to the
+    /// `gc_fence` field:
+    ///
+    /// ```text
+    /// Key_100_put_R_120, Key_120_del
+    /// ```
+    ///
+    /// And when the reading in the 4th step finds the `PUT` record but the version at 120 doesn't
+    /// exist, it will be regarded as already GC-ed and ignored.
     ///
     /// For CDC and TiFlash, when they receives a commit record with `gc_fence` field set, it can
     /// determine that it must be caused by an overlapped rollback instead of an actual commit.
@@ -127,6 +140,7 @@ impl std::fmt::Debug for Write {
                     .unwrap_or_else(|| "None".to_owned()),
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
+            .field("gc_fence", &self.gc_fence)
             .finish()
     }
 }
@@ -251,7 +265,7 @@ impl WriteRef<'_> {
                 FLAG_OVERLAPPED_ROLLBACK => {
                     has_overlapped_rollback = true;
                 }
-                FLAG_GC_FENCE => gc_fence = Some(number::decode_u64(&mut b)?.into()),
+                GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
                 flag => panic!("invalid flag [{}] in write", flag),
             }
         }
@@ -266,7 +280,7 @@ impl WriteRef<'_> {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2 + 1);
+        let mut b = Vec::with_capacity(self.pre_allocate_size());
         b.push(self.write_type.to_u8());
         b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
@@ -278,10 +292,23 @@ impl WriteRef<'_> {
             b.push(FLAG_OVERLAPPED_ROLLBACK);
         }
         if let Some(ts) = self.gc_fence {
-            b.push(FLAG_GC_FENCE);
+            b.push(GC_FENCE_PREFIX);
             b.encode_u64(ts.into_inner()).unwrap();
         }
         b
+    }
+
+    fn pre_allocate_size(&self) -> usize {
+        // write_type + start_ts + has_overlapped_rollback
+        let mut size = 1 + MAX_VAR_U64_LEN + 1;
+
+        if let Some(v) = &self.short_value {
+            size += 2 + v.len();
+        }
+        if self.gc_fence.is_some() {
+            size += 1 + size_of::<u64>();
+        }
+        size
     }
 
     #[inline]
@@ -363,6 +390,7 @@ mod tests {
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();
+            assert!(v.len() <= write.as_ref().pre_allocate_size());
             let w = WriteRef::parse(&v[..])
                 .unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e))
                 .to_owned();
@@ -386,7 +414,7 @@ mod tests {
         assert!(!Write::new(
             WriteType::Put,
             3.into(),
-            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec()),
         )
         .as_ref()
         .is_protected());
