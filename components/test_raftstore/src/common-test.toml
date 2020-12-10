@@ -68,7 +68,7 @@ pd-heartbeat-tick-interval = "20ms"
 raft-reject-transfer-leader-duration = "0s"
 hibernate-timeout = "0s"
 dev-assert = true
-delay-sync-us = 5000
+delay-sync-us = 2000
 
 [coprocessor]
 
