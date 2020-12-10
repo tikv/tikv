@@ -3587,6 +3587,7 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::msg::ExtCallback;
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3810,6 +3811,56 @@ mod tests {
                 };
             }
             pre_remove = remove_i;
+        }
+    }
+
+    #[test]
+    fn test_uncommitted_proposals() {
+        struct DropPanic(bool);
+        impl Drop for DropPanic {
+            fn drop(&mut self) {
+                if self.0 {
+                    unreachable!()
+                }
+            }
+        }
+        fn must_call() -> ExtCallback {
+            let mut d = DropPanic(true);
+            Box::new(move || {
+                d.0 = false;
+            })
+        }
+        fn must_not_call() -> ExtCallback {
+            Box::new(move || unreachable!())
+        }
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
+
+        // (1, 4) and (1, 5) is not committed
+        let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];
+        let committed = vec![(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
+        for (index, term) in entries.clone() {
+            if term != 1 {
+                continue;
+            }
+            let cb = if committed.contains(&(index, term)) {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_call()))
+            } else {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_not_call()))
+            };
+            pq.push(Proposal {
+                index,
+                term,
+                cb,
+                is_conf_change: false,
+                renew_lease_time: None,
+                must_pass_epoch_check: false,
+            });
+        }
+        for (index, term) in entries {
+            if let Some(mut p) = pq.find_proposal(term, index, 0) {
+                p.cb.invoke_committed();
+            }
         }
     }
 
