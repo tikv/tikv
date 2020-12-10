@@ -323,6 +323,10 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
 
+            if !write.check_gc_fence_as_latest_version(self.cfg.ts) {
+                return Ok(None);
+            }
+
             match write.write_type {
                 WriteType::Put => {
                     let write = write.to_owned();
@@ -348,11 +352,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     ) -> Result<Option<Value>> {
         match some_write {
             None => Ok(None),
-            Some(write) => match write.write_type {
-                WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
-                WriteType::Delete => Ok(None),
-                _ => unreachable!(),
-            },
+            Some(write) => {
+                if !write.as_ref().check_gc_fence_as_latest_version(self.cfg.ts) {
+                    return Ok(None);
+                }
+                match write.write_type {
+                    WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
+                    WriteType::Delete => Ok(None),
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
