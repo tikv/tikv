@@ -58,6 +58,10 @@ impl Dicts {
                 enable_file_dictionary_log,
                 file_dictionary_rewrite_threshold,
             )?),
+            key_dict: Mutex::new(KeyDictionary {
+                current_key_id: 0,
+                ..Default::default()
+            }),
             current_key_id: AtomicU64::new(0),
             files_cache: DashMap::default(),
             rotation_period,
@@ -236,7 +240,7 @@ impl Dicts {
                     return Ok(());
                 }
             };
-            if log_file.file_dict.files.get(dst_fname).is_some() {
+            if file_dict_file.file_dict.files.get(dst_fname).is_some() {
                 return Err(Error::Io(IoError::new(
                     ErrorKind::AlreadyExists,
                     format!("file already exists, {}", dst_fname),
@@ -858,14 +862,7 @@ mod tests {
         let mut file = FileInfo::default();
         file.method = EncryptionMethod::Aes192Ctr as _;
         file.key_id = 7; // Not exists.
-        manager
-            .dicts
-            .log_file
-            .lock()
-            .unwrap()
-            .file_dict
-            .files
-            .insert("foo".to_owned(), file);
+        manager.dicts.files_cache.insert("foo".to_owned(), file);
         manager.get_file("foo").unwrap_err();
     }
 
@@ -962,7 +959,13 @@ mod tests {
         // Create a file and a datakey.
         manager.new_file("foo").unwrap();
 
-        let files = manager.dicts.log_file.lock().unwrap().file_dict.clone();
+        let files = manager
+            .dicts
+            .file_dict_file
+            .lock()
+            .unwrap()
+            .file_dict
+            .clone();
         let keys = manager.dicts.key_dict.lock().unwrap().clone();
 
         // Close and re-open.
@@ -970,7 +973,13 @@ mod tests {
         let (_tmp, manager1) = new_tmp_key_manager(Some(tmp), None, None, None);
         let manager1 = manager1.unwrap().unwrap();
 
-        let files1 = manager1.dicts.log_file.lock().unwrap().file_dict.clone();
+        let files1 = manager1
+            .dicts
+            .file_dict_file
+            .lock()
+            .unwrap()
+            .file_dict
+            .clone();
         let keys1 = manager1.dicts.key_dict.lock().unwrap().clone();
         assert_eq!(files, files1);
         assert_eq!(keys, keys1);

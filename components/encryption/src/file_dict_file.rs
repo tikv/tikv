@@ -393,33 +393,33 @@ mod tests {
         file_dict_file.insert("info2", &info2).unwrap();
         file_dict_file.insert("info3", &info3).unwrap();
 
-        let file_dict = file_dict_file.recovery().unwrap();
+        file_dict_file.recovery().unwrap();
 
-        assert_eq!(*file_dict.files.get("info1").unwrap(), info1);
-        assert_eq!(*file_dict.files.get("info2").unwrap(), info2);
-        assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
-        assert_eq!(file_dict.files.len(), 3);
+        assert_eq!(*file_dict_file.file_dict.files.get("info1").unwrap(), info1);
+        assert_eq!(*file_dict_file.file_dict.files.get("info2").unwrap(), info2);
+        assert_eq!(*file_dict_file.file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(file_dict_file.file_dict.files.len(), 3);
 
         file_dict_file.remove("info2").unwrap();
         file_dict_file.remove("info1").unwrap();
         file_dict_file.insert("info2", &info4).unwrap();
 
-        let file_dict = file_dict_file.recovery().unwrap();
-        assert_eq!(file_dict.files.get("info1"), None);
-        assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
-        assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
-        assert_eq!(file_dict.files.len(), 2);
+        file_dict_file.recovery().unwrap();
+        assert_eq!(file_dict_file.file_dict.files.get("info1"), None);
+        assert_eq!(*file_dict_file.file_dict.files.get("info2").unwrap(), info4);
+        assert_eq!(*file_dict_file.file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(file_dict_file.file_dict.files.len(), 2);
 
         file_dict_file
             .replace("info3", "info5", info5.clone())
             .unwrap();
 
-        let file_dict = file_dict_file.recovery().unwrap();
-        assert_eq!(file_dict.files.get("info1"), None);
-        assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
-        assert_eq!(file_dict.files.get("info3"), None);
-        assert_eq!(*file_dict.files.get("info5").unwrap(), info5);
-        assert_eq!(file_dict.files.len(), 2);
+        file_dict_file.recovery().unwrap();
+        assert_eq!(file_dict_file.file_dict.files.get("info1"), None);
+        assert_eq!(*file_dict_file.file_dict.files.get("info2").unwrap(), info4);
+        assert_eq!(file_dict_file.file_dict.files.get("info3"), None);
+        assert_eq!(*file_dict_file.file_dict.files.get("info5").unwrap(), info5);
+        assert_eq!(file_dict_file.file_dict.files.len(), 2);
     }
 
     #[test]
@@ -445,7 +445,7 @@ mod tests {
         let info = create_file_info(1, EncryptionMethod::Aes256Ctr);
         file_dict_file.insert("info", &info).unwrap();
 
-        let (_, file_dict) = FileDictionaryFile::open(
+        let f = FileDictionaryFile::open(
             tempdir.path(),
             "test_file_dict_file",
             true,  /*enable_log*/
@@ -453,7 +453,7 @@ mod tests {
             false, /*skip_rewrite*/
         )
         .unwrap();
-        assert_eq!(*file_dict.files.get("info").unwrap(), info);
+        assert_eq!(*f.file_dict.files.get("info").unwrap(), info);
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
         }
         // Try open as v2 file.
         {
-            let (_, file_dict) = FileDictionaryFile::open(
+            let f = FileDictionaryFile::open(
                 tempdir.path(),
                 "test_file_dict_file",
                 true, /*enable_log*/
@@ -559,14 +559,14 @@ mod tests {
                 true, /*skip_rewrite*/
             )
             .unwrap();
-            assert_eq!(*file_dict.files.get("f1").unwrap(), info1);
-            assert_eq!(file_dict.files.get("f2"), None);
-            assert_eq!(file_dict.files.get("f3"), None);
-            assert_eq!(*file_dict.files.get("f4").unwrap(), info4);
+            assert_eq!(*f.file_dict.files.get("f1").unwrap(), info1);
+            assert_eq!(f.file_dict.files.get("f2"), None);
+            assert_eq!(f.file_dict.files.get("f3"), None);
+            assert_eq!(*f.file_dict.files.get("f4").unwrap(), info4);
         }
         // Downgrade to v1 file.
         {
-            let (_, file_dict) = FileDictionaryFile::open(
+            let f = FileDictionaryFile::open(
                 tempdir.path(),
                 "test_file_dict_file",
                 false, /*enable_log*/
@@ -574,10 +574,10 @@ mod tests {
                 false, /*skip_rewrite*/
             )
             .unwrap();
-            assert_eq!(*file_dict.files.get("f1").unwrap(), info1);
-            assert_eq!(file_dict.files.get("f2"), None);
-            assert_eq!(file_dict.files.get("f3"), None);
-            assert_eq!(*file_dict.files.get("f4").unwrap(), info4);
+            assert_eq!(*f.file_dict.files.get("f1").unwrap(), info1);
+            assert_eq!(f.file_dict.files.get("f2"), None);
+            assert_eq!(f.file_dict.files.get("f3"), None);
+            assert_eq!(*f.file_dict.files.get("f4").unwrap(), info4);
         }
         // Try open as v1 file. Should success.
         {
