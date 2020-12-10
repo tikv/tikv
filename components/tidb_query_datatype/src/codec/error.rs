@@ -118,7 +118,7 @@ impl Error {
         self.code() == ERR_DATA_OUT_OF_RANGE
     }
 
-    pub fn is_truncate(&self) -> bool {
+    pub fn is_truncated(&self) -> bool {
         self.code() == ERR_TRUNCATE_WRONG_VALUE
     }
 

@@ -903,7 +903,7 @@ fn cast_int_as_duration(
                 if err.is_overflow() {
                     ctx.handle_overflow_err(err)?;
                     Ok(None)
-                } else if err.is_truncate() {
+                } else if err.is_truncated() {
                     ctx.handle_truncate_err(err)?;
                     Ok(None)
                 } else {
@@ -2084,6 +2084,7 @@ mod tests {
             ("0100-00-00 00:00:00", 1_000_000_000_000),
             ("1000-01-01 00:00:00", 10_000_101_000_000),
             ("1999-01-01 00:00:00", 19_990_101_000_000),
+            ("0000-00-00 00:00:00", 73), // NULL
         ];
 
         for (expected, input) in should_pass {
