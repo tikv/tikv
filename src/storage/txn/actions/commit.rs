@@ -90,7 +90,7 @@ pub fn commit<S: Snapshot>(
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
-            write = write.set_overlapped_rollback(true);
+            write = write.set_overlapped_rollback(true, None);
             break;
         }
     }

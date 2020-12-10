@@ -383,6 +383,22 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
     }
 }
 
+/// # TODO
+///
+/// This function is added to prove `rpn_fn` supports `enum`/`set` correctly. We will add enum/set
+/// related copr functions into `get_cast_fn_rpn_meta` after Enum/Set decode implemented.
+#[rpn_fn]
+#[inline]
+fn cast_enum_as_int(val: EnumRef) -> Result<Option<Int>> {
+    Ok(Some(val.value() as Int))
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_set_as_int(val: SetRef) -> Result<Option<Int>> {
+    Ok(Some(val.value() as Int))
+}
+
 #[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_uint(
@@ -1318,6 +1334,7 @@ mod tests {
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+    use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
@@ -1621,6 +1638,50 @@ mod tests {
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_int() {
+        // TODO: we need to test None case here.
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+
+        let cs = vec![
+            // (input, expect)
+            (EnumRef::new(&buf, 0), 0),
+            (EnumRef::new(&buf, 1), 1),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_enum_as_int(input);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_set_as_int() {
+        // TODO: we need to test None case here.
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+
+        let cs = vec![
+            // (input, expect)
+            (SetRef::new(&buf, 0b01), 1),
+            (SetRef::new(&buf, 0b11), 3),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_set_as_int(input);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -2084,7 +2145,6 @@ mod tests {
             ("0100-00-00 00:00:00", 1_000_000_000_000),
             ("1000-01-01 00:00:00", 10_000_101_000_000),
             ("1999-01-01 00:00:00", 19_990_101_000_000),
-            ("0000-00-00 00:00:00", 73), // NULL
         ];
 
         for (expected, input) in should_pass {

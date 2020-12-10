@@ -39,11 +39,11 @@ use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::config::{log_level_serde, ConfigController};
+use collections::HashMap;
 use configuration::Configuration;
 use pd_client::RpcClient;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
-use tikv_util::collections::HashMap;
 use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -1012,13 +1012,13 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::{LogLevelRequest, StatusServer};
+    use collections::HashSet;
     use configuration::Configuration;
     use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
     use test_util::new_security_cfg;
-    use tikv_util::collections::HashSet;
     use tikv_util::logger::get_log_level;
 
     #[derive(Clone)]
