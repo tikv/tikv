@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use engine_traits::KvEngine;
@@ -7,13 +6,11 @@ use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, IsolationLevel};
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange};
-use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
-use tikv::storage::Statistics;
-use tikv_util::worker::Scheduler;
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -55,6 +52,22 @@ pub struct ScannerPool<T, E> {
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
+    pub fn new(count: usize, raft_router: T) -> Self {
+        let workers = Arc::new(
+            Builder::new()
+                .threaded_scheduler()
+                .thread_name("inc-scan")
+                .core_threads(count)
+                .build()
+                .unwrap(),
+        );
+        Self {
+            workers,
+            raft_router,
+            _phantom: PhantomData::default(),
+        }
+    }
+
     pub fn spawn_task(&self, mut task: ScanTask) {
         let raft_router = self.raft_router.clone();
         let fut = async move {

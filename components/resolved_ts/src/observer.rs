@@ -1,28 +1,30 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
-use engine_traits::{KvEngine, Peekable};
+use engine_traits::KvEngine;
+use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;
+use raftstore::store::RegionSnapshot;
 use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;
 
-pub type ChangeDataSnapshot<S> = Box<dyn Peekable<DBVector = <S as Peekable>::DBVector> + Send>;
-
-struct ChangeDataObserver<E: KvEngine> {
+pub struct ChangeDataObserver<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
 }
 
 impl<E: KvEngine> ChangeDataObserver<E> {
-    // pub fn new() -> ChangeDataObserver {
-    //     ChangeDataObserver {
-    //         cmd_batches: RefCell::default(),
-    //     }
-    // }
+    pub fn new(scheduler: Scheduler<Task<E::Snapshot>>) -> Self {
+        ChangeDataObserver {
+            cmd_batches: RefCell::default(),
+            scheduler,
+        }
+    }
 }
 
 impl<E: KvEngine> Coprocessor for ChangeDataObserver<E> {}
@@ -45,7 +47,12 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
     fn on_flush_apply(&self, engine: E) {
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
-            let snapshot: ChangeDataSnapshot<E::Snapshot> = Box::new(engine.snapshot());
+            // let snapshot: ChangeDataSnapshot<E::Snapshot> = Box::new(engine.snapshot());
+            let mut region = Region::default();
+            region.mut_peers().push(Peer::default());
+            // Create a snapshot here for preventing the old value was GC-ed.
+            let snapshot =
+                RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
                 cmd_batch: batches,
                 snapshot,

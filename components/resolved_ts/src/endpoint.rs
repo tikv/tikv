@@ -11,14 +11,17 @@ use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ObserveID, StoreMeta};
+use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange, StoreMeta};
+use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::util::RemoteLease;
+use raftstore::store::RegionSnapshot;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
+use crate::advance::AdvanceTsWorker;
 use crate::cmd::{ChangeLog, ChangeRow};
 use crate::errors::Error;
-use crate::observer::ChangeDataSnapshot;
+use crate::observer::ChangeDataObserver;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
 
@@ -45,6 +48,7 @@ enum PendingLock {
 struct ObserveRegion {
     meta: Region,
     observe_id: ObserveID,
+    // TODO: Get lease from raftstore.
     lease: Option<RemoteLease>,
     resolver: Resolver,
     resolver_status: ResolverStatus,
@@ -146,20 +150,49 @@ pub trait CmdSinker<S: Snapshot>: Send {
     fn sink_cmd(
         &mut self,
         change_logs: Vec<(ObserveID, Vec<ChangeLog>)>,
-        snapshot: ChangeDataSnapshot<S>,
+        snapshot: RegionSnapshot<S>,
     );
 }
 
-pub struct Endpoint<T, E: KvEngine, S> {
+pub struct Endpoint<T, E: KvEngine, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
+    raft_router: T,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
-    sinker: S,
-    _phantom: PhantomData<T>,
+    sinker: Option<C>,
+    advance_worker: AdvanceTsWorker<T, E>,
+    _phantom: PhantomData<(T, E)>,
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> Endpoint<T, E, S> {
+impl<T, E, C> Endpoint<T, E, C>
+where
+    T: 'static + RaftStoreRouter<E>,
+    E: KvEngine,
+    C: CmdSinker<E::Snapshot>,
+{
+    pub fn new(
+        scheduler: Scheduler<Task<E::Snapshot>>,
+        raft_router: T,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        advance_worker: AdvanceTsWorker<T, E>,
+        scanner_pool: ScannerPool<T, E>,
+        sinker: Option<C>,
+    ) -> Self {
+        let ep = Self {
+            scheduler,
+            raft_router,
+            store_meta,
+            advance_worker,
+            scanner_pool,
+            sinker,
+            regions: HashMap::default(),
+            _phantom: PhantomData::default(),
+        };
+        ep.register_advance_event();
+        ep
+    }
+
     fn register_region(&mut self, region: Region) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
@@ -207,7 +240,30 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
 
     fn deregister_region(&mut self, region: &Region) {
         if let Some(observe_region) = self.regions.remove(&region.id) {
-            if let ResolverStatus::Pending { cancelled, .. } = observe_region.resolver_status {
+            let ObserveRegion {
+                meta: region,
+                observe_id,
+                resolver_status,
+                ..
+            } = observe_region;
+            let region_id = region.id;
+            if let Err(e) = self.raft_router.significant_send(
+                region_id,
+                SignificantMsg::CaptureChange {
+                    cmd: ChangeCmd {
+                        region_id,
+                        change_observe: ChangeObserve {
+                            id: observe_id,
+                            range: ObserveRange::None,
+                        },
+                    },
+                    region_epoch: region.get_region_epoch().clone(),
+                    callback: Callback::None,
+                },
+            ) {
+                info!("send msg to deregister region failed"; "region_id" => region_id, "err" => ?e);
+            }
+            if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
             }
         }
@@ -255,7 +311,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
     fn handle_change_log(
         &mut self,
         cmd_batch: Vec<CmdBatch>,
-        snapshot: ChangeDataSnapshot<E::Snapshot>,
+        snapshot: RegionSnapshot<E::Snapshot>,
     ) {
         let logs = cmd_batch
             .into_iter()
@@ -285,7 +341,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
             })
             .filter_map(|v| v)
             .collect();
-        self.sinker.sink_cmd(logs, snapshot);
+        if let Some(sinker) = self.sinker.as_mut() {
+            sinker.sink_cmd(logs, snapshot);
+        }
     }
 
     fn handle_scan_locks(
@@ -305,6 +363,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
             }
         }
     }
+
+    fn register_advance_event(&self) {
+        let regions = self.regions.keys().into_iter().copied().collect();
+        self.advance_worker.register_advance_event(regions);
+    }
 }
 
 pub enum Task<S: Snapshot> {
@@ -319,13 +382,14 @@ pub enum Task<S: Snapshot> {
         observe_id: ObserveID,
         error: Error,
     },
+    RegisterAdvanceEvent,
     AdvanceResolvedTs {
         regions: Vec<u64>,
         ts: TimeStamp,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: ChangeDataSnapshot<S>,
+        snapshot: RegionSnapshot<S>,
     },
     ScanLocks {
         region_id: u64,
@@ -382,6 +446,7 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("region_id", &region_id)
                 .field("observe_id", &observe_id)
                 .finish(),
+            Task::RegisterAdvanceEvent => de.field("name", &"register_advance_event").finish(),
         }
     }
 }
@@ -392,11 +457,11 @@ impl<S: Snapshot> fmt::Display for Task<S> {
     }
 }
 
-impl<T, E, S> Runnable for Endpoint<T, E, S>
+impl<T, E, C> Runnable for Endpoint<T, E, C>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    S: CmdSinker<E::Snapshot>,
+    C: CmdSinker<E::Snapshot>,
 {
     type Task = Task<E::Snapshot>;
 
@@ -421,6 +486,7 @@ where
                 observe_id,
                 entries,
             } => self.handle_scan_locks(region_id, observe_id, entries),
+            Task::RegisterAdvanceEvent => self.register_advance_event(),
         }
     }
 }
