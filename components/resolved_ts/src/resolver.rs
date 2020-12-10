@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashSet;
 use crossbeam::atomic::AtomicCell;
 use std::cmp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tikv_util::collections::HashSet;
 use txn_types::{Key, TimeStamp};
 
 // Resolver resolves timestamps that guarantee no more commit will happen before

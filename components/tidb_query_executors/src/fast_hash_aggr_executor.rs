@@ -4,10 +4,10 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use collections::HashMap;
 use tidb_query_datatype::Collation;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::box_try;
-use tikv_util::collections::HashMap;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 

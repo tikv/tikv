@@ -1,6 +1,6 @@
+use collections::HashMap;
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raftstore::coprocessor::Cmd;
-use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
 
 pub enum ChangeRow {

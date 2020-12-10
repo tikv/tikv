@@ -707,7 +707,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }
 
-/// Tests whether stale merge is rollback properly if it merge to the same target region again later.
+/// Tests whether stale merge is rollback properly if it merges to the same target region again later.
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
     let mut cluster = new_node_cluster(0, 3);
@@ -736,7 +736,7 @@ fn test_node_failed_merge_before_succeed_merge() {
 
     // Prevent sched_merge_tick to propose CommitMerge
     let schedule_merge_fp = "on_schedule_merge";
-    fail::cfg(schedule_merge_fp, "return()").unwrap();
+    fail::cfg(schedule_merge_fp, "return").unwrap();
 
     // To minimize peers log gap for merging
     cluster.must_put(b"k11", b"v2");
@@ -752,11 +752,10 @@ fn test_node_failed_merge_before_succeed_merge() {
     fail::remove(schedule_merge_fp);
     // Wait for left region to rollback merge
     cluster.must_put(b"k12", b"v2");
-    // Prevent the `PrepareMerge` and `RollbackMerge` log sending to apply fsm after
-    // cleaning send filter. Since this method is just to check `RollbackMerge`,
-    // the `PrepareMerge` may escape, but it makes the best effort.
-    let before_send_rollback_merge_1003_fp = "before_send_rollback_merge_1003";
-    fail::cfg(before_send_rollback_merge_1003_fp, "return").unwrap();
+    // Prevent apply fsm applying the `PrepareMerge` and `RollbackMerge` log after
+    // cleaning send filter.
+    let before_handle_normal_1003_fp = "before_handle_normal_1003";
+    fail::cfg(before_handle_normal_1003_fp, "return").unwrap();
     cluster.clear_send_filters();
 
     right = pd_client.get_region(b"k5").unwrap();
@@ -781,7 +780,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     let after_send_to_apply_1003_fp = "after_send_to_apply_1003";
     fail::cfg(after_send_to_apply_1003_fp, "sleep(300)").unwrap();
 
-    fail::remove(before_send_rollback_merge_1003_fp);
+    fail::remove(before_handle_normal_1003_fp);
     // Wait `after_send_to_apply_1003` timeout
     sleep_ms(300);
     fail::remove(after_send_to_apply_1003_fp);

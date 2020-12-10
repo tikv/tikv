@@ -167,7 +167,7 @@ fn test_read_before_init() {
     cluster.pd_client.must_none_pending_peer(p2);
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
 
-    fail::cfg("before_apply_snap_update_region", "return").unwrap();
+    fail::cfg("before_handle_snapshot_ready_3", "return").unwrap();
     // Add peer 3
     let p3 = new_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
@@ -190,7 +190,7 @@ fn test_read_before_init() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    fail::remove("before_apply_snap_update_region");
+    fail::remove("before_handle_snapshot_ready_3");
     assert!(
         resp.get_header()
             .get_error()

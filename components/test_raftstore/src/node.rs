@@ -12,6 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -30,7 +31,6 @@ use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker};
@@ -113,6 +113,10 @@ impl Transport for ChannelTransport {
             }
             _ => Err(box_err!("missing sender for store {}", to_store)),
         }
+    }
+
+    fn need_flush(&self) -> bool {
+        false
     }
 
     fn flush(&mut self) {}

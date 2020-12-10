@@ -4,10 +4,10 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 
+use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
-use tikv_util::collections::HashSet;
 
 pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

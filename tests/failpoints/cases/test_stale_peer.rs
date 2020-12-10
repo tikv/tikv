@@ -114,7 +114,7 @@ fn test_stale_learner_restart() {
             .get_msg(&state_key)
             .unwrap()
             .unwrap();
-        if last_index == state.last_index {
+        if last_index <= state.get_hard_state().get_commit() {
             break;
         }
         thread::sleep(Duration::from_millis(10));
