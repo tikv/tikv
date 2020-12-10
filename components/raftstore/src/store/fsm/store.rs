@@ -379,20 +379,6 @@ where
         self.store.get_id()
     }
 
-    /// Timeout is calculated from TiKV start, the node should not become
-    /// hibernated if it still within the hibernate timeout, see
-    /// https://github.com/tikv/tikv/issues/7747
-    pub fn is_hibernate_timeout(&mut self) -> bool {
-        let timeout = match self.node_start_time {
-            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
-            None => return true,
-        };
-        if timeout {
-            self.node_start_time = None;
-        }
-        timeout
-    }
-
     pub fn update_ticks_timeout(&mut self) {
         self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
             self.cfg.raft_base_tick_interval.0;
