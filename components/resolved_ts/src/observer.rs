@@ -1,28 +1,36 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Peekable};
 use kvproto::metapb::*;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
+use raftstore::store::fsm::{ObserveID, StoreMeta};
+use tikv_util::worker::Scheduler;
 
-struct ChangeDataObserver {
+use crate::endpoint::Task;
+
+pub type ChangeDataSnapshot<S> = Box<dyn Peekable<DBVector = <S as Peekable>::DBVector> + Send>;
+
+struct ChangeDataObserver<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
+    scheduler: Scheduler<Task<E::Snapshot>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
-impl ChangeDataObserver {
-    pub fn new() -> ChangeDataObserver {
-        ChangeDataObserver {
-            cmd_batches: RefCell::default(),
-        }
-    }
+impl<E: KvEngine> ChangeDataObserver<E> {
+    // pub fn new() -> ChangeDataObserver {
+    //     ChangeDataObserver {
+    //         cmd_batches: RefCell::default(),
+    //     }
+    // }
 }
 
-impl Coprocessor for ChangeDataObserver {}
+impl<E: KvEngine> Coprocessor for ChangeDataObserver<E> {}
 
-impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver {
+impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
     fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
@@ -42,25 +50,47 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
-            let snapshot: Box<dyn Peekable<DBVector = <E::Snapshot as Peekable>::DBVector>> =
-                Box::new(engine.snapshot());
+            let snapshot: ChangeDataSnapshot<E::Snapshot> = Box::new(engine.snapshot());
         }
     }
 }
 
-impl RoleObserver for ChangeDataObserver {
+impl<E: KvEngine> RoleObserver for ChangeDataObserver<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
-        if role != StateRole::Leader {}
+        if let Err(e) = self.scheduler.schedule(Task::RegionRoleChanged {
+            role,
+            region: ctx.region().clone(),
+        }) {
+            info!(""; "err" => ?e);
+        }
     }
 }
 
-impl RegionChangeObserver for ChangeDataObserver {
+impl<E: KvEngine> RegionChangeObserver for ChangeDataObserver<E> {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         _: StateRole,
     ) {
-        if let RegionChangeEvent::Destroy = event {}
+        match event {
+            RegionChangeEvent::Destroy => {
+                if let Err(e) = self
+                    .scheduler
+                    .schedule(Task::RegionDestroyed(ctx.region().clone()))
+                {
+                    info!(""; "err" => ?e);
+                }
+            }
+            RegionChangeEvent::Update => {
+                if let Err(e) = self
+                    .scheduler
+                    .schedule(Task::RegionUpdated(ctx.region().clone()))
+                {
+                    info!(""; "err" => ?e);
+                }
+            }
+            RegionChangeEvent::Create => (),
+        }
     }
 }

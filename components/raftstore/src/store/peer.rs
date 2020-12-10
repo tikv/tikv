@@ -32,6 +32,7 @@ use raft::{
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
+use txn_types::TimeStamp;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -470,6 +471,8 @@ where
 
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+
+    pub resolved_ts: Arc<AtomicCell<TimeStamp>>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -562,6 +565,7 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
+            resolved_ts: Arc::new(AtomicCell::new(TimeStamp::zero())),
         };
 
         // If this region has only one peer and I am the one, campaign directly.

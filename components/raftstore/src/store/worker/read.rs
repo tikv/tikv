@@ -15,6 +15,7 @@ use kvproto::raft_cmdpb::{
     CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
 };
 use time::Timespec;
+use txn_types::TimeStamp;
 
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RemoteLease};
@@ -145,6 +146,7 @@ pub struct ReadDelegate {
     tag: String,
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    pub resolved_ts: Arc<AtomicCell<TimeStamp>>,
     max_ts_sync_status: Arc<AtomicU64>,
 }
 
@@ -164,6 +166,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            resolved_ts: peer.resolved_ts.clone(),
         }
     }
 
@@ -820,6 +823,7 @@ mod tests {
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                resolved_ts: Arc::new(AtomicCell::new(TimeStamp::zero())),
             };
             meta.readers.insert(1, read_delegate);
         }

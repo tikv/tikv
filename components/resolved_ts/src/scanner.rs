@@ -114,6 +114,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     }
                 }
             }
+            entries.push(ScanEntry::None);
             (task.send_entries)(entries);
         };
         self.workers.spawn(fut);
