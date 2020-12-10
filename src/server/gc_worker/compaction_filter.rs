@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{GcConfig, GcWorkerConfigManager};
@@ -297,15 +296,17 @@ struct CompactionFilterStats {
     last_report: Cell<Instant>,
 }
 impl CompactionFilterStats {
-    fn report(&self) {
+    fn need_report(&self) -> bool {
+        self.versions.get() >= 1024 * 1024 // 1M versions.
+            || self.last_report.get().elapsed() >= Duration::from_secs(60)
+    }
+
+    fn prepare_report(&self) -> (usize, usize, usize) {
         let versions = self.versions.replace(0);
         let filtered = self.filtered.replace(0);
         let deleted = self.deleted.replace(0);
-        info!(
-            "Compaction filter in thread {:?} reports", thread::current().name();
-            "total" => versions, "filtered" => filtered, "deleted" => deleted,
-        );
         self.last_report.set(Instant::now());
+        (versions, filtered, deleted)
     }
 }
 impl Default for CompactionFilterStats {
@@ -316,11 +317,6 @@ impl Default for CompactionFilterStats {
             deleted: Cell::new(0),
             last_report: Cell::new(Instant::now()),
         }
-    }
-}
-impl Drop for CompactionFilterStats {
-    fn drop(&mut self) {
-        self.report();
     }
 }
 
@@ -337,16 +333,20 @@ impl Drop for WriteCompactionFilter {
         self.engine.sync_wal().unwrap();
 
         self.switch_key_metrics();
-        STATS.with(|stats| {
+        if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
             stats.filtered.update(|x| x + self.total_filtered);
             stats.deleted.update(|x| x + self.total_deleted);
-            if stats.versions.get() >= 1024 * 1024
-                || stats.last_report.get().elapsed() >= Duration::from_secs(60)
-            {
-                stats.report();
+            if stats.need_report() {
+                return Some(stats.prepare_report());
             }
-        })
+            None
+        }) {
+            info!(
+                "Compaction filter reports"; "total" => versions,
+                "filtered" => filtered, "deleted" => deleted,
+            );
+        }
     }
 }
 

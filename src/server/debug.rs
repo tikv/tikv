@@ -24,13 +24,13 @@ use raft::{self, RawNode};
 
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+use collections::HashSet;
 use engine_rocks::RocksMvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
-use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;

@@ -47,6 +47,7 @@ engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.4"
 openssl = "0.10"
+file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
@@ -77,6 +78,7 @@ tempfile = "3.0"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync", "rt-threaded"] }
 txn_types = { path = "../txn_types" }

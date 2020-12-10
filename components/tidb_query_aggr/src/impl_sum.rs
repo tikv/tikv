@@ -1,15 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::AggrFunction;
+use tidb_query_common::Result;
+use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::EvalType;
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use super::*;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_expr::RpnExpression;
 
 /// The parser for SUM aggregate function.
 pub struct AggrFnDefinitionParserSum;
@@ -58,6 +58,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnSum::<Decimal>::new()),
             EvalType::Real => Box::new(AggrFnSum::<Real>::new()),
+            EvalType::Enum => Box::new(AggrFnSumForEnum::new()),
+            EvalType::Set => Box::new(AggrFnSumForSet::new()),
             // If we meet unexpected types after rewriting, it is an implementation fault.
             _ => unreachable!(),
         })
@@ -148,15 +150,228 @@ where
     }
 }
 
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateSumForEnum::new())]
+pub struct AggrFnSumForEnum
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    _phantom: std::marker::PhantomData<Decimal>,
+}
+
+impl AggrFnSumForEnum
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggrFnStateSumForEnum
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    sum: Decimal,
+    has_value: bool,
+}
+
+impl AggrFnStateSumForEnum
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            sum: Decimal::zero(),
+            has_value: false,
+        }
+    }
+
+    /// # Notes
+    ///
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
+    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    ///
+    /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &Decimal::from(value.value()))?;
+                self.has_value = true;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl super::ConcreteAggrFunctionState for AggrFnStateSumForEnum
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    type ParameterType = EnumRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        let result = if self.has_value { Some(self.sum) } else { None };
+
+        target[0].push(result);
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateSumForSet::new())]
+pub struct AggrFnSumForSet
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    _phantom: std::marker::PhantomData<Decimal>,
+}
+
+impl AggrFnSumForSet
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggrFnStateSumForSet
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    sum: Decimal,
+    has_value: bool,
+}
+
+impl AggrFnStateSumForSet
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            sum: Decimal::zero(),
+            has_value: false,
+        }
+    }
+
+    /// # Notes
+    ///
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
+    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    ///
+    /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &Decimal::from(value.value()))?;
+                self.has_value = true;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl super::ConcreteAggrFunctionState for AggrFnStateSumForSet
+where
+    VectorValue: VectorValueExt<Decimal>,
+{
+    type ParameterType = SetRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        let result = if self.has_value { Some(self.sum) } else { None };
+
+        target[0].push(result);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
 
+    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use crate::parser::AggrDefinitionParser;
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+
+    use super::*;
+
+    #[test]
+    fn test_sum_enum() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnSumForEnum::new();
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Decimal)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), &[None]);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
+    }
+
+    #[test]
+    fn test_sum_set() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnSumForSet::new();
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Decimal)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), &[None]);
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b01))).unwrap();
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
+    }
 
     /// SUM(Bytes) should produce (Real).
     #[test]

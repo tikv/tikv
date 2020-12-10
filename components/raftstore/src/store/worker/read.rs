@@ -24,8 +24,8 @@ use crate::store::{
 };
 use crate::Result;
 
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 

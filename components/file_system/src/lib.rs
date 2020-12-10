@@ -1,15 +1,147 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{self, OpenOptions};
-use std::io::{self, ErrorKind, Read};
+#[macro_use]
+extern crate lazy_static;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
+mod file;
+mod rate_limiter;
+
+pub use file::{File, OpenOptions};
+pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
+
+pub use std::fs::{
+    canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
+    remove_dir_all, remove_file, rename, set_permissions, symlink_metadata, DirBuilder, DirEntry,
+    FileType, Metadata, Permissions, ReadDir,
+};
+
+use std::cell::Cell;
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 
+#[derive(Debug)]
+pub enum IOOp {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum IOType {
+    Other,
+    Read,
+    Write,
+    Coprocessor,
+    Flush,
+    Compaction,
+    Replication,
+    LoadBalance,
+    Import,
+    Export,
+}
+
+thread_local! {
+    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
+}
+
+fn set_io_type(new_io_type: IOType) {
+    IO_TYPE.with(|io_type| {
+        io_type.set(new_io_type);
+    });
+}
+
+fn get_io_type() -> IOType {
+    IO_TYPE.with(|io_type| io_type.get())
+}
+
+pub struct WithIOType {
+    previous_io_type: IOType,
+}
+
+impl WithIOType {
+    pub fn new(new_io_type: IOType) -> WithIOType {
+        let previous_io_type = get_io_type();
+        set_io_type(new_io_type);
+        WithIOType { previous_io_type }
+    }
+}
+
+impl Drop for WithIOType {
+    fn drop(&mut self) {
+        set_io_type(self.previous_io_type);
+    }
+}
+
+/// Indicates how large a buffer to pre-allocate before reading the entire file.
+fn initial_buffer_size(file: &File) -> io::Result<usize> {
+    // Allocate one extra byte so the buffer doesn't need to grow before the
+    // final `read` call at the end of the file.  Don't worry about `usize`
+    // overflow because reading will fail regardless in that case.
+    file.metadata().map(|m| m.len() as usize + 1)
+}
+
+/// Write a slice as the entire contents of a file.
+pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
+    File::create(path)?.write_all(contents.as_ref())
+}
+
+/// Read the entire contents of a file into a bytes vector.
+pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::with_capacity(initial_buffer_size(&file)?);
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Read the entire contents of a file into a string.
+pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut string = String::with_capacity(initial_buffer_size(&file)?);
+    file.read_to_string(&mut string)?;
+    Ok(string)
+}
+
+fn copy_imp(from: &Path, to: &Path, sync: bool) -> io::Result<u64> {
+    if !from.is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from)?;
+    let mut writer = File::create(to)?;
+    let perm = reader.metadata()?.permissions();
+
+    let ret = io::copy(&mut reader, &mut writer)?;
+    set_permissions(to, perm)?;
+    if sync {
+        writer.sync_all()?;
+        if let Some(parent) = to.parent() {
+            sync_dir(parent)?;
+        }
+    }
+    Ok(ret)
+}
+
+/// Copies the contents of one file to another. This function will also
+/// copy the permission bits of the original file to the destination file.
+pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    copy_imp(from.as_ref(), to.as_ref(), false /* sync */)
+}
+
+/// Copies the contents and permission bits of one file to another, then synchronizes.
+pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    copy_imp(from.as_ref(), to.as_ref(), true /* sync */)
+}
+
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
-    let meta = fs::metadata(path)?;
+    let meta = metadata(path)?;
     Ok(meta.len())
 }
 
@@ -21,7 +153,7 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
 /// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
 /// Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
-    match fs::remove_file(&file) {
+    match remove_file(&file) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
@@ -31,7 +163,7 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
 /// Deletes given path from file system. Returns `true` on success, `false` if the directory doesn't
 /// exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
-    match fs::remove_dir_all(&dir) {
+    match remove_dir_all(&dir) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
@@ -41,7 +173,7 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
 /// Creates a new, empty directory at the provided path. Returns `true` on success,
 /// `false` if the directory already exists. Otherwise the raw error will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
-    match fs::create_dir(&dir) {
+    match create_dir(&dir) {
         Ok(_) => Ok(true),
         Err(ref e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
         Err(e) => Err(e),
@@ -52,7 +184,7 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
 pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
     // File::open will not error when opening a directory
     // because it just call libc::open and do not do the file or dir check
-    fs::File::open(path)?.sync_all()
+    File::open(path)?.sync_all()
 }
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
@@ -138,7 +270,6 @@ impl<R: Read> Read for Sha256Reader<R> {
 mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
-    use std::fs::OpenOptions;
     use std::io::Write;
     use std::iter;
     use tempfile::TempDir;
@@ -228,7 +359,7 @@ mod tests {
             .map(|()| rng.sample(Alphanumeric))
             .take(size)
             .collect();
-        fs::write(path, s.as_bytes()).unwrap();
+        write(path, s.as_bytes()).unwrap();
         calc_crc32_bytes(s.as_bytes())
     }
 
@@ -270,10 +401,10 @@ mod tests {
         let large_file = tmp_dir.path().join("large.txt");
         gen_rand_file(&large_file, DIGEST_BUFFER_SIZE * 4);
 
-        let large_file_bytes = fs::read(&large_file).unwrap();
+        let large_file_bytes = read(&large_file).unwrap();
         let direct_sha256 = sha256(&large_file_bytes).unwrap();
 
-        let large_file_reader = fs::File::open(&large_file).unwrap();
+        let large_file_reader = File::open(&large_file).unwrap();
         let (mut sha256_reader, sha256_hasher) = Sha256Reader::new(large_file_reader).unwrap();
         let ret = sha256_reader.read_to_end(&mut Vec::new());
 

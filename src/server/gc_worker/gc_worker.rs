@@ -31,6 +31,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
+use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -191,7 +192,7 @@ where
         gc_info: &mut GcInfo,
         txn: &mut MvccTxn<E::Snap>,
     ) -> Result<()> {
-        let next_gc_info = txn.gc(key.clone(), safe_point)?;
+        let next_gc_info = gc(txn, key.clone(), safe_point)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;

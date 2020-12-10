@@ -346,6 +346,8 @@ pub struct InvokeContext {
     /// Changed RaftApplyState is stored into `apply_state`.
     pub apply_state: RaftApplyState,
     last_term: u64,
+    /// If the ready has new entries.
+    pub has_new_entries: bool,
     /// The old region is stored here if there is a snapshot.
     pub snap_region: Option<Region>,
     /// The regions whose range are overlapped with this region
@@ -359,6 +361,7 @@ impl InvokeContext {
             raft_state: store.raft_state.clone(),
             apply_state: store.apply_state.clone(),
             last_term: store.last_term,
+            has_new_entries: false,
             snap_region: None,
             destroyed_regions: vec![],
         }
@@ -507,53 +510,6 @@ fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
     )
 }
 
-fn validate_states<EK: KvEngine, ER: RaftEngine>(
-    region_id: u64,
-    engines: &Engines<EK, ER>,
-    raft_state: &mut RaftLocalState,
-    apply_state: &RaftApplyState,
-) -> Result<()> {
-    let last_index = raft_state.get_last_index();
-    let mut commit_index = raft_state.get_hard_state().get_commit();
-    let apply_index = apply_state.get_applied_index();
-
-    if commit_index < apply_state.get_last_commit_index() {
-        return Err(box_err!(
-            "raft state {:?} not match apply state {:?} and can't be recovered.",
-            raft_state,
-            apply_state
-        ));
-    }
-    let recorded_commit_index = apply_state.get_commit_index();
-    if commit_index < recorded_commit_index {
-        let entry = engines.raft.get_entry(region_id, recorded_commit_index)?;
-        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
-            return Err(box_err!(
-                "log at recorded commit index [{}] {} doesn't exist, may lose data",
-                apply_state.get_commit_term(),
-                recorded_commit_index
-            ));
-        }
-        info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
-        commit_index = recorded_commit_index;
-    }
-
-    if commit_index > last_index || apply_index > commit_index {
-        return Err(box_err!(
-            "raft state {:?} not match apply state {:?} and can't be recovered,",
-            raft_state,
-            apply_state
-        ));
-    }
-
-    raft_state.mut_hard_state().set_commit(commit_index);
-    if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
-        return Err(box_err!("raft state {:?} corrupted", raft_state));
-    }
-
-    Ok(())
-}
-
 fn init_last_term<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
@@ -579,6 +535,64 @@ fn init_last_term<EK: KvEngine, ER: RaftEngine>(
         )),
         Some(e) => Ok(e.get_term()),
     }
+}
+
+fn validate_states<EK: KvEngine, ER: RaftEngine>(
+    region_id: u64,
+    engines: &Engines<EK, ER>,
+    raft_state: &mut RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
+    let last_index = raft_state.get_last_index();
+    let mut commit_index = raft_state.get_hard_state().get_commit();
+    let recorded_commit_index = apply_state.get_commit_index();
+    let state_str = || -> String {
+        format!(
+            "region {}, raft state {:?}, apply state {:?}",
+            region_id, raft_state, apply_state
+        )
+    };
+    // The commit index of raft state may be less than the recorded commit index.
+    // If so, forward the commit index.
+    if commit_index < recorded_commit_index {
+        let entry = engines.raft.get_entry(region_id, recorded_commit_index)?;
+        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+            return Err(box_err!(
+                "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
+                apply_state.get_commit_term(),
+                recorded_commit_index,
+                state_str()
+            ));
+        }
+        info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
+        commit_index = recorded_commit_index;
+    }
+    // Invariant: applied index <= max(commit index, recorded commit index)
+    if apply_state.get_applied_index() > commit_index {
+        return Err(box_err!(
+            "applied index > max(commit index, recorded commit index), {}",
+            state_str()
+        ));
+    }
+    // Invariant: max(commit index, recorded commit index) <= last index
+    if commit_index > last_index {
+        return Err(box_err!(
+            "max(commit index, recorded commit index) > last index, {}",
+            state_str()
+        ));
+    }
+    // Since the entries must be persisted before applying, the term of raft state should also
+    // be persisted. So it should be greater than the commit term of apply state.
+    if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
+        return Err(box_err!(
+            "term of raft state < commit term of apply state, {}",
+            state_str()
+        ));
+    }
+
+    raft_state.mut_hard_state().set_commit(commit_index);
+
+    Ok(())
 }
 
 pub struct PeerStorage<EK, ER>
@@ -835,8 +849,19 @@ where
     }
 
     #[inline]
-    pub fn committed_index(&self) -> u64 {
+    pub fn commit_index(&self) -> u64 {
         self.raft_state.get_hard_state().get_commit()
+    }
+
+    #[inline]
+    pub fn set_commit_index(&mut self, commit: u64) {
+        assert!(commit >= self.commit_index());
+        self.raft_state.mut_hard_state().set_commit(commit);
+    }
+
+    #[inline]
+    pub fn hard_state(&self) -> &HardState {
+        self.raft_state.get_hard_state()
     }
 
     #[inline]
@@ -968,7 +993,7 @@ where
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), self.committed_index(), tx);
+        let task = GenSnapTask::new(self.region.get_id(), tx);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -984,10 +1009,12 @@ where
     // Append the given entries to the raft log using previous last index or self.last_index.
     // Return the new last index for later update. After we commit in engine, we can set last_index
     // to the return one.
+    // WARNING: If this function returns error, the caller must panic otherwise the entry cache may
+    // be wrong and break correctness.
     pub fn append<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         invoke_ctx: &mut InvokeContext,
-        entries: &[Entry],
+        entries: Vec<Entry>,
         ready_ctx: &mut H,
     ) -> Result<u64> {
         let region_id = self.get_region_id();
@@ -1002,24 +1029,21 @@ where
             return Ok(prev_last_index);
         }
 
+        invoke_ctx.has_new_entries = true;
+
         let (last_index, last_term) = {
             let e = entries.last().unwrap();
             (e.get_index(), e.get_term())
         };
 
-        for entry in entries {
-            if !ready_ctx.sync_log() {
-                ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
-            }
-        }
-
-        // TODO: save a copy here.
-        ready_ctx.raft_wb_mut().append_slice(region_id, entries)?;
-
+        // WARNING: This code is correct based on the assumption that
+        // if this function returns error, the TiKV will panic soon,
+        // otherwise, the entry cache may be wrong and break correctness.
         if let Some(ref mut cache) = self.cache {
-            // TODO: if the writebatch is failed to commit, the cache will be wrong.
-            cache.append(&self.tag, entries);
+            cache.append(&self.tag, &entries);
         }
+
+        ready_ctx.raft_wb_mut().append(region_id, entries)?;
 
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
@@ -1145,8 +1169,6 @@ where
             "region" => ?region,
             "state" => ?ctx.apply_state,
         );
-
-        fail_point!("before_apply_snap_update_region", |_| { Ok(()) });
 
         ctx.snap_region = Some(region);
         Ok(())
@@ -1337,12 +1359,11 @@ where
     /// This function only write data to `ready_ctx`'s `WriteBatch`. It's caller's duty to write
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
-    // Using `&Ready` here to make sure `Ready` struct is not modified in this function. This is
-    // a requirement to advance the ready object properly later.
+    /// WARNING: If this function returns error, the caller must panic(details in `append` function).
     pub fn handle_raft_ready<H: HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch>>(
         &mut self,
         ready_ctx: &mut H,
-        ready: &Ready,
+        ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
@@ -1359,12 +1380,8 @@ where
             last_index(&ctx.raft_state)
         };
 
-        if ready.must_sync() {
-            ready_ctx.set_sync_log(true);
-        }
-
         if !ready.entries().is_empty() {
-            self.append(&mut ctx, ready.entries(), ready_ctx)?;
+            self.append(&mut ctx, ready.take_entries(), ready_ctx)?;
         }
 
         // Last index is 0 means the peer is created from raft message
@@ -1375,7 +1392,7 @@ where
             }
         }
 
-        // Save raft state if it has changed or peer has applied a snapshot.
+        // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
             if snapshot_index > 0 {
@@ -1449,6 +1466,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn get_sync_log_from_entry(entry: &Entry) -> bool {
     if entry.get_sync_log() {
         return true;
@@ -1714,7 +1732,9 @@ mod tests {
         let mut kv_wb = store.engines.kv.write_batch();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::new(&store);
-        store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
+        store
+            .append(&mut ctx, ents[1..].to_vec(), &mut ready_ctx)
+            .unwrap();
         ctx.apply_state
             .mut_truncated_state()
             .set_index(ents[0].get_index());
@@ -1734,7 +1754,9 @@ mod tests {
     fn append_ents(store: &mut PeerStorage<KvTestEngine, RaftTestEngine>, ents: &[Entry]) {
         let mut ctx = InvokeContext::new(store);
         let mut ready_ctx = ReadyContext::new(store);
-        store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
+        store
+            .append(&mut ctx, ents.to_vec(), &mut ready_ctx)
+            .unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         ready_ctx.raft_wb.write().unwrap();
         store.raft_state = ctx.raft_state;
@@ -2042,7 +2064,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::new(&s);
         s.append(
             &mut ctx,
-            &[new_entry(6, 5), new_entry(7, 5)],
+            [new_entry(6, 5), new_entry(7, 5)].to_vec(),
             &mut ready_ctx,
         )
         .unwrap();
@@ -2597,17 +2619,6 @@ mod tests {
             .put_msg(&log_key, &new_entry(13, RAFT_INIT_LOG_TERM))
             .unwrap();
         engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
-        assert!(build_storage().is_err());
-
-        // last_commit_index > commit_index is invalid.
-        raft_state.set_last_index(20);
-        raft_state.mut_hard_state().set_commit(12);
-        engines.raft.put_msg(&raft_state_key, &raft_state).unwrap();
-        apply_state.set_last_commit_index(13);
-        engines
-            .kv
-            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
-            .unwrap();
         assert!(build_storage().is_err());
     }
 }
