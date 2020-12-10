@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use collections::HashMap;
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
@@ -13,7 +14,6 @@ use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
 use raft_proto::ConfChangeI;
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use time::{Duration, Timespec};
 
@@ -913,7 +913,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use crate::store::peer_storage;
-    use tikv_util::time::{monotonic_now, monotonic_raw_now};
+    use tikv_util::time::monotonic_raw_now;
 
     use super::*;
 
@@ -921,20 +921,16 @@ mod tests {
     fn test_lease() {
         #[inline]
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
-            // In linux, sleep uses CLOCK_MONOTONIC.
-            let monotonic_start = monotonic_now();
-            // In linux, lease uses CLOCK_MONOTONIC_RAW.
+            // In linux, lease uses CLOCK_MONOTONIC_RAW, while sleep uses CLOCK_MONOTONIC
             let monotonic_raw_start = monotonic_raw_now();
             thread::sleep(duration.to_std().unwrap());
-            let monotonic_end = monotonic_now();
-            let monotonic_raw_end = monotonic_raw_now();
-            assert_eq!(
-                lease.inspect(Some(monotonic_raw_end)),
-                state,
-                "elapsed monotonic_raw: {:?}, monotonic: {:?}",
-                monotonic_raw_end - monotonic_raw_start,
-                monotonic_end - monotonic_start
-            );
+            let mut monotonic_raw_end = monotonic_raw_now();
+            // spin wait to make sure pace is aligned with MONOTONIC_RAW clock
+            while monotonic_raw_end - monotonic_raw_start < duration {
+                thread::yield_now();
+                monotonic_raw_end = monotonic_raw_now();
+            }
+            assert_eq!(lease.inspect(Some(monotonic_raw_end)), state);
             assert_eq!(lease.inspect(None), state);
         }
 

@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -12,7 +13,6 @@ use tikv::storage::{
     txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result, Statistics, Storage,
     TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
-use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.

@@ -75,13 +75,13 @@ fn test_observe_duplicate_cmd() {
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     let (mut req_tx, resp_rx) = suite
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     fail::remove(fp);
     // Receive Commit response
@@ -115,7 +115,7 @@ fn test_observe_duplicate_cmd() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
 
@@ -160,7 +160,7 @@ fn test_delayed_change_cmd() {
         .get_region_cdc_client(region.get_id())
         .event_feed()
         .unwrap();
-    event_feed_wrap.as_ref().replace(Some(resp_rx));
+    event_feed_wrap.replace(Some(resp_rx));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     sleep_ms(200);
 
@@ -193,6 +193,6 @@ fn test_delayed_change_cmd() {
         }
     }
 
-    event_feed_wrap.as_ref().replace(None);
+    event_feed_wrap.replace(None);
     suite.stop();
 }
