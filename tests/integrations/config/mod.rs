@@ -80,6 +80,7 @@ fn test_serde_custom_tikv_config() {
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
+        end_point_slow_log_threshold: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
