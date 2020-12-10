@@ -13,12 +13,11 @@ use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ObserveID, StoreMeta};
 use raftstore::store::util::RemoteLease;
-use raftstore::Error as RaftStoreError;
-use tikv_util::worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler};
-use txn_types::{Key, Lock, TimeStamp};
+use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
+use txn_types::{Key, TimeStamp};
 
 use crate::cmd::{ChangeLog, ChangeRow};
-use crate::errors::Result;
+use crate::errors::Error;
 use crate::observer::ChangeDataSnapshot;
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
@@ -175,6 +174,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
             ResolverStatus::Ready => panic!("illeagal created observe region"),
         };
         let scheduler = self.scheduler.clone();
+        let scheduler1 = self.scheduler.clone();
         let scan_task = ScanTask {
             id: observe_region.observe_id,
             tag: String::new(),
@@ -192,14 +192,24 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
             before_start: None,
+            on_error: Some(Box::new(move |observe_id, region, err| {
+                scheduler1
+                    .schedule(Task::RegionError {
+                        observe_id,
+                        region,
+                        error: err,
+                    })
+                    .unwrap();
+            })),
         };
         self.scanner_pool.spawn_task(scan_task);
     }
 
     fn deregister_region(&mut self, region: &Region) {
-        let observe_region = self.regions.remove(&region.id).unwrap();
-        if let ResolverStatus::Pending { cancelled, .. } = observe_region.resolver_status {
-            cancelled.store(true, Ordering::Release);
+        if let Some(observe_region) = self.regions.remove(&region.id) {
+            if let ResolverStatus::Pending { cancelled, .. } = observe_region.resolver_status {
+                cancelled.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -215,11 +225,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine, S: CmdSinker<E::Snapshot>> En
     fn region_role_changed(&mut self, region: Region, role: StateRole) {
         match role {
             StateRole::Leader => self.register_region(region),
-            other => self.deregister_region(&region),
+            _ => self.deregister_region(&region),
         }
     }
 
-    fn region_error(&mut self, region: Region, observe_id: ObserveID, error: RaftStoreError) {
+    fn region_error(&mut self, region: Region, observe_id: ObserveID, error: Error) {
         if let Some(observe_region) = self.regions.get(&region.id) {
             if observe_region.observe_id != observe_id {
                 return;
@@ -307,7 +317,7 @@ pub enum Task<S: Snapshot> {
     RegionError {
         region: Region,
         observe_id: ObserveID,
-        error: RaftStoreError,
+        error: Error,
     },
     AdvanceResolvedTs {
         regions: Vec<u64>,

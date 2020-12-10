@@ -13,9 +13,11 @@ use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
 use tikv::storage::mvcc::{DeltaScanner, MvccReader, ScannerBuilder};
 use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tikv::storage::Statistics;
+use tikv_util::worker::Scheduler;
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
+use crate::endpoint::Task;
 use crate::errors::{Error, Result};
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
@@ -35,6 +37,7 @@ pub struct ScanTask {
     pub cancelled: Box<dyn Fn() -> bool + Send>,
     pub send_entries: Box<dyn Fn(Vec<ScanEntry>) + Send>,
     pub before_start: Option<Box<dyn Fn() + Send>>,
+    pub on_error: Option<Box<dyn Fn(ObserveID, Region, Error) + Send>>,
 }
 
 #[derive(Debug)]
@@ -59,6 +62,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 Ok(snap) => snap,
                 Err(e) => {
                     warn!("resolved_ts scan get snapshot failed"; "err" => ?e);
+                    let ScanTask {
+                        on_error,
+                        region,
+                        id,
+                        ..
+                    } = task;
+                    if let Some(on_error) = on_error {
+                        on_error(id, region, e);
+                    }
                     return;
                 }
             };
@@ -80,6 +92,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                             Ok(rs) => rs,
                             Err(e) => {
                                 warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                let ScanTask {
+                                    on_error,
+                                    region,
+                                    id,
+                                    ..
+                                } = task;
+                                if let Some(on_error) = on_error {
+                                    on_error(id, region, e);
+                                }
                                 return;
                             }
                         };
@@ -103,6 +124,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                                 Ok(rs) => rs,
                                 Err(e) => {
                                     warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                    let ScanTask {
+                                        on_error,
+                                        region,
+                                        id,
+                                        ..
+                                    } = task;
+                                    if let Some(on_error) = on_error {
+                                        on_error(id, region, e);
+                                    }
                                     return;
                                 }
                             };

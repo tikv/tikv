@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, Peekable};
-use kvproto::metapb::*;
 use raft::StateRole;
 use raftstore::coprocessor::*;
 use raftstore::store::fsm::ObserveID;

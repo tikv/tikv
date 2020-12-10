@@ -1,7 +1,5 @@
-use kvproto::errorpb::Error as KvError;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
+use kvproto::raft_cmdpb::{CmdType, Request};
 use raftstore::coprocessor::Cmd;
-use raftstore::Error as RaftStoreError;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
 
