@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn test_disable_delay_sync() {
         let test_sync_policy = new_test_sync_policy(false, 10);
-        let mut sync_policy = test_sync_policy.sync_policy.clone();
+        let mut sync_policy = test_sync_policy.sync_policy;
         assert!(!sync_policy.delay_sync_enabled());
         assert!(sync_policy.try_flush_readies());
         assert!(!sync_policy.sync_if_needed(false));
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn test_check_sync_internal() {
         let test = new_test_sync_policy(true, 10);
-        let mut sync_policy = test.sync_policy.clone();
+        let mut sync_policy = test.sync_policy;
 
         sync_policy.global_plan_sync_ts.store(15, Ordering::Release);
         sync_policy.global_last_sync_ts.store(15, Ordering::Release);
@@ -572,12 +572,12 @@ mod tests {
     #[test]
     fn test_mark_ready_unsynced() {
         let test = new_test_sync_policy(true, 10);
-        let mut sync_policy = test.sync_policy.clone();
+        let mut sync_policy = test.sync_policy;
 
         let notifier_1 = Arc::new(AtomicU64::new(0));
         let notifier_2 = Arc::new(AtomicU64::new(0));
         sync_policy.mark_ready_unsynced(1, 1, notifier_1.clone(), 2);
-        sync_policy.mark_ready_unsynced(3, 1, notifier_1.clone(), 5);
+        sync_policy.mark_ready_unsynced(3, 1, notifier_1, 5);
         sync_policy.mark_ready_unsynced(1, 2, notifier_2, 6);
         assert_eq!(sync_policy.unsynced_readies.len(), 3);
     }
