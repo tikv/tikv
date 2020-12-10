@@ -104,10 +104,11 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut topn_heap = BinaryHeap::new();
         let mut cur_v: (i32, Vec<u8>) = (0, Vec::from(""));
         let top_n_size = req.get_top_n_size() as usize;
-        let mut stats_version = ANALYZE_VERSION_V1;
-        if req.has_version() {
-            stats_version = req.get_version();
-        }
+        let stats_version = if req.has_version() {
+            req.get_version()
+        } else {
+            ANALYZE_VERSION_V1
+        };
         while let Some((key, _)) = scanner.next()? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
