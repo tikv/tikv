@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use collections::HashMap;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::*;
-use tikv_util::{collections::HashMap, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 // In theory, raft can propose conf change as long as there is no pending one. Replicas
 // don't apply logs synchronously, so it's possible the old leader is removed before the new

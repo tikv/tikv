@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use tikv_util::time::Duration;
 
+use collections::HashMap;
 use prometheus::local::*;
-use tikv_util::collections::HashMap;
 use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
 
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics};
