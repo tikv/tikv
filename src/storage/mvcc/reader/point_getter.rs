@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
+
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -274,6 +276,10 @@ impl<S: Snapshot> PointGetter<S> {
             }
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+
+            if !write.check_gc_fence_as_latest_version(self.ts) {
+                return Ok(None);
+            }
 
             match write.write_type {
                 WriteType::Put => {

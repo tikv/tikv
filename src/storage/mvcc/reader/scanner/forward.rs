@@ -366,6 +366,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
+            if !write.check_gc_fence_as_latest_version(cfg.ts) {
+                break None;
+            }
+
             match write.write_type {
                 WriteType::Put => {
                     if cfg.omit_value {
@@ -465,6 +469,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             }
             let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
+
+            if !write.check_gc_fence_as_latest_version(cfg.ts) {
+                break None;
+            }
 
             match write.write_type {
                 WriteType::Put => {
@@ -655,6 +663,9 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             }
 
             let (write_type, start_ts, short_value) = {
+                // DeltaEntryScanner only returns commit records between `from_ts` and `cfg.ts`.
+                // We can assume that it must ensure GC safepoint doesn't exceed `from_ts`, so GC
+                // fence checking can be skipped.
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,

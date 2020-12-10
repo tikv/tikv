@@ -53,7 +53,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             .into());
         }
         if need_value {
-            val = txn.reader.get(&key, for_update_ts, true)?;
+            val = txn
+                .reader
+                .get(&key, for_update_ts, Some(txn.start_ts), true)?;
         }
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
@@ -93,7 +95,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Handle rollback.
-        // The rollack informathin may come from either a Rollback record or a record with
+        // The rollback information may come from either a Rollback record or a record with
         // `has_overlapped_rollback` flag.
         if commit_ts == txn.start_ts
             && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
@@ -107,9 +109,15 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
         // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
         if commit_ts > txn.start_ts {
-            if let Some((commit_ts, write)) = txn.reader.seek_write(&key, txn.start_ts)? {
-                if write.start_ts == txn.start_ts {
-                    assert!(commit_ts == txn.start_ts && write.write_type == WriteType::Rollback);
+            if let Some((older_commit_ts, older_write)) =
+                txn.reader.seek_write(&key, txn.start_ts)?
+            {
+                if older_commit_ts == txn.start_ts {
+                    assert!(
+                        (older_write.start_ts == txn.start_ts
+                            && older_write.write_type == WriteType::Rollback)
+                            || older_write.has_overlapped_rollback
+                    );
                     return Err(ErrorInner::PessimisticLockRolledBack {
                         start_ts: txn.start_ts,
                         key: key.into_raw()?,
@@ -128,7 +136,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 WriteType::Put => Some(txn.reader.load_data(&key, write)?),
                 WriteType::Delete => None,
                 WriteType::Lock | WriteType::Rollback => {
-                    txn.reader.get(&key, commit_ts.prev(), true)?
+                    txn.reader
+                        .get(&key, commit_ts.prev(), Some(txn.start_ts), true)?
                 }
             };
         }

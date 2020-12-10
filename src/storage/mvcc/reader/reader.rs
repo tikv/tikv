@@ -212,10 +212,14 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
+    /// Gets the value of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass 0 to `gc_fence_limit` to skip the check.
     pub fn get(
         &mut self,
         key: &Key,
         ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
         skip_lock_check: bool,
     ) -> Result<Option<Value>> {
         if !skip_lock_check {
@@ -225,25 +229,40 @@ impl<S: Snapshot> MvccReader<S> {
                 IsolationLevel::Rc => {}
             }
         }
-        if let Some(write) = self.get_write(key, ts)? {
+        if let Some(write) = self.get_write(key, ts, gc_fence_limit)? {
             Ok(Some(self.load_data(key, write)?))
         } else {
             Ok(None)
         }
     }
 
-    pub fn get_write(&mut self, key: &Key, mut ts: TimeStamp) -> Result<Option<Write>> {
+    /// Gets the write record of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    pub fn get_write(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<Option<Write>> {
         loop {
             match self.seek_write(key, ts)? {
-                Some((commit_ts, write)) => match write.write_type {
-                    WriteType::Put => {
-                        return Ok(Some(write));
+                Some((commit_ts, write)) => {
+                    if let Some(limit) = gc_fence_limit {
+                        if !write.check_gc_fence_as_latest_version(limit) {
+                            return Ok(None);
+                        }
                     }
-                    WriteType::Delete => {
-                        return Ok(None);
+                    match write.write_type {
+                        WriteType::Put => {
+                            return Ok(Some(write));
+                        }
+                        WriteType::Delete => {
+                            return Ok(None);
+                        }
+                        WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
-                },
+                }
                 None => return Ok(None),
             }
         }
