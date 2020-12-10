@@ -21,12 +21,12 @@ use kvproto::replication_modepb::{
 };
 use raft::eraftpb::ConfChangeType;
 
+use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
@@ -1253,6 +1253,16 @@ impl PdClient for TestPdClient {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         self.check_bootstrap()?;
         self.cluster.rl().get_store(store_id)
+    }
+
+    fn get_store_async(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        match self.cluster.rl().get_store(store_id) {
+            Ok(store) => Box::pin(ok(store)),
+            Err(e) => Box::pin(err(e)),
+        }
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
