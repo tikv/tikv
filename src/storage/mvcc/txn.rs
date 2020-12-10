@@ -211,8 +211,8 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
-        self.locks_for_1pc.push((key, lock, remove_pessimstic_lock));
+    pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimistic_lock: bool) {
+        self.locks_for_1pc.push((key, lock, remove_pessimistic_lock));
     }
 
     pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
