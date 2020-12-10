@@ -1,0 +1,36 @@
+on: [
+    push,
+    pull_request
+]
+name: make sure can developed under macOS
+jobs:
+  can_build:
+    strategy:
+      matrix:
+        platform: [ macos-10.14, macos-10.15 ]
+    name: make sure can build under macOS
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          rust-version: nightly
+          components: clippy
+      - run: |
+          make build
+  can_test:
+    strategy:
+      matrix:
+        platform: [ macos-10.14, macos-10.15 ]
+    name: make sure developers' test can build under macOS
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          rust-version: nightly
+          components: clippy
+      - run: |
+          cargo -Zpackage-features test --no-run --workspace --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer
