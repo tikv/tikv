@@ -393,20 +393,18 @@ mod tests {
         file_dict_file.insert("info2", &info2).unwrap();
         file_dict_file.insert("info3", &info3).unwrap();
 
-        log_file.recovery().unwrap();
+        let file_dict = file_dict_file.recovery().unwrap();
 
-        assert_eq!(*log_file.file_dict.files.get("info1").unwrap(), info1);
-        assert_eq!(*log_file.file_dict.files.get("info2").unwrap(), info2);
-        assert_eq!(*log_file.file_dict.files.get("info3").unwrap(), info3);
-        assert_eq!(log_file.file_dict.files.len(), 3);
+        assert_eq!(*file_dict.files.get("info1").unwrap(), info1);
+        assert_eq!(*file_dict.files.get("info2").unwrap(), info2);
+        assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
+        assert_eq!(file_dict.files.len(), 3);
 
         file_dict_file.remove("info2").unwrap();
         file_dict_file.remove("info1").unwrap();
         file_dict_file.insert("info2", &info4).unwrap();
 
-        log_file.recovery().unwrap();
-
-        file_dict_file.recovery().unwrap();
+        let file_dict = file_dict_file.recovery().unwrap();
         assert_eq!(file_dict.files.get("info1"), None);
         assert_eq!(*file_dict.files.get("info2").unwrap(), info4);
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);

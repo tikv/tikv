@@ -28,8 +28,6 @@ const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 const DEFAULT_FILES_CACHE_CAPACITY: usize = 1024 * 128;
 
 struct Dicts {
-    // Maps data file paths to key id and metadata. This file is stored as plaintext.
-
     // A concurrency HashMap which stores data in log_file. All updates to files_cache must be
     // executed during lock of log_file.
     files_cache: DashMap<String, FileInfo>,
