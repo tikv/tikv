@@ -23,5 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: Swatinem/rust-cache@v1
+        with:
+          key: test
       - run: |
           cargo -Zpackage-features test --no-run --workspace --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer
