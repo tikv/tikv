@@ -139,7 +139,7 @@ impl Condvar {
         loop {
             if let Some(inner) = ptr {
                 unsafe {
-                    let ref node = *inner;
+                    let node = &(*inner);
                     if inner == me {
                         self.head.set(node.get_next());
                         if self.head.get().is_none() {
@@ -162,7 +162,7 @@ impl Condvar {
     fn notify_head(&self) {
         if let Some(head) = self.head.get() {
             unsafe {
-                let ref node = *head;
+                let node = &(*head);
                 node.notify();
                 self.head.set(node.get_next());
             }
