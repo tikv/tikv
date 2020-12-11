@@ -108,6 +108,7 @@ tidb_query_executors = { path = "../components/tidb_query_executors" }
 tidb_query_expr = { path = "../components/tidb_query_expr" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
+collections = { path = "../components/collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 toml = "0.5"
 txn_types = { path = "../components/txn_types" }

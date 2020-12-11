@@ -10,6 +10,7 @@ test-runner = ["derive_more"]
 [dependencies]
 crossbeam = "0.7"
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

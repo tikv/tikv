@@ -27,6 +27,9 @@ impl Transport for MockTransport {
     fn send(&mut self, _: RaftMessage) -> Result<()> {
         unimplemented!()
     }
+    fn need_flush(&self) -> bool {
+        false
+    }
     fn flush(&mut self) {
         unimplemented!()
     }
