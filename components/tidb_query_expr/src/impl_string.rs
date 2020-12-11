@@ -1353,7 +1353,6 @@ mod tests {
                 Collation::Utf8Mb4Bin,
                 Some(4i64),
             ),
-            // Case-sensitive cases
             (
                 Some(b"BaR".to_vec()),
                 Some(b"foobArbar".to_vec()),
@@ -1521,7 +1520,6 @@ mod tests {
                 Collation::Utf8Mb4Bin,
                 Some(5),
             ),
-            // Case-sensitive cases
             (
                 Some(b"bAr".to_vec()),
                 Some(b"foobarBaR".to_vec()),
