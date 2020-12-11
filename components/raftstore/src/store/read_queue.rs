@@ -8,12 +8,12 @@ use crate::store::metrics::*;
 use crate::store::{Callback, Config};
 use crate::Result;
 
+use collections::HashMap;
 use engine_traits::Snapshot;
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::{self, RaftCmdRequest};
 use protobuf::Message;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
-use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
 use time::Timespec;
