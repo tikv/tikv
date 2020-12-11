@@ -309,3 +309,68 @@ fn test_read_index_out_of_order() {
     assert!(resp2.recv_timeout(Duration::from_secs(1)).is_ok());
     assert!(resp1.recv_timeout(Duration::from_secs(1)).is_ok());
 }
+
+#[test]
+fn test_split_isolation() {
+    let mut cluster = new_node_cluster(0, 2);
+    // Use long election timeout and short lease.
+    configure_for_hibernate(&mut cluster);
+    configure_for_lease_read(&mut cluster, Some(200), Some(10));
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    pd_client.must_add_peer(rid, new_learner_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.stop_node(2);
+    // Split region into ['', 'k2') and ['k2', '')
+    let r1 = cluster.get_region(b"k2");
+    cluster.must_split(&r1, b"k2");
+    let idx = cluster.truncated_state(1, 1).get_index();
+    // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    }
+    let timer = Instant::now();
+    loop {
+        if cluster.truncated_state(1, 1).get_index() > idx {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+        if timer.elapsed() > Duration::from_secs(3) {
+            panic!("log is not compact after 3 seconds");
+        }
+    }
+    // Wait till leader peer goes to sleep again.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 2
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    let mut peer = None;
+    let r2 = cluster.get_region(b"k1");
+    for p in r2.get_peers() {
+        if p.store_id == 2 {
+            peer = Some(p.clone());
+            break;
+        }
+    }
+    let peer = peer.unwrap();
+    cluster.run_node(2).unwrap();
+    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be created.
+    for _ in 0..10 {
+        let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
+        let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
+        if !resp.get_header().has_error() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!("test failed");
+}
