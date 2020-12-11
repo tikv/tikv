@@ -88,6 +88,10 @@ pub enum Command {
 
 pub struct TypedCommand<T> {
     pub cmd: Command,
+
+    // Track the type of the command's return value, to enable the compiler
+    // to choose the correct implementation of the From trait when converting from
+    // an input request the appropriate Command.
     _pd: PhantomData<T>,
 }
 
@@ -600,10 +604,16 @@ impl Debug for Command {
     }
 }
 
+/// Commands that do not need to modify the database during execution will implement this trait.
+/// Currently, this refers to the following variants of `storage::txn::commands::Command`:
+/// `ScanLock`, `ResolveLockReadPhase`, `MvccByKey` and `MvccByStartTs`.
 pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
+/// Commands that need to modify the database during execution will implement this trait.
+/// Currently, that refers to all variants of `storage::txn::commands::Command` except for
+/// `ScanLock`, `ResolveLockReadPhase`, `MvccByKey` and `MvccByStartTs`.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }

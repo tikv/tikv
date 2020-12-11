@@ -11,6 +11,15 @@ macro_rules! ctx {
     };
 }
 
+/// Generate the struct definition and Debug, Display methods for a passed in
+/// storage command.
+/// Parameters:
+/// cmd -> Used as the type name for the struct. It must match one of the variants of the enum
+/// `storage::txns::commands::Command`.
+/// cmd_ty -> The type that encapsulates the result of executing this command. It is passed as
+/// a generic parameter to `TypedCommand`.
+/// display -? Information needed to implement the `Display` trait for the command.
+/// content -> The contents of the struct definition for the command.
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
@@ -28,6 +37,8 @@ macro_rules! command {
         }
 
         impl $cmd {
+            /// Return a `TypedCommand` encapsulating the result of executing this command.
+            /// The result is of type `StorageCallbackType`
             pub fn new(
                 $($arg: $arg_ty,)*
                 ctx: crate::storage::Context,
