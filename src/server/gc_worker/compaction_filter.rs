@@ -410,11 +410,15 @@ impl WriteCompactionFilter {
                     CmpOrdering::Greater => break,
                     CmpOrdering::Less => {
                         let _ = filtered.next().unwrap();
-                    },
+                    }
                     CmpOrdering::Equal => {
                         // It's possible that there are multiple `key_ts` in different levels.
                         // A potential case is that a snapshot has been ingested.
-                        let seq = write_iter.sequence().unwrap();
+                        let seq = match write_iter.sequence() {
+                            Some(seqno) => seqno,
+                            // The iterator should support to get sequence numbers.
+                            None => return Err("Iterator can't get seqno".to_owned()),
+                        };
                         debug_assert!(seq >= *filtered_seqno);
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
                         // an ingested file's sequence is not 0 if it overlaps with the DB.
