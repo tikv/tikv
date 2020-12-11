@@ -51,13 +51,13 @@ impl PerTypeIORateLimiter {
     pub fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
         self.bytes_per_refill.store(
             calculate_bytes_per_refill(bytes_per_sec, self.refill_period),
-            Ordering::Release,
+            Ordering::Relaxed,
         );
     }
 
     #[inline]
     fn request_fast(&self, bytes_per_refill: usize, bytes: usize) -> Option<usize> {
-        if self.consumed.load(Ordering::Acquire) < bytes_per_refill {
+        if self.consumed.load(Ordering::Relaxed) < bytes_per_refill {
             let before = self.consumed.fetch_add(bytes, Ordering::Relaxed);
             if before < bytes_per_refill {
                 return Some(std::cmp::min(bytes_per_refill - before, bytes));
