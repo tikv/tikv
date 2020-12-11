@@ -95,6 +95,7 @@ engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.4"
 failure = "0.1"
+file_system = { path = "components/file_system" }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -155,6 +156,7 @@ tidb_query_aggr = { path = "components/tidb_query_aggr" }
 tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
+collections = { path = "components/collections" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
@@ -229,6 +231,8 @@ members = [
   "components/encryption",
   "components/error_code",
   "components/concurrency_manager",
+  "components/file_system",
+  "components/collections",
 ]
 default-members = ["cmd"]
 

@@ -407,6 +407,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::Sha2 => sha2_fn_meta(),
+        ScalarFuncSig::Compress => compress_fn_meta(),
+        ScalarFuncSig::Uncompress => uncompress_fn_meta(),
         ScalarFuncSig::RandomBytes => random_bytes_fn_meta(),
         ScalarFuncSig::Password => password_fn_meta(),
         // impl_json
@@ -567,6 +569,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
+        ScalarFuncSig::OctString => oct_string_fn_meta(),
         ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),

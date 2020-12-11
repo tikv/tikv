@@ -4,8 +4,11 @@ use futures::executor::block_on;
 use futures::{stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
+use std::time::Duration;
 use tempfile::Builder;
+use test_raftstore::Simulator;
 use test_sst_importer::*;
+use tikv_util::HandyRwLock;
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
@@ -84,7 +87,7 @@ fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<U
 #[test]
 fn test_ingest_key_manager_delete_file_failed() {
     // test with tde
-    let (_tmp_key_dir, _cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client_tde();
+    let (_tmp_key_dir, cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client_tde();
 
     let temp_dir = Builder::new()
         .prefix("test_download_sst_blocking_sst_writer")
@@ -113,14 +116,29 @@ fn test_ingest_key_manager_delete_file_failed() {
 
     assert!(!resp.has_error());
 
-    // regenerate the file add ingest it again, even key manager contains file with the same name,
-    // this action should success
     fail::remove(deregister_fp);
 
-    // Do upload and ingest again, though key manager contians this file, the ingest action should success.
+    let node_id = *cluster.sim.rl().get_node_ids().iter().next().unwrap();
+    let save_path = cluster
+        .sim
+        .rl()
+        .importers
+        .get(&node_id)
+        .unwrap()
+        .get_path(&meta);
+    // wait up to 5 seconds to make sure raw uploaded file is deleted by the async clean up task.
+    for _ in 0..50 {
+        if !save_path.as_path().exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!save_path.as_path().exists());
+
+    // Do upload and ingest again, though key manager contains this file, the ingest action should success.
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
+    ingest.set_context(ctx);
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
