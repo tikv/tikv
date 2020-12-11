@@ -17,26 +17,29 @@ impl LinkedNotifiable {
     pub fn new_sync() -> LinkedNotifiable {
         LinkedNotifiable::Sync(StdCondvar::new(), Cell::new(None))
     }
+
     pub fn new_async() -> LinkedNotifiable {
         LinkedNotifiable::Async(AsyncSemaphore::new(0), Cell::new(None))
     }
 
     pub fn notify(&self) {
-        match self {
-            &LinkedNotifiable::Sync(ref condv, _) => condv.notify_one(),
-            &LinkedNotifiable::Async(ref sem, _) => sem.add_permits(1),
+        match *self {
+            LinkedNotifiable::Sync(ref condv, _) => condv.notify_one(),
+            LinkedNotifiable::Async(ref sem, _) => sem.add_permits(1),
         }
     }
+
     pub fn get_next(&self) -> Option<NonNull<LinkedNotifiable>> {
-        match self {
-            &LinkedNotifiable::Sync(_, ref ptr) => ptr.get(),
-            &LinkedNotifiable::Async(_, ref ptr) => ptr.get(),
+        match *self {
+            LinkedNotifiable::Sync(_, ref ptr) => ptr.get(),
+            LinkedNotifiable::Async(_, ref ptr) => ptr.get(),
         }
     }
+
     pub fn set_next(&self, next: Option<NonNull<LinkedNotifiable>>) {
-        match self {
-            &LinkedNotifiable::Sync(_, ref ptr) => ptr.set(next),
-            &LinkedNotifiable::Async(_, ref ptr) => ptr.set(next),
+        match *self {
+            LinkedNotifiable::Sync(_, ref ptr) => ptr.set(next),
+            LinkedNotifiable::Async(_, ref ptr) => ptr.set(next),
         }
     }
 }
@@ -58,20 +61,23 @@ impl Condvar {
         }
     }
 
+    /// Asynchronously waits on this condition variable for a notification,
+    /// timing out after a specified duration.
     pub fn wait_timeout<'a, T>(
         &self,
         guard: MutexGuard<'a, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
+        // mutable to indulge NonNull
         let mut node = LinkedNotifiable::new_sync();
         let raw_node_ptr: *mut _ = &mut node;
         let node_ptr = unsafe { NonNull::new_unchecked(raw_node_ptr) };
         if let Some(tail) = self.tail.get() {
             unsafe {
-                tail.as_ref().set_next(Some(node_ptr.clone()));
+                tail.as_ref().set_next(Some(node_ptr));
             }
         } else {
-            self.head.set(Some(node_ptr.clone()));
+            self.head.set(Some(node_ptr));
         }
         self.tail.set(Some(node_ptr));
         // alternative: std::thread::park_timeout suffers from spurious wake
@@ -79,11 +85,13 @@ impl Condvar {
             LinkedNotifiable::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
             _ => unreachable!(),
         };
-        // let (guard, res) = node.condv.wait_timeout(guard, timeout).unwrap();
         self.notify_before_me(raw_node_ptr);
         (guard, res.timed_out())
     }
 
+    /// Asynchronously waits on this condition variable for a notification,
+    /// timing out after a specified duration. Need to pass in additional
+    /// reference of the original mutex to regain lock after wakeup.
     pub async fn async_wait_timeout<'a, 'b, T>(
         &self,
         mu: &'a Mutex<T>,
@@ -107,7 +115,6 @@ impl Condvar {
             LinkedNotifiable::Async(ref sem, _) => sem.acquire().fuse(),
             _ => unreachable!(),
         };
-        // let f = node.sem.acquire().fuse();
         pin_mut!(f);
         let timed_out = select! {
             _ = f => false,
@@ -118,6 +125,7 @@ impl Condvar {
         (guard, timed_out)
     }
 
+    /// Notifies oldest peers while safely exiting the waiting queue.
     fn notify_before_me(&self, me: *mut LinkedNotifiable) {
         let mut ptr = self.head.get();
         loop {
@@ -143,6 +151,7 @@ impl Condvar {
         }
     }
 
+    /// Notifies the oldest waiter.
     fn notify_head(&self) {
         if let Some(head) = self.head.get() {
             unsafe {
@@ -156,6 +165,8 @@ impl Condvar {
         }
     }
 
+    /// Notifies all waiters in queue as till now. Effectively notify the oldest
+    /// waiter to start a chained wakeup.
     pub fn notify_all(&self) {
         self.notify_head();
     }

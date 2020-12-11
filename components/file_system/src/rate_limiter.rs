@@ -51,7 +51,7 @@ impl PerTypeIORateLimiter {
     pub fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
         self.bytes_per_refill.store(
             calculate_bytes_per_refill(bytes_per_sec, self.refill_period),
-            Ordering::Relaxed,
+            Ordering::Release,
         );
     }
 
@@ -81,8 +81,8 @@ impl PerTypeIORateLimiter {
         }
         if priority == IOPriority::NotLimited {
             self.consumed.fetch_add(bytes, Ordering::Relaxed);
-            // NotLimited requester don't do refill themselves, therefore the first
-            // Limited IO in long period will take penalty in a mandotory refill.
+            // Not limited requester don't do refill themselves, therefore the first
+            // limited IO in long period will take penalty for a mandotory refill.
             return bytes;
         }
         loop {
@@ -130,7 +130,6 @@ impl PerTypeIORateLimiter {
                 break bytes;
             }
             let mut last_refill_time = self.last_refill_time.lock().unwrap();
-            // double check
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
@@ -152,7 +151,6 @@ impl PerTypeIORateLimiter {
                         .await;
                     let now = time_util::monotonic_raw_now();
                     if timed_out && *last_refill_time == cached_last_refill_time {
-                        // timeout, try do the refill myself
                         *last_refill_time = now;
                         break self.refill_and_request(bytes);
                     }
@@ -198,7 +196,7 @@ impl IORateLimiter {
         limiter
     }
 
-    /// Request for token for bytes and potentially update statistics. If this
+    /// Requests for token for bytes and potentially update statistics. If this
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
@@ -217,6 +215,9 @@ impl IORateLimiter {
         }
     }
 
+    /// Asynchronously requests for token for bytes and potentially update statistics. If this
+    /// request can not be satisfied, the call is blocked. Granted token can be
+    /// less than the requested bytes, but must be greater than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
         let bytes = self.total_limiters[0].async_request(bytes, prio).await;
@@ -238,10 +239,6 @@ impl IORateLimiter {
             }
         }
     }
-
-    pub fn disable_rate_limit(&self, _io_type: IOType) {}
-
-    pub fn enable_rate_limit(&self, _io_type: IOType) {}
 }
 
 lazy_static! {
