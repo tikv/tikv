@@ -102,7 +102,10 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         let mut topn_heap = BinaryHeap::new();
-        let mut cur_v: (i32, Vec<u8>) = (0, Vec::from(""));
+        // cur_val recording the current value's data and its counts when iterating index's rows.
+        // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
+        // top-n information.
+        let mut cur_val: (u32, Vec<u8>) = (0, Vec::from(""));
         let top_n_size = req.get_top_n_size() as usize;
         let stats_version = if req.has_version() {
             req.get_version()
@@ -144,33 +147,32 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
             if stats_version == ANALYZE_VERSION_V2 {
-                let vec_data = data.to_vec();
-                if cur_v.1 == vec_data {
-                    cur_v.0 += 1;
+                if cur_val.1 == data {
+                    cur_val.0 += 1;
                 } else {
-                    if cur_v.0 > 0 {
-                        topn_heap.push(Reverse(cur_v.clone()));
+                    if cur_val.0 > 0 {
+                        topn_heap.push(Reverse(cur_val));
                     }
                     if topn_heap.len() > top_n_size {
                         topn_heap.pop();
                     }
-                    cur_v = (1, vec_data);
+                    cur_val = (1, data.clone());
                 }
             }
             hist.append(&data);
         }
 
         if stats_version == ANALYZE_VERSION_V2 {
-            if cur_v.0 > 0 {
-                topn_heap.push(Reverse(cur_v.clone()));
+            if cur_val.0 > 0 {
+                topn_heap.push(Reverse(cur_val));
                 if topn_heap.len() > top_n_size {
                     topn_heap.pop();
                 }
             }
             if let Some(c) = cms.as_mut() {
-                for heap_data in topn_heap {
-                    c.sub(&(heap_data.0).1, (heap_data.0).0 as u32);
-                    c.push_to_top_n((heap_data.0).1, (heap_data.0).0 as u64);
+                for heap_item in topn_heap {
+                    c.sub(&(heap_item.0).1, (heap_item.0).0);
+                    c.push_to_top_n((heap_item.0).1, (heap_item.0).0 as u64);
                 }
             }
         }
