@@ -201,15 +201,15 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
-        let bytes = self.total_limiters[0].request(bytes, prio);
+        let bytes = self.total_limiters[IOType::Other as usize].request(bytes, prio);
         let bytes = self.total_limiters[io_type as usize].request(bytes, prio);
         match io_op {
             IOOp::Write => {
-                let bytes = self.write_limiters[0].request(bytes, prio);
+                let bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
                 self.write_limiters[io_type as usize].request(bytes, prio)
             }
             IOOp::Read => {
-                let bytes = self.read_limiters[0].request(bytes, prio);
+                let bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
                 self.read_limiters[io_type as usize].request(bytes, prio)
             }
         }
@@ -220,19 +220,25 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
-        let bytes = self.total_limiters[0].async_request(bytes, prio).await;
+        let bytes = self.total_limiters[IOType::Other as usize]
+            .async_request(bytes, prio)
+            .await;
         let bytes = self.total_limiters[io_type as usize]
             .async_request(bytes, prio)
             .await;
         match io_op {
             IOOp::Write => {
-                let bytes = self.write_limiters[0].async_request(bytes, prio).await;
+                let bytes = self.write_limiters[IOType::Other as usize]
+                    .async_request(bytes, prio)
+                    .await;
                 self.write_limiters[io_type as usize]
                     .async_request(bytes, prio)
                     .await
             }
             IOOp::Read => {
-                let bytes = self.read_limiters[0].async_request(bytes, prio).await;
+                let bytes = self.read_limiters[IOType::Other as usize]
+                    .async_request(bytes, prio)
+                    .await;
                 self.read_limiters[io_type as usize]
                     .async_request(bytes, prio)
                     .await

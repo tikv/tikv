@@ -38,16 +38,16 @@ pub enum IOOp {
 
 #[derive(Clone, Copy, Debug)]
 pub enum IOType {
-    Other,
-    Read,
-    Write,
-    Coprocessor,
-    Flush,
-    Compaction,
-    Replication,
-    LoadBalance,
-    Import,
-    Export,
+    Other = 0,
+    Read = 1,
+    Write = 2,
+    Coprocessor = 3,
+    Flush = 4,
+    Compaction = 5,
+    Replication = 6,
+    LoadBalance = 7,
+    Import = 8,
+    Export = 9,
 }
 
 pub const IO_TYPE_VARIANTS: usize = 10;
