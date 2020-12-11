@@ -63,7 +63,7 @@ use engine::{Iterable, Mutable, Peekable};
 
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -231,6 +231,7 @@ pub struct PollContext<T, C: 'static> {
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
+    pub node_start_time: Option<TiInstant>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -269,6 +270,21 @@ impl<T, C> PollContext<T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Timeout is calculated from TiKV start, the node should not become
+    /// hibernated if it still within the hibernate timeout, see
+    /// https://github.com/tikv/tikv/issues/7747
+    #[allow(clippy::wrong_self_convention)]
+    pub fn is_hibernate_timeout(&mut self) -> bool {
+        let timeout = match self.node_start_time {
+            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
+            None => return true,
+        };
+        if timeout {
+            self.node_start_time = None;
+        }
+        timeout
     }
 }
 
@@ -509,7 +525,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
+            write_opts.set_sync(true);
             self.poll_ctx
                 .engines
                 .raft
@@ -585,6 +601,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
         self.timer = SlowTimer::new();
+        self.poll_ctx.perf_context_statistics.start();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
@@ -912,6 +929,7 @@ where
             queued_snapshot: HashSet::default(),
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.perf_level),
+            node_start_time: Some(TiInstant::now_coarse()),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

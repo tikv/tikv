@@ -13,7 +13,7 @@ use engine::Peekable;
 use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::{keys, Callback};
+use tikv::raftstore::store::keys;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -997,112 +997,6 @@ fn test_merge_isloated_stale_learner() {
     cluster.run_node(2).unwrap();
     // We can see if the old peer 2 is destroyed
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
-}
-
-// In the previous implementation, the source peer will propose rollback merge
-// after the local target peer's epoch is larger than recorded previously.
-// But it's wrong. This test constructs a case that writing data to the source region
-// after merging. This operation can succeed in the previous implementation which
-// causes data loss.
-// In the current implementation, the rollback merge proposal can be proposed only when
-// the number of peers who want to rollback merge is greater than the majority of all
-// peers. If so, this merge is impossible to succeed.
-// PS: A peer who wants to rollback merge means its local target peer's epoch is larger
-// than recorded.
-#[test]
-fn test_node_merge_write_data_to_source_region_after_merging() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
-    // For snapshot after merging
-    cluster.cfg.raft_store.merge_max_log_gap = 10;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
-    cluster.cfg.raft_store.apply_max_batch_size = 1;
-    cluster.cfg.raft_store.apply_pool_size = 2;
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k2", b"v2");
-
-    let mut region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-
-    let left = pd_client.get_region(b"k1").unwrap();
-    let right = pd_client.get_region(b"k2").unwrap();
-
-    let right_peer_2 = find_peer(&right, 2).cloned().unwrap();
-    assert_eq!(right_peer_2.get_id(), 2);
-    let on_handle_apply_2_fp = "on_handle_apply_2";
-    fail::cfg(on_handle_apply_2_fp, "pause").unwrap();
-
-    let right_peer_1 = find_peer(&right, 1).cloned().unwrap();
-    cluster.must_transfer_leader(right.get_id(), right_peer_1);
-
-    let left_peer_3 = find_peer(&left, 3).cloned().unwrap();
-    cluster.must_transfer_leader(left.get_id(), left_peer_3.clone());
-
-    let schedule_merge_fp = "on_schedule_merge";
-    fail::cfg(schedule_merge_fp, "return()").unwrap();
-
-    cluster.try_merge(left.get_id(), right.get_id());
-
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-
-    fail::remove(schedule_merge_fp);
-
-    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
-
-    region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    let state1 = cluster.apply_state(region.get_id(), 1);
-    for i in 0..15 {
-        cluster.must_put(format!("k2{}", i).as_bytes(), b"v2");
-    }
-    // Wait for log compaction
-    for _ in 0..50 {
-        let state2 = cluster.apply_state(region.get_id(), 1);
-        if state2.get_truncated_state().get_index() >= state1.get_applied_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
-    // Ignore this msg to make left region exist.
-    let on_need_gc_merge_fp = "on_need_gc_merge";
-    fail::cfg(on_need_gc_merge_fp, "return").unwrap();
-
-    cluster.clear_send_filters();
-    // On store 3, now the right region is updated by snapshot not applying logs
-    // so the left region still exist.
-    // Wait for left region to rollback merge (in previous wrong implementation)
-    sleep_ms(200);
-    // Write data to left region
-    let mut new_left = left.clone();
-    let mut epoch = new_left.take_region_epoch();
-    // prepareMerge => conf_ver + 1, version + 1
-    // rollbackMerge => version + 1
-    epoch.set_conf_ver(epoch.get_conf_ver() + 1);
-    epoch.set_version(epoch.get_version() + 2);
-    let mut req = new_request(
-        new_left.get_id(),
-        epoch,
-        vec![new_put_cf_cmd("default", b"k11", b"v11")],
-        false,
-    );
-    req.mut_header().set_peer(left_peer_3);
-    if let Ok(()) = cluster
-        .sim
-        .rl()
-        .async_command_on_node(3, req, Callback::None)
-    {
-        sleep_ms(200);
-        // The write must not succeed
-        must_get_none(&cluster.get_engine(2), b"k11");
-        must_get_none(&cluster.get_engine(3), b"k11");
-    }
-
-    fail::remove(on_handle_apply_2_fp);
 }
 
 /// Test if a learner can be destroyed properly in such conditions as follows

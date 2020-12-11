@@ -48,6 +48,7 @@ snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
+end-point-slow-log-threshold = "1s"
 
 [server.labels]
 a = "b"
@@ -135,6 +136,7 @@ store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
 hibernate-regions = true
+hibernate-timeout = "10m"
 dev-assert = true
 perf-level = 4
 

@@ -1018,7 +1018,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             "end_key" => next_key.as_ref().map(DisplayValue)
         );
         if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
-            error!(
+            warn!(
                 "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
                 "end_key" => next_key.as_ref().map(DisplayValue),
                 "err" => ?e

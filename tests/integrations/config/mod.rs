@@ -80,6 +80,7 @@ fn test_serde_custom_tikv_config() {
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
+        end_point_slow_log_threshold: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -107,7 +108,6 @@ fn test_serde_custom_tikv_config() {
         job: "tikv_1".to_owned(),
     };
     value.raft_store = RaftstoreConfig {
-        sync_log: false,
         prevote: false,
         raftdb_path: "/var".to_owned(),
         capacity: ReadableSize(123),
@@ -164,6 +164,7 @@ fn test_serde_custom_tikv_config() {
         store_pool_size: 3,
         future_poll_size: 2,
         hibernate_regions: true,
+        hibernate_timeout: ReadableDuration::minutes(10),
         dev_assert: true,
         perf_level: PerfLevel::EnableTime,
     };

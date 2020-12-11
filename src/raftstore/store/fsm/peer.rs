@@ -712,7 +712,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if self.fsm.group_state == GroupState::Idle {
                 // missing_ticks should be less than election timeout ticks otherwise
                 // follower may tick more than an election timeout in chaos state.
-                if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
+                // Before stopping tick, `missing_tick` should be `raft_election_timeout_ticks` - 2
+                // - `raft_heartbeat_ticks` (default 10 - 2 - 2 = 6)
+                // and the follwer's `election_elapsed` in raft-rs is 1.
+                // After the group state becomes Chaos, the next tick will call `raft_group.tick`
+                // `missing_tick` + 1 times(default 7).
+                // Then the follower's `election_elapsed` will be 1 + `missing_tick` + 1
+                // (default 1 + 6 + 1 = 8) which is less than the min election timeout.
+                // The reason is that we don't want let all followers become (pre)candidate if one
+                // follower may receive a request, then becomes (pre)candidate and sends (pre)vote msg
+                // to others. As long as the leader can wake up and broadcast hearbeats in one `raft_heartbeat_ticks`
+                // time(default 2s), no more followers will wake up and sends vote msg again.
+                if self.fsm.missing_ticks + 2 + self.ctx.cfg.raft_heartbeat_ticks
+                    < self.ctx.cfg.raft_election_timeout_ticks
+                {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
                 }
@@ -741,7 +754,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             Some(res) => res,
         };
-        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res)
+            || (self.fsm.peer.is_leader() && !self.ctx.is_hibernate_timeout())
+        {
             self.register_raft_base_tick();
         } else {
             debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
@@ -838,7 +853,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
-            self.reset_raft_tick(GroupState::Chaos);
+            if self.fsm.group_state != GroupState::Chaos {
+                self.fsm.group_state = GroupState::Chaos;
+                self.register_raft_base_tick();
+            }
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.reset_raft_tick(GroupState::Ordered);
         }
@@ -1299,6 +1317,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
+
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
 
         // Clear merge related structures.
         let mut meta = self.ctx.store_meta.lock().unwrap();

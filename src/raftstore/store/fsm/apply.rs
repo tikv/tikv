@@ -298,8 +298,6 @@ struct ApplyContext {
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
@@ -335,7 +333,6 @@ impl ApplyContext {
             kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -385,7 +382,7 @@ impl ApplyContext {
     pub fn write_to_db(&mut self) {
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(self.sync_log_hint);
             self.engines
                 .kv
                 .write_opt(self.kv_wb(), &write_opts)
@@ -2655,7 +2652,9 @@ pub struct ApplyPoller {
 }
 
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
-    fn begin(&mut self, _batch_size: usize) {}
+    fn begin(&mut self, _batch_size: usize) {
+        self.apply_ctx.perf_context_statistics.start();
+    }
 
     /// There is no control fsm in apply poller.
     fn handle_control(&mut self, _: &mut ControlFsm) -> Option<usize> {

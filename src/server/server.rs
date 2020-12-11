@@ -40,7 +40,6 @@ use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
-const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
@@ -113,7 +112,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
-            .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .max_receive_message_len(-1)
             .resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.

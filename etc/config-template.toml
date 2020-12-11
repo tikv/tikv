@@ -118,6 +118,10 @@
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
+## If handle time is larger than the threshold, it will print slow log in endpoint.
+## The default value is 1s.
+# end-point-slow-log-threshold = "1s"
+
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
@@ -182,11 +186,6 @@
 # retry-max-count = -1
 
 [raftstore]
-## Whether to force to flush logs.
-## Set to `true` (default) for best reliability, which prevents data loss when there is a power
-## failure. Set to `false` for higher performance (ensure that you run multiple TiKV nodes!).
-# sync-log = true
-
 ## Whether to enable Raft prevote.
 ## Prevote minimizes disruption when a partitioned node rejoins the cluster by using a two phase
 ## election.

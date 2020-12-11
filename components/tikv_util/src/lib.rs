@@ -54,6 +54,7 @@ pub mod future_pool;
 pub mod macros;
 pub mod keybuilder;
 pub mod logger;
+pub mod lru;
 pub mod metrics;
 pub mod mpsc;
 pub mod security;

@@ -2,6 +2,25 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.19]
+### Bugfixes
+- Fix the bug that TiKV panics when parsing responses with missing reason phrases [#8540](https://github.com/tikv/tikv/pull/8540)
+
+### Improvements
+- Set `sync-log` to `true` as an nonadjustable value [#8636](https://github.com/tikv/tikv/pull/8636)
+
+## [3.0.18]
+### Misc
+- Change gc failure log to warning [#8444](https://github.com/tikv/tikv/pull/8444)
+
+## [3.0.17]
+### Bugfixes
+- Fix a bug that might read stale data during region merging [#8111](https://github.com/tikv/tikv/pull/8111)
+- Fix memory leak during scheduling [#8355](https://github.com/tikv/tikv/pull/8355)
+
+### Improvements
+- Add the `hibernate-timeout` configuration that delays region hibernation to improve rolling update performance [#8207](https://github.com/tikv/tikv/pull/8207)
+
 ## [3.0.16]
 ### Bugfixes
 - Fix the potential wrong result read from ingested files [#8039](https://github.com/tikv/tikv/pull/8039)
