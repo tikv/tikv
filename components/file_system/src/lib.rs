@@ -11,6 +11,7 @@ extern crate tikv_alloc;
 mod condvar;
 mod file;
 mod rate_limiter;
+mod time_util;
 
 pub use file::{File, OpenOptions};
 pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};

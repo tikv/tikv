@@ -99,9 +99,9 @@ impl Condvar {
             self.head.set(Some(raw_tail));
         }
         self.tail.set(Some(raw_tail));
-        // Alternative: use std::thread::park_timeout
+        // alternative: std::thread::park_timeout suffers from spurious wake
         let (guard, res) = node.condv.wait_timeout(guard, timeout).unwrap();
-        self.notify_head();
+        self.notify_before_me(raw_tail);
         (guard, res.timed_out())
     }
 
@@ -111,7 +111,7 @@ impl Condvar {
         guard: MutexGuard<'b, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
-        // drop early
+        // it's safe to drop early because semaphore is state preserving
         std::mem::drop(guard);
         let mut node = AsyncCondvarNode::new();
         let raw_tail: *mut _ = &mut node;
@@ -130,8 +130,33 @@ impl Condvar {
             _ = tokio::time::delay_for(timeout).fuse() => true,
         };
         let guard = mu.lock().unwrap();
-        self.notify_head();
+        self.notify_before_me(raw_tail);
         (guard, timed_out)
+    }
+
+    fn notify_before_me(&self, me: *mut dyn LinkedNotifiable) {
+        let mut ptr = self.head.get();
+        loop {
+            if let Some(inner) = ptr {
+                unsafe {
+                    let ref node = *inner;
+                    if inner == me {
+                        self.head.set(node.get_next());
+                        if self.head.get().is_none() {
+                            self.tail.set(None);
+                        }
+                        break;
+                    } else {
+                        node.notify();
+                        ptr = node.get_next();
+                    }
+                }
+            } else {
+                self.head.set(None);
+                self.tail.set(None);
+                return;
+            }
+        }
     }
 
     fn notify_head(&self) {
