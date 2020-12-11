@@ -2812,8 +2812,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc5942d2bd52ec562b572798496532e343c2f69383777740e1eeddf0e468cf3"
+source = "git+https://github.com/tikv/pprof-rs.git?branch=tikv-release-4.0#e47d299873bb0c37e9675ea2e8c313a57211842a"
 dependencies = [
  "backtrace",
  "inferno",
