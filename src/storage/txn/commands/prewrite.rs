@@ -1292,7 +1292,7 @@ mod tests {
                 async_apply_prewrite: false,
             },
             Case {
-                // works on async prewrite, when no keys are previously locked
+                // works on async prewrite
                 expected: ResponsePolicy::OnCommitted,
 
                 pessimistic: false,
@@ -1301,7 +1301,7 @@ mod tests {
                 async_apply_prewrite: true,
             },
             Case {
-                // works on 1pc, when no keys are previously locked
+                // works on 1pc
                 expected: ResponsePolicy::OnCommitted,
 
                 pessimistic: false,
