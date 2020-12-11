@@ -214,7 +214,10 @@ impl<S: Snapshot> MvccReader<S> {
 
     /// Gets the value of the specified key's latest version before specified `ts`.
     /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
-    /// `gc_fence_limit`. Pass 0 to `gc_fence_limit` to skip the check.
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
     pub fn get(
         &mut self,
         key: &Key,
@@ -239,6 +242,9 @@ impl<S: Snapshot> MvccReader<S> {
     /// Gets the write record of the specified key's latest version before specified `ts`.
     /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
     /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
     pub fn get_write(
         &mut self,
         key: &Key,
