@@ -147,6 +147,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
             if stats_version == ANALYZE_VERSION_V2 {
+                hist.append(&data);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
                 } else {
@@ -156,10 +157,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     if topn_heap.len() > top_n_size {
                         topn_heap.pop();
                     }
-                    cur_val = (1, data.clone());
+                    cur_val = (1, data);
                 }
             }
-            hist.append(&data);
         }
 
         if stats_version == ANALYZE_VERSION_V2 {
