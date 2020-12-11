@@ -17,11 +17,20 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
     mut lock: Lock,
     current_ts: TimeStamp,
     caller_start_ts: TimeStamp,
+    force_sync_commit: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     // Never rollback or push forward min_commit_ts in check_txn_status if it's using async commit.
     // Rollback of async-commit locks are done during ResolveLock.
     if lock.use_async_commit {
-        return Ok((TxnStatus::uncommitted(lock, false), None));
+        if force_sync_commit {
+            info!(
+                "fallback is set, check_txn_status treats it as a non-async-commit txn";
+                "start_ts" => txn.start_ts,
+                "primary_key" => ?primary_key,
+            );
+        } else {
+            return Ok((TxnStatus::uncommitted(lock, false), None));
+        }
     }
 
     let is_pessimistic_txn = !lock.for_update_ts.is_zero();

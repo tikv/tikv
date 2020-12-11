@@ -1255,6 +1255,16 @@ impl PdClient for TestPdClient {
         self.cluster.rl().get_store(store_id)
     }
 
+    fn get_store_async(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        match self.cluster.rl().get_store(store_id) {
+            Ok(store) => Box::pin(ok(store)),
+            Err(e) => Box::pin(err(e)),
+        }
+    }
+
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
         self.check_bootstrap()?;
         if let Some(region) = self.cluster.rl().get_region(data_key(key)) {

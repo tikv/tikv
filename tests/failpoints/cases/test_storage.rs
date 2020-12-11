@@ -962,5 +962,5 @@ fn test_async_apply_prewrite_1pc() {
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
     test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value1", 10, false);
-    test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value2", 20, true);
+    test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
 }
