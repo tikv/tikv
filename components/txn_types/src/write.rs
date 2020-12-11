@@ -452,4 +452,32 @@ mod tests {
         .as_ref()
         .is_protected());
     }
+
+    #[test]
+    fn test_check_gc_fence() {
+        // (gc_fence, read_ts, expected_result).
+        let cases: Vec<(Option<u64>, u64, bool)> = vec![
+            (None, 10, true),
+            (None, 100, true),
+            (None, u64::max_value(), true),
+            (Some(0), 100, true),
+            (Some(0), u64::max_value(), true),
+            (Some(100), 50, true),
+            (Some(100), 100, false),
+            (Some(100), 150, false),
+            (Some(100), u64::max_value(), false),
+        ];
+
+        for case in cases {
+            let write = Write::new(WriteType::Put, 5.into(), None)
+                .set_overlapped_rollback(true, case.0.map(Into::into));
+
+            assert_eq!(
+                write
+                    .as_ref()
+                    .check_gc_fence_as_latest_version(case.1.into()),
+                case.2
+            );
+        }
+    }
 }
