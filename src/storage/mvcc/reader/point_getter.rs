@@ -352,8 +352,9 @@ mod tests {
         CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
     };
     use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_gc, must_pessimistic_prewrite_delete,
-        must_prewrite_delete, must_prewrite_lock, must_prewrite_put, must_rollback,
+        force_cleanup_with_gc_fence, must_acquire_pessimistic_lock, must_commit, must_gc,
+        must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put, must_rollback,
     };
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
@@ -909,5 +910,79 @@ mod tests {
 
         must_met_newer_ts_data(&engine, 50, key, val2, true);
         must_met_newer_ts_data(&engine, 60, key, val2, true);
+    }
+
+    #[test]
+    fn test_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 20);
+        force_cleanup_with_gc_fence(&engine, b"k1", 20, 0, 50);
+
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 20);
+        force_cleanup_with_gc_fence(&engine, b"k2", 20, 0, 40);
+
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 20);
+        force_cleanup_with_gc_fence(&engine, b"k3", 20, 0, 30);
+
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 14);
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4x", 15);
+        must_commit(&engine, b"k4", 15, 20);
+        force_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20);
+        force_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30);
+
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
+        must_commit(&engine, b"k5", 13, 14);
+        must_prewrite_delete(&engine, b"k5", b"v5", 15);
+        must_commit(&engine, b"k5", 15, 20);
+        force_cleanup_with_gc_fence(&engine, b"k5", 14, 0, 20);
+        force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
+
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
+        must_commit(&engine, b"k6", 16, 20);
+        must_prewrite_lock(&engine, b"k6", b"k6", 25);
+        must_commit(&engine, b"k6", 25, 26);
+        must_prewrite_lock(&engine, b"k6", b"k6", 28);
+        must_commit(&engine, b"k6", 28, 29);
+        force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 50);
+
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 20);
+        must_prewrite_lock(&engine, b"k7", b"k7", 25);
+        must_commit(&engine, b"k7", 25, 26);
+        must_prewrite_lock(&engine, b"k7", b"k7", 28);
+        must_commit(&engine, b"k7", 28, 29);
+        force_cleanup_with_gc_fence(&engine, b"k7", 20, 0, 27);
+
+        must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
+        must_commit(&engine, b"k8", 17, 30);
+        force_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0);
+
+        let expected_results = vec![
+            (b"k1", Some(b"v1")),
+            (b"k2", None),
+            (b"k3", None),
+            (b"k4", None),
+            (b"k5", None),
+            (b"k6", Some(b"v6")),
+            (b"k7", None),
+            (b"k8", Some(b"v8")),
+        ];
+
+        for (k, v) in &expected_results {
+            let mut single_getter = new_single_point_getter(&engine, 40.into());
+            let value = single_getter.get(&Key::from_raw(*k)).unwrap();
+            assert_eq!(value, v.map(|v| v.to_vec()));
+        }
+
+        let mut multi_getter = new_multi_point_getter(&engine, 40.into());
+        for (k, v) in &expected_results {
+            let value = multi_getter.get(&Key::from_raw(*k)).unwrap();
+            assert_eq!(value, v.map(|v| v.to_vec()));
+        }
     }
 }

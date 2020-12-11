@@ -248,7 +248,9 @@ pub mod tests {
         must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
         must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
     };
-    pub use actions::cleanup::tests::{must_err as must_cleanup_err, must_succeed as must_cleanup};
+    pub use actions::cleanup::tests::{
+        force_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
+    };
     pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
     pub use actions::gc::tests::must_succeed as must_gc;
     pub use actions::prewrite::tests::{
