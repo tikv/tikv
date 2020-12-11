@@ -13,7 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: Swatinem/rust-cache@v1
-      - run: make build
+      - run: |
+          make build
   can_test:
     strategy:
       matrix:
