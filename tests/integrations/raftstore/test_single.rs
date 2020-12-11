@@ -1,8 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::time::*;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
@@ -178,4 +179,23 @@ fn test_node_put_large_entry() {
 fn test_server_put_large_entry() {
     let mut cluster = new_server_cluster(0, 1);
     test_put_large_entry(&mut cluster);
+}
+
+#[test]
+fn test_node_apply_no_op() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    let timer = Instant::now();
+    loop {
+        let state = cluster.apply_state(1, 1);
+        if state.get_applied_index() > RAFT_INIT_LOG_INDEX {
+            break;
+        }
+        if timer.elapsed() > Duration::from_secs(3) {
+            panic!("apply no-op log not finish after 3 seconds");
+        }
+        sleep_ms(10);
+    }
 }
