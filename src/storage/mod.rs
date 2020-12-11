@@ -1728,6 +1728,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
@@ -1741,9 +1742,46 @@ mod tests {
         },
         time::Duration,
     };
-    use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
     use txn_types::{Mutation, WriteType};
+
+    #[test]
+    fn test_prewrite_blocks_read() {
+        use kvproto::kvrpcpb::ExtraOp;
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+
+        // We have to do the prewrite manually so that the mem locks don't get released.
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let mutations = vec![Mutation::Put((Key::from_raw(b"x"), b"z".to_vec()))];
+        let mut cmd = commands::Prewrite::with_defaults(mutations, vec![1, 2, 3], 10.into());
+        if let Command::Prewrite(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        let wr = cmd
+            .cmd
+            .process_write(
+                snapshot,
+                commands::WriteContext {
+                    lock_mgr: &DummyLockManager {},
+                    concurrency_manager: storage.concurrency_manager.clone(),
+                    extra_op: ExtraOp::Noop,
+                    statistics: &mut Statistics::default(),
+                    async_apply_prewrite: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(wr.lock_guards.len(), 1);
+
+        let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
+        assert!(matches!(
+            result,
+            Err(Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
+                ..
+            }))))
+        ));
+    }
 
     #[test]
     fn test_get_put() {
@@ -4543,6 +4581,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -4567,6 +4606,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -4621,6 +4661,7 @@ mod tests {
                     0.into(),
                     0.into(),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -4664,6 +4705,7 @@ mod tests {
                     ts(12, 0),
                     ts(15, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -4693,6 +4735,7 @@ mod tests {
                     ts(126, 0),
                     ts(127, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -5459,6 +5502,7 @@ mod tests {
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(150, 0),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -5492,6 +5536,7 @@ mod tests {
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),
+                    false,
                     false,
                     Context::default(),
                 ),

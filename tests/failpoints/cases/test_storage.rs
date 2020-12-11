@@ -8,6 +8,7 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
+use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
@@ -15,7 +16,7 @@ use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContex
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
-use tikv_util::{collections::HashMap, HandyRwLock};
+use tikv_util::HandyRwLock;
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
 
@@ -961,5 +962,5 @@ fn test_async_apply_prewrite_1pc() {
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
     test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value1", 10, false);
-    test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value2", 20, true);
+    test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
 }

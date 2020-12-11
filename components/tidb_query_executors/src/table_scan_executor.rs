@@ -4,9 +4,9 @@ use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::collections::HashMap;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::TableScan;
