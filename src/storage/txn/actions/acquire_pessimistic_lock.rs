@@ -558,7 +558,7 @@ pub mod tests {
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
-        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, None);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, Some(0));
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {

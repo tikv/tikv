@@ -37,9 +37,10 @@ impl<'a, S: Snapshot> GcFenceGetter<'a, S> {
         let key = self.key;
         let start = key.clone().append_ts(u64::MAX.into());
         let end = key.clone().append_ts(0.into());
+        let prefix_len = S::iter_boundaries_prefix_len();
         let iter_opt = IterOptions::new(
-            Some(KeyBuilder::from_vec(start.into_encoded(), 0, 0)),
-            Some(KeyBuilder::from_vec(end.into_encoded(), 0, 0)),
+            Some(KeyBuilder::from_vec(start.into_encoded(), prefix_len, 0)),
+            Some(KeyBuilder::from_vec(end.into_encoded(), prefix_len, 0)),
             false, /*fill_cache*/
         );
         let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
