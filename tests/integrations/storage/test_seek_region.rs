@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
@@ -118,8 +118,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 fn test_region_collection_seek_region() {
     let mut cluster = new_node_cluster(0, 3);
 
-    let worker = Arc::new(Mutex::new(Worker::new("test")));
-    let share_worker = worker.clone();
+    let share_worker = Arc::new(Mutex::new(Worker::new("test")));
     let (tx, rx) = channel();
     cluster
         .sim

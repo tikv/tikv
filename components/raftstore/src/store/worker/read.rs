@@ -24,8 +24,8 @@ use crate::store::{
 };
 use crate::Result;
 
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::collections::HashMap;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
@@ -419,81 +419,6 @@ where
         }
 
         Ok(Some(delegate))
-    }
-
-    pub fn propose_raft_command1(
-        &mut self,
-        mut read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
-    ) {
-        let region_id = req.get_header().get_region_id();
-        loop {
-            match self.pre_propose_raft_command(&req) {
-                Ok(Some(delegate)) => {
-                    let snapshot_ts = match read_id.as_mut() {
-                        // If this peer became Leader not long ago and just after the cached
-                        // snapshot was created, this snapshot can not see all data of the peer.
-                        Some(id) => {
-                            if id.create_time <= delegate.last_valid_ts {
-                                id.create_time = monotonic_raw_now();
-                            }
-                            id.create_time
-                        }
-                        None => monotonic_raw_now(),
-                    };
-                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
-                        // Cache snapshot_time for remaining requests in the same batch.
-                        let mut response = self.execute(&req, &delegate.region, None, read_id);
-                        // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut response.response, delegate.term);
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
-                        }
-                        response.txn_extra_op = delegate.txn_extra_op.load();
-                        cb.invoke_read(response);
-                        self.delegates.insert(region_id, Some(delegate));
-                        return;
-                    }
-                    break;
-                }
-                // It can not handle the request, forwards to raftstore.
-                Ok(None) => {
-                    if self.delegates.get(&region_id).is_some() {
-                        break;
-                    }
-                    let meta = self.store_meta.lock().unwrap();
-                    match meta.readers.get(&region_id).cloned() {
-                        Some(reader) => {
-                            self.delegates.insert(region_id, Some(reader));
-                        }
-                        None => {
-                            self.metrics.rejected_by_no_region += 1;
-                            debug!("rejected by no region"; "region_id" => region_id);
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let mut response = cmd_resp::new_error(e);
-                    if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
-                        cmd_resp::bind_term(&mut response, delegate.term);
-                    }
-                    cb.invoke_read(ReadResponse {
-                        response,
-                        snapshot: None,
-                        txn_extra_op: TxnExtraOp::Noop,
-                    });
-                    self.delegates.remove(&region_id);
-                    return;
-                }
-            }
-        }
-        // Remove delegate for updating it by next cmd execution.
-        self.delegates.remove(&region_id);
-        // Forward to raftstore.
-        let cmd = RaftCommand::new(req, cb);
-        self.redirect(cmd);
     }
 
     pub fn propose_raft_command(

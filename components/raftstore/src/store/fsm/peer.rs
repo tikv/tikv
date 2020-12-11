@@ -4,10 +4,13 @@ use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::VecDeque;
 use std::iter::Iterator;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
+use collections::HashMap;
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
@@ -28,7 +31,6 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
-use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -101,7 +103,6 @@ where
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    early_apply: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most REGION_SPLIT_SKIT_MAX_COUNT times.
@@ -186,7 +187,6 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -229,7 +229,6 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                early_apply: cfg.early_apply,
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
@@ -657,8 +656,13 @@ where
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
         // Apply committed entries more quickly.
-        if self.fsm.peer.raft_group.store().committed_index()
+        // Or if it's a leader. This implicitly means it's a singleton
+        // because it becomes leader in `Peer::new` when it's a
+        // singleton. It has a no-op entry that need to be persisted,
+        // committed, and then it should apply it.
+        if self.fsm.peer.raft_group.store().commit_index()
             > self.fsm.peer.raft_group.store().applied_index()
+            || self.fsm.peer.is_leader()
         {
             self.fsm.has_ready = true;
         }
@@ -898,62 +902,32 @@ where
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(mut r) = res {
+        if let Some(r) = res {
             self.on_role_changed(&r.0);
-            if !r.0.entries().is_empty() {
+            if r.1.has_new_entries {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
-            }
-            if self.ctx.cfg.early_apply {
-                self.handle_raft_ready_apply(&mut r.0, &r.1);
             }
             self.ctx.ready_res.push(r);
         }
     }
 
-    #[inline]
-    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
-        self.fsm.early_apply = ready
-            .committed_entries
-            .as_ref()
-            .and_then(|e| e.last())
-            .map_or(false, |e| {
-                self.fsm.peer.can_early_apply(e.get_term(), e.get_index())
-            });
-        if !self.fsm.early_apply {
-            return;
-        }
-        self.fsm
-            .peer
-            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
-    }
-
-    pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
+    pub fn post_raft_ready_append(&mut self, ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
-        if !self.fsm.early_apply {
-            self.fsm
-                .peer
-                .handle_raft_ready_apply(self.ctx, &mut ready, &invoke_ctx);
-        }
-        let res = self
-            .fsm
-            .peer
-            .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_advance(ready);
-        let mut has_snapshot = false;
+        let res = self.fsm.peer.post_raft_ready_append(self.ctx, invoke_ctx);
+        self.fsm.peer.handle_raft_ready_advance(self.ctx, ready);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
-            has_snapshot = true;
+            if is_merging {
+                // After applying a snapshot, merge is rollbacked implicitly.
+                self.on_ready_rollback_merge(0, None);
+            }
             self.register_raft_base_tick();
         }
         if self.fsm.peer.leader_unreachable {
             self.fsm.group_state = GroupState::Chaos;
             self.register_raft_base_tick();
             self.fsm.peer.leader_unreachable = false;
-        }
-        if is_merging && has_snapshot {
-            // After applying a snapshot, merge is rollbacked implicitly.
-            self.on_ready_rollback_merge(0, None);
         }
     }
 
@@ -1759,7 +1733,7 @@ where
             };
             // Use `unwrap` is ok because the StoreMeta lock is held and these source peers still
             // exist in regions and region_ranges map.
-            // It depends on the implementation of `destroy_peer`
+            // It depends on the implementation of `destroy_peer`.
             self.ctx
                 .router
                 .force_send(
@@ -1928,6 +1902,7 @@ where
                 }
             }
         }
+        meta.leaders.remove(&region_id);
     }
 
     // Update some region infos
@@ -1966,6 +1941,8 @@ where
         }
 
         self.update_region(cp.region);
+
+        fail_point!("change_peer_after_update_region");
 
         let now = Instant::now();
         let (mut remove_self, mut need_ping) = (false, false);
@@ -2105,8 +2082,19 @@ where
         let region_id = derived.get_id();
         meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
+
+        // Roughly estimate the size and keys for new regions.
+        let new_region_count = regions.len() as u64;
+        let estimated_size = self.fsm.peer.approximate_size.map(|x| x / new_region_count);
+        let estimated_keys = self.fsm.peer.approximate_keys.map(|x| x / new_region_count);
+        // It's not correct anymore, so set it to None to let split checker update it.
+        self.fsm.peer.approximate_size = None;
+        self.fsm.peer.approximate_keys = None;
+
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
+            self.fsm.peer.approximate_size = estimated_size;
+            self.fsm.peer.approximate_keys = estimated_keys;
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -2128,14 +2116,26 @@ where
                     "err" => %e,
                 );
             }
+            if let Err(e) = self.ctx.split_check_scheduler.schedule(
+                SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                    region: self.fsm.peer.region().clone(),
+                    pending_tasks: Arc::new(AtomicU64::new(1)),
+                    cb: Box::new(move |_, _| {}),
+                },
+            ) {
+                error!(
+                    "failed to schedule split check task";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => ?e,
+                );
+            }
         }
 
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exists", self.fsm.peer.tag);
         }
-        // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
@@ -2229,13 +2229,15 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
+                new_peer.peer.approximate_size = estimated_size;
+                new_peer.peer.approximate_keys = estimated_keys;
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
                 new_peer.peer.heartbeat_pd(self.ctx);
             }
 
             new_peer.peer.activate(self.ctx);
-            meta.regions.insert(new_region_id, new_region);
+            meta.regions.insert(new_region_id, new_region.clone());
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
@@ -2262,6 +2264,24 @@ where
                     {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
+                }
+            }
+
+            if is_leader {
+                // The size and keys for new region may be far from the real value.
+                // So we let split checker to update it immediately.
+                if let Err(e) = self.ctx.split_check_scheduler.schedule(
+                    SplitCheckTask::GetRegionApproximateSizeAndKeys {
+                        region: new_region,
+                        pending_tasks: Arc::new(AtomicU64::new(1)),
+                        cb: Box::new(move |_, _| {}),
+                    },
+                ) {
+                    error!(
+                        "failed to schedule split check task";
+                        "region_id" => new_region_id,
+                        "err" => ?e,
+                    );
                 }
             }
         }
