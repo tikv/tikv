@@ -146,8 +146,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cms.insert(&data);
                 }
             }
+            hist.append(&data);
             if stats_version == ANALYZE_VERSION_V2 {
-                hist.append(&data);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
                 } else {
