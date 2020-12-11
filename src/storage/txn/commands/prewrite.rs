@@ -492,7 +492,6 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.try_one_pc,
                         &mut txn,
                         final_min_commit_ts,
-                        rows,
                         lock_manager,
                     ),
                 },
@@ -649,11 +648,9 @@ fn one_pc_commit_ts(
     try_one_pc: bool,
     txn: &mut MvccTxn<impl Snapshot>,
     final_min_commit_ts: TimeStamp,
-    rows: usize,
     lock_manager: &impl LockManager,
 ) -> TimeStamp {
     if try_one_pc {
-        assert_eq!(txn.locks_for_1pc.len(), rows);
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
@@ -705,7 +702,7 @@ mod tests {
             commands::test_util::{
                 commit, pessimsitic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
-            tests::must_acquire_pessimistic_lock,
+            tests::{must_acquire_pessimistic_lock, must_rollback},
             Error, ErrorInner,
         },
         Engine, Snapshot, Statistics, TestEngineBuilder,
@@ -916,7 +913,7 @@ mod tests {
         let mut statistics = Statistics::default();
         let res = prewrite_with_cm(
             &engine,
-            cm,
+            cm.clone(),
             &mut statistics,
             mutations,
             key.to_vec(),
@@ -927,6 +924,23 @@ mod tests {
         assert!(res.min_commit_ts.is_zero());
         assert!(res.one_pc_commit_ts.is_zero());
         must_locked(&engine, key, 20);
+
+        must_rollback(&engine, key, 20);
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
+        ];
+        let mut statistics = Statistics::default();
+        prewrite_with_cm(
+            &engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            40,
+            Some(60),
+        )
+        .unwrap();
     }
 
     #[test]
