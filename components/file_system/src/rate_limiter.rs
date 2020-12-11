@@ -215,9 +215,10 @@ impl IORateLimiter {
         }
     }
 
-    /// Asynchronously requests for token for bytes and potentially update statistics. If this
-    /// request can not be satisfied, the call is blocked. Granted token can be
-    /// less than the requested bytes, but must be greater than zero.
+    /// Asynchronously requests for token for bytes and potentially update
+    /// statistics. If this request can not be satisfied, the call is blocked.
+    /// Granted token can be less than the requested bytes, but must be greater
+    /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
         let bytes = self.total_limiters[IOType::Other as usize]

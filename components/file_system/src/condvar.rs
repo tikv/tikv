@@ -61,16 +61,9 @@ impl Condvar {
         }
     }
 
-    /// Asynchronously waits on this condition variable for a notification,
-    /// timing out after a specified duration.
-    pub fn wait_timeout<'a, T>(
-        &self,
-        guard: MutexGuard<'a, T>,
-        timeout: Duration,
-    ) -> (MutexGuard<'a, T>, bool) {
-        // mutable to indulge NonNull
-        let mut node = LinkedNotifiable::new_sync();
-        let raw_node_ptr: *mut _ = &mut node;
+    #[inline]
+    fn enqueue(&self, raw_node_ptr: *mut LinkedNotifiable) {
+        assert!(!raw_node_ptr.is_null());
         let node_ptr = unsafe { NonNull::new_unchecked(raw_node_ptr) };
         if let Some(tail) = self.tail.get() {
             unsafe {
@@ -80,12 +73,24 @@ impl Condvar {
             self.head.set(Some(node_ptr));
         }
         self.tail.set(Some(node_ptr));
+    }
+
+    /// Asynchronously waits on this condition variable for a notification,
+    /// timing out after a specified duration.
+    pub fn wait_timeout<'a, T>(
+        &self,
+        guard: MutexGuard<'a, T>,
+        timeout: Duration,
+    ) -> (MutexGuard<'a, T>, bool) {
+        // mutable to indulge NonNull
+        let mut node = LinkedNotifiable::new_sync();
+        self.enqueue(&mut node);
         // alternative: std::thread::park_timeout suffers from spurious wake
         let (guard, res) = match node {
             LinkedNotifiable::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
             _ => unreachable!(),
         };
-        self.notify_before_me(raw_node_ptr);
+        self.notify_by(&mut node);
         (guard, res.timed_out())
     }
 
@@ -101,40 +106,37 @@ impl Condvar {
         // it's safe to drop early because semaphore is state preserving
         std::mem::drop(guard);
         let mut node = LinkedNotifiable::new_async();
-        let raw_node_ptr: *mut _ = &mut node;
-        let node_ptr = unsafe { NonNull::new_unchecked(raw_node_ptr) };
-        if let Some(tail) = self.tail.get() {
-            unsafe {
-                tail.as_ref().set_next(Some(node_ptr));
+        self.enqueue(&mut node);
+        let timed_out = {
+            let f = match node {
+                LinkedNotifiable::Async(ref sem, _) => sem.acquire().fuse(),
+                _ => unreachable!(),
+            };
+            pin_mut!(f);
+            select! {
+                _ = f => false,
+                _ = tokio::time::delay_for(timeout).fuse() => true,
             }
-        } else {
-            self.head.set(Some(node_ptr));
-        }
-        self.tail.set(Some(node_ptr));
-        let f = match node {
-            LinkedNotifiable::Async(ref sem, _) => sem.acquire().fuse(),
-            _ => unreachable!(),
-        };
-        pin_mut!(f);
-        let timed_out = select! {
-            _ = f => false,
-            _ = tokio::time::delay_for(timeout).fuse() => true,
         };
         let guard = mu.lock().unwrap();
-        self.notify_before_me(raw_node_ptr);
+        self.notify_by(&mut node);
         (guard, timed_out)
     }
 
-    /// Notifies oldest peers while safely exiting the waiting queue.
-    fn notify_before_me(&self, me: *mut LinkedNotifiable) {
+    /// Notifies all the peers until encounter node at provided address, then
+    /// remove the node from queue and notify its successor if any.
+    fn notify_by(&self, caller: &mut LinkedNotifiable) {
         let mut ptr = self.head.get();
         loop {
             if let Some(inner) = ptr {
                 unsafe {
                     let node = inner.as_ref();
-                    if inner.as_ptr() == me {
-                        self.head.set(node.get_next());
-                        if self.head.get().is_none() {
+                    if inner.as_ptr() == caller {
+                        let next = node.get_next();
+                        self.head.set(next);
+                        if let Some(next) = next {
+                            next.as_ref().notify();
+                        } else {
                             self.tail.set(None);
                         }
                         break;
