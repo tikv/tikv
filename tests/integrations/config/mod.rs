@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use engine_rocks::raw::{
@@ -24,7 +25,6 @@ use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
-use tikv_util::collections::HashSet;
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
