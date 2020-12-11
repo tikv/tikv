@@ -157,15 +157,19 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
+const DURATION_RE_STR: &str =
+    r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$";
+
 // is_duration returns a boolean indicating whether the str matches the format of duration.
 // See https://dev.mysql.com/doc/refman/5.7/en/time.html
 #[inline]
 fn is_duration(s: &str) -> bool {
-    let re =
-        Regex::new(r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$")
-            .unwrap();
-    re.is_match(s)
+    lazy_static::lazy_static! {
+        static ref DURATION_REGEX: Regex = Regex::new(DURATION_RE_STR).unwrap();
+    }
+    DURATION_REGEX.is_match(s)
 }
+
 #[rpn_fn(writer, capture = [ctx])]
 #[inline]
 pub fn add_string_and_duration(
@@ -174,7 +178,8 @@ pub fn add_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    match is_duration(std::str::from_utf8(arg0).unwrap()) {
+    let s = std::str::from_utf8(arg0).unwrap();
+    match is_duration(s) {
         true => {
             let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
                 Ok(arg0) => arg0,
@@ -195,7 +200,6 @@ pub fn add_string_and_duration(
             return Ok(writer.write(Some(dur.to_string().into_bytes())));
         }
         false => {
-            let s = std::str::from_utf8(arg0).unwrap();
             let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
                 Ok(arg0) => arg0,
                 Err(_) => return Ok(writer.write(None)),
@@ -225,7 +229,8 @@ pub fn sub_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    match is_duration(std::str::from_utf8(arg0).unwrap()) {
+    let s = std::str::from_utf8(arg0).unwrap();
+    match is_duration(s) {
         true => {
             let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
                 Ok(arg0) => arg0,
@@ -246,7 +251,6 @@ pub fn sub_string_and_duration(
             return Ok(writer.write(Some(dur.to_string().into_bytes())));
         }
         false => {
-            let s = std::str::from_utf8(arg0).unwrap();
             let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
                 Ok(arg0) => arg0,
                 Err(_) => return Ok(writer.write(None)),

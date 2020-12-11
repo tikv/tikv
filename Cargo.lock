@@ -4677,6 +4677,7 @@ dependencies = [
  "file_system",
  "flate2",
  "hex 0.4.2",
+ "lazy_static",
  "match_template",
  "num",
  "num-traits",
