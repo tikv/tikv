@@ -19,6 +19,7 @@ use tempfile::{Builder, TempDir};
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
@@ -53,7 +54,6 @@ use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
 };
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
@@ -120,6 +120,7 @@ pub struct ServerCluster {
     pub importers: HashMap<u64, Arc<SSTImporter>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
+    pub security_mgr: Arc<SecurityManager>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -142,7 +143,7 @@ impl ServerCluster {
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
             Arc::default(),
-            security_mgr,
+            security_mgr.clone(),
             map.clone(),
             RaftStoreBlackHole,
             worker.scheduler(),
@@ -152,6 +153,7 @@ impl ServerCluster {
             metas: HashMap::default(),
             addrs: map,
             pd_client,
+            security_mgr,
             storages: HashMap::default(),
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),

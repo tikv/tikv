@@ -5,6 +5,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use collections::HashMap;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -17,7 +18,6 @@ use kvproto::cdcpb::{
 };
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
-use tikv_util::collections::HashMap;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
 

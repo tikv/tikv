@@ -357,7 +357,7 @@ mod tests {
 
     fn test_delete_all_in_range(
         strategy: DeleteStrategy,
-        origin_keys: &Vec<Vec<u8>>,
+        origin_keys: &[Vec<u8>],
         ranges: &[Range],
     ) {
         let path = Builder::new()

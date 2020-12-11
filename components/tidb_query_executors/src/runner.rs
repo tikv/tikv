@@ -115,6 +115,18 @@ impl BatchExecutorsRunner<()> {
                     BatchTopNExecutor::check_supported(&descriptor)
                         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
+                ExecType::TypeJoin => {
+                    other_err!("Join executor not implemented");
+                }
+                ExecType::TypeKill => {
+                    other_err!("Kill executor not implemented");
+                }
+                ExecType::TypeExchangeSender => {
+                    other_err!("ExchangeSender executor not implemented");
+                }
+                ExecType::TypeExchangeReceiver => {
+                    other_err!("ExchangeReceiver executor not implemented");
+                }
             }
         }
 

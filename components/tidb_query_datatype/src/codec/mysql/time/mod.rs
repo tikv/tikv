@@ -2745,6 +2745,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_convert_to_f64() {
         let cases = vec![
             ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),

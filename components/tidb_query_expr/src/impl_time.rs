@@ -35,7 +35,7 @@ pub fn date_format(
     let (t, layout) = (t.as_ref().unwrap(), layout.as_ref().unwrap());
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
 
@@ -60,7 +60,7 @@ pub fn week_with_mode(
     let (t, m) = (t.unwrap(), m.unwrap());
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     let week = t.week(WeekMode::from_bits_truncate(*m as u32));
@@ -76,7 +76,7 @@ pub fn week_day(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<In
     let t = t.as_ref().unwrap();
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     let day = t.weekday().num_days_from_monday();
@@ -268,6 +268,12 @@ pub fn sub_string_and_duration(
     };
 }
 
+#[rpn_fn]
+#[inline]
+pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>> {
+    Ok(from_time.date_diff(*to_time))
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
@@ -277,12 +283,40 @@ pub fn add_datetime_and_duration(
 ) -> Result<Option<DateTime>> {
     let mut res = match datetime.checked_add(ctx, *duration) {
         Some(res) => res,
-        None => return Ok(None),
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} + {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?
+        }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
     }
     Ok(Some(res))
+}
+
+#[rpn_fn(capture=[ctx])]
+#[inline]
+pub fn sub_duration_and_duration(
+    ctx: &mut EvalContext,
+    duration1: &Duration,
+    duration2: &Duration,
+) -> Result<Option<Duration>> {
+    let result = match duration1.checked_sub(*duration2) {
+        Some(result) => result,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "Duration",
+                    format!("({} - {})", duration1, duration2),
+                ))
+                .map(|_| Ok(None))?
+        }
+    };
+    Ok(Some(result))
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -294,7 +328,14 @@ pub fn sub_datetime_and_duration(
 ) -> Result<Option<DateTime>> {
     let mut res = match datetime.checked_sub(ctx, *duration) {
         Some(res) => res,
-        None => return Ok(None),
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} - {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?
+        }
     };
     if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
@@ -450,7 +491,7 @@ pub fn year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Option<Int>> 
     if t.is_zero() {
         if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| Ok(None))?;
         }
         return Ok(Some(0));
@@ -469,7 +510,7 @@ pub fn day_of_month(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     if t.is_zero() {
         if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| Ok(None))?;
         }
         return Ok(Some(0));
@@ -527,7 +568,7 @@ pub fn period_diff(p1: Option<&Int>, p2: Option<&Int>) -> Result<Option<Int>> {
 pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
     if t.month() == 0 {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     if t.day() == 0 {
@@ -549,13 +590,17 @@ pub fn add_duration_and_duration(
     let res = match res {
         None => {
             return ctx
-                .handle_invalid_time_error(Error::overflow(duration1, duration2))
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} + {})", duration1, duration2),
+                ))
                 .map(|_| Ok(None))?
         }
         Some(res) => res,
     };
     Ok(Some(res))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,6 +634,31 @@ mod tests {
                 .push_param(duration1)
                 .push_param(duration2)
                 .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+    #[test]
+    fn test_sub_duration_and_duration() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration1, duration2, exp) in cases {
+            let expected =
+                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
+            let duration1 =
+                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
+            let duration2 =
+                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration1)
+                .push_param(duration2)
+                .evaluate(ScalarFuncSig::SubDurationAndDuration)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -1050,6 +1120,53 @@ mod tests {
                 .evaluate(ScalarFuncSig::SubStringAndDuration)
                 .unwrap();
             assert_eq!(sub_output, arg_str);
+        }
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(0),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                Some(1),
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                Some(1),
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                Some(-1),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            let arg1 = Time::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
+            let arg2 = Time::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .evaluate(ScalarFuncSig::DateDiff)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 
@@ -1610,9 +1727,9 @@ mod tests {
     #[test]
     fn test_make_time() {
         let cases = vec![
-            (12 as i64, 15 as i64, 30 as f64, "12:15:30"),
+            (12 as i64, 15 as i64, 30_f64, "12:15:30"),
             (25, 15, 30.0, "25:15:30"),
-            (-25, 15, 30 as f64, "-25:15:30"),
+            (-25, 15, 30_f64, "-25:15:30"),
             (12, 15, 30.1, "12:15:30.1"),
             (12, 15, 30.2, "12:15:30.2"),
             (12, 15, 30.3000001, "12:15:30.3"),
@@ -1651,7 +1768,7 @@ mod tests {
             }
         }
         let none_case = vec![
-            (12 as i64, -15 as i64, 30 as f64),
+            (12 as i64, -15 as i64, 30_f64),
             (12, 15, -30.0),
             (12, 15, 60.0),
             (12, 60, 0.0),
