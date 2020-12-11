@@ -80,6 +80,7 @@ pub use self::jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
+use num_traits::Zero;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::str;
@@ -146,6 +147,16 @@ impl<'a> JsonRef<'a> {
     /// Returns the underlying value slice
     pub fn value(&self) -> &'a [u8] {
         &self.value
+    }
+
+    /// Return a boolean indicate whether `self`'s value is zero
+    pub fn is_zero(&self) -> bool {
+        match self.type_code {
+            JsonType::I64 => self.get_i64() == 0,
+            JsonType::U64 => self.get_u64() == 0,
+            JsonType::Float => self.get_double().is_zero(),
+            _ => false,
+        }
     }
 
     // Returns the JSON value as u64

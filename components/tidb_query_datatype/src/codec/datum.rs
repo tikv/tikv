@@ -372,6 +372,7 @@ impl Datum {
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Json(j) => Some(j.as_ref().is_zero()),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
