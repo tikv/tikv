@@ -56,7 +56,7 @@ impl CmSketch {
     }
 
     pub fn push_to_top_n(&mut self, b: Vec<u8>, cnt: u64) {
-        self.top_n.push((b.to_vec(), cnt))
+        self.top_n.push((b, cnt))
     }
 
     pub fn into_proto(self) -> tipb::CmSketch {
