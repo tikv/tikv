@@ -197,7 +197,7 @@ pub fn add_string_and_duration(
                 0 => dur.minimize_fsp(),
                 _ => dur.maximize_fsp(),
             };
-            return Ok(writer.write(Some(dur.to_string().into_bytes())));
+            Ok(writer.write(Some(dur.to_string().into_bytes())))
         }
         false => {
             let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
@@ -216,9 +216,9 @@ pub fn add_string_and_duration(
                 0 => res.minimize_fsp(),
                 _ => res.maximize_fsp(),
             };
-            return Ok(writer.write(Some(res.to_string().into_bytes())));
+            Ok(writer.write(Some(res.to_string().into_bytes())))
         }
-    };
+    }
 }
 
 #[rpn_fn(writer, capture = [ctx])]
@@ -248,7 +248,7 @@ pub fn sub_string_and_duration(
                 0 => dur.minimize_fsp(),
                 _ => dur.maximize_fsp(),
             };
-            return Ok(writer.write(Some(dur.to_string().into_bytes())));
+            Ok(writer.write(Some(dur.to_string().into_bytes())))
         }
         false => {
             let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
@@ -267,9 +267,9 @@ pub fn sub_string_and_duration(
                 0 => res.minimize_fsp(),
                 _ => res.maximize_fsp(),
             };
-            return Ok(writer.write(Some(res.to_string().into_bytes())));
+            Ok(writer.write(Some(res.to_string().into_bytes())))
         }
-    };
+    }
 }
 
 #[rpn_fn]
