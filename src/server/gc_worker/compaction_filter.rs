@@ -674,14 +674,19 @@ fn check_need_gc(
         if props.min_ts > safe_point {
             return false;
         }
+        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+            // When comparing `num_versions` with `num_rows`, it's unnecessary to
+            // trait internal levels specially.
+            return true;
+        }
+
+        // When comparing `num_versions` with `num_puts`, trait internal levels specially
+        // because MVCC-delete marks can't be handled at those levels.
         let num_versions = if is_bottommost {
             props.num_versions as f64
         } else {
             (props.num_versions - props.num_deletes) as f64
         };
-        if num_versions > props.num_rows as f64 * ratio_threshold {
-            return true;
-        }
         if num_versions > props.num_puts as f64 * ratio_threshold {
             return true;
         }
