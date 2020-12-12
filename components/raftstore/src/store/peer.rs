@@ -900,8 +900,10 @@ impl Peer {
         // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
         // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        let index = self.get_store().commit_index();
-        if msg_type == MessageType::MsgReadIndex && self.get_store().term(index).unwrap_or(0) == self.term() {
+        let index = self.get_store().committed_index();
+        if msg_type == MessageType::MsgReadIndex
+            && self.get_store().term(index).unwrap_or(0) == self.term()
+        {
             // If the leader hasn't committed any entries in its term, it can't response read only
             // requests. Please also take a look at raft-rs.
             let state = self.inspect_lease();
