@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
+use std::{mem, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -1338,18 +1338,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
-        let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
-        handles.push(workers.pd_worker.stop());
+        let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
         self.system.shutdown();
-        for h in handles {
-            if let Some(h) = h {
-                h.join().unwrap();
-            }
-        }
+        handle.map(|h| h.join().unwrap());
         workers.coprocessor_host.shutdown();
-        workers.background_worker.stop();
         workers.cleanup_worker.stop();
+        workers.background_worker.stop();
     }
 }
 

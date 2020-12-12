@@ -26,7 +26,7 @@ use raftstore::store::AutoSplitController;
 use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
 use raftstore::store::{GlobalReplicationState, PdTask, SplitCheckTask};
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, Scheduler, Worker};
+use tikv_util::worker::{FutureWorker, Scheduler, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -66,7 +66,7 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
 
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    bg_worker: Option<Worker>,
+    bg_worker: Worker,
 }
 
 impl<C, ER> Node<C, ER>
@@ -81,7 +81,7 @@ where
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
-        bg_worker: Option<Worker>,
+        bg_worker: Worker,
     ) -> Node<C, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -393,12 +393,7 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let background_worker = if let Some(worker) = self.bg_worker.as_ref() {
-            worker.clone()
-        } else {
-            // only for test
-            WorkerBuilder::new("background").create()
-        };
+
         self.system.spawn(
             store,
             cfg,
@@ -411,7 +406,7 @@ where
             coprocessor_host,
             importer,
             split_check_scheduler,
-            background_worker,
+            self.bg_worker.clone(),
             auto_split_controller,
             self.state.clone(),
             concurrency_manager,
@@ -428,8 +423,6 @@ where
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id);
-        if let Some(worker) = self.bg_worker.take() {
-            worker.stop();
-        }
+        self.bg_worker.stop();
     }
 }
