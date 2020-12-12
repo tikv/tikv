@@ -427,9 +427,9 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
+        self.stop_store(store_id);
         if let Some(worker) = self.bg_worker.take() {
             worker.stop();
         }
-        self.stop_store(store_id)
     }
 }
