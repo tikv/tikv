@@ -3,6 +3,8 @@
 use std::{cmp, i32, isize};
 
 use super::Result;
+
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use grpcio::CompressionAlgorithms;
 
 use collections::HashMap;
@@ -11,6 +13,7 @@ use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
 pub use raftstore::store::Config as RaftStoreConfig;
+use std::sync::{Arc, RwLock};
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -49,7 +52,7 @@ pub enum GrpcCompressionType {
 }
 
 /// Configuration for the `server` module.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -57,13 +60,16 @@ pub struct Config {
     pub cluster_id: u64,
 
     // Server listening address.
+    #[config(skip)]
     pub addr: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
+    #[config(skip)]
     pub advertise_addr: String,
 
     // These are related to TiKV status.
+    #[config(skip)]
     pub status_addr: String,
 
     // Status server's advertise listening address for outer communication.
@@ -75,15 +81,19 @@ pub struct Config {
     pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    #[config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: i32,
     pub grpc_raft_conn_num: usize,
+    #[config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
+    #[config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
     pub grpc_keepalive_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
+    #[config(skip)]
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
     pub concurrent_recv_snap_limit: usize,
@@ -94,7 +104,9 @@ pub struct Config {
     pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub end_point_max_concurrency: usize,
+    #[config(skip)]
     pub snap_max_write_bytes_per_sec: ReadableSize,
+    #[config(skip)]
     pub snap_max_total_size: ReadableSize,
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
@@ -110,21 +122,25 @@ pub struct Config {
     pub raft_client_backoff_step: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
+    #[config(skip)]
     pub labels: HashMap<String, String>,
 
     // deprecated. use readpool.coprocessor.xx_concurrency.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_concurrency: Option<usize>,
 
     // deprecated. use readpool.coprocessor.stack_size.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_stack_size: Option<ReadableSize>,
 
     // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_max_tasks: Option<usize>,
 }
 
@@ -313,6 +329,21 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub struct ServerConfigManager(pub Arc<RwLock<Config>>);
+
+impl ConfigManager for ServerConfigManager {
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        info!(
+            "server config changed";
+            "change" => ?change,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]

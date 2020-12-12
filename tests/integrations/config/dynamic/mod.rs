@@ -3,4 +3,5 @@
 mod gc_worker;
 mod pessimistic_txn;
 mod raftstore;
+mod server;
 mod split_check;
