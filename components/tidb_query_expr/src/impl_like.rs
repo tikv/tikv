@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use regex::{bytes::Regex as BytesRegex, Regex};
+
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
@@ -64,6 +66,41 @@ pub fn like<C: Collator>(target: BytesRef, pattern: BytesRef, escape: &i64) -> R
     }
 
     Ok(Some(true as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn regexp_utf8(target: BytesRef, pattern: BytesRef) -> Result<Option<i64>> {
+    let target = match String::from_utf8(target.to_vec()) {
+        Ok(target) => target,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let pattern = match String::from_utf8(pattern.to_vec()) {
+        Ok(pattern) => pattern,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let pattern = format!("(?i){}", pattern);
+
+    // TODO: cache compiled result
+    match Regex::new(&pattern) {
+        Ok(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
+        Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn regexp(target: BytesRef, pattern: BytesRef) -> Result<Option<i64>> {
+    let pattern = match String::from_utf8(pattern.to_vec()) {
+        Ok(pattern) => pattern,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+
+    // TODO: cache compiled result
+    match BytesRegex::new(&pattern) {
+        Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
+        Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+    }
 }
 
 #[cfg(test)]
@@ -239,6 +276,70 @@ mod tests {
                 "target={}, pattern={}, escape={}",
                 target, pattern, escape
             );
+        }
+    }
+
+    #[test]
+    fn test_regexp_utf8() {
+        let cases = vec![
+            ("a", r"^$", Some(0)),
+            ("a", r"a", Some(1)),
+            ("b", r"a", Some(0)),
+            ("aA", r"Aa", Some(1)),
+            ("aaa", r".", Some(1)),
+            ("ab", r"^.$", Some(0)),
+            ("b", r"..", Some(0)),
+            ("aab", r".ab", Some(1)),
+            ("abcd", r".*", Some(1)),
+            ("你", r"^.$", Some(1)),
+            ("你好", r"你好", Some(1)),
+            ("你好", r"^你好$", Some(1)),
+            ("你好", r"^您好$", Some(0)),
+        ];
+
+        for (target, pattern, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(target.to_owned().into_bytes())
+                .push_param(pattern.to_owned().into_bytes())
+                .evaluate(ScalarFuncSig::RegexpUtf8Sig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_regexp() {
+        let cases = vec![
+            ("a".to_owned().into_bytes(), r"^$", Some(0)),
+            ("a".to_owned().into_bytes(), r"a", Some(1)),
+            ("b".to_owned().into_bytes(), r"a", Some(0)),
+            ("aA".to_owned().into_bytes(), r"Aa", Some(0)),
+            ("aaa".to_owned().into_bytes(), r".", Some(1)),
+            ("ab".to_owned().into_bytes(), r"^.$", Some(0)),
+            ("b".to_owned().into_bytes(), r"..", Some(0)),
+            ("aab".to_owned().into_bytes(), r".ab", Some(1)),
+            ("abcd".to_owned().into_bytes(), r".*", Some(1)),
+            (vec![0x7f], r"^.$", Some(1)), // dot should match one byte which is less than 128
+            (vec![0xf0], r"^.$", Some(0)), // dot can't match one byte greater than 128
+            // dot should match "你" even if the char has 3 bytes.
+            ("你".to_owned().into_bytes(), r"^.$", Some(1)),
+            ("你好".to_owned().into_bytes(), r"你好", Some(1)),
+            ("你好".to_owned().into_bytes(), r"^你好$", Some(1)),
+            ("你好".to_owned().into_bytes(), r"^您好$", Some(0)),
+            (
+                vec![255, 255, 0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD],
+                r"你好",
+                Some(1),
+            ),
+        ];
+
+        for (target, pattern, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(target)
+                .push_param(pattern.to_owned().into_bytes())
+                .evaluate(ScalarFuncSig::RegexpSig)
+                .unwrap();
+            assert_eq!(output, expected);
         }
     }
 }
