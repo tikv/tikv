@@ -813,8 +813,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         );
 
         fail_point!(
-            "on_peer_collect_message_1003",
-            peer.peer_id() == 1003,
+            "on_peer_collect_message_2",
+            peer.peer_id() == 2,
             |_| unreachable!()
         );
 
