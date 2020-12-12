@@ -562,7 +562,7 @@ impl Cluster {
                         .all(|x| x.get_store_id() != *store_id)
                     {
                         let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
-                        let policy = SchedulePolicy::Repeat(1);
+                        let policy = SchedulePolicy::TillSuccess;
                         return Some(Operator::AddPeer { peer, policy });
                     }
                 }
