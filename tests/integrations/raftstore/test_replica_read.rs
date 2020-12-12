@@ -370,7 +370,7 @@ fn test_split_isolation() {
         if !resp.get_header().has_error() {
             return;
         }
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(200));
     }
     panic!("test failed");
 }
