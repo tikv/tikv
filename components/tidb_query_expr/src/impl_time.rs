@@ -157,15 +157,14 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
-const DURATION_RE_STR: &str =
-    r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$";
-
 // is_duration returns a boolean indicating whether the str matches the format of duration.
 // See https://dev.mysql.com/doc/refman/5.7/en/time.html
 #[inline]
 fn is_duration(s: &str) -> bool {
     lazy_static::lazy_static! {
-        static ref DURATION_REGEX: Regex = Regex::new(DURATION_RE_STR).unwrap();
+        static ref DURATION_REGEX: Regex = Regex::new(
+            r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$"
+        ).unwrap();
     }
     DURATION_REGEX.is_match(s)
 }
