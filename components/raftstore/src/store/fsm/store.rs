@@ -1341,7 +1341,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
         self.system.shutdown();
-        handle.map(|h| h.join().unwrap());
+        if let Some(h) = handle {
+            h.join().unwrap();
+        }
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
         workers.background_worker.stop();
