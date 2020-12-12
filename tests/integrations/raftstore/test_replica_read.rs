@@ -334,7 +334,7 @@ fn test_split_isolation() {
     cluster.must_split(&r1, b"k2");
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
-    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     let timer = Instant::now();
