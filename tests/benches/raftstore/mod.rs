@@ -6,7 +6,7 @@ use std::sync::Arc;
 use criterion::{Bencher, Criterion};
 use engine_rocks::raw::DB;
 use engine_rocks::Compat;
-use engine_traits::{Mutable, WriteBatchExt, WriteBatch};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use test_raftstore::*;
 use test_util::*;
 
