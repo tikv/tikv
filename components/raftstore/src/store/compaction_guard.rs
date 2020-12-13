@@ -9,6 +9,8 @@ use engine_traits::{
 };
 use keys::data_end_key;
 
+use super::metrics::*;
+
 const COMPACTION_GUARD_MAX_POS_SKIP: u32 = 10;
 
 lazy_static! {
@@ -46,6 +48,7 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
             Ok(regions) => {
                 // The regions returned from region_info_accessor should have been sorted,
                 // but we sort it again just in case.
+                COMPACTION_GUARD_ACTION_COUNTER.create.inc();
                 let mut boundaries = regions
                     .iter()
                     .map(|region| data_end_key(&region.end_key))
@@ -58,6 +61,7 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
                 })
             }
             Err(e) => {
+                COMPACTION_GUARD_ACTION_COUNTER.create_failure.inc();
                 warn!("failed to create compaction guard generator"; "err" => ?e);
                 None
             }
@@ -89,11 +93,14 @@ impl SstPartitioner for CompactionGuardGenerator {
             }
         }
         self.pos.set(pos);
-        if (req.current_output_file_size >= self.min_output_file_size)
-            && ((pos < self.boundaries.len())
-                && (self.boundaries[pos].as_slice() <= req.current_user_key))
-        {
-            SstPartitionerResult::Required
+        if pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.current_user_key {
+            if req.current_output_file_size >= self.min_output_file_size {
+                COMPACTION_GUARD_ACTION_COUNTER.partition.inc();
+                SstPartitionerResult::Required
+            } else {
+                COMPACTION_GUARD_ACTION_COUNTER.skip_partition.inc();
+                SstPartitionerResult::NotRequired
+            }
         } else {
             SstPartitionerResult::NotRequired
         }

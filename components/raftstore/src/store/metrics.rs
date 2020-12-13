@@ -131,6 +131,13 @@ make_auto_flush_static_metric! {
         raft_engine_purge,
     }
 
+    pub label_enum CompactionGuardAction {
+        create,
+        create_failure,
+        partition,
+        skip_partition,
+    }
+
     pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
     }
@@ -176,6 +183,10 @@ make_auto_flush_static_metric! {
     }
     pub struct PerfContextTimeDuration : LocalHistogram {
         "type" => PerfContextType
+    }
+
+    pub struct CompactionGuardActionVec: LocalIntCounter {
+        "type" => CompactionGuardAction,
     }
 }
 
@@ -476,4 +487,13 @@ lazy_static! {
             "The number of pending entries in the channel of apply FSMs."
     )
     .unwrap();
+
+    pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_compaction_guard_action_total",
+            "Total number of compaction guard actions.",
+            &["type"]
+        ).unwrap();
+    pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
+        auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
 }
