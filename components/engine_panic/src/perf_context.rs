@@ -6,7 +6,7 @@ use engine_traits::{PerfContextExt, PerfContext};
 impl PerfContextExt for PanicEngine {
     type PerfContext = PanicPerfContext;
 
-    fn get() -> Option<Self::PerfContext> {
+    fn get_perf_context() -> Option<Self::PerfContext> {
         panic!()
     }
 }

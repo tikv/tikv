@@ -7,7 +7,7 @@ use crate::raw::PerfContext as RawPerfContext;
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
-    fn get() -> Option<Self::PerfContext> {
+    fn get_perf_context() -> Option<Self::PerfContext> {
         Some(RocksPerfContext(RawPerfContext::get()))
     }
 }
