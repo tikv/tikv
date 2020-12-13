@@ -3,7 +3,7 @@
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
-    fn get_perf_context() -> Option<Self::PerfContext>;
+    fn get_perf_context(&self) -> Option<Self::PerfContext>;
 }
 
 pub trait PerfContext {
