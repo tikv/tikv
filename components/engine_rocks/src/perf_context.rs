@@ -15,6 +15,10 @@ impl PerfContextExt for RocksEngine {
 pub struct RocksPerfContext(RawPerfContext);
 
 impl PerfContext for RocksPerfContext {
+    fn reset(&mut self) {
+        self.0.reset()
+    }
+
     fn write_wal_time(&self) -> u64 {
         self.0.write_wal_time()
     }

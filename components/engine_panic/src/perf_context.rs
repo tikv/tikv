@@ -14,6 +14,7 @@ impl PerfContextExt for PanicEngine {
 pub struct PanicPerfContext;
 
 impl PerfContext for PanicPerfContext {
+    fn reset(&mut self) { panic!() }
     fn write_wal_time(&self) -> u64 { panic!() }
     fn write_memtable_time(&self) -> u64 { panic!() }
     fn write_delay_time(&self) -> u64 { panic!() }

@@ -7,6 +7,7 @@ pub trait PerfContextExt {
 }
 
 pub trait PerfContext {
+    fn reset(&mut self);
     fn write_wal_time(&self) -> u64;
     fn write_memtable_time(&self) -> u64;
     fn write_delay_time(&self) -> u64;
