@@ -1725,18 +1725,17 @@ where
             // Use `unwrap` is ok because the StoreMeta lock is held and these source peers still
             // exist in regions and region_ranges map.
             // It depends on the implementation of `destroy_peer`.
-            if let Err(e) = self.ctx.router.force_send(
-                source_region_id,
-                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                    target_region_id: self.fsm.region_id(),
-                    target: self.fsm.peer.peer.clone(),
-                    result,
-                }),
-            ) {
-                if !self.ctx.router.is_shutdown() {
-                    panic!("{} failed to send merge result(destroy_regions_for_snapshot) to source region {}, err {}", self.fsm.peer.tag, source_region_id, e);
-                }
-            }
+            self.ctx
+                .router
+                .force_send(
+                    source_region_id,
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                        target_region_id: self.fsm.region_id(),
+                        target: self.fsm.peer.peer.clone(),
+                        result,
+                    }),
+                )
+                .unwrap();
         }
     }
 
@@ -2239,14 +2238,10 @@ where
             }
             let mailbox = BasicMailbox::new(sender, new_peer);
             self.ctx.router.register(new_region_id, mailbox);
-            if let Err(e) = self.ctx.router.force_send(new_region_id, PeerMsg::Start) {
-                if !self.ctx.router.is_shutdown() {
-                    panic!(
-                        "{} failed to send PeerMsg::Start to region {}, err {}",
-                        self.fsm.peer.tag, new_region_id, e
-                    );
-                }
-            }
+            self.ctx
+                .router
+                .force_send(new_region_id, PeerMsg::Start)
+                .unwrap();
 
             if !campaigned {
                 if let Some(msg) = meta
@@ -2701,23 +2696,17 @@ where
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        if let Err(e) = self.ctx.router.force_send(
-            source.get_id(),
-            PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                target_region_id: self.fsm.region_id(),
-                target: self.fsm.peer.peer.clone(),
-                result: MergeResultKind::FromTargetLog,
-            }),
-        ) {
-            if !self.ctx.router.is_shutdown() {
-                panic!(
-                    "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
-                    self.fsm.peer.tag,
-                    source.get_id(),
-                    e
-                );
-            }
-        }
+        self.ctx
+            .router
+            .force_send(
+                source.get_id(),
+                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    target_region_id: self.fsm.region_id(),
+                    target: self.fsm.peer.peer.clone(),
+                    result: MergeResultKind::FromTargetLog,
+                }),
+            )
+            .unwrap();
     }
 
     /// Handle rollbacking Merge result.
@@ -2948,18 +2937,17 @@ where
         drop(meta);
 
         for r in &apply_result.destroyed_regions {
-            if let Err(e) = self.ctx.router.force_send(
-                r.get_id(),
-                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                    target_region_id: self.fsm.region_id(),
-                    target: self.fsm.peer.peer.clone(),
-                    result: MergeResultKind::FromTargetSnapshotStep2,
-                }),
-            ) {
-                if !self.ctx.router.is_shutdown() {
-                    panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}", self.fsm.peer.tag, r.get_id(), e);
-                }
-            }
+            self.ctx
+                .router
+                .force_send(
+                    r.get_id(),
+                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                        target_region_id: self.fsm.region_id(),
+                        target: self.fsm.peer.peer.clone(),
+                        result: MergeResultKind::FromTargetSnapshotStep2,
+                    }),
+                )
+                .unwrap();
         }
     }
 
