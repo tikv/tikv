@@ -18,8 +18,8 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_traits::{PerfLevel};
 use engine_traits::PerfContext;
+use engine_traits::PerfLevel;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -3443,7 +3443,9 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.perf_context_statistics.start(&self.apply_ctx.engine);
+        self.apply_ctx
+            .perf_context_statistics
+            .start(&self.apply_ctx.engine);
     }
 
     /// There is no control fsm in apply poller.

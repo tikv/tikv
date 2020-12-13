@@ -82,4 +82,3 @@ numeric_enum_mod! {perf_level_serde PerfLevel {
     EnableTime = 5,
     OutOfBounds = 6,
 }}
-

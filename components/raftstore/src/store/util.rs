@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{fmt, u64};
 
 use collections::HashMap;
-use engine_traits::{PerfLevel};
+use engine_traits::PerfLevel;
 use engine_traits::{PerfContext, PerfContextExt};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
