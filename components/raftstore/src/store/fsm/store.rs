@@ -11,7 +11,8 @@ use std::{mem, thread, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{PerfLevel};
+use engine_traits::PerfContext;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
@@ -676,6 +677,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         }
 
         report_perf_context!(
+            self.poll_ctx.engines.kv,
             self.poll_ctx.perf_context_statistics,
             STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
         );

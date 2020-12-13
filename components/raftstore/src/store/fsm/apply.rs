@@ -18,7 +18,8 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_rocks::{PerfLevel};
+use engine_traits::PerfContext;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -464,6 +465,7 @@ where
                     panic!("failed to write to engine: {:?}", e);
                 });
             report_perf_context!(
+                self.engine,
                 self.perf_context_statistics,
                 APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
             );
