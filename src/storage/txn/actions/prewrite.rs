@@ -570,6 +570,67 @@ pub mod tests {
     }
 
     #[test]
+    fn test_async_commit_prewrite_min_commit_ts() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        // min_commit_ts must be > max_ts
+        let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
+        let min_ts = prewrite(
+            &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            &Some(vec![b"k2".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 42.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be > start_ts
+        let mut txn = MvccTxn::new(snapshot, 44.into(), false, cm);
+        let min_ts = prewrite(
+            &mut txn,
+            &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
+            Mutation::Put((Key::from_raw(b"k3"), b"v1".to_vec())),
+            &Some(vec![b"k4".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 44.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be > for_update_ts
+        let mut props = optimistic_async_props(b"k5", 44.into(), 50.into(), 2, false);
+        props.kind = TransactionKind::Pessimistic(45.into());
+        let min_ts = prewrite(
+            &mut txn,
+            &props,
+            Mutation::Put((Key::from_raw(b"k5"), b"v1".to_vec())),
+            &Some(vec![b"k6".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 45.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be >= txn min_commit_ts
+        let mut props = optimistic_async_props(b"k7", 44.into(), 50.into(), 2, false);
+        props.min_commit_ts = 46.into();
+        let min_ts = prewrite(
+            &mut txn,
+            &props,
+            Mutation::Put((Key::from_raw(b"k7"), b"v1".to_vec())),
+            &Some(vec![b"k8".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts >= 46.into());
+        assert!(min_ts < 50.into());
+    }
+
+    #[test]
     fn test_1pc_check_max_commit_ts() {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());

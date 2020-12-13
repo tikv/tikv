@@ -303,7 +303,7 @@ pub mod test_router {
 
     impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
@@ -313,21 +313,21 @@ pub mod test_router {
             &self,
             _: RaftCommand<S>,
         ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
 
     impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
         fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
 
@@ -336,12 +336,12 @@ pub mod test_router {
             _: u64,
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
-            self.significant_msg_sender.send(msg).unwrap();
+            let _ = self.significant_msg_sender.send(msg);
             Ok(())
         }
 
         fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
         }
     }
 }
