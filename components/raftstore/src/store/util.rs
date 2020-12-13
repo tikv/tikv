@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{fmt, u64};
 
 use collections::HashMap;
-use engine_rocks::{set_perf_level, PerfLevel};
+use engine_traits::{PerfLevel};
 use engine_traits::{PerfContext, PerfContextExt};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
@@ -813,7 +813,7 @@ impl PerfContextStatistics {
         if let Some(mut ctx) = engine.get_perf_context() {
             ctx.reset();
         }
-        set_perf_level(self.perf_level);
+        engine.set_perf_level(self.perf_level);
         self.write_wal_time = 0;
         self.pre_and_post_process = 0;
         self.db_mutex_lock_nanos = 0;
