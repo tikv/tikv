@@ -15,6 +15,12 @@ pub enum PerfLevel {
 ///
 /// This is very rocks-specific and is optional for other engines.
 /// Eventually it will need to be rethought to make sense for other engines.
+///
+/// In rocks, `PerfContext` uses global state, and does not require
+/// access through an engine. Thus perf data is not per-engine.
+/// This doesn't seem like a reasonable assumption for engines generally,
+/// so this abstraction follows the existing pattern in this crate and
+/// requires `PerfContext` to be accessed through the engine.
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
