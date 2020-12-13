@@ -1,12 +1,20 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::PanicEngine;
-use engine_traits::{PerfContextExt, PerfContext};
+use engine_traits::{PerfContextExt, PerfContext, PerfLevel};
 
 impl PerfContextExt for PanicEngine {
     type PerfContext = PanicPerfContext;
 
     fn get_perf_context(&self) -> Option<Self::PerfContext> {
+        panic!()
+    }
+
+    fn get_perf_level(&self) -> PerfLevel {
+        panic!()
+    }
+
+    fn set_perf_level(&self, level: PerfLevel) {
         panic!()
     }
 }

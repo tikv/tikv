@@ -1,9 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PerfLevel {
+    Uninitialized,
+    Disable,
+    EnableCount,
+    EnableTimeExceptForMutex,
+    EnableTimeAndCPUTimeExceptForMutex,
+    EnableTime,
+    OutOfBounds,
+}
+
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
     fn get_perf_context(&self) -> Option<Self::PerfContext>;
+    fn get_perf_level(&self) -> PerfLevel;
+    fn set_perf_level(&self, level: PerfLevel);
 }
 
 pub trait PerfContext {

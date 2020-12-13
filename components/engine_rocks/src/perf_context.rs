@@ -1,14 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use engine_traits::{PerfContextExt, PerfContext};
+use engine_traits::{PerfContextExt, PerfContext, PerfLevel};
 use crate::raw::PerfContext as RawPerfContext;
+use crate::raw_util;
 
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
     fn get_perf_context(&self) -> Option<Self::PerfContext> {
         Some(RocksPerfContext(RawPerfContext::get()))
+    }
+
+    fn get_perf_level(&self) -> PerfLevel {
+        raw_util::from_raw_perf_level(rocksdb::get_perf_level())
+    }
+
+    fn set_perf_level(&self, level: PerfLevel) {
+        rocksdb::set_perf_level(raw_util::to_raw_perf_level(level))
     }
 }
 

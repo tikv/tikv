@@ -207,6 +207,30 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
         .collect()
 }
 
+pub fn to_raw_perf_level(level: engine_traits::PerfLevel) -> rocksdb::PerfLevel {
+    match level {
+        engine_traits::PerfLevel::Uninitialized => rocksdb::PerfLevel::Uninitialized,
+        engine_traits::PerfLevel::Disable => rocksdb::PerfLevel::Disable,
+        engine_traits::PerfLevel::EnableCount => rocksdb::PerfLevel::EnableCount,
+        engine_traits::PerfLevel::EnableTimeExceptForMutex => rocksdb::PerfLevel::EnableTimeExceptForMutex,
+        engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex,
+        engine_traits::PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
+        engine_traits::PerfLevel::OutOfBounds => rocksdb::PerfLevel::OutOfBounds,
+    }
+}
+
+pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLevel {
+    match level {
+        rocksdb::PerfLevel::Uninitialized => engine_traits::PerfLevel::Uninitialized,
+        rocksdb::PerfLevel::Disable => engine_traits::PerfLevel::Disable,
+        rocksdb::PerfLevel::EnableCount => engine_traits::PerfLevel::EnableCount,
+        rocksdb::PerfLevel::EnableTimeExceptForMutex => engine_traits::PerfLevel::EnableTimeExceptForMutex,
+        rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex,
+        rocksdb::PerfLevel::EnableTime => engine_traits::PerfLevel::EnableTime,
+        rocksdb::PerfLevel::OutOfBounds => engine_traits::PerfLevel::OutOfBounds,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
