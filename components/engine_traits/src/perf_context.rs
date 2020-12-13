@@ -11,6 +11,10 @@ pub enum PerfLevel {
     OutOfBounds,
 }
 
+/// Extensions for measuring engine performance.
+///
+/// This is very rocks-specific and is optional for other engines.
+/// Eventually it will need to be rethought to make sense for other engines.
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
