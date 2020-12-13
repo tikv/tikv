@@ -11,7 +11,6 @@ use std::{mem, thread, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::raw_util::from_raw_perf_level;
 use engine_traits::{PerfLevel};
 use engine_traits::PerfContext;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
@@ -1100,7 +1099,7 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(from_raw_perf_level(self.cfg.value().perf_level)),
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
         };
