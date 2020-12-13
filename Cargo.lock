@@ -1194,10 +1194,13 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "toml",
  "txn_types",
 ]
 
