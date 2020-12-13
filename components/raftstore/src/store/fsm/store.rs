@@ -758,7 +758,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.has_ready = false;
         self.timer = TiInstant::now_coarse();
         // update config
-        self.poll_ctx.perf_context_statistics.start();
+        self.poll_ctx.perf_context_statistics.start(&self.poll_ctx.engines.kv);
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,

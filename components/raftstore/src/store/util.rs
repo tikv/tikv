@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::{fmt, u64};
 
 use collections::HashMap;
-use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
+use engine_rocks::{set_perf_level, PerfLevel};
+use engine_traits::{PerfContext, PerfContextExt};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
@@ -805,11 +806,13 @@ impl PerfContextStatistics {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self, engine: &impl PerfContextExt) {
         if self.perf_level == PerfLevel::Disable {
             return;
         }
-        PerfContext::get().reset();
+        if let Some(mut ctx) = engine.get_perf_context() {
+            ctx.reset();
+        }
         set_perf_level(self.perf_level);
         self.write_wal_time = 0;
         self.pre_and_post_process = 0;

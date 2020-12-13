@@ -3443,7 +3443,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.perf_context_statistics.start();
+        self.apply_ctx.perf_context_statistics.start(&self.apply_ctx.engine);
     }
 
     /// There is no control fsm in apply poller.
