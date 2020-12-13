@@ -86,12 +86,28 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
 }
 
+/// Stores the `Command` along with its return type, stored as generic parameter `T`.
+///
+/// Incoming protobuf requests (like `CommitRequest`, `PrewriteRequest`) are converted to
+/// this type via a series of transformations. That process is described below using
+/// `CommitRequest` as an example:
+/// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs, where it
+/// needs to be transformed to a `TypedCommand` before being passed to the
+/// `storage.sched_txn_command` method.
+/// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its generic
+/// parameters indicates that the result type for this instance of `TypedCommand` is
+/// going to be `TxnStatus` - one of the variants of the `StorageCallback` enum.
+/// 3. In the above `from` method, the details of the commit request are captured by
+/// instantiating an instance of the struct `storage::txn::commands::commit::Command`
+/// via its `new` method.
+/// 4. This struct is wrapped in a variant of the enum `storage::txn::commands::Command`.
+/// This enum exists to facilitate generic operations over different commands.
+/// 5. Finally, the `Command` enum variant for `Commit` is converted to the `TypedCommand`
+/// using the `From<Command>` impl for `TypedCommand`.
 pub struct TypedCommand<T> {
     pub cmd: Command,
 
-    // Track the type of the command's return value, to enable the compiler
-    // to choose the correct implementation of the From trait when converting from
-    // an input request the appropriate Command.
+    /// Track the type of the command's return value.
     _pd: PhantomData<T>,
 }
 

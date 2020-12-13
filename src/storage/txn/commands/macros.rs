@@ -37,8 +37,8 @@ macro_rules! command {
         }
 
         impl $cmd {
-            /// Return a `TypedCommand` encapsulating the result of executing this command.
-            /// The result is of type `StorageCallbackType`
+            /// Return a `TypedCommand` that encapsulates the result of executing this command.
+            /// The actual result of the command implements the `StorageCallbackType` trait.
             pub fn new(
                 $($arg: $arg_ty,)*
                 ctx: crate::storage::Context,
