@@ -1725,17 +1725,18 @@ where
             // Use `unwrap` is ok because the StoreMeta lock is held and these source peers still
             // exist in regions and region_ranges map.
             // It depends on the implementation of `destroy_peer`.
-            self.ctx
-                .router
-                .force_send(
-                    source_region_id,
-                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                        target_region_id: self.fsm.region_id(),
-                        target: self.fsm.peer.peer.clone(),
-                        result,
-                    }),
-                )
-                .unwrap();
+            if let Err(e) = self.ctx.router.force_send(
+                source_region_id,
+                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    target_region_id: self.fsm.region_id(),
+                    target: self.fsm.peer.peer.clone(),
+                    result,
+                }),
+            ) {
+                if !self.ctx.router.is_shutdown() {
+                    panic!("{} failed to send merge result(destroy_regions_for_snapshot) to source region {}, err {}", self.fsm.peer.tag, source_region_id, e);
+                }
+            }
         }
     }
 
@@ -2238,10 +2239,14 @@ where
             }
             let mailbox = BasicMailbox::new(sender, new_peer);
             self.ctx.router.register(new_region_id, mailbox);
-            self.ctx
-                .router
-                .force_send(new_region_id, PeerMsg::Start)
-                .unwrap();
+            if let Err(e) = self.ctx.router.force_send(new_region_id, PeerMsg::Start) {
+                if !self.ctx.router.is_shutdown() {
+                    panic!(
+                        "{} failed to send PeerMsg::Start to region {}, err {}",
+                        self.fsm.peer.tag, new_region_id, e
+                    );
+                }
+            }
 
             if !campaigned {
                 if let Some(msg) = meta
