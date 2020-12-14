@@ -1250,17 +1250,20 @@ mod tests {
             Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
         ];
         let mut statistics = Statistics::default();
+
         #[derive(Clone)]
         struct Case {
             expected: ResponsePolicy,
+
             // inputs
-            pessimistic: bool,
             // optimistic/pessimistic prewrite
-            async_commit: bool,
+            pessimistic: bool,
             // async commit on/off
-            one_pc: bool,
+            async_commit: bool,
             // 1pc on/off
-            async_apply_prewrite: bool, // async_apply_prewrite enabled
+            one_pc: bool,
+            // async_apply_prewrite enabled in config
+            async_apply_prewrite: bool,
         }
 
         let cases = vec![
@@ -1283,15 +1286,6 @@ mod tests {
                 async_apply_prewrite: true,
             },
             Case {
-                // early return can be turned on/off by async_apply_prewrite in context
-                expected: ResponsePolicy::OnApplied,
-
-                pessimistic: false,
-                async_commit: false,
-                one_pc: false,
-                async_apply_prewrite: false,
-            },
-            Case {
                 // works on async prewrite
                 expected: ResponsePolicy::OnCommitted,
 
@@ -1299,6 +1293,15 @@ mod tests {
                 async_commit: true,
                 one_pc: false,
                 async_apply_prewrite: true,
+            },
+            Case {
+                // early return can be turned on/off by async_apply_prewrite in context
+                expected: ResponsePolicy::OnApplied,
+
+                pessimistic: false,
+                async_commit: true,
+                one_pc: false,
+                async_apply_prewrite: false,
             },
             Case {
                 // works on 1pc
