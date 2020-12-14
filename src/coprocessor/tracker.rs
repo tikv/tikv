@@ -51,14 +51,15 @@ pub struct Tracker {
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
     handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
     req_lifetime: Duration,
-    item_process_time: Duration,
 
-    // Suspend time between processing two item
+    // Suspend time between processing two items
+    //
     // In a cooperative environment, a cop task may suspend itself at finishing an item,
-    // and be resumed by runtime later. That will raise a considerable suspend time.
+    // and be resumed by the runtime later. That will raise a considerable suspend time.
     item_suspend_time: Duration,
-
     total_suspend_time: Duration,
+
+    item_process_time: Duration,
     total_process_time: Duration,
     total_storage_stats: Statistics,
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
