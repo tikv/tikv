@@ -197,6 +197,7 @@ mod parser {
     }
 
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: u8) -> Option<Duration> {
+        let input = input.trim();
         if input.is_empty() {
             return Some(Duration::zero());
         }
@@ -302,15 +303,13 @@ impl Duration {
     }
 
     #[inline]
-    pub fn minimize_fsp(mut self) -> Self {
-        self.fsp = MIN_FSP as u8;
-        self
+    pub fn minimize_fsp(self) -> Self {
+        Duration { fsp: MIN_FSP as u8, ..self }
     }
 
     #[inline]
-    pub fn maximize_fsp(mut self) -> Self {
-        self.fsp = MAX_FSP as u8;
-        self
+    pub fn maximize_fsp(self) -> Self {
+        Duration { fsp: MAX_FSP as u8, ..self }
     }
 
     #[inline]
@@ -422,8 +421,7 @@ impl Duration {
     /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(ctx: &mut EvalContext, input: &[u8], fsp: i8) -> Result<Duration> {
-        let input = std::str::from_utf8(input)?.trim();
+    pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
         parser::parse(ctx, input, fsp).ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }

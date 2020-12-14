@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use regex::Regex;
-
 use tidb_query_codegen::rpn_fn;
 
 use crate::RpnFnCallExtra;
@@ -157,18 +155,6 @@ pub fn to_seconds(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(t.second_number()))
 }
 
-// is_duration returns a boolean indicating whether the str matches the format of duration.
-// See https://dev.mysql.com/doc/refman/5.7/en/time.html
-#[inline]
-fn is_duration(s: &str) -> bool {
-    lazy_static::lazy_static! {
-        static ref DURATION_REGEX: Regex = Regex::new(
-            r"^\s*[-]?(((\d{1,2}\s+)?0*\d{0,3}(:0*\d{1,2}){0,2})|(\d{1,7}))?(\.\d*)?\s*$"
-        ).unwrap();
-    }
-    DURATION_REGEX.is_match(s)
-}
-
 #[rpn_fn(writer, capture = [ctx])]
 #[inline]
 pub fn add_string_and_duration(
@@ -177,46 +163,37 @@ pub fn add_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = std::str::from_utf8(arg0).unwrap();
-    match is_duration(s) {
-        true => {
-            let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
-                Ok(arg0) => arg0,
-                Err(_) => return Ok(writer.write(None)),
-            };
-            let dur = match arg0.checked_add(*arg1) {
-                Some(dur) => dur,
+    let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
+    match Duration::parse(ctx, arg0, MAX_FSP) {
+        Ok(arg0) => match arg0.checked_add(*arg1) {
+            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+            None => {
+                return ctx
+                    .handle_overflow_err(Error::overflow(
+                        "DURATION",
+                        &format!("{} + {}", arg0, arg1),
+                    ))
+                    .map(|_| Ok(writer.write(None)))?
+            }
+        },
+        Err(_) => match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+            Ok(arg0) => match arg0.checked_add(ctx, *arg1) {
+                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
                 None => {
                     return ctx
-                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .handle_overflow_err(Error::overflow(
+                            "DURATION",
+                            &format!("{} + {}", arg0, arg1),
+                        ))
                         .map(|_| Ok(writer.write(None)))?
                 }
-            };
-            let dur = match dur.subsec_micros() {
-                0 => dur.minimize_fsp(),
-                _ => dur.maximize_fsp(),
-            };
-            Ok(writer.write(Some(dur.to_string().into_bytes())))
-        }
-        false => {
-            let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
-                Ok(arg0) => arg0,
-                Err(_) => return Ok(writer.write(None)),
-            };
-            let mut res = match arg0.checked_add(ctx, *arg1) {
-                Some(res) => res,
-                None => {
-                    return ctx
-                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
-                        .map(|_| Ok(writer.write(None)))?
-                }
-            };
-            match res.micro() {
-                0 => res.minimize_fsp(),
-                _ => res.maximize_fsp(),
-            };
-            Ok(writer.write(Some(res.to_string().into_bytes())))
-        }
+            },
+            Err(_) => {
+                return ctx
+                    .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                    .map(|_| Ok(writer.write(None)))?
+            }
+        },
     }
 }
 
@@ -228,46 +205,37 @@ pub fn sub_string_and_duration(
     arg1: &Duration,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = std::str::from_utf8(arg0).unwrap();
-    match is_duration(s) {
-        true => {
-            let arg0 = match Duration::parse(ctx, arg0, MAX_FSP) {
-                Ok(arg0) => arg0,
-                Err(_) => return Ok(writer.write(None)),
-            };
-            let dur = match arg0.checked_sub(*arg1) {
-                Some(dur) => dur,
+    let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
+    match Duration::parse(ctx, arg0, MAX_FSP) {
+        Ok(arg0) => match arg0.checked_sub(*arg1) {
+            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+            None => {
+                return ctx
+                    .handle_overflow_err(Error::overflow(
+                        "DURATION",
+                        &format!("{} + {}", arg0, arg1),
+                    ))
+                    .map(|_| Ok(writer.write(None)))?
+            }
+        },
+        Err(_) => match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+            Ok(arg0) => match arg0.checked_sub(ctx, *arg1) {
+                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
                 None => {
                     return ctx
-                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                        .handle_overflow_err(Error::overflow(
+                            "DURATION",
+                            &format!("{} + {}", arg0, arg1),
+                        ))
                         .map(|_| Ok(writer.write(None)))?
                 }
-            };
-            let dur = match dur.subsec_micros() {
-                0 => dur.minimize_fsp(),
-                _ => dur.maximize_fsp(),
-            };
-            Ok(writer.write(Some(dur.to_string().into_bytes())))
-        }
-        false => {
-            let arg0 = match DateTime::parse_datetime(ctx, s, MAX_FSP, true) {
-                Ok(arg0) => arg0,
-                Err(_) => return Ok(writer.write(None)),
-            };
-            let mut res = match arg0.checked_sub(ctx, *arg1) {
-                Some(res) => res,
-                None => {
-                    return ctx
-                        .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
-                        .map(|_| Ok(writer.write(None)))?
-                }
-            };
-            match res.micro() {
-                0 => res.minimize_fsp(),
-                _ => res.maximize_fsp(),
-            };
-            Ok(writer.write(Some(res.to_string().into_bytes())))
-        }
+            },
+            Err(_) => {
+                return ctx
+                    .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
+                    .map(|_| Ok(writer.write(None)))?
+            }
+        },
     }
 }
 
@@ -575,7 +543,7 @@ pub fn last_day(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>>
             .map(|_| Ok(None))?;
     }
     if t.day() == 0 {
-        let one_day = Duration::parse(ctx, b"1 00:00:00", 6).unwrap();
+        let one_day = Duration::parse(ctx, "1 00:00:00", 6).unwrap();
         let adjusted_t: DateTime = t.checked_add(ctx, one_day).unwrap();
         return Ok(adjusted_t.last_date_of_month());
     }
@@ -604,6 +572,23 @@ pub fn add_duration_and_duration(
     Ok(Some(res))
 }
 
+// Cast Duration into string representation and drop subsec if possible.
+fn duration_to_string(duration: Duration) -> String {
+    match duration.subsec_micros() {
+        0 => duration.minimize_fsp().to_string(),
+        _ => duration.maximize_fsp().to_string(),
+    }
+}
+
+// Cast DateTime into string representation and drop subsec if possible.
+fn datetime_to_string(mut datetime: DateTime) -> String {
+    match datetime.micro() {
+        0 => datetime.minimize_fsp(),
+        _ => datetime.maximize_fsp(),
+    };
+    datetime.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,12 +612,9 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (duration1, duration2, exp) in cases {
-            let expected =
-                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
-            let duration1 =
-                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
-            let duration2 =
-                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration1 = duration1.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let duration2 = duration2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration1)
                 .push_param(duration2)
@@ -652,12 +634,9 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (duration1, duration2, exp) in cases {
-            let expected =
-                exp.map(|exp| Duration::parse(&mut ctx, exp.as_bytes(), MAX_FSP).unwrap());
-            let duration1 =
-                duration1.map(|arg1| Duration::parse(&mut ctx, arg1.as_bytes(), MAX_FSP).unwrap());
-            let duration2 =
-                duration2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration1 = duration1.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let duration2 = duration2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration1)
                 .push_param(duration2)
@@ -1005,111 +984,93 @@ mod tests {
     }
 
     #[test]
-    fn test_is_duration() {
-        let cases = vec![
-            ("110:00:00", true),
-            ("aa:bb:cc", false),
-            ("1 01:00:00", true),
-            ("01:00:00.999999", true),
-            ("071231235959.999999", false),
-            ("20171231235959.999999", false),
-            ("2017-01-01 01:01:01.11", false),
-            ("07-12-31 23:59:59.999999", false),
-            ("2007-12-31 23:59:59.999999", false),
-        ];
-        for (arg, exp) in cases {
-            let got = is_duration(arg);
-            assert_eq!(got, exp);
-        }
-    }
-
-    #[test]
     fn test_add_sub_string_and_duration() {
         let cases = vec![
             // normal cases
             (
-                Some("01:00:00.999999".as_bytes().to_vec()),
+                Some("01:00:00.999999"),
                 Some("02:00:00.999998"),
-                Some("03:00:01.999997".as_bytes().to_vec()),
+                Some("03:00:01.999997"),
             ),
             (
-                Some("23:59:59".as_bytes().to_vec()),
+                Some("23:59:59"),
                 Some("00:00:01"),
-                Some("24:00:00".as_bytes().to_vec()),
+                Some("24:00:00"),
             ),
             (
-                Some("110:00:00".as_bytes().to_vec()),
+                Some("110:00:00"),
                 Some("1 02:00:00"),
-                Some("136:00:00".as_bytes().to_vec()),
+                Some("136:00:00"),
             ),
             (
-                Some("-110:00:00".as_bytes().to_vec()),
+                Some("-110:00:00"),
                 Some("1 02:00:00"),
-                Some("-84:00:00".as_bytes().to_vec()),
+                Some("-84:00:00"),
             ),
             (
-                Some("00:00:01".as_bytes().to_vec()),
+                Some("00:00:01"),
                 Some("-00:00:01"),
-                Some("00:00:00".as_bytes().to_vec()),
+                Some("00:00:00"),
             ),
             (
-                Some("00:00:03".as_bytes().to_vec()),
+                Some("00:00:03"),
                 Some("-00:00:01"),
-                Some("00:00:02".as_bytes().to_vec()),
+                Some("00:00:02"),
             ),
             (
-                Some("2018-02-28 23:00:00".as_bytes().to_vec()),
+                Some("2018-02-28 23:00:00"),
                 Some("01:30:30.123456"),
-                Some("2018-03-01 00:30:30.123456".as_bytes().to_vec()),
+                Some("2018-03-01 00:30:30.123456"),
             ),
             (
-                Some("2016-02-28 23:00:00".as_bytes().to_vec()),
+                Some("2016-02-28 23:00:00"),
                 Some("01:30:30"),
-                Some("2016-02-29 00:30:30".as_bytes().to_vec()),
+                Some("2016-02-29 00:30:30"),
             ),
             (
-                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
+                Some("2018-12-31 23:00:00"),
                 Some("01:30:30"),
-                Some("2019-01-01 00:30:30".as_bytes().to_vec()),
+                Some("2019-01-01 00:30:30"),
             ),
             (
-                Some("2018-12-31 23:00:00".as_bytes().to_vec()),
+                Some("2018-12-31 23:00:00"),
                 Some("1 01:30:30"),
-                Some("2019-01-02 00:30:30".as_bytes().to_vec()),
+                Some("2019-01-02 00:30:30"),
             ),
             (
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+                Some("2019-01-01 01:00:00"),
                 Some("-01:01:00"),
-                Some("2018-12-31 23:59:00".as_bytes().to_vec()),
+                Some("2018-12-31 23:59:00"),
             ),
             // null cases
             (None, None, None),
             (None, Some("11:30:45.123456"), None),
             (
-                Some("00:00:00".as_bytes().to_vec()),
+                Some("00:00:00"),
                 None,
-                Some("00:00:00".as_bytes().to_vec()),
+                Some("00:00:00"),
             ),
             (
-                Some("01:00:00".as_bytes().to_vec()),
+                Some("01:00:00"),
                 None,
-                Some("01:00:00".as_bytes().to_vec()),
+                Some("01:00:00"),
             ),
             (
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+                Some("2019-01-01 01:00:00"),
                 None,
-                Some("2019-01-01 01:00:00".as_bytes().to_vec()),
+                Some("2019-01-01 01:00:00"),
             ),
         ];
 
         for (arg_str, arg_dur, sum) in cases {
+            let arg_str = arg_str.map(|str| str.as_bytes().to_vec());
             let arg_dur = match arg_dur {
-                Some(arg_dur) => Some(
-                    Duration::parse(&mut EvalContext::default(), arg_dur.as_bytes(), MAX_FSP)
-                        .unwrap(),
-                ),
+                Some(arg_dur) => {
+                    Some(Duration::parse(&mut EvalContext::default(), arg_dur, MAX_FSP).unwrap())
+                }
                 None => Some(Duration::zero()),
             };
+            let sum = sum.map(|str| str.as_bytes().to_vec());
             let add_output = RpnFnScalarEvaluator::new()
                 .push_param(arg_str.clone())
                 .push_param(arg_dur)
@@ -1217,8 +1178,7 @@ mod tests {
             let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
                 arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
-            let arg2 =
-                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -1278,8 +1238,7 @@ mod tests {
             let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
                 arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
-            let arg2 =
-                arg2.map(|arg2| Duration::parse(&mut ctx, arg2.as_bytes(), MAX_FSP).unwrap());
+            let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             if null_case {
                 let output = RpnFnScalarEvaluator::new()
                     .push_param(arg1)
@@ -1487,8 +1446,7 @@ mod tests {
         ];
 
         for (arg, fsp, h, m, s, ms) in cases {
-            let duration =
-                Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
+            let duration = Some(Duration::parse(&mut EvalContext::default(), arg, fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
                     .push_param(duration)
@@ -1526,8 +1484,7 @@ mod tests {
             ("272:59:59.14", 0, 982799),
         ];
         for (arg, fsp, s) in cases {
-            let duration =
-                Some(Duration::parse(&mut EvalContext::default(), arg.as_bytes(), fsp).unwrap());
+            let duration = Some(Duration::parse(&mut EvalContext::default(), arg, fsp).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .evaluate::<Int>(ScalarFuncSig::TimeToSec)
@@ -1754,7 +1711,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (hour, minute, second, ans) in cases {
             for fsp in 0..MAX_FSP {
-                let ans_val = Some(Duration::parse(&mut ctx, ans.as_bytes(), fsp).unwrap());
+                let ans_val = Some(Duration::parse(&mut ctx, ans, fsp).unwrap());
                 let output = RpnFnScalarEvaluator::new()
                     .push_param(Some(hour))
                     .push_param(Some(minute))
