@@ -118,12 +118,14 @@ impl Engine for MockEngine {
         let mut expected_writes = self.expected_modifies.0.lock().unwrap();
         for modify in batch.modifies.iter() {
             if let Some(expected_write) = expected_writes.pop_front() {
+                // check whether the modify is expected
                 if let Some(expected_modify) = expected_write.modify {
                     assert_eq!(
                         modify, &expected_modify,
                         "modify writing to Engine not match with expected"
                     )
                 }
+                // check whether use right callback
                 match expected_write.use_proposed_cb {
                     Some(true) => assert!(
                         proposed_cb.is_some(),
