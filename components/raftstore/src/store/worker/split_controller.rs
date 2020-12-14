@@ -331,7 +331,6 @@ impl AutoSplitController {
                 {
                     continue;
                 }
-                info!("approximate";"region-id"=>region_id,"size"=>region_info.approximate_size,"key"=>region_info.approximate_key);
                 let region_infos = region_infos_map
                     .entry(region_id)
                     .or_insert_with(|| Vec::with_capacity(capacity));
@@ -353,6 +352,9 @@ impl AutoSplitController {
                 self.recorders.remove_entry(&region_id);
                 continue;
             }
+
+            let approximate_keys = region_infos[0].approximate_key;
+            let approximate_size = region_infos[0].approximate_size;
 
             let num = self.cfg.detect_times;
             let recorder = self
@@ -378,7 +380,13 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
-                    info!("load base split region";"region_id"=>region_id);
+                    info!(
+                        "load base split region";
+                        "region_id"=>region_id,
+                        "size"=>approximate_size,
+                        "keys"=>approximate_keys,
+                        "qps"=>qps
+                    );
                 }
                 self.recorders.remove(&region_id);
             }
@@ -483,6 +491,8 @@ mod tests {
         let mut hub = AutoSplitController::new(SplitConfigManager::default());
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
+        hub.cfg.key_threshold = 0;
+        hub.cfg.size_threshold = 0;
 
         for i in 0..100 {
             let mut qps_stats = ReadStats::default();
