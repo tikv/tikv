@@ -164,33 +164,21 @@ pub fn add_string_and_duration(
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
-    match Duration::parse(ctx, arg0, MAX_FSP) {
-        Ok(arg0) => {
-            return match arg0.checked_add(*arg1) {
-                Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
-                None => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DURATION",
-                        &format!("{} + {}", arg0, arg1),
-                    ))
-                    .map(|_| Ok(writer.write(None)))?,
-            }
-        }
-        Err(_) => (),
+    if let Ok(arg0) = Duration::parse(ctx, arg0, MAX_FSP) {
+        return match arg0.checked_add(*arg1) {
+            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+            None => ctx
+                .handle_overflow_err(Error::overflow("DURATION", &format!("{} + {}", arg0, arg1)))
+                .map(|_| Ok(writer.write(None)))?,
+        };
     };
-    match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
-        Ok(arg0) => {
-            return match arg0.checked_add(ctx, *arg1) {
-                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
-                None => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DURATION",
-                        &format!("{} + {}", arg0, arg1),
-                    ))
-                    .map(|_| Ok(writer.write(None)))?,
-            }
-        }
-        Err(_) => (),
+    if let Ok(arg0) = DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+        return match arg0.checked_add(ctx, *arg1) {
+            Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
+            None => ctx
+                .handle_overflow_err(Error::overflow("DURATION", &format!("{} + {}", arg0, arg1)))
+                .map(|_| Ok(writer.write(None)))?,
+        };
     };
     ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
 
@@ -206,33 +194,21 @@ pub fn sub_string_and_duration(
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
-    match Duration::parse(ctx, arg0, MAX_FSP) {
-        Ok(arg0) => {
-            return match arg0.checked_sub(*arg1) {
-                Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
-                None => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DURATION",
-                        &format!("{} - {}", arg0, arg1),
-                    ))
-                    .map(|_| Ok(writer.write(None)))?,
-            }
-        }
-        Err(_) => (),
+    if let Ok(arg0) = Duration::parse(ctx, arg0, MAX_FSP) {
+        return match arg0.checked_sub(*arg1) {
+            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+            None => ctx
+                .handle_overflow_err(Error::overflow("DURATION", &format!("{} - {}", arg0, arg1)))
+                .map(|_| Ok(writer.write(None)))?,
+        };
     };
-    match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
-        Ok(arg0) => {
-            return match arg0.checked_sub(ctx, *arg1) {
-                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
-                None => ctx
-                    .handle_overflow_err(Error::overflow(
-                        "DURATION",
-                        &format!("{} - {}", arg0, arg1),
-                    ))
-                    .map(|_| Ok(writer.write(None)))?,
-            }
-        }
-        Err(_) => (),
+    if let Ok(arg0) = DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+        return match arg0.checked_sub(ctx, *arg1) {
+            Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
+            None => ctx
+                .handle_overflow_err(Error::overflow("DURATION", &format!("{} - {}", arg0, arg1)))
+                .map(|_| Ok(writer.write(None)))?,
+        };
     };
     ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
 
