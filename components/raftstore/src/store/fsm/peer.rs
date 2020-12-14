@@ -2696,17 +2696,21 @@ where
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        self.ctx
-            .router
-            .force_send(
+        if let Err(e) = self.ctx.router.force_send(
+            source.get_id(),
+            PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                target_region_id: self.fsm.region_id(),
+                target: self.fsm.peer.peer.clone(),
+                result: MergeResultKind::FromTargetLog,
+            }),
+        ) {
+            panic!(
+                "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
+                self.fsm.peer.tag,
                 source.get_id(),
-                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                    target_region_id: self.fsm.region_id(),
-                    target: self.fsm.peer.peer.clone(),
-                    result: MergeResultKind::FromTargetLog,
-                }),
-            )
-            .unwrap();
+                e
+            );
+        }
     }
 
     /// Handle rollbacking Merge result.
@@ -2937,17 +2941,17 @@ where
         drop(meta);
 
         for r in &apply_result.destroyed_regions {
-            self.ctx
-                .router
-                .force_send(
-                    r.get_id(),
-                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
-                        target_region_id: self.fsm.region_id(),
-                        target: self.fsm.peer.peer.clone(),
-                        result: MergeResultKind::FromTargetSnapshotStep2,
-                    }),
-                )
-                .unwrap();
+            if let Err(e) = self.ctx.router.force_send(
+                r.get_id(),
+                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    target_region_id: self.fsm.region_id(),
+                    target: self.fsm.peer.peer.clone(),
+                    result: MergeResultKind::FromTargetSnapshotStep2,
+                }),
+            ) {
+                panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
+                       self.fsm.peer.tag, r.get_id(), e);
+            }
         }
     }
 
