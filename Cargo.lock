@@ -4235,7 +4235,6 @@ name = "tiflash-proxy"
 version = "0.0.1"
 dependencies = [
  "cmd",
- "engine_rocks",
 ]
 
 [[package]]

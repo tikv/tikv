@@ -1,12 +1,6 @@
 use std::os::raw::{c_char, c_int};
 
 #[no_mangle]
-fn ____useless_func_to_make_compiler_happy(pp: &mut engine_rocks::raw::Env) {
-    *pp = Default::default();
-    engine_rocks::encryption::get_env(None, None).unwrap();
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn print_tiflash_proxy_version() {
     cmd::print_proxy_version();
 }

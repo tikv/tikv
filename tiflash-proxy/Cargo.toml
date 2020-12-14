@@ -11,4 +11,3 @@ crate-type = ["cdylib"]
 
 [dependencies]
 cmd = { path = "../cmd" }
-engine_rocks = { path = "../components/engine_rocks" }
