@@ -177,7 +177,7 @@ pub fn add_string_and_duration(
             }
         }
         Err(_) => (),
-    }
+    };
     match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
         Ok(arg0) => {
             return match arg0.checked_add(ctx, *arg1) {
@@ -191,7 +191,7 @@ pub fn add_string_and_duration(
             }
         }
         Err(_) => (),
-    }
+    };
     ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
 
     Ok(writer.write(None))
@@ -219,7 +219,7 @@ pub fn sub_string_and_duration(
             }
         }
         Err(_) => (),
-    }
+    };
     match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
         Ok(arg0) => {
             return match arg0.checked_sub(ctx, *arg1) {
@@ -233,7 +233,7 @@ pub fn sub_string_and_duration(
             }
         }
         Err(_) => (),
-    }
+    };
     ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
 
     Ok(writer.write(None))
