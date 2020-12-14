@@ -566,6 +566,7 @@ impl Delegate {
                 }
                 continue;
             }
+            let is_one_pc = req.get_flags().get_one_pc();
             let mut put = req.take_put();
             match put.cf.as_str() {
                 "write" => {
@@ -575,29 +576,35 @@ impl Delegate {
                         continue;
                     }
 
-                    // In order to advance resolved ts,
-                    // we must untrack inflight txns if they are committed.
-                    let commit_ts = if row.commit_ts == 0 {
-                        None
+                    if is_one_pc {
+                        set_event_row_type(&mut row, EventLogType::Committed);
                     } else {
-                        Some(row.commit_ts)
-                    };
-                    match self.resolver {
-                        Some(ref mut resolver) => resolver.untrack_lock(
-                            row.start_ts.into(),
-                            commit_ts.map(Into::into),
-                            row.key.clone(),
-                        ),
-                        None => {
-                            assert!(self.pending.is_some(), "region resolver not ready");
-                            let pending = self.pending.as_mut().unwrap();
-                            pending.locks.push(PendingLock::Untrack {
-                                key: row.key.clone(),
-                                start_ts: row.start_ts.into(),
-                                commit_ts: commit_ts.map(Into::into),
-                            });
-                            pending.pending_bytes += row.key.len();
-                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                        // 1PC has nothing to do with the resolver
+
+                        // In order to advance resolved ts,
+                        // we must untrack inflight txns if they are committed.
+                        let commit_ts = if row.commit_ts == 0 {
+                            None
+                        } else {
+                            Some(row.commit_ts)
+                        };
+                        match self.resolver {
+                            Some(ref mut resolver) => resolver.untrack_lock(
+                                row.start_ts.into(),
+                                commit_ts.map(Into::into),
+                                row.key.clone(),
+                            ),
+                            None => {
+                                assert!(self.pending.is_some(), "region resolver not ready");
+                                let pending = self.pending.as_mut().unwrap();
+                                pending.locks.push(PendingLock::Untrack {
+                                    key: row.key.clone(),
+                                    start_ts: row.start_ts.into(),
+                                    commit_ts: commit_ts.map(Into::into),
+                                });
+                                pending.pending_bytes += row.key.len();
+                                CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                            }
                         }
                     }
 

@@ -386,6 +386,9 @@ where
         let mut reqs = Vec::with_capacity(batch.modifies.len());
         for m in batch.modifies {
             let mut req = Request::default();
+            if batch.extra.one_pc {
+                req.mut_flags().set_one_pc(true);
+            }
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::default();
