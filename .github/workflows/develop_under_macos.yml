@@ -13,18 +13,5 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: Swatinem/rust-cache@v1
-      - run: |
-          make build
-  can_test:
-    strategy:
-      matrix:
-        platform: [ macos-10.15, macos-11.0 ]
-    name: make sure developers' test can build under macOS
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-        with:
-          key: test
-      - run: |
-          cargo -Zpackage-features test --no-run --workspace --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer
+      - run: CARGO_INCREMENTAL=1 make clippy
+
