@@ -19,6 +19,7 @@ use tempfile::{Builder, TempDir};
 use tokio::runtime::Builder as TokioBuilder;
 
 use super::*;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
@@ -53,7 +54,6 @@ use tikv::{
     config::{ConfigController, TiKvConfig},
     server::raftkv::ReplicaReadLockChecker,
 };
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};

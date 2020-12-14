@@ -1,4 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 use std::cmp::Eq;
 use std::hash::Hash;
 

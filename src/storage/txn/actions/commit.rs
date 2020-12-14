@@ -90,7 +90,7 @@ pub fn commit<S: Snapshot>(
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
-            write = write.set_overlapped_rollback(true);
+            write = write.set_overlapped_rollback(true, None);
             break;
         }
     }
@@ -227,7 +227,7 @@ pub mod tests {
             false,
             uncommitted(100, ts(20, 1)),
         );
-        // The the min_commit_ts should be ts(20, 1)
+        // The min_commit_ts should be ts(20, 1)
         must_err(&engine, k, ts(10, 0), ts(15, 0));
         must_err(&engine, k, ts(10, 0), ts(20, 0));
         must_succeed(&engine, k, ts(10, 0), ts(20, 1));
