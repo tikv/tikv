@@ -75,6 +75,52 @@ impl Condvar {
         self.tail.set(Some(node_ptr));
     }
 
+    /// Notifies all the peers until encounter node at provided address, then
+    /// remove the node from queue and notify its successor if any.
+    #[inline]
+    fn notify_by(&self, caller: &mut LinkedNotifiable) {
+        let mut ptr = self.head.get();
+        loop {
+            if let Some(inner) = ptr {
+                unsafe {
+                    let node = inner.as_ref();
+                    if inner.as_ptr() == caller {
+                        let next = node.get_next();
+                        self.head.set(next);
+                        if let Some(next) = next {
+                            next.as_ref().notify();
+                        } else {
+                            self.tail.set(None);
+                        }
+                        break;
+                    } else {
+                        node.notify();
+                        ptr = node.get_next();
+                    }
+                }
+            } else {
+                self.head.set(None);
+                self.tail.set(None);
+                return;
+            }
+        }
+    }
+
+    /// Notifies the oldest waiter.
+    #[inline]
+    fn notify_head(&self) {
+        if let Some(head) = self.head.get() {
+            unsafe {
+                let node = head.as_ref();
+                node.notify();
+                self.head.set(node.get_next());
+            }
+            if self.head.get().is_none() {
+                self.tail.set(None);
+            }
+        }
+    }
+
     /// Asynchronously waits on this condition variable for a notification,
     /// timing out after a specified duration.
     pub fn wait_timeout<'a, T>(
@@ -121,50 +167,6 @@ impl Condvar {
         let guard = mu.lock().unwrap();
         self.notify_by(&mut node);
         (guard, timed_out)
-    }
-
-    /// Notifies all the peers until encounter node at provided address, then
-    /// remove the node from queue and notify its successor if any.
-    fn notify_by(&self, caller: &mut LinkedNotifiable) {
-        let mut ptr = self.head.get();
-        loop {
-            if let Some(inner) = ptr {
-                unsafe {
-                    let node = inner.as_ref();
-                    if inner.as_ptr() == caller {
-                        let next = node.get_next();
-                        self.head.set(next);
-                        if let Some(next) = next {
-                            next.as_ref().notify();
-                        } else {
-                            self.tail.set(None);
-                        }
-                        break;
-                    } else {
-                        node.notify();
-                        ptr = node.get_next();
-                    }
-                }
-            } else {
-                self.head.set(None);
-                self.tail.set(None);
-                return;
-            }
-        }
-    }
-
-    /// Notifies the oldest waiter.
-    fn notify_head(&self) {
-        if let Some(head) = self.head.get() {
-            unsafe {
-                let node = head.as_ref();
-                node.notify();
-                self.head.set(node.get_next());
-            }
-            if self.head.get().is_none() {
-                self.tail.set(None);
-            }
-        }
     }
 
     /// Notifies all waiters in queue as till now. Effectively notify the oldest
