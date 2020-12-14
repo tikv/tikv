@@ -165,36 +165,36 @@ pub fn add_string_and_duration(
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
     match Duration::parse(ctx, arg0, MAX_FSP) {
-        Ok(arg0) => match arg0.checked_add(*arg1) {
-            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
-            None => {
-                return ctx
+        Ok(arg0) => {
+            return match arg0.checked_add(*arg1) {
+                Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+                None => ctx
                     .handle_overflow_err(Error::overflow(
                         "DURATION",
                         &format!("{} + {}", arg0, arg1),
                     ))
-                    .map(|_| Ok(writer.write(None)))?
+                    .map(|_| Ok(writer.write(None)))?,
             }
-        },
-        Err(_) => match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
-            Ok(arg0) => match arg0.checked_add(ctx, *arg1) {
-                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
-                None => {
-                    return ctx
-                        .handle_overflow_err(Error::overflow(
-                            "DURATION",
-                            &format!("{} + {}", arg0, arg1),
-                        ))
-                        .map(|_| Ok(writer.write(None)))?
-                }
-            },
-            Err(_) => {
-                return ctx
-                    .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
-                    .map(|_| Ok(writer.write(None)))?
-            }
-        },
+        }
+        Err(_) => (),
     }
+    match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+        Ok(arg0) => {
+            return match arg0.checked_add(ctx, *arg1) {
+                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
+                None => ctx
+                    .handle_overflow_err(Error::overflow(
+                        "DURATION",
+                        &format!("{} + {}", arg0, arg1),
+                    ))
+                    .map(|_| Ok(writer.write(None)))?,
+            }
+        }
+        Err(_) => (),
+    }
+    ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
+
+    Ok(writer.write(None))
 }
 
 #[rpn_fn(writer, capture = [ctx])]
@@ -207,36 +207,36 @@ pub fn sub_string_and_duration(
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
     match Duration::parse(ctx, arg0, MAX_FSP) {
-        Ok(arg0) => match arg0.checked_sub(*arg1) {
-            Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
-            None => {
-                return ctx
+        Ok(arg0) => {
+            return match arg0.checked_sub(*arg1) {
+                Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
+                None => ctx
                     .handle_overflow_err(Error::overflow(
                         "DURATION",
-                        &format!("{} + {}", arg0, arg1),
+                        &format!("{} - {}", arg0, arg1),
                     ))
-                    .map(|_| Ok(writer.write(None)))?
+                    .map(|_| Ok(writer.write(None)))?,
             }
-        },
-        Err(_) => match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
-            Ok(arg0) => match arg0.checked_sub(ctx, *arg1) {
-                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
-                None => {
-                    return ctx
-                        .handle_overflow_err(Error::overflow(
-                            "DURATION",
-                            &format!("{} + {}", arg0, arg1),
-                        ))
-                        .map(|_| Ok(writer.write(None)))?
-                }
-            },
-            Err(_) => {
-                return ctx
-                    .handle_invalid_time_error(Error::incorrect_datetime_value(arg0))
-                    .map(|_| Ok(writer.write(None)))?
-            }
-        },
+        }
+        Err(_) => (),
     }
+    match DateTime::parse_datetime(ctx, arg0, MAX_FSP, true) {
+        Ok(arg0) => {
+            return match arg0.checked_sub(ctx, *arg1) {
+                Some(result) => Ok(writer.write(Some(datetime_to_string(result).into_bytes()))),
+                None => ctx
+                    .handle_overflow_err(Error::overflow(
+                        "DURATION",
+                        &format!("{} - {}", arg0, arg1),
+                    ))
+                    .map(|_| Ok(writer.write(None)))?,
+            }
+        }
+        Err(_) => (),
+    }
+    ctx.handle_invalid_time_error(Error::incorrect_datetime_value(arg0))?;
+
+    Ok(writer.write(None))
 }
 
 #[rpn_fn]
@@ -992,31 +992,11 @@ mod tests {
                 Some("02:00:00.999998"),
                 Some("03:00:01.999997"),
             ),
-            (
-                Some("23:59:59"),
-                Some("00:00:01"),
-                Some("24:00:00"),
-            ),
-            (
-                Some("110:00:00"),
-                Some("1 02:00:00"),
-                Some("136:00:00"),
-            ),
-            (
-                Some("-110:00:00"),
-                Some("1 02:00:00"),
-                Some("-84:00:00"),
-            ),
-            (
-                Some("00:00:01"),
-                Some("-00:00:01"),
-                Some("00:00:00"),
-            ),
-            (
-                Some("00:00:03"),
-                Some("-00:00:01"),
-                Some("00:00:02"),
-            ),
+            (Some("23:59:59"), Some("00:00:01"), Some("24:00:00")),
+            (Some("110:00:00"), Some("1 02:00:00"), Some("136:00:00")),
+            (Some("-110:00:00"), Some("1 02:00:00"), Some("-84:00:00")),
+            (Some("00:00:01"), Some("-00:00:01"), Some("00:00:00")),
+            (Some("00:00:03"), Some("-00:00:01"), Some("00:00:02")),
             (
                 Some("2018-02-28 23:00:00"),
                 Some("01:30:30.123456"),
@@ -1045,16 +1025,8 @@ mod tests {
             // null cases
             (None, None, None),
             (None, Some("11:30:45.123456"), None),
-            (
-                Some("00:00:00"),
-                None,
-                Some("00:00:00"),
-            ),
-            (
-                Some("01:00:00"),
-                None,
-                Some("01:00:00"),
-            ),
+            (Some("00:00:00"), None, Some("00:00:00")),
+            (Some("01:00:00"), None, Some("01:00:00")),
             (
                 Some("2019-01-01 01:00:00"),
                 None,

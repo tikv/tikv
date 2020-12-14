@@ -304,12 +304,18 @@ impl Duration {
 
     #[inline]
     pub fn minimize_fsp(self) -> Self {
-        Duration { fsp: MIN_FSP as u8, ..self }
+        Duration {
+            fsp: MIN_FSP as u8,
+            ..self
+        }
     }
 
     #[inline]
     pub fn maximize_fsp(self) -> Self {
-        Duration { fsp: MAX_FSP as u8, ..self }
+        Duration {
+            fsp: MAX_FSP as u8,
+            ..self
+        }
     }
 
     #[inline]
