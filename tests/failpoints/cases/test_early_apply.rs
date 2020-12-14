@@ -12,6 +12,7 @@ fn test_singleton_cannot_early_apply() {
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
+
     cluster.run();
     // Put one key first to cache leader.
     cluster.must_put(b"k0", b"v0");
@@ -34,6 +35,9 @@ fn test_multi_early_apply() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    // So compact log will not be triggered automatically.
+    configure_for_request_snapshot(&mut cluster);
+
     cluster.run_conf_change();
     // Check mixed regions can be scheduled correctly.
     let r1 = cluster.get_region(b"k1");
@@ -44,10 +48,6 @@ fn test_multi_early_apply() {
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(1), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
-
-    // Prevent gc_log_tick to propose a compact log
-    let raft_gc_log_tick_fp = "on_raft_gc_log_tick";
-    fail::cfg(raft_gc_log_tick_fp, "return()").unwrap();
 
     let store_1_fp = "raft_before_save_on_store_1";
 
