@@ -1069,7 +1069,6 @@ pub mod tests {
     fn test_mvcc_delete_skip_filtered() {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
-        // cfg.writecf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
