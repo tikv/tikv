@@ -97,6 +97,8 @@ pub struct RegionInfo {
     pub qps: usize,
     pub peer: Peer,
     pub key_ranges: Vec<KeyRange>,
+    pub approximate_size: u64,
+    pub approximate_key: u64,
 }
 
 impl RegionInfo {
@@ -106,6 +108,8 @@ impl RegionInfo {
             qps: 0,
             key_ranges: Vec::with_capacity(sample_num),
             peer: Peer::default(),
+            approximate_size: 0,
+            approximate_key: 0,
         }
     }
 
@@ -316,61 +320,69 @@ impl AutoSplitController {
         AutoSplitController::new(SplitConfigManager::default())
     }
 
-    pub fn flush(&mut self, others: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
-        let mut split_infos = Vec::default();
-        let mut top = BinaryHeap::with_capacity(TOP_N as usize);
-
+    fn collect_read_stats(&self, read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
         // collect from different thread
         let mut region_infos_map = HashMap::default(); // regionID-regionInfos
-        let capacity = others.len();
-        for other in others {
-            for (region_id, region_info) in other.region_infos {
-                if region_info.key_ranges.len() >= self.cfg.sample_num {
-                    let region_infos = region_infos_map
-                        .entry(region_id)
-                        .or_insert_with(|| Vec::with_capacity(capacity));
-                    region_infos.push(region_info);
+        let capacity = read_stats_vec.len();
+        for read_stats in read_stats_vec {
+            for (region_id, region_info) in read_stats.region_infos {
+                if region_info.approximate_size < self.cfg.size_threshold
+                    && region_info.approximate_key < self.cfg.key_threshold
+                {
+                    continue;
                 }
+                info!("approximate";"region-id"=>region_id,"size"=>region_info.approximate_size,"key"=>region_info.approximate_key);
+                let region_infos = region_infos_map
+                    .entry(region_id)
+                    .or_insert_with(|| Vec::with_capacity(capacity));
+                region_infos.push(region_info);
             }
         }
+        region_infos_map
+    }
+
+    pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
+        let mut split_infos = Vec::default();
+        let mut top = BinaryHeap::with_capacity(TOP_N as usize);
+        let region_infos_map = self.collect_read_stats(read_stats_vec);
 
         for (region_id, region_infos) in region_infos_map {
             let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_qps);
-
             let qps = *pre_sum.last().unwrap(); // region_infos is not empty
-            let num = self.cfg.detect_times;
-            if qps > self.cfg.qps_threshold {
-                let recorder = self
-                    .recorders
-                    .entry(region_id)
-                    .or_insert_with(|| Recorder::new(num));
-
-                recorder.update_peer(&region_infos[0].peer);
-
-                let key_ranges = sample(
-                    self.cfg.sample_num,
-                    &pre_sum,
-                    region_infos,
-                    RegionInfo::get_key_ranges_mut,
-                );
-
-                recorder.record(key_ranges);
-                if recorder.is_ready() {
-                    let key = recorder.collect(&self.cfg);
-                    if !key.is_empty() {
-                        let split_info = SplitInfo {
-                            region_id,
-                            split_key: Key::from_raw(&key).into_encoded(),
-                            peer: recorder.peer.clone(),
-                        };
-                        split_infos.push(split_info);
-                        info!("load base split region";"region_id"=>region_id);
-                    }
-                    self.recorders.remove(&region_id);
-                }
-            } else {
+            if qps < self.cfg.qps_threshold {
                 self.recorders.remove_entry(&region_id);
+                continue;
             }
+
+            let num = self.cfg.detect_times;
+            let recorder = self
+                .recorders
+                .entry(region_id)
+                .or_insert_with(|| Recorder::new(num));
+            recorder.update_peer(&region_infos[0].peer);
+
+            let key_ranges = sample(
+                self.cfg.sample_num,
+                &pre_sum,
+                region_infos,
+                RegionInfo::get_key_ranges_mut,
+            );
+
+            recorder.record(key_ranges);
+            if recorder.is_ready() {
+                let key = recorder.collect(&self.cfg);
+                if !key.is_empty() {
+                    let split_info = SplitInfo {
+                        region_id,
+                        split_key: Key::from_raw(&key).into_encoded(),
+                        peer: recorder.peer.clone(),
+                    };
+                    split_infos.push(split_info);
+                    info!("load base split region";"region_id"=>region_id);
+                }
+                self.recorders.remove(&region_id);
+            }
+
             top.push(qps);
         }
 
@@ -488,6 +500,49 @@ mod tests {
                     b"b"
                 );
             }
+        }
+    }
+
+    fn add_region(read_stats: &mut Vec<ReadStats>, id: u64, key: u64, size: u64) {
+        let mut region_info = RegionInfo::new(read_stats[0].sample_num);
+        region_info.approximate_key = key;
+        region_info.approximate_size = size;
+        read_stats[0].region_infos.entry(id).or_insert(region_info);
+    }
+
+    #[test]
+    fn test_threshold() {
+        let hub = AutoSplitController::new(SplitConfigManager::default());
+        let mut read_stats = vec![ReadStats::default()];
+        add_region(
+            &mut read_stats,
+            1,
+            hub.cfg.key_threshold,
+            hub.cfg.size_threshold,
+        );
+        add_region(
+            &mut read_stats,
+            2,
+            hub.cfg.key_threshold,
+            hub.cfg.size_threshold - 1,
+        );
+        add_region(
+            &mut read_stats,
+            3,
+            hub.cfg.key_threshold - 1,
+            hub.cfg.size_threshold,
+        );
+        add_region(
+            &mut read_stats,
+            4,
+            hub.cfg.key_threshold - 1,
+            hub.cfg.size_threshold - 1,
+        );
+
+        let regions = hub.collect_read_stats(read_stats);
+        assert_eq!(regions.len(), 3);
+        for (id, _) in regions {
+            assert_ne!(id, 4);
         }
     }
 

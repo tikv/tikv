@@ -264,7 +264,7 @@ where
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-            Task::UpdateMaxTimestamp { region_id, ..} => write!(
+            Task::UpdateMaxTimestamp { region_id, .. } => write!(
                 f,
                 "update the max timestamp for region {} in the concurrency manager",
                 region_id
@@ -920,7 +920,7 @@ where
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_read_stats(&mut self, read_stats: ReadStats) {
+    fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, stats) in &read_stats.flows {
             let peer_stat = self
                 .region_peers
@@ -933,9 +933,23 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
-                if sender.send(read_stats).is_err() {
-                    warn!("send read_stats failed, are we shutting down?")
-                }
+                let pd_client = self.pd_client.clone();
+                let db = self.db.clone();
+                let sender2 = sender.clone();
+                let f = async move {
+                    for (region_id, region_info) in read_stats.region_infos.iter_mut() {
+                        if let Ok(Some(region)) = pd_client.get_region_by_id(*region_id).await {
+                            region_info.approximate_size =
+                                get_region_approximate_size(&db, &region, 0).unwrap_or_default();
+                            region_info.approximate_key =
+                                get_region_approximate_keys(&db, &region, 0).unwrap_or_default();
+                        }
+                    }
+                    if sender2.send(read_stats).is_err() {
+                        warn!("send read_stats failed, are we shutting down?")
+                    }
+                };
+                spawn_local(f);
             }
         }
     }
