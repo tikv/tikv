@@ -68,13 +68,13 @@ pub(crate) fn make_rollback<S: Snapshot>(
     start_ts: TimeStamp,
     protected: bool,
     overlapped_write: Option<Write>,
-    gc_fence: Option<GcFenceGetter<'_, S>>,
+    gc_fence: GcFenceGetter<'_, S>,
 ) -> Result<Option<Write>> {
     let write = match overlapped_write {
         Some(write) => {
             assert!(start_ts > write.start_ts);
             if protected {
-                let fence = gc_fence.unwrap().get(start_ts)?;
+                let fence = gc_fence.get(start_ts)?;
                 Some(write.set_overlapped_rollback(true, Some(fence)))
             } else {
                 // No need to update the original write.
@@ -114,7 +114,7 @@ impl MissingLockAction {
         &self,
         ts: TimeStamp,
         overlapped_write: Option<Write>,
-        gc_fence: Option<GcFenceGetter<'_, S>>,
+        gc_fence: GcFenceGetter<'_, S>,
     ) -> Result<Option<Write>> {
         let protected = match self {
             MissingLockAction::Rollback => false,
@@ -335,7 +335,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.start_ts,
             protected,
             overlapped_write,
-            Some(GcFenceGetter::new(&self.reader.snapshot, &key)),
+            GcFenceGetter::new(&self.reader.snapshot, &key),
         )? {
             self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         }
@@ -1865,6 +1865,8 @@ mod tests {
         // A key's gc fence won't be another MVCC key.
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 131);
         must_commit(&engine, b"k1", 131, 132);
+        must_prewrite_put(&engine, b"k0", b"v1", b"k0", 133);
+        must_commit(&engine, b"k0", 133, 134);
         must_prewrite_put(&engine, b"k2", b"v1", b"k2", 133);
         must_commit(&engine, b"k2", 133, 134);
         must_cleanup(&engine, b"k1", 132, 0);

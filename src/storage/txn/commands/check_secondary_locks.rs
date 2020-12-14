@@ -121,7 +121,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                     self.start_ts,
                     true,
                     rollback_overlapped_write,
-                    Some(GcFenceGetter::new(&txn.reader.snapshot, &key)),
+                    GcFenceGetter::new(&txn.reader.snapshot, &key),
                 )? {
                     txn.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
                     if txn.collapse_rollback {

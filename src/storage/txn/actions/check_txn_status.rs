@@ -120,7 +120,7 @@ pub fn check_txn_status_missing_lock<S: Snapshot>(
             if let Some(write) = action.construct_write(
                 ts,
                 overlapped_write,
-                Some(GcFenceGetter::new(&txn.reader.snapshot, &primary_key)),
+                GcFenceGetter::new(&txn.reader.snapshot, &primary_key),
             )? {
                 txn.put_write(primary_key, ts, write.as_ref().to_bytes());
             }
