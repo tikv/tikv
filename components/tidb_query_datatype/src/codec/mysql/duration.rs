@@ -228,23 +228,15 @@ mod parser {
                     neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
                 ) {
                     Ok(duration) => Some(duration),
-                    Err(err)
-                        if err.is_overflow()
-                            && ctx
-                                .handle_overflow_err(Error::truncated_wrong_val("TIME", input))
-                                .is_ok() =>
-                    {
+                    Err(err) => ctx.handle_overflow_err(err).map_or(None, |_| {
                         let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
                         Some(Duration { nanos, fsp })
-                    }
-                    _ => None,
+                    }),
                 }
             });
 
         if duration.is_none() && fallback_to_daytime {
-            hhmmss_datetime(ctx, rest, fsp)
-                .ok()
-                .map(|(_, duration)| duration)
+            hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
         } else {
             duration
         }
