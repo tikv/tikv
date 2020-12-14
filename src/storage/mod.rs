@@ -1716,7 +1716,9 @@ mod tests {
     use super::{test_util::*, *};
 
     use crate::config::TitanDBConfig;
+    use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
+    use crate::storage::txn::commands::Prewrite;
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -5697,5 +5699,45 @@ mod tests {
             .unwrap();
         let res = rx.recv().unwrap().unwrap();
         assert_eq!(res.min_commit_ts, 1001.into());
+    }
+
+    #[test]
+    fn test_scheduler_response_policy() {
+        let engine =
+            MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap())
+                .add_expected_write(ExpectedWrite::new().expect_committed_cb())
+                .add_expected_write(ExpectedWrite::new().expect_committed_cb())
+                .build();
+        let mut builder = TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
+        builder.config.enable_async_apply_prewrite = true;
+        let storage = builder.build().unwrap();
+        let (tx, rx) = channel();
+        let keys = [b"k1", b"k2"];
+        let values = [b"v1", b"v2"];
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
+            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+        ];
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    mutations.clone(),
+                    keys[0].to_vec(),
+                    TimeStamp::new(10),
+                    0,
+                    false,
+                    1,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    Some(vec![]),
+                    false,
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap().unwrap();
     }
 }
