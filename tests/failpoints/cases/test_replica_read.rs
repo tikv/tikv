@@ -415,3 +415,78 @@ fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
     }
     panic!("raft log is not truncated to {}", index);
 }
+
+/// Test if the read index request can get a correct response when the commit index of leader
+/// if not up-to-date after transferring leader.
+#[test]
+fn test_replica_read_after_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    assert_eq!(r, 1);
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_peer(3, 3));
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Make sure the peer 3 exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // peer 2 does not know the latest commit index if it cann't receive hearbeat.
+    // It's because the mechanism of notifying commit index in raft-rs is lazy.
+    let recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter_2);
+
+    cluster.must_put(b"k1", b"v2");
+
+    // Delay the response raft messages to peer 2.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let response_recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .msg_type(MessageType::MsgAppendResponse)
+            .msg_type(MessageType::MsgHeartbeatResponse),
+    );
+    cluster.sim.wl().add_recv_filter(2, response_recv_filter_2);
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    cluster.clear_send_filters();
+
+    // Wait peer 1 and 3 to send heartbeat response to peer 2
+    sleep_ms(100);
+    // Pause before collecting message to make the these message be handled in one loop
+    let on_peer_collect_message_2 = "on_peer_collect_message_2";
+    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+
+    let new_region = cluster.get_region(b"k1");
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), new_region, b"k1", true, true);
+    // Wait peer 2 to send read index to peer 1003
+    sleep_ms(100);
+
+    fail::remove(on_peer_collect_message_2);
+
+    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let exp_value = resp.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v2");
+}
