@@ -74,45 +74,89 @@ pub struct Config {
 
     // Status server's advertise listening address for outer communication.
     // If not set, the status server's listening address will be used.
+    #[config(skip)]
     pub advertise_status_addr: String,
 
+    #[config(skip)]
     pub status_thread_pool_size: usize,
 
+    #[config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
+
+    #[config(skip)]
     pub grpc_concurrency: usize,
+
+    #[config(skip)]
     pub grpc_concurrent_stream: i32,
+
+    #[config(skip)]
     pub grpc_raft_conn_num: usize,
+
     #[config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
+
     #[config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
+
+    #[config(skip)]
     pub grpc_keepalive_time: ReadableDuration,
+
+    #[config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
+
     /// How many snapshots can be sent concurrently.
     #[config(skip)]
     pub concurrent_send_snap_limit: usize,
+
     /// How many snapshots can be recv concurrently.
+    #[config(skip)]
     pub concurrent_recv_snap_limit: usize,
+
+    #[config(skip)]
     pub end_point_recursion_limit: u32,
+
+    #[config(skip)]
     pub end_point_stream_channel_size: usize,
+
+    #[config(skip)]
     pub end_point_batch_row_limit: usize,
+
+    #[config(skip)]
     pub end_point_stream_batch_row_limit: usize,
+
+    #[config(skip)]
     pub end_point_enable_batch_if_possible: bool,
+
+    #[config(skip)]
     pub end_point_request_max_handle_duration: ReadableDuration,
+
+    #[config(skip)]
     pub end_point_max_concurrency: usize,
+
     #[config(skip)]
     pub snap_max_write_bytes_per_sec: ReadableSize,
     #[config(skip)]
     pub snap_max_total_size: ReadableSize,
+
+    #[config(skip)]
     pub stats_concurrency: usize,
+
+    #[config(skip)]
     pub heavy_load_threshold: usize,
+
+    #[config(skip)]
     pub heavy_load_wait_duration: ReadableDuration,
+
+    #[config(skip)]
     pub enable_request_batch: bool,
+
+    #[config(skip)]
     pub background_thread_count: usize,
+
     // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
 
