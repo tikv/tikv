@@ -384,6 +384,7 @@ impl WriteCompactionFilter {
             unsafe { libc::exit(-1) };
         }
     }
+
     fn handle_delete_mark_impl(&mut self) -> Result<(), String> {
         let (mark, mut filtered) = match self.deleting_filtered.take() {
             Some((x, y)) => (x, y.into_iter().peekable()),
@@ -1062,7 +1063,8 @@ pub mod tests {
     }
 
     // When handling MVCC-delete marks at the bottommost level, filtered keys won't
-    // be rewritten again by DB::delete.
+    // be rewritten again by DB::delete. All pathes in `handle_delete_mark_impl` should
+    // be covered by this case.
     #[test]
     fn test_mvcc_delete_skip_filtered() {
         let mut cfg = DbConfig::default();
@@ -1115,8 +1117,9 @@ pub mod tests {
         raw_engine.flush_cf(CF_WRITE, true).unwrap();
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[0], 1);
 
+        let key_104 = Key::from_raw(b"zkey").append_ts(104.into()).into_encoded();
         let key_112 = Key::from_raw(b"zkey").append_ts(112.into()).into_encoded();
-        let value = raw_engine
+        let value_112 = raw_engine
             .get_value_cf(CF_WRITE, &key_112)
             .unwrap()
             .unwrap();
@@ -1135,12 +1138,15 @@ pub mod tests {
         // key_112 must be cleared by the compaction.
         must_get(&engine, b"zkey", 120, b"zvalue3");
 
-        // Put the cleaned key back to simulate it hasn't been compacted.
-        raw_engine.put_cf(CF_WRITE, &key_112, &value).unwrap();
+        // Put `k_112` back to simulate it hasn't been compacted.
+        raw_engine.put_cf(CF_WRITE, &key_112, &value_112).unwrap();
+        // Delete `k_104` to simulate it has been cleared by traditional GC.
+        raw_engine.delete_cf(CF_WRITE, &key_104).unwrap();
 
         // Do the last compaction:
         // [key_112] will be deleted.
         // [key_122, key_106, key_104, key_102, key1_122] will be filtered.
+        // [key_106, key_102] will be skiped in `handle_delete_mark`.
         let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
         let mut files = Vec::with_capacity(2);
         for &level in &[5, 6] {
@@ -1153,7 +1159,7 @@ pub mod tests {
             .push(Arc::new(|filter: &WriteCompactionFilter| {
                 assert_eq!(filter.total_filtered, 5);
                 assert_eq!(filter.total_deleted, 1);
-                assert_eq!(filter.mvcc_delete_skip_older, 3);
+                assert_eq!(filter.mvcc_delete_skip_older, 2);
             }));
         gc_runner.safe_point(130).gc_on_files(&raw_engine, &files);
         // key_112 must be cleared by the compaction.
