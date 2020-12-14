@@ -587,7 +587,7 @@ impl Drop for WriteCompactionFilter {
 }
 
 impl CompactionFilter for WriteCompactionFilter {
-    fn filter_v2(
+    fn featured_filter(
         &mut self,
         level: usize,
         key: &[u8],
@@ -784,6 +784,11 @@ pub mod tests {
                 callbacks.push(callback.clone());
             }
         }
+        fn post_gc(&self) {
+            let mut gc_context = GC_CONTEXT.lock().unwrap();
+            let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
+            callbacks.clear();
+        }
 
         fn gc(&self, raw_engine: &RocksEngine) {
             let _guard = LOCK.lock().unwrap();
@@ -797,6 +802,7 @@ pub mod tests {
                 compact_opts.set_target_level(target_level as i32);
             }
             db.compact_range_cf_opt(handle, &compact_opts, self.start, self.end);
+            self.post_gc();
         }
 
         fn gc_on_files(&self, raw_engine: &RocksEngine, input_files: &[String]) {
@@ -807,6 +813,7 @@ pub mod tests {
             let level = self.target_level.unwrap() as i32;
             db.compact_files_cf(handle, &CompactionOptions::new(), input_files, level)
                 .unwrap();
+            self.post_gc();
         }
     }
 

@@ -2032,7 +2032,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-seqno#da51df3056540b5dd2518d86a2584ae1a5900c37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "cc",
  "cmake",
@@ -2041,7 +2041,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-seqno#da51df3056540b5dd2518d86a2584ae1a5900c37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2061,7 +2061,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-seqno#da51df3056540b5dd2518d86a2584ae1a5900c37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3489,7 +3489,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/hicqu/rust-rocksdb.git?branch=compaction-filter-seqno#da51df3056540b5dd2518d86a2584ae1a5900c37"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "libc",
  "librocksdb_sys",
