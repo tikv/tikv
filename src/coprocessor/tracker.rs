@@ -27,10 +27,10 @@ enum TrackerState {
     AllItemsBegan,
 
     /// The tracker is notified that a single item just began.
-    ItemBegan,
+    ItemBegan(Instant),
 
     /// The tracker is notified that a single item just finished.
-    ItemFinished,
+    ItemFinished(Instant),
 
     /// The tracker is notified that all items just finished.
     AllItemFinished,
@@ -43,7 +43,6 @@ enum TrackerState {
 #[derive(Debug)]
 pub struct Tracker {
     request_begin_at: Instant,
-    item_begin_at: Instant,
 
     // Intermediate results
     current_stage: TrackerState,
@@ -53,6 +52,13 @@ pub struct Tracker {
     handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
     req_lifetime: Duration,
     item_process_time: Duration,
+
+    // Suspend time between processing two item
+    // In a cooperative environment, a cop task may suspend itself at finishing an item,
+    // and be resumed by runtime later. That will raise a considerable suspend time.
+    item_suspend_time: Duration,
+
+    total_suspend_time: Duration,
     total_process_time: Duration,
     total_storage_stats: Statistics,
     total_perf_stats: PerfStatisticsDelta, // Accumulated perf statistics
@@ -70,7 +76,6 @@ impl Tracker {
         let now = Instant::now_coarse();
         Tracker {
             request_begin_at: now,
-            item_begin_at: now,
             current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
             schedule_wait_time: Duration::default(),
@@ -78,6 +83,8 @@ impl Tracker {
             handler_build_time: Duration::default(),
             req_lifetime: Duration::default(),
             item_process_time: Duration::default(),
+            item_suspend_time: Duration::default(),
+            total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
             total_perf_stats: PerfStatisticsDelta::default(),
@@ -115,13 +122,18 @@ impl Tracker {
     }
 
     pub fn on_begin_item(&mut self) {
-        assert!(
-            self.current_stage == TrackerState::AllItemsBegan
-                || self.current_stage == TrackerState::ItemFinished
-        );
+        let now = Instant::now_coarse();
+        match self.current_stage {
+            TrackerState::AllItemsBegan => {}
+            TrackerState::ItemFinished(at) => {
+                self.item_suspend_time = now - at;
+                self.total_suspend_time += self.item_suspend_time;
+            }
+            _ => unreachable!(),
+        }
+
         set_perf_level(self.req_ctx.perf_level);
-        self.item_begin_at = Instant::now_coarse();
-        self.current_stage = TrackerState::ItemBegan;
+        self.current_stage = TrackerState::ItemBegan(now);
     }
 
     pub fn on_finish_item(
@@ -129,16 +141,19 @@ impl Tracker {
         some_storage_stats: Option<Statistics>,
         perf_statistics: PerfStatisticsDelta,
     ) {
-        assert_eq!(self.current_stage, TrackerState::ItemBegan);
-        self.item_process_time = Instant::now_coarse() - self.item_begin_at;
-        self.total_process_time += self.item_process_time;
-        if let Some(storage_stats) = some_storage_stats {
-            self.total_storage_stats.add(&storage_stats);
+        if let TrackerState::ItemBegan(at) = self.current_stage {
+            let now = Instant::now_coarse();
+            self.item_process_time = now - at;
+            self.total_process_time += self.item_process_time;
+            if let Some(storage_stats) = some_storage_stats {
+                self.total_storage_stats.add(&storage_stats);
+            }
+            // Record delta perf statistics
+            self.total_perf_stats += perf_statistics;
+            self.current_stage = TrackerState::ItemFinished(now);
+        } else {
+            unreachable!()
         }
-        // Record delta perf statistics
-        self.total_perf_stats += perf_statistics;
-        self.current_stage = TrackerState::ItemFinished;
-        // TODO: Need to record time between Finish -> Begin Next?
     }
 
     pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
@@ -149,15 +164,22 @@ impl Tracker {
     /// TiDB asks for ExecDetail to be printed in its log.
     /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
     pub fn get_item_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
-        assert_eq!(self.current_stage, TrackerState::ItemFinished);
-        self.exec_details(self.item_process_time)
+        if let TrackerState::ItemFinished(_) = self.current_stage {
+            self.exec_details(self.item_process_time)
+        } else {
+            unreachable!()
+        }
     }
 
     /// Get ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
-        assert_eq!(self.current_stage, TrackerState::ItemFinished);
-        self.exec_details(self.total_process_time)
+        if let TrackerState::ItemFinished(_) = self.current_stage {
+            // TODO: Separate process time and suspend time
+            self.exec_details(self.total_process_time + self.total_suspend_time)
+        } else {
+            unreachable!()
+        }
     }
 
     fn exec_details(&self, measure: Duration) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
@@ -195,10 +217,12 @@ impl Tracker {
     }
 
     pub fn on_finish_all_items(&mut self) {
-        assert!(
-            self.current_stage == TrackerState::AllItemsBegan
-                || self.current_stage == TrackerState::ItemFinished
-        );
+        match self.current_stage {
+            TrackerState::AllItemsBegan => {}
+            TrackerState::ItemFinished(_) => {}
+            _ => unreachable!(),
+        }
+
         self.req_lifetime = Instant::now_coarse() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
@@ -227,6 +251,7 @@ impl Tracker {
                 "wait_time.snapshot" => ?self.snapshot_wait_time,
                 "handler_build_time" => ?self.handler_build_time,
                 "total_process_time" => ?self.total_process_time,
+                "total_suspend_time" => ?self.total_suspend_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_ctx.tag.get_str(),
@@ -320,12 +345,13 @@ impl Drop for Tracker {
         if let TrackerState::SnapshotRetrieved(_) = self.current_stage {
             self.on_begin_all_items();
         }
-        if self.current_stage == TrackerState::ItemBegan {
+        if let TrackerState::ItemBegan(_) = self.current_stage {
             self.on_finish_item(None, PerfStatisticsDelta::default());
         }
-        if self.current_stage == TrackerState::AllItemsBegan
-            || self.current_stage == TrackerState::ItemFinished
-        {
+        if self.current_stage == TrackerState::AllItemsBegan {
+            self.on_finish_all_items();
+        }
+        if let TrackerState::ItemFinished(_) = self.current_stage {
             self.on_finish_all_items();
         }
     }
