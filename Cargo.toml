@@ -124,7 +124,7 @@ pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
 prost = "0.6"
-pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
+pprof = { version = "^0.3.14", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
