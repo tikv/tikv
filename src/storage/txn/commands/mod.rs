@@ -104,6 +104,8 @@ pub enum Command {
 /// This enum exists to facilitate generic operations over different commands.
 /// 5. Finally, the `Command` enum variant for `Commit` is converted to the `TypedCommand`
 /// using the `From<Command>` impl for `TypedCommand`.
+/// For other requests, see the corresponding `future_` method, the `From` trait
+/// implementation and so on.
 pub struct TypedCommand<T> {
     pub cmd: Command,
 

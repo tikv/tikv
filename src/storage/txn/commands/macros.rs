@@ -12,13 +12,19 @@ macro_rules! ctx {
 }
 
 /// Generate the struct definition and Debug, Display methods for a passed in
-/// storage command.
+/// storage command. An instance of this type is created from the `From`
+/// trait implementations of `TypedCommand`, when processing incoming storage
+/// requests of different types.
 /// Parameters:
-/// cmd -> Used as the type name for the struct. It must match one of the variants of the enum
-/// `storage::txns::commands::Command`.
-/// cmd_ty -> The type that encapsulates the result of executing this command. It is passed as
-/// a generic parameter to `TypedCommand`.
-/// display -? Information needed to implement the `Display` trait for the command.
+/// cmd -> Used as the type name for the generated struct. A variant of the
+/// enum `storage::txns::commands::Command` must exist whose name matches the
+/// value of `cmd` and which accepts one parameter whose type name matches
+/// the value of `cmd`.
+/// cmd_ty -> The type that encapsulates the result of executing this command.
+/// A `From` conversion should exist in txn/commands/mod.rs from a `Command` enum
+/// variant corresponding to the value of `cmd` to a `TypedCommand`
+/// parameterized with the value of `cmd_ty`.
+/// display -> Information needed to implement the `Display` trait for the command.
 /// content -> The contents of the struct definition for the command.
 macro_rules! command {
     (
