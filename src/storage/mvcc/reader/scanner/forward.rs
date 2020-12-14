@@ -624,6 +624,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     std::cmp::max(lock.ts, lock.for_update_ts),
+                    cfg.ts,
                     statistics,
                 )?
             } else {
@@ -646,7 +647,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        _cfg: &mut ScannerConfig<S>,
+        cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
@@ -719,6 +720,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     commit_ts,
+                    cfg.ts,
                     statistics,
                 )?
             } else {

@@ -44,6 +44,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok(ts);
     }
 
+    // Note that the `prev_write` may has invalid GC fence.
     let prev_write = if !mutation.skip_constraint_check() {
         mutation.check_for_newer_version(txn)?
     } else {

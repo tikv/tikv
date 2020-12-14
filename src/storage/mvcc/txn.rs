@@ -362,6 +362,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         write_cursor,
                         key,
                         self.start_ts,
+                        self.start_ts,
                         &mut self.reader.statistics,
                     )?;
                     write.map(|w| OldValue {
@@ -369,10 +370,14 @@ impl<S: Snapshot> MvccTxn<S> {
                         start_ts: w.start_ts,
                     })
                 } else {
-                    Some(OldValue {
-                        short_value: w.short_value,
-                        start_ts: w.start_ts,
-                    })
+                    if w.as_ref().check_gc_fence_as_latest_version(self.start_ts) {
+                        Some(OldValue {
+                            short_value: w.short_value,
+                            start_ts: w.start_ts,
+                        })
+                    } else {
+                        None
+                    }
                 }
             } else {
                 None
