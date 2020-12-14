@@ -45,6 +45,10 @@ fn test_multi_early_apply() {
     must_get_equal(&cluster.get_engine(1), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 
+    // Prevent gc_log_tick to propose a compact log
+    let raft_gc_log_tick_fp = "on_raft_gc_log_tick";
+    fail::cfg(raft_gc_log_tick_fp, "return()").unwrap();
+
     let store_1_fp = "raft_before_save_on_store_1";
 
     let executed = AtomicBool::new(false);
