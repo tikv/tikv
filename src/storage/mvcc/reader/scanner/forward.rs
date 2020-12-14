@@ -767,6 +767,11 @@ where
 pub mod test_util {
     use super::*;
     use crate::storage::mvcc::Write;
+    use crate::storage::txn::tests::{
+        force_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put,
+    };
+    use crate::storage::Engine;
 
     #[derive(Default)]
     pub struct EntryBuilder {
@@ -879,11 +884,78 @@ pub mod test_util {
             }
         }
     }
+
+    #[allow(clippy::type_complexity)]
+    pub fn prepare_test_data_for_check_gc_fence(
+        engine: &impl Engine,
+    ) -> (TimeStamp, Vec<(Vec<u8>, Option<Vec<u8>>)>) {
+        must_prewrite_put(engine, b"k1", b"v1", b"k1", 10);
+        must_commit(engine, b"k1", 10, 20);
+        force_cleanup_with_gc_fence(engine, b"k1", 20, 0, 50);
+
+        must_prewrite_put(engine, b"k2", b"v2", b"k2", 11);
+        must_commit(engine, b"k2", 11, 20);
+        force_cleanup_with_gc_fence(engine, b"k2", 20, 0, 40);
+
+        must_prewrite_put(engine, b"k3", b"v3", b"k3", 12);
+        must_commit(engine, b"k3", 12, 20);
+        force_cleanup_with_gc_fence(engine, b"k3", 20, 0, 30);
+
+        must_prewrite_put(engine, b"k4", b"v4", b"k4", 13);
+        must_commit(engine, b"k4", 13, 14);
+        must_prewrite_put(engine, b"k4", b"v4", b"k4x", 15);
+        must_commit(engine, b"k4", 15, 20);
+        force_cleanup_with_gc_fence(engine, b"k4", 14, 0, 20);
+        force_cleanup_with_gc_fence(engine, b"k4", 20, 0, 30);
+
+        must_prewrite_put(engine, b"k5", b"v5", b"k5", 13);
+        must_commit(engine, b"k5", 13, 14);
+        must_prewrite_delete(engine, b"k5", b"v5", 15);
+        must_commit(engine, b"k5", 15, 20);
+        force_cleanup_with_gc_fence(engine, b"k5", 14, 0, 20);
+        force_cleanup_with_gc_fence(engine, b"k5", 20, 0, 30);
+
+        must_prewrite_put(engine, b"k6", b"v6", b"k6", 16);
+        must_commit(engine, b"k6", 16, 20);
+        must_prewrite_lock(engine, b"k6", b"k6", 25);
+        must_commit(engine, b"k6", 25, 26);
+        must_prewrite_lock(engine, b"k6", b"k6", 28);
+        must_commit(engine, b"k6", 28, 29);
+        force_cleanup_with_gc_fence(engine, b"k6", 20, 0, 50);
+
+        must_prewrite_put(engine, b"k7", b"v7", b"k7", 16);
+        must_commit(engine, b"k7", 16, 20);
+        must_prewrite_lock(engine, b"k7", b"k7", 25);
+        must_commit(engine, b"k7", 25, 26);
+        must_prewrite_lock(engine, b"k7", b"k7", 28);
+        must_commit(engine, b"k7", 28, 29);
+        force_cleanup_with_gc_fence(engine, b"k7", 20, 0, 27);
+
+        must_prewrite_put(engine, b"k8", b"v8", b"k8", 17);
+        must_commit(engine, b"k8", 17, 30);
+        force_cleanup_with_gc_fence(engine, b"k8", 30, 0, 0);
+
+        // Returns the read ts to be checked and the expected result.
+        (
+            40.into(),
+            vec![
+                (b"k1".to_vec(), Some(b"v1".to_vec())),
+                (b"k2".to_vec(), None),
+                (b"k3".to_vec(), None),
+                (b"k4".to_vec(), None),
+                (b"k5".to_vec(), None),
+                (b"k6".to_vec(), Some(b"v6".to_vec())),
+                (b"k7".to_vec(), None),
+                (b"k8".to_vec(), Some(b"v8".to_vec())),
+            ],
+        )
+    }
 }
 
 #[cfg(test)]
 mod latest_kv_tests {
     use super::super::ScannerBuilder;
+    use super::test_util::prepare_test_data_for_check_gc_fence;
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::Scanner;
@@ -1166,6 +1238,30 @@ mod latest_kv_tests {
         );
         assert_eq!(scanner.next().unwrap(), None);
     }
+
+    #[test]
+    fn test_latest_kv_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+            .range(None, None)
+            .build()
+            .unwrap();
+        let result: Vec<_> = scanner
+            .scan(100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect();
+        assert_eq!(result, expected_result);
+    }
 }
 
 #[cfg(test)]
@@ -1177,7 +1273,8 @@ mod latest_entry_tests {
     };
     use crate::storage::{Engine, TestEngineBuilder};
 
-    use super::test_util::EntryBuilder;
+    use super::test_util::*;
+    use crate::storage::txn::EntryBatch;
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
     #[test]
@@ -1520,6 +1617,31 @@ mod latest_entry_tests {
         check(5, 0, true, vec![&entry_a_3, &entry_b_1]);
         // Scanning entries without delete in (0, 10] should get a_7
         check(10, 0, false, vec![&entry_a_7]);
+    }
+
+    #[test]
+    fn test_latest_entry_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+        let mut result = EntryBatch::with_capacity(20);
+        scanner.scan_entries(&mut result).unwrap();
+        let result: Vec<_> = result
+            .drain()
+            .map(|entry| entry.into_kvpair().unwrap())
+            .collect();
+
+        assert_eq!(result, expected_result);
     }
 }
 

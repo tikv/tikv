@@ -913,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_gc_fence() {
+    fn test_point_get_check_gc_fence() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);

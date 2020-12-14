@@ -439,6 +439,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_util::prepare_test_data_for_check_gc_fence;
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
@@ -1204,5 +1205,30 @@ mod tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
+    }
+
+    #[test]
+    fn test_backward_scanner_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .rev()
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, true)
+            .range(None, None)
+            .build()
+            .unwrap();
+        let result: Vec<_> = scanner
+            .scan(100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect();
+        assert_eq!(result, expected_result);
     }
 }
