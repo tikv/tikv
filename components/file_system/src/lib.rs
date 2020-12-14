@@ -22,7 +22,10 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub use iosnoop::{get_io_type, init_io_snooper, set_io_type, IOContext, IOOp, IOType, WithIOType};
+pub use iosnoop::{
+    flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOOp, IOType,
+    WithIOType,
+};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 

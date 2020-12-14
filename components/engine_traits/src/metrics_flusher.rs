@@ -7,8 +7,9 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::raft_engine::RaftEngine;
-
 use crate::*;
+
+use file_system::flush_io_metrics;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
@@ -52,6 +53,7 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
                         raft_db.reset_statistics();
                         last_reset = Instant::now();
                     }
+                    flush_io_metrics();
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;

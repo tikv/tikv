@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::metrics::*;
 use super::{IOStats, IOType};
 
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
@@ -122,12 +124,50 @@ pub fn init_io_snooper() -> Result<(), String> {
         .attach(&mut bpf)
         .map_err(|e| e.to_string())?;
     // the "events" table is where the "open file" events get sent
-    let stats_table = bpf.table("statsbytype").map_err(|e| e.to_string())?;
-    let type_table = bpf.table("typebypid").map_err(|e| e.to_string())?;
+    let stats_table = bpf.table("stats_by_type").map_err(|e| e.to_string())?;
+    let type_table = bpf.table("type_by_pid").map_err(|e| e.to_string())?;
     unsafe {
         BPF_TABLE = Some((bpf, stats_table, type_table));
     }
     Ok(())
+}
+
+lazy_static! {
+    static ref IO_CONTEXT: Mutex<IOContext> = Mutex::new(IOContext::new());
+}
+
+macro_rules! flush_io_latency {
+    ($bpf:ident, $delta:ident, $metrics:ident) => {
+        let mut t = $bpf.table(concat!(stringify!($metrics), "_latency")).unwrap();
+        for e in t.iter() {
+            let bucket = unsafe { ptr::read(e.key.as_ptr() as *const u64) };
+            let count = unsafe { ptr::read(e.value.as_ptr() as *const u64) };
+
+            for _ in 0..count {
+                IO_LATENCY_MICROS.$metrics.read.observe(bucket as f64);
+            }
+        }
+        t.delete_all().unwrap();
+
+        // IO_BYTES.$metrics.read.inc_by($delta.get(IOType::pascal!($metrics)).unwrap_or_default().read);
+        // IO_BYTES.$metrics.write.inc_by($delta.get(IOType::pascal!($metrics)).unwrap_or_default().write);
+    };
+}
+
+pub unsafe fn flush_io_metrics() {
+    if let Some((bpf, _, _)) = BPF_TABLE.as_mut() {
+        let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
+        flush_io_latency!(bpf, delta, other);
+        flush_io_latency!(bpf, delta, read);
+        flush_io_latency!(bpf, delta, write);
+        flush_io_latency!(bpf, delta, coprocessor);
+        flush_io_latency!(bpf, delta, flush);
+        flush_io_latency!(bpf, delta, compaction);
+        flush_io_latency!(bpf, delta, replication);
+        flush_io_latency!(bpf, delta, loadbalance);
+        flush_io_latency!(bpf, delta, import);
+        flush_io_latency!(bpf, delta, export);
+    }
 }
 
 #[cfg(test)]

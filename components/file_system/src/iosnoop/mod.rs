@@ -8,8 +8,10 @@ mod imp;
 #[path = "null.rs"]
 mod imp;
 
+mod metrics;
+
+pub use imp::{flush_io_metrics, init_io_snooper, IOContext};
 pub use imp::{get_io_type, set_io_type};
-pub use imp::{init_io_snooper, IOContext};
 
 #[repr(C)]
 #[derive(Default, Clone)]

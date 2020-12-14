@@ -452,6 +452,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "casey"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fabe85130dda9cf267715582ce6cf1ab581c8dfe3cb33f7065fee0f14e3fea14"
+dependencies = [
+ "syn",
+]
+
+[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1218,6 +1227,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "file_system",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -1343,6 +1353,7 @@ name = "file_system"
 version = "0.1.0"
 dependencies = [
  "bcc",
+ "casey",
  "collections",
  "crc32fast",
  "crossbeam-utils 0.8.1",
@@ -1352,6 +1363,8 @@ dependencies = [
  "maligned",
  "nix 0.19.0",
  "openssl",
+ "prometheus",
+ "prometheus-static-metric",
  "rand",
  "tempfile",
  "tikv_alloc",

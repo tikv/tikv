@@ -38,3 +38,5 @@ pub fn set_io_type(new_io_type: IOType) {
 pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
+
+pub fn flush_io_metrics() {}
