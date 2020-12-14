@@ -196,7 +196,12 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
-    pub fn parse(ctx: &mut EvalContext, input: &str, fsp: u8) -> Option<Duration> {
+    pub fn parse(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: u8,
+        fallback_to_daytime: bool,
+    ) -> Option<Duration> {
         let input = input.trim();
         if input.is_empty() {
             return Some(Duration::zero());
@@ -204,7 +209,7 @@ mod parser {
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
-        day_hhmmss(rest)
+        let duration = day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
                 Some((rest, [day.checked_mul(24)?.checked_add(hh)?, mm, ss]))
@@ -219,28 +224,30 @@ mod parser {
                     return None;
                 }
 
-                Some(Duration::new_from_parts(
+                match Duration::new_from_parts(
                     neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
-                ))
-            })
-            .or_else(|| {
-                hhmmss_datetime(ctx, rest, fsp)
-                    .ok()
-                    .map(|(_, duration)| Ok(duration))
-            })
-            .and_then(|result| {
-                result
-                    .or_else(|err| {
-                        if err.is_overflow() {
-                            ctx.handle_overflow_err(Error::truncated_wrong_val("TIME", input))?;
-                            let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
-                            Ok(Duration { nanos, fsp })
-                        } else {
-                            Err(err)
-                        }
-                    })
-                    .ok()
-            })
+                ) {
+                    Ok(duration) => Some(duration),
+                    Err(err)
+                        if err.is_overflow()
+                            && ctx
+                                .handle_overflow_err(Error::truncated_wrong_val("TIME", input))
+                                .is_ok() =>
+                    {
+                        let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
+                        Some(Duration { nanos, fsp })
+                    }
+                    _ => None,
+                }
+            });
+
+        if duration.is_none() && fallback_to_daytime {
+            hhmmss_datetime(ctx, rest, fsp)
+                .ok()
+                .map(|(_, duration)| duration)
+        } else {
+            duration
+        }
     }
 } /* parser */
 
@@ -429,7 +436,15 @@ impl Duration {
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp).ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+        parser::parse(ctx, input, fsp, true)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+    }
+
+    /// Parses the input exactly as duration and will not fallback to datetime.
+    pub fn parse_exactly(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        parser::parse(ctx, input, fsp, false)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.

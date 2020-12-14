@@ -164,7 +164,7 @@ pub fn add_string_and_duration(
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
-    if let Ok(arg0) = Duration::parse(ctx, arg0, MAX_FSP) {
+    if let Ok(arg0) = Duration::parse_exactly(ctx, arg0, MAX_FSP) {
         return match arg0.checked_add(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
@@ -194,7 +194,7 @@ pub fn sub_string_and_duration(
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
     let arg0 = std::str::from_utf8(arg0).map_err(Error::Encoding)?;
-    if let Ok(arg0) = Duration::parse(ctx, arg0, MAX_FSP) {
+    if let Ok(arg0) = Duration::parse_exactly(ctx, arg0, MAX_FSP) {
         return match arg0.checked_sub(*arg1) {
             Some(result) => Ok(writer.write(Some(duration_to_string(result).into_bytes()))),
             None => ctx
