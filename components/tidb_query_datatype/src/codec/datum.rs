@@ -1802,7 +1802,7 @@ mod tests {
                 Some(true),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"11:11:11.999999", MAX_FSP)
+                Duration::parse(&mut EvalContext::default(), "11:11:11.999999", MAX_FSP)
                     .unwrap()
                     .into(),
                 Some(true),
@@ -1979,7 +1979,7 @@ mod tests {
                 20121231113045f64,
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"11:30:45", 0).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), "11:30:45", 0).unwrap()),
                 f64::from(113045),
             ),
             (
@@ -2015,7 +2015,7 @@ mod tests {
             ),
             (
                 Datum::Dur(
-                    Duration::parse(&mut EvalContext::default(), b"11:30:45.999", 0).unwrap(),
+                    Duration::parse(&mut EvalContext::default(), "11:30:45.999", 0).unwrap(),
                 ),
                 113046,
             ),
