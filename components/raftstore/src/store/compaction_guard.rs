@@ -2,7 +2,7 @@
 
 use std::{cell::Cell, ffi::CString};
 
-use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
+use crate::coprocessor::RegionInfoProvider;
 use engine_traits::{
     SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
     SstPartitionerResult,
@@ -17,15 +17,15 @@ lazy_static! {
     static ref COMPACTION_GUARD: CString = CString::new(b"CompactionGuard".to_vec()).unwrap();
 }
 
-pub struct CompactionGuardGeneratorFactory {
-    accessor: RegionInfoAccessor,
+pub struct CompactionGuardGeneratorFactory<P: RegionInfoProvider> {
+    provider: P,
     min_output_file_size: u64,
 }
 
-impl CompactionGuardGeneratorFactory {
-    pub fn new(accessor: RegionInfoAccessor, min_output_file_size: u64) -> Self {
+impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
+    pub fn new(provider: P, min_output_file_size: u64) -> Self {
         CompactionGuardGeneratorFactory {
-            accessor,
+            provider,
             min_output_file_size,
         }
     }
@@ -33,7 +33,7 @@ impl CompactionGuardGeneratorFactory {
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
+impl<P: RegionInfoProvider + Sync> SstPartitionerFactory for CompactionGuardGeneratorFactory<P> {
     type Partitioner = CompactionGuardGenerator;
 
     fn name(&self) -> &CString {
@@ -42,11 +42,11 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
 
     fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
         match self
-            .accessor
+            .provider
             .get_regions_in_range(context.smallest_key, context.largest_key)
         {
             Ok(regions) => {
-                // The regions returned from region_info_accessor should have been sorted,
+                // The regions returned from region_info_provider should have been sorted,
                 // but we sort it again just in case.
                 COMPACTION_GUARD_ACTION_COUNTER.create.inc();
                 let mut boundaries = regions
