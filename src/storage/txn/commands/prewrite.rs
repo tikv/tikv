@@ -707,6 +707,7 @@ mod tests {
         },
         Engine, Snapshot, Statistics, TestEngineBuilder,
     };
+    use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
     use txn_types::{Key, Mutation, TimeStamp};
@@ -1233,5 +1234,139 @@ mod tests {
             p.secondary_keys = Some(vec![]);
         }
         assert_max_ts_err!(cmd.cmd.process_write(MockSnapshot, context!()));
+    }
+
+    // this test shows which stage in raft can we return the response
+    #[test]
+    fn test_response_stage() {
+        use crate::storage::DummyLockManager;
+        use kvproto::kvrpcpb::ExtraOp;
+        let cm = ConcurrencyManager::new(42.into());
+        let start_ts = TimeStamp::new(10);
+        let keys = [b"k1", b"k2"];
+        let values = [b"v1", b"v2"];
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
+            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+        ];
+        let mut statistics = Statistics::default();
+
+        #[derive(Clone)]
+        struct Case {
+            expected: ResponsePolicy,
+
+            // inputs
+            // optimistic/pessimistic prewrite
+            pessimistic: bool,
+            // async commit on/off
+            async_commit: bool,
+            // 1pc on/off
+            one_pc: bool,
+            // async_apply_prewrite enabled in config
+            async_apply_prewrite: bool,
+        }
+
+        let cases = vec![
+            Case {
+                // basic case
+                expected: ResponsePolicy::OnApplied,
+
+                pessimistic: false,
+                async_commit: false,
+                one_pc: false,
+                async_apply_prewrite: false,
+            },
+            Case {
+                // async_apply_prewrite does not affect non-async/1pc prewrite
+                expected: ResponsePolicy::OnApplied,
+
+                pessimistic: false,
+                async_commit: false,
+                one_pc: false,
+                async_apply_prewrite: true,
+            },
+            Case {
+                // works on async prewrite
+                expected: ResponsePolicy::OnCommitted,
+
+                pessimistic: false,
+                async_commit: true,
+                one_pc: false,
+                async_apply_prewrite: true,
+            },
+            Case {
+                // early return can be turned on/off by async_apply_prewrite in context
+                expected: ResponsePolicy::OnApplied,
+
+                pessimistic: false,
+                async_commit: true,
+                one_pc: false,
+                async_apply_prewrite: false,
+            },
+            Case {
+                // works on 1pc
+                expected: ResponsePolicy::OnCommitted,
+
+                pessimistic: false,
+                async_commit: false,
+                one_pc: true,
+                async_apply_prewrite: true,
+            },
+        ];
+        let cases = cases
+            .iter()
+            .cloned()
+            .chain(cases.iter().cloned().map(|mut it| {
+                it.pessimistic = true;
+                it
+            }));
+
+        for case in cases {
+            let secondary_keys = if case.async_commit {
+                Some(vec![])
+            } else {
+                None
+            };
+            let cmd = if case.pessimistic {
+                PrewritePessimistic::new(
+                    mutations.iter().map(|it| (it.clone(), false)).collect(),
+                    keys[0].to_vec(),
+                    start_ts,
+                    0,
+                    11.into(),
+                    1,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    secondary_keys,
+                    case.one_pc,
+                    Context::default(),
+                )
+            } else {
+                Prewrite::new(
+                    mutations.clone(),
+                    keys[0].to_vec(),
+                    start_ts,
+                    0,
+                    false,
+                    1,
+                    TimeStamp::default(),
+                    TimeStamp::default(),
+                    secondary_keys,
+                    case.one_pc,
+                    Context::default(),
+                )
+            };
+            let context = WriteContext {
+                lock_mgr: &DummyLockManager {},
+                concurrency_manager: cm.clone(),
+                extra_op: ExtraOp::Noop,
+                statistics: &mut statistics,
+                async_apply_prewrite: case.async_apply_prewrite,
+            };
+            let engine = TestEngineBuilder::new().build().unwrap();
+            let snap = engine.snapshot(Default::default()).unwrap();
+            let result = cmd.cmd.process_write(snap, context).unwrap();
+            assert_eq!(result.response_policy, case.expected);
+        }
     }
 }
