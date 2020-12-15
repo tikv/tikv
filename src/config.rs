@@ -3353,12 +3353,12 @@ mod tests {
     #[test]
     fn test_change_auto_tuned() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
-        cfg.rocksdb.auto_tuned = false;
+        cfg.rocksdb.auto_tuned = true;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
         // update auto_tuned
-        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
+        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), true);
 
         cfg_controller
             .update_config("rocksdb.auto_tuned", "false")
