@@ -19,9 +19,10 @@ use engine_traits::{
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
+    RaftRequestHeader, Request, RequestFlags, Response,
 };
 use kvproto::{errorpb, metapb};
+use protobuf::ProtobufEnum;
 use raft::eraftpb::{self, MessageType};
 use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
 
@@ -387,7 +388,7 @@ where
         for m in batch.modifies {
             let mut req = Request::default();
             if batch.extra.one_pc {
-                req.mut_flags().set_one_pc(true);
+                req.set_flags(RequestFlags::OnePc.value());
             }
             match m {
                 Modify::Delete(cf, k) => {

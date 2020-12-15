@@ -24,7 +24,10 @@ use kvproto::cdcpb::{
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, AdminRequest, AdminResponse, CmdType, Request, RequestFlags,
+};
+use protobuf::ProtobufEnum;
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
@@ -566,7 +569,7 @@ impl Delegate {
                 }
                 continue;
             }
-            let is_one_pc = req.get_flags().get_one_pc();
+            let is_one_pc = (req.get_flags() & RequestFlags::OnePc.value()) > 0;
             let mut put = req.take_put();
             match put.cf.as_str() {
                 "write" => {
