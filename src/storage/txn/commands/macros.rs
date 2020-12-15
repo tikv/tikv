@@ -12,9 +12,7 @@ macro_rules! ctx {
 }
 
 /// Generate the struct definition and Debug, Display methods for a passed-in
-/// storage command. An instance of this type is created from the `From`
-/// trait implementations of `TypedCommand`, when processing incoming storage
-/// requests of different types.
+/// storage command.
 /// Parameters:
 /// cmd -> Used as the type name for the generated struct. A variant of the
 /// enum `storage::txns::commands::Command` must exist whose name matches the
