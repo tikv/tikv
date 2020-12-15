@@ -1260,6 +1260,12 @@ mod tests {
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req2 payload. So here:
+            // req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
@@ -1267,11 +1273,24 @@ mod tests {
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
+<<<<<<< HEAD
                 resp.get_exec_details().get_handle_time().get_process_ms(),
                 PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+=======
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
+>>>>>>> 5f6f1e2b1... copr: add suspend time into tracker (#9257)
             );
 
             // Response 2
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req1 payload. So here:
+            // req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
@@ -1279,8 +1298,15 @@ mod tests {
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
+<<<<<<< HEAD
                 resp.get_exec_details().get_handle_time().get_process_ms(),
                 PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
+=======
+                resp.get_exec_details()
+                    .get_time_detail()
+                    .get_process_wall_time_ms(),
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
+>>>>>>> 5f6f1e2b1... copr: add suspend time into tracker (#9257)
             );
         }
 
