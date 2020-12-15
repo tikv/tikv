@@ -548,7 +548,7 @@ pub fn add_duration_and_duration(
     Ok(Some(res))
 }
 
-// Cast Duration into string representation and drop subsec if possible.
+/// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
         0 => duration.minimize_fsp().to_string(),
@@ -556,7 +556,7 @@ fn duration_to_string(duration: Duration) -> String {
     }
 }
 
-// Cast DateTime into string representation and drop subsec if possible.
+/// Cast DateTime into string representation and drop subsec if possible.
 fn datetime_to_string(mut datetime: DateTime) -> String {
     match datetime.micro() {
         0 => datetime.minimize_fsp(),
