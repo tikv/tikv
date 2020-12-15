@@ -527,9 +527,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => return Ok(None),
         };
 
-        let hex_start = tikv_util::hex_encode_upper(&start);
-        let hex_end = tikv_util::hex_encode_upper(&end);
-        debug!("trying gc"; "start_key" => log_wrappers::Value::key(&start), "end_key" => log_wrappers::Value::key(&end));
+        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
+        debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(
             &self.worker_scheduler,
@@ -540,7 +540,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         ) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.
-            warn!("failed gc"; "start_key" => log_wrappers::Value::key(&start), "end_key" => log_wrappers::Value::key(&end), "err" => ?e);
+            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
         }
 
         *processed_regions += 1;
