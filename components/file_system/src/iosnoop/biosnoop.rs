@@ -151,7 +151,7 @@ lazy_static! {
 }
 
 macro_rules! flush_io_latency {
-    ($bpf:ident, $delta:ident, $metrics:ident) => {
+    ($bpf:ident, $delta:ident, $metrics:ident, $type:expr) => {
         let mut t = $bpf.table(concat!(stringify!($metrics), "_latency")).unwrap();
         for e in t.iter() {
             let bucket = ptr::read(e.key.as_ptr() as *const u64);
@@ -162,25 +162,26 @@ macro_rules! flush_io_latency {
             }
         }
         t.delete_all().unwrap();
-
-        // IO_BYTES.$metrics.read.inc_by($delta.get(IOType::pascal!($metrics)).unwrap_or_default().read);
-        // IO_BYTES.$metrics.write.inc_by($delta.get(IOType::pascal!($metrics)).unwrap_or_default().write);
+        if let Some(v) = $delta.get(&$type) {
+            IO_BYTES.$metrics.read.inc_by(v.read as i64);
+            IO_BYTES.$metrics.write.inc_by(v.write as i64);
+        }
     };
 }
 
 pub unsafe fn flush_io_metrics() {
     if let Some((bpf, _, _)) = BPF_TABLE.as_mut() {
         let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
-        flush_io_latency!(bpf, delta, other);
-        flush_io_latency!(bpf, delta, read);
-        flush_io_latency!(bpf, delta, write);
-        flush_io_latency!(bpf, delta, coprocessor);
-        flush_io_latency!(bpf, delta, flush);
-        flush_io_latency!(bpf, delta, compaction);
-        flush_io_latency!(bpf, delta, replication);
-        flush_io_latency!(bpf, delta, loadbalance);
-        flush_io_latency!(bpf, delta, import);
-        flush_io_latency!(bpf, delta, export);
+        flush_io_latency!(bpf, delta, other, IOType::Other);
+        flush_io_latency!(bpf, delta, read, IOType::Read);
+        flush_io_latency!(bpf, delta, write, IOType::Write);
+        flush_io_latency!(bpf, delta, coprocessor, IOType::Coprocessor);
+        flush_io_latency!(bpf, delta, flush, IOType::Flush);
+        flush_io_latency!(bpf, delta, compaction, IOType::Compaction);
+        flush_io_latency!(bpf, delta, replication, IOType::Replication);
+        flush_io_latency!(bpf, delta, loadbalance, IOType::LoadBalance);
+        flush_io_latency!(bpf, delta, import, IOType::Import);
+        flush_io_latency!(bpf, delta, export, IOType::Export);
     }
 }
 

@@ -71,7 +71,7 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
         info.type = Other;
         bpf_trace_printk("pid %d error %d here\n", pid, err);
     }
-    info.ts = bpf_ktime_get_ns();
+    info.start_ts = bpf_ktime_get_ns();
 
     info_by_req.update(&req, &info);
     return 0;
