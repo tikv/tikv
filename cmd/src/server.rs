@@ -634,7 +634,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             raft_store,
             self.pd_client.clone(),
             self.state.clone(),
-            Some(self.background_worker.clone()),
+            self.background_worker.clone(),
         );
 
         node.start(
