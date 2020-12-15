@@ -18,7 +18,7 @@ pub struct MockEngine {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExpectedWrite {
-    // the following `Option`s means we just don't care
+    // if the following `Option`s are None, it means we just don't care
     modify: Option<Modify>,
     use_proposed_cb: Option<bool>,
     use_committed_cb: Option<bool>,
