@@ -6,7 +6,6 @@ use engine_traits::{IterOptions, MvccProperties};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
-use std::ops::Deref;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -36,13 +35,6 @@ pub struct OverlappedWrite {
     pub write: Write,
     /// GC fence for `overlapped_write`. PTAL at `txn_types::Write::gc_fence`.
     pub gc_fence: TimeStamp,
-}
-
-impl Deref for OverlappedWrite {
-    type Target = Write;
-    fn deref(&self) -> &Self::Target {
-        &self.write
-    }
 }
 
 impl TxnCommitRecord {
@@ -1062,8 +1054,8 @@ mod tests {
             .unwrap()
             .unwrap_none()
             .unwrap();
-        assert_eq!(overlapped_write.start_ts, 45.into());
-        assert_eq!(overlapped_write.write_type, WriteType::Put);
+        assert_eq!(overlapped_write.write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write.write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())
