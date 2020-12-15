@@ -31,6 +31,7 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
+
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -43,6 +44,7 @@ pub mod future;
 pub mod macros;
 pub mod callback;
 pub mod deadline;
+pub mod hex;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;
@@ -54,6 +56,8 @@ pub mod timer;
 pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
+
+pub use crate::hex::*;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";

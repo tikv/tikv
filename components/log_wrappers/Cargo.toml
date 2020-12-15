@@ -5,8 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
-hex = "0.4"
 protobuf = "2.8"
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }

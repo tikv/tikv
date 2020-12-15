@@ -107,8 +107,8 @@ impl Display for RegionInfoQuery {
             } => write!(
                 f,
                 "GetRegionsInRange(start_key: {}, end_key: {})",
-                hex::encode_upper(start_key),
-                hex::encode_upper(end_key)
+                &log_wrappers::Value::key(start_key),
+                &log_wrappers::Value::key(end_key)
             ),
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }

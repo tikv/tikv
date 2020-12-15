@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# This script checks if there is plain (not redacted) log in TiKV.
+
+set -e
+
+if grep -r -n -P '(?<!hex_)encode_upper' -C 1 --color=always --include \*.rs --exclude hex.rs --exclude-dir target . ; then
+    echo "To print user data into info logs or error messages, use log_wrappers::Value() instead of hex::encode_upper. The former will respect \`security.redact-info-log\` config and filter out user data from info log if needed. Otherwise, use \`tikv_util::hex_encode_upper\` to get around the lint error. See https://github.com/tikv/tikv/pull/9250 for more information." && false
+else
+    true
+fi
+
+echo "Security check passed."

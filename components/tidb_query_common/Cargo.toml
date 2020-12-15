@@ -16,6 +16,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 lazy_static = "1.3"
+log_wrappers = { path = "../log_wrappers" }
 
 [dev-dependencies]
 byteorder = "1.2"

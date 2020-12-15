@@ -22,7 +22,7 @@ impl std::fmt::Debug for BufferVec {
             if item.is_empty() {
                 write!(f, "null")?;
             } else {
-                write!(f, "{}", hex::encode_upper(item))?;
+                write!(f, "{}", crate::hex_encode_upper(item))?;
             }
         }
         write!(f, "]")

@@ -114,7 +114,10 @@ impl<'a> slog::Value for Value<'a> {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             serializer.emit_arguments(key, &format_args!("?"))
         } else {
-            serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
+            serializer.emit_arguments(
+                key,
+                &format_args!("{}", tikv_util::hex_encode_upper(self.0)),
+            )
         }
     }
 }
@@ -126,7 +129,7 @@ impl<'a> fmt::Display for Value<'a> {
             // Print placeholder instead of the value itself.
             write!(f, "?")
         } else {
-            write!(f, "{}", hex::encode_upper(self.0))
+            write!(f, "{}", tikv_util::hex_encode_upper(self.0))
         }
     }
 }

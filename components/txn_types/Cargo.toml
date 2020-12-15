@@ -20,3 +20,4 @@ quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 collections = { path = "../collections" }
+log_wrappers = { path = "../log_wrappers" }

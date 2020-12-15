@@ -788,7 +788,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {}", hex::encode_upper(key));
+        panic!("find no region for {}", tikv_util::hex_encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -1229,7 +1229,7 @@ impl<T: Simulator> Cluster<T> {
                 panic!(
                     "region {:?} has not been split by {}",
                     region,
-                    hex::encode_upper(split_key)
+                    tikv_util::hex_encode_upper(split_key)
                 );
             }
             try_cnt += 1;

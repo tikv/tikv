@@ -61,6 +61,7 @@ txn_types = { path = "../txn_types" }
 concurrency_manager = { path = "../concurrency_manager" }
 fail = "0.4"
 lazy_static = "1.3"
+log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
 prost = "0.6"

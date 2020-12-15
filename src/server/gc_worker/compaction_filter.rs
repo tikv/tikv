@@ -399,21 +399,24 @@ impl CompactionFilter for WriteCompactionFilter {
 fn split_ts(key: &[u8]) -> (&[u8], u64) {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => (key, ts.into_inner()),
-        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+        Err(_) => panic!("invalid write cf key: {}", log_wrappers::Value::key(key)),
     }
 }
 
 fn truncate_ts(key: &[u8]) -> &[u8] {
     match Key::truncate_ts_for(key) {
         Ok(prefix) => prefix,
-        Err(_) => panic!("invalid write cf key: {}", hex::encode_upper(key)),
+        Err(_) => panic!("invalid write cf key: {}", log_wrappers::Value::key(key)),
     }
 }
 
 fn parse_write(value: &[u8]) -> WriteRef {
     match WriteRef::parse(value) {
         Ok(write) => write,
-        Err(_) => panic!("invalid write cf value: {}", hex::encode_upper(value)),
+        Err(_) => panic!(
+            "invalid write cf value: {}",
+            log_wrappers::Value::value(value)
+        ),
     }
 }
 

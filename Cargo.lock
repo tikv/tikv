@@ -212,6 +212,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pd_client",
  "prometheus",
  "raft",
@@ -463,6 +464,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1956,10 +1958,11 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2139,11 +2142,11 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
  "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2724,6 +2727,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -3442,6 +3446,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4596,6 +4601,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
  "tikv_util",
@@ -4619,6 +4625,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -5129,6 +5136,7 @@ dependencies = [
  "farmhash",
  "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",

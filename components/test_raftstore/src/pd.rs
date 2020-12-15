@@ -1275,7 +1275,7 @@ impl PdClient for TestPdClient {
 
         Err(box_err!(
             "no region contains key {}",
-            hex::encode_upper(key)
+            tikv_util::hex_encode_upper(key)
         ))
     }
 
