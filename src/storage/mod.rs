@@ -5712,32 +5712,34 @@ mod tests {
             pipelined_pessimistic_lock: bool,
         }
 
-        fn run_case<T: 'static + StorageCallbackType + Send>(case: Case<T>) {
-            let mut builder =
-                MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
-            for expected_write in case.expected_writes {
-                builder = builder.add_expected_write(expected_write)
+        impl<T: 'static + StorageCallbackType + Send> Case<T> {
+            fn run(self) {
+                let mut builder =
+                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
+                for expected_write in self.expected_writes {
+                    builder = builder.add_expected_write(expected_write)
+                }
+                let engine = builder.build();
+                let mut builder =
+                    TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
+                builder.config.enable_async_apply_prewrite = true;
+                if self.pipelined_pessimistic_lock {
+                    builder
+                        .pipelined_pessimistic_lock
+                        .store(true, Ordering::Relaxed);
+                }
+                let storage = builder.build().unwrap();
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        self.command,
+                        Box::new(move |res| {
+                            tx.send(res).unwrap();
+                        }),
+                    )
+                    .unwrap();
+                rx.recv().unwrap().unwrap();
             }
-            let engine = builder.build();
-            let mut builder =
-                TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
-            builder.config.enable_async_apply_prewrite = true;
-            if case.pipelined_pessimistic_lock {
-                builder
-                    .pipelined_pessimistic_lock
-                    .store(true, Ordering::Relaxed);
-            }
-            let storage = builder.build().unwrap();
-            let (tx, rx) = channel();
-            storage
-                .sched_txn_command(
-                    case.command,
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    }),
-                )
-                .unwrap();
-            rx.recv().unwrap().unwrap();
         }
 
         let keys = [b"k1", b"k2"];
@@ -5823,7 +5825,7 @@ mod tests {
         };
         let on_proposed_fallback_case = Case {
             // this case's command return ResponsePolicy::OnProposed
-            // but with pipelined pessimistic lock is off,
+            // but when pipelined pessimistic lock is off,
             // the scheduler should fallback to use OnApplied
             expected_writes: vec![
                 ExpectedWrite::new().expect_no_proposed_cb(),
@@ -5845,9 +5847,9 @@ mod tests {
             pipelined_pessimistic_lock: false,
         };
 
-        run_case(on_applied_case);
-        run_case(on_commited_case);
-        run_case(on_proposed_case);
-        run_case(on_proposed_fallback_case);
+        on_applied_case.run();
+        on_commited_case.run();
+        on_proposed_case.run();
+        on_proposed_fallback_case.run();
     }
 }
