@@ -99,6 +99,7 @@ pub struct RegionInfo {
     pub key_ranges: Vec<KeyRange>,
     pub approximate_size: u64,
     pub approximate_key: u64,
+    pub flow: FlowStatistics,
 }
 
 impl RegionInfo {
@@ -110,6 +111,7 @@ impl RegionInfo {
             peer: Peer::default(),
             approximate_size: 0,
             approximate_key: 0,
+            flow: FlowStatistics::default(),
         }
     }
 
@@ -257,7 +259,6 @@ impl Recorder {
 
 #[derive(Clone, Debug)]
 pub struct ReadStats {
-    pub flows: HashMap<u64, FlowStatistics>,
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
 }
@@ -278,16 +279,17 @@ impl ReadStats {
     }
 
     pub fn add_flow(&mut self, region_id: u64, write: &FlowStatistics, data: &FlowStatistics) {
-        let flow_stats = self
-            .flows
+        let num = self.sample_num;
+        let region_info = self
+            .region_infos
             .entry(region_id)
-            .or_insert_with(FlowStatistics::default);
-        flow_stats.add(write);
-        flow_stats.add(data);
+            .or_insert_with(|| RegionInfo::new(num));
+        region_info.flow.add(write);
+        region_info.flow.add(data);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.region_infos.is_empty() && self.flows.is_empty()
+        self.region_infos.is_empty()
     }
 }
 
@@ -296,7 +298,6 @@ impl Default for ReadStats {
         ReadStats {
             sample_num: DEFAULT_SAMPLE_NUM,
             region_infos: HashMap::default(),
-            flows: HashMap::default(),
         }
     }
 }
