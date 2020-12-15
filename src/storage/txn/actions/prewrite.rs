@@ -451,6 +451,10 @@ pub mod tests {
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::ExtraOp;
+    #[cfg(test)]
+    use txn_types::OldValue;
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
         TransactionProperties {
@@ -730,7 +734,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_prewrite_constraint_check_check_gc_fence() {
+    fn test_prewrite_check_gc_fence() {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
 
@@ -758,23 +762,24 @@ pub mod tests {
         must_commit(&engine, b"k4", 42, 43);
         force_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0);
 
-        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
-        must_commit(&engine, b"k5", 13, 20);
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
+        must_commit(&engine, b"k5", 14, 20);
         must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
         must_commit(&engine, b"k5", 21, 30);
         force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
         force_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40);
 
-        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 13);
-        must_commit(&engine, b"k6", 13, 20);
-        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 21);
-        must_commit(&engine, b"k6", 21, 30);
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
+        must_commit(&engine, b"k6", 15, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
+        must_commit(&engine, b"k6", 22, 30);
         force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30);
         force_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0);
 
+        // 1. Check GC fence when doing constraint check with the older version.
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
+        let mut txn = MvccTxn::new(snapshot.clone(), 50.into(), false, cm.clone());
         let txn_props = TransactionProperties {
             start_ts: 50.into(),
             kind: TransactionKind::Optimistic(false),
@@ -786,8 +791,8 @@ pub mod tests {
         };
 
         let cases = vec![
-            // (b"k1", true),
-            // (b"k2", false),
+            (b"k1", true),
+            (b"k2", false),
             (b"k3", true),
             (b"k4", false),
             (b"k5", true),
@@ -821,5 +826,56 @@ pub mod tests {
                 res.unwrap_err();
             }
         }
+        // Don't actually write the txn so that the test data is not changed.
+        drop(txn);
+
+        // 2. Check GC fence when reading the old value.
+        let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
+        txn.extra_op = ExtraOp::ReadOldValue;
+        let txn_props = TransactionProperties {
+            start_ts: 50.into(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: b"k1",
+            txn_size: 6,
+            lock_ttl: 2000,
+            min_commit_ts: 51.into(),
+        };
+
+        let cases: Vec<_> = vec![
+            (b"k1" as &[u8], None),
+            (b"k2", Some((b"v2" as &[u8], 11))),
+            (b"k3", None),
+            (b"k4", Some((b"v4", 13))),
+            (b"k5", None),
+            (b"k6", Some((b"v6x", 22))),
+        ]
+        .into_iter()
+        .map(|(k, v)| {
+            let old_value = v.map(|(value, ts)| OldValue {
+                short_value: Some(value.to_vec()),
+                start_ts: ts.into(),
+            });
+            (Key::from_raw(k), old_value)
+        })
+        .collect();
+
+        for (key, _) in &cases {
+            prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Put((key.clone(), b"value".to_vec())),
+                &None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut old_values = txn.take_extra().old_values;
+        for (key, expected_value) in cases {
+            let (old_value, mutation) = old_values.remove(&key.append_ts(50.into())).unwrap();
+            assert_eq!(old_value, expected_value);
+            assert_eq!(mutation, MutationType::Put);
+        }
+        assert!(old_values.is_empty());
     }
 }
