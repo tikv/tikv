@@ -929,9 +929,11 @@ where
             region_info.approximate_key = peer_stat.approximate_keys;
             region_info.approximate_size = peer_stat.approximate_size;
         }
-        if let Some(sender) = self.stats_monitor.get_sender() {
-            if sender.send(read_stats).is_err() {
-                warn!("send read_stats failed, are we shutting down?")
+        if !read_stats.region_infos.is_empty() {
+            if let Some(sender) = self.stats_monitor.get_sender() {
+                if sender.send(read_stats).is_err() {
+                    warn!("send read_stats failed, are we shutting down?")
+                }
             }
         }
     }
