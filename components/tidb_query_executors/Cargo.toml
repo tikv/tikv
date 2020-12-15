@@ -20,6 +20,7 @@ tidb_query_common = { path = "../tidb_query_common" }
 tidb_query_expr = { path = "../tidb_query_expr" }
 tidb_query_aggr = { path = "../tidb_query_aggr" }
 tikv_util = { path = "../tikv_util" }
+log_wrappers = { path = "../log_wrappers" }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
