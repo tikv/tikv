@@ -582,6 +582,13 @@ impl Delegate {
 
                     if is_one_pc {
                         set_event_row_type(&mut row, EventLogType::Committed);
+                        let commit_ts = row.commit_ts;
+                        if let Some(resolver) = &self.resolver {
+                            assert!(
+                                TimeStamp::from(commit_ts)
+                                    > resolver.resolved_ts().unwrap_or_default()
+                            );
+                        }
                     } else {
                         // 1PC has nothing to do with the resolver
 
