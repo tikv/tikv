@@ -11,7 +11,7 @@ macro_rules! ctx {
     };
 }
 
-/// Generate the struct definition and Debug, Display methods for a passed in
+/// Generate the struct definition and Debug, Display methods for a passed-in
 /// storage command. An instance of this type is created from the `From`
 /// trait implementations of `TypedCommand`, when processing incoming storage
 /// requests of different types.
