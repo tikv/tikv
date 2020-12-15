@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
 use crate::raw::EventListener;
+use collections::hash_set_with_capacity;
 use engine_traits::CompactedEvent;
 use engine_traits::CompactionJobInfo;
 use rocksdb::{
@@ -12,7 +13,6 @@ use rocksdb::{
 };
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use tikv_util::collections::hash_set_with_capacity;
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 

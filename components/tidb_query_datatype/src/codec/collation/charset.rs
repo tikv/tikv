@@ -1,10 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use super::Charset;
+
+use std::str;
+
+use super::*;
 
 pub struct CharsetBinary;
 
 impl Charset for CharsetBinary {
     type Char = u8;
+
+    #[inline]
+    fn validate(_: &[u8]) -> Result<()> {
+        Ok(())
+    }
 
     #[inline]
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
@@ -20,6 +28,12 @@ pub struct CharsetUtf8mb4;
 
 impl Charset for CharsetUtf8mb4 {
     type Char = char;
+
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
 
     #[inline]
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {

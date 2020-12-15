@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::ops::{Bound, Deref};
 use std::sync::{Arc, RwLock};
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
     IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
@@ -15,7 +16,6 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
-use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
 use txn_types::{Key, Lock, MutationType, TimeStamp, Value, WriteRef, WriteType};

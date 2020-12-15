@@ -37,7 +37,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage};
+use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
@@ -1018,6 +1018,33 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     ) {
         unimplemented!()
     }
+
+    fn check_leader(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        let ts = request.get_ts();
+        let leaders = request.take_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::CheckLeader { leaders, cb })?;
+            let regions = resp.await?;
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("cdc call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
 }
 
 fn response_batch_commands_request<F>(
@@ -1222,7 +1249,19 @@ fn future_scan<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            match v {
+                Ok(kv_res) => {
+                    resp.set_pairs(map_kv_pairs(kv_res).into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }
