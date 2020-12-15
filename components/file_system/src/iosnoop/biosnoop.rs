@@ -4,6 +4,7 @@ use super::metrics::*;
 use super::{IOStats, IOType};
 
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -108,8 +109,21 @@ impl IOContext {
 }
 
 pub fn init_io_snooper() -> Result<(), String> {
-    let code = include_str!("biosnoop.c");
-    let code = code.replace("##TGID##", &nix::unistd::getpid().to_string());
+    let stat = unsafe {
+        let mut stat: libc::stat = std::mem::zeroed();
+        if libc::stat(
+            CString::new("/proc/self/ns/pid").unwrap().as_ptr(),
+            &mut stat,
+        ) != 0
+        {
+            return Err(String::from("Can't get namespace stats"));
+        }
+        stat
+    };
+    let code = include_str!("biosnoop.c")
+        .replace("##TGID##", &nix::unistd::getpid().to_string())
+        .replace("##DEV##", &stat.st_dev.to_string())
+        .replace("##INO##", &stat.st_ino.to_string());
     // compile the above BPF code!
     let mut bpf = BPF::new(&code).map_err(|e| e.to_string())?;
     // attach kprobes
@@ -140,8 +154,8 @@ macro_rules! flush_io_latency {
     ($bpf:ident, $delta:ident, $metrics:ident) => {
         let mut t = $bpf.table(concat!(stringify!($metrics), "_latency")).unwrap();
         for e in t.iter() {
-            let bucket = unsafe { ptr::read(e.key.as_ptr() as *const u64) };
-            let count = unsafe { ptr::read(e.value.as_ptr() as *const u64) };
+            let bucket = ptr::read(e.key.as_ptr() as *const u64);
+            let count = ptr::read(e.value.as_ptr() as *const u64);
 
             for _ in 0..count {
                 IO_LATENCY_MICROS.$metrics.read.observe(bucket as f64);

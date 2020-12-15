@@ -47,6 +47,15 @@ BPF_HISTOGRAM(export_latency);
 // cache PID by req
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
 {
+    // TODO: Using bpf_get_ns_current_pid_tgid of newer kernel to get
+    // 
+    // struct bpf_pidns_info ns = {};
+    // if (!bpf_get_ns_current_pid_tgid(##DEV##, ##INO##, &ns, sizeof(struct bpf_pidns_info))) {
+    //     return 0;
+    // }
+    // u32 pid = ns.pid;
+    // u32 tgid = ns.tgid;
+
     u64 id = bpf_get_current_pid_tgid();
     u32 pid = id & (((u64)1 << 32) - 1);
     u32 tgid = id >> 32;
@@ -100,7 +109,7 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
         (*val).read += req->__data_len;
     }
 
-    u64 delta = (bpf_ktime_get_ns() - info.start_ts) / 1000; // microseconds
+    u64 delta = (bpf_ktime_get_ns() - info->start_ts) / 1000; // microseconds
     switch (type) {
         case Other:
             other_latency.increment(bpf_log2l(delta));
