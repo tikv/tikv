@@ -112,12 +112,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             if let Some((older_commit_ts, older_write)) =
                 txn.reader.seek_write(&key, txn.start_ts)?
             {
-                if older_commit_ts == txn.start_ts {
-                    assert!(
-                        (older_write.start_ts == txn.start_ts
-                            && older_write.write_type == WriteType::Rollback)
-                            || older_write.has_overlapped_rollback
-                    );
+                if older_commit_ts == txn.start_ts
+                    && (older_write.write_type == WriteType::Rollback
+                        || older_write.has_overlapped_rollback)
+                {
                     return Err(ErrorInner::PessimisticLockRolledBack {
                         start_ts: txn.start_ts,
                         key: key.into_raw()?,
