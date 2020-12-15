@@ -22,11 +22,9 @@ use kvproto::cdcpb::{
     EventEntries, EventLogType, EventRow, EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, WriteBatchFlag};
 use kvproto::metapb::{Region, RegionEpoch};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, AdminResponse, CmdType, Request, RequestFlags,
-};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use protobuf::ProtobufEnum;
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
@@ -436,11 +434,14 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
+                    let is_one_pc =
+                        (request.get_header().get_flags() & WriteBatchFlag::OnePc.value()) > 0;
                     self.sink_data(
                         index,
                         request.requests.into(),
                         old_value_cb.clone(),
                         old_value_cache,
+                        is_one_pc,
                     )?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
@@ -553,6 +554,7 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_cache: &mut OldValueCache,
+        is_one_pc: bool,
     ) -> Result<()> {
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
@@ -569,7 +571,6 @@ impl Delegate {
                 }
                 continue;
             }
-            let is_one_pc = (req.get_flags() & RequestFlags::OnePc.value()) > 0;
             let mut put = req.take_put();
             match put.cf.as_str() {
                 "write" => {

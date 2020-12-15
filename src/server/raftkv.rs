@@ -16,15 +16,15 @@ use engine_traits::{
     IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
     TablePropertiesExt,
 };
-use kvproto::kvrpcpb::Context;
+use kvproto::kvrpcpb::{Context, WriteBatchFlag};
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, RequestFlags, Response,
+    RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufEnum;
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -244,6 +244,7 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -271,10 +272,20 @@ where
         }
 
         let len = reqs.len();
-        let header = self.new_request_header(ctx);
+        let mut header = self.new_request_header(ctx);
+        if txn_extra.one_pc {
+            header.set_flags(WriteBatchFlag::OnePc.value());
+        }
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
+
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
 
         self.router
             .send_command(
@@ -387,9 +398,6 @@ where
         let mut reqs = Vec::with_capacity(batch.modifies.len());
         for m in batch.modifies {
             let mut req = Request::default();
-            if batch.extra.one_pc {
-                req.set_flags(RequestFlags::OnePc.value());
-            }
             match m {
                 Modify::Delete(cf, k) => {
                     let mut delete = DeleteRequest::default();
@@ -426,15 +434,10 @@ where
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !batch.extra.is_empty() {
-                tx.schedule(batch.extra);
-            }
-        }
-
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
