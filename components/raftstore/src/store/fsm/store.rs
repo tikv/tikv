@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
+use std::{mem, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -17,6 +17,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
@@ -26,12 +27,12 @@ use protobuf::Message;
 use raft::{Ready, StateRole};
 use time::{self, Timespec};
 
+use collections::HashMap;
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
-use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
@@ -94,6 +95,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
+    /// region_id -> (term, leader)
+    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -123,6 +126,7 @@ impl StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
+            leaders: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
@@ -329,7 +333,6 @@ where
     pub sync_log: bool,
     pub has_ready: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
-    pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -474,7 +477,6 @@ where
                 "region_id" => region_id,
             );
         }
-        self.need_flush_trans = true;
     }
 }
 
@@ -583,6 +585,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
+                StoreMsg::CheckLeader { leaders, cb } => self.on_check_leader(leaders, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -625,11 +628,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.need_flush_trans
+        if self.poll_ctx.trans.need_flush()
             && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
         {
             self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
@@ -652,13 +654,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
         fail_point!("raft_between_save");
+
         if !self.poll_ctx.raft_wb.is_empty() {
             fail_point!(
                 "raft_before_save_on_store_1",
                 self.poll_ctx.store_id() == 1,
                 |_| {}
             );
-
             self.poll_ctx
                 .engines
                 .raft
@@ -810,6 +812,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             |_| unreachable!()
         );
 
+        fail_point!(
+            "on_peer_collect_message_2",
+            peer.peer_id() == 2,
+            |_| unreachable!()
+        );
+
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
@@ -856,9 +864,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) {
-        if self.poll_ctx.need_flush_trans {
+        if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
-            self.poll_ctx.need_flush_trans = false;
         }
     }
 }
@@ -1089,7 +1096,6 @@ where
             sync_log: false,
             has_ready: false,
             ready_res: Vec::new(),
-            need_flush_trans: false,
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
@@ -1263,7 +1269,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         pd_client: Arc<C>,
     ) -> Result<()> {
-        let engines = builder.engines.clone();
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
@@ -1319,7 +1324,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-            engines.kv,
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
@@ -1340,18 +1344,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
-        let mut handles: Vec<Option<thread::JoinHandle<()>>> = vec![];
-        handles.push(workers.pd_worker.stop());
+        let handle = workers.pd_worker.stop();
         self.apply_system.shutdown();
         self.system.shutdown();
-        for h in handles {
-            if let Some(h) = h {
-                h.join().unwrap();
-            }
+        if let Some(h) = handle {
+            h.join().unwrap();
         }
         workers.coprocessor_host.shutdown();
-        workers.background_worker.stop();
         workers.cleanup_worker.stop();
+        workers.background_worker.stop();
     }
 }
 
@@ -1487,7 +1488,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         "region_id" => region_id,
                     );
                 }
-                self.ctx.need_flush_trans = true;
             }
 
             return Ok(CheckMsgStatus::DropMsg);
@@ -2357,6 +2357,40 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let scheduler = &self.ctx.raftlog_gc_scheduler;
         let _ = scheduler.schedule(RaftlogGcTask::Purge);
         self.register_raft_engine_purge_tick();
+    }
+
+    fn on_check_leader(&self, leaders: Vec<LeaderInfo>, cb: Box<dyn FnOnce(Vec<u64>) + Send>) {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let regions = leaders
+            .into_iter()
+            .map(|leader_info| {
+                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                    if let Some(region) = meta.regions.get(&leader_info.region_id) {
+                        if *term == leader_info.term
+                            && leader.id == leader_info.peer_id
+                            && util::compare_region_epoch(
+                                leader_info.get_region_epoch(),
+                                region,
+                                true,
+                                true,
+                                false,
+                            )
+                            .is_ok()
+                        {
+                            return Some(leader_info.region_id);
+                        }
+                        debug!("check leader failed";
+                            "leader_info" => ?leader_info,
+                            "current_term" => term,
+                            "current_region" => ?region,
+                        );
+                    }
+                }
+                None
+            })
+            .filter_map(|r| r)
+            .collect();
+        cb(regions);
     }
 }
 

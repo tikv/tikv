@@ -10,7 +10,7 @@ use kvproto::metapb::Peer;
 
 use rand::Rng;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::config::Tracker;
 
 use txn_types::Key;

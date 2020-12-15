@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::collections::{HashMap, HashMapEntry};
+use collections::{HashMap, HashMapEntry};
 use std::hash::Hash;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};

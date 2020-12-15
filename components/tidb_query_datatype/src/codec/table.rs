@@ -14,8 +14,8 @@ use super::mysql::{Duration, Time};
 use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
 use codec::prelude::*;
+use collections::{HashMap, HashSet};
 use tikv_util::codec::BytesSlice;
-use tikv_util::collections::{HashMap, HashSet};
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -32,6 +32,13 @@ pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 
 /// Flag that indicate if the index value has common handle.
 pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
+/// Flag that indicate if the index value has partition id.
+pub const INDEX_VALUE_PARTITION_ID_FLAG: u8 = 126;
+/// Flag that indicate if the index value has restored data.
+pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERSION;
+
+/// ID for partition column, see https://github.com/pingcap/parser/pull/1010
+pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
@@ -529,7 +536,7 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
-    use tikv_util::collections::{HashMap, HashSet};
+    use collections::{HashMap, HashSet};
     use tikv_util::map;
 
     use super::*;

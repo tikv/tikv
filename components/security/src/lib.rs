@@ -9,12 +9,12 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
     ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
-use tikv_util::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
