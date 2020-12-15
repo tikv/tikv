@@ -6,6 +6,7 @@ use engine_traits::{IterOptions, MvccProperties};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
+use std::ops::Deref;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -35,6 +36,13 @@ pub struct OverlappedWrite {
     pub write: Write,
     /// GC fence for `overlapped_write`. PTAL at `txn_types::Write::gc_fence`.
     pub gc_fence: TimeStamp,
+}
+
+impl Deref for OverlappedWrite {
+    type Target = Write;
+    fn deref(&self) -> &Self::Target {
+        &self.write
+    }
 }
 
 impl TxnCommitRecord {
@@ -76,7 +84,7 @@ impl TxnCommitRecord {
 }
 
 pub struct MvccReader<S: Snapshot> {
-    pub snapshot: S,
+    snapshot: S,
     pub statistics: Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,

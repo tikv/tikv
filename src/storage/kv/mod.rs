@@ -221,12 +221,6 @@ pub trait Snapshot: Sync + Send + Clone {
     fn get(&self, key: &Key) -> Result<Option<Value>>;
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
-
-    /// When creating an iterator with boundaries, `reserved_prefix_len` could be necessary
-    /// for some implementations.
-    fn iter_boundaries_prefix_len() -> usize {
-        0
-    }
     fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
