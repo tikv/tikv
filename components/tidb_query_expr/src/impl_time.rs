@@ -3,12 +3,11 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::RpnFnCallExtra;
-use std::convert::TryInto;
 use tidb_query_common::Result;
 
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::codec::mysql::duration::{
-    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_SECOND_PART, NANOS_PER_SEC,
+    MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS_PART, MAX_SECOND_PART, NANOS_PER_SEC,
 };
 use tidb_query_datatype::codec::mysql::time::extension::DateTimeExtension;
 use tidb_query_datatype::codec::mysql::time::weekmode::WeekMode;
@@ -339,23 +338,27 @@ pub fn make_time(
         (hour.is_negative(), hour.wrapping_abs() as u64)
     };
 
-    // Filter out the number that is negative or greater than MAX_MINUTE_PART.
-    let mut minute: u32 = match (*minute).try_into().ok().filter(|m| *m <= MAX_MINUTE_PART) {
-        Some(minute) => minute,
-        None => return Ok(None),
+    let nanosecond = second.fract().abs() * NANOS_PER_SEC as f64;
+    let second = second.trunc() as i64;
+    let minute = *minute;
+
+    // Filter out the number that is negative or greater than `MAX_MINUTE_PART`.
+    let mut minute = if 0 <= minute && minute <= MAX_MINUTE_PART as _ {
+        minute as _
+    } else {
+        return Ok(None);
     };
 
-    let mut nanosecond = (second.fract().abs() * NANOS_PER_SEC as f64) as u32;
-
-    // Filter out the number that is negative or greater than MAX_SECOND_PART.
-    let mut second: u32 = match (second.trunc() as i64)
-        .try_into()
-        .ok()
-        .filter(|s| *s <= MAX_SECOND_PART)
-    {
-        Some(second) => second,
-        None => return Ok(None),
+    // Filter out the number that is negative or greater than `MAX_SECOND_PART`.
+    let mut second = if 0 <= second && second <= MAX_SECOND_PART as _ {
+        second as _
+    } else {
+        return Ok(None);
     };
+
+    // Ensure that the nanosecond part is valid.
+    assert!(0.0 <= nanosecond && nanosecond.floor() <= MAX_NANOS_PART as _);
+    let mut nanosecond = nanosecond as _;
 
     let is_overflow = (hour, minute, second, nanosecond)
         > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
@@ -375,6 +378,8 @@ pub fn make_time(
         extra.ret_field_type.get_decimal() as i8,
     ) {
         Ok(duration) => Ok(Some(duration)),
+
+        // May encounter the fsp error
         Err(err) => Err(err.into()),
     }
 }
