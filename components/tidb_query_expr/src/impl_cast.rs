@@ -5362,18 +5362,8 @@ mod tests {
                 false,
             ),
             // overflow as warning
-            (
-                8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
-                true,
-            ),
-            (
-                -8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                true,
-            ),
+            (8385960, 0, Ok(None), true),
+            (-8385960, 0, Ok(None), true),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
@@ -5390,12 +5380,7 @@ mod tests {
                 Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
                 false,
             ),
-            (
-                -10000235959,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                false,
-            ),
+            (-10000235959, 0, Ok(None), false),
         ];
 
         for (input, fsp, expected, overflow) in cs {
