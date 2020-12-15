@@ -1438,6 +1438,11 @@ impl DBConfigManger {
     fn set_auto_tuned(&self, auto_tuned: bool) -> Result<(), Box<dyn Error>> {
         let mut opt = self.db.as_inner().get_db_options();
         opt.set_auto_tuned(auto_tuned)?;
+        // double check the new state
+        let new_auto_tuned = opt.get_auto_tuned();
+        if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != auto_tuned {
+            return Err("fail to set auto_tuned mode".into());
+        }
         Ok(())
     }
 
@@ -3277,7 +3282,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
-        cfg.rocksdb.auto_tuned = true;
+        cfg.rocksdb.auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
@@ -3312,14 +3317,6 @@ mod tests {
             ReadableSize::mb(128).0 as i64
         );
 
-        // update auto_tuned
-        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), true);
-
-        cfg_controller
-            .update_config("rocksdb.auto_tuned", "false")
-            .unwrap();
-        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
-
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
@@ -3351,6 +3348,22 @@ mod tests {
         assert!(cfg_controller
             .update_config("storage.block-cache.capacity", "512MB")
             .is_err());
+    }
+
+    #[test]
+    fn test_change_auto_tuned() {
+        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        cfg.rocksdb.auto_tuned = false;
+        cfg.validate().unwrap();
+        let (db, cfg_controller) = new_engines(cfg);
+
+        // update auto_tuned
+        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
+
+        cfg_controller
+            .update_config("rocksdb.auto_tuned", "false")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
     }
 
     #[test]
