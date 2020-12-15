@@ -1092,30 +1092,10 @@ mod tests {
                 false,
             ),
             // will overflow
-            (
-                8385960,
-                0,
-                Err(Error::overflow("Duration", 8385960)),
-                false,
-            ),
-            (
-                8385960,
-                1,
-                Err(Error::overflow("Duration", 8385960)),
-                false,
-            ),
-            (
-                8385960,
-                5,
-                Err(Error::overflow("Duration", 8385960)),
-                false,
-            ),
-            (
-                8385960,
-                6,
-                Err(Error::overflow("Duration", 8385960)),
-                false,
-            ),
+            (8385960, 0, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 1, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 5, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 6, Err(Error::overflow("Duration", 8385960)), false),
             (
                 -8385960,
                 0,
