@@ -20,12 +20,12 @@ macro_rules! ctx {
 /// enum `storage::txns::commands::Command` must exist whose name matches the
 /// value of `cmd` and which accepts one parameter whose type name matches
 /// the value of `cmd`.
-/// cmd_ty -> The type that encapsulates the result of executing this command.
+/// cmd_ty -> The type of the result of executing this command.
 /// A `From` conversion should exist in txn/commands/mod.rs from a `Command` enum
 /// variant corresponding to the value of `cmd` to a `TypedCommand`
 /// parameterized with the value of `cmd_ty`.
 /// display -> Information needed to implement the `Display` trait for the command.
-/// content -> The contents of the struct definition for the command.
+/// content -> The fields of the struct definition for the command.
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*

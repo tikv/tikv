@@ -86,9 +86,9 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
 }
 
-/// Stores the `Command` along with its return type, stored as generic parameter `T`.
+/// A `Command` with its return type, reified as the generic parameter `T`.
 ///
-/// Incoming protobuf requests (like `CommitRequest`, `PrewriteRequest`) are converted to
+/// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are converted to
 /// this type via a series of transformations. That process is described below using
 /// `CommitRequest` as an example:
 /// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs, where it
