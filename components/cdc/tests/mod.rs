@@ -266,6 +266,68 @@ impl TestSuite {
         );
     }
 
+    pub fn must_acquire_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut lock_req = PessimisticLockRequest::default();
+        lock_req.set_context(self.get_context(region_id));
+        lock_req.set_mutations(muts.into_iter().collect());
+        lock_req.start_version = start_ts.into_inner();
+        lock_req.for_update_ts = for_update_ts.into_inner();
+        lock_req.primary_lock = pk;
+        let lock_resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_lock(&lock_req)
+            .unwrap();
+        assert!(
+            !lock_resp.has_region_error(),
+            "{:?}",
+            lock_resp.get_region_error()
+        );
+        assert!(
+            lock_resp.get_errors().len() == 0,
+            "{:?}",
+            lock_resp.get_errors()
+        );
+    }
+
+    pub fn must_kv_pessimistic_prewrite(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut prewrite_req = PrewriteRequest::default();
+        prewrite_req.set_context(self.get_context(region_id));
+        prewrite_req.set_mutations(muts.into_iter().collect());
+        prewrite_req.primary_lock = pk;
+        prewrite_req.start_version = ts.into_inner();
+        prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        prewrite_req.for_update_ts = for_update_ts.into_inner();
+        prewrite_req.mut_is_pessimistic_lock().push(true);
+        let prewrite_resp = self
+            .get_tikv_client(region_id)
+            .kv_prewrite(&prewrite_req)
+            .unwrap();
+        assert!(
+            !prewrite_resp.has_region_error(),
+            "{:?}",
+            prewrite_resp.get_region_error()
+        );
+        assert!(
+            prewrite_resp.errors.is_empty(),
+            "{:?}",
+            prewrite_resp.get_errors()
+        );
+    }
+
     pub fn async_kv_commit(
         &mut self,
         region_id: u64,
