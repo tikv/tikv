@@ -44,7 +44,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok(ts);
     }
 
-    // Note that the `prev_write` may has invalid GC fence.
+    // Note that the `prev_write` may have invalid GC fence.
     let prev_write = if !mutation.skip_constraint_check() {
         mutation.check_for_newer_version(txn)?
     } else {
@@ -442,7 +442,11 @@ pub mod tests {
     use super::*;
     #[cfg(test)]
     use crate::storage::txn::{
-        commands::prewrite::fallback_1pc_locks, tests::must_acquire_pessimistic_lock,
+        commands::prewrite::fallback_1pc_locks,
+        tests::{
+            force_cleanup_with_gc_fence, must_acquire_pessimistic_lock, must_commit,
+            must_prewrite_lock, must_prewrite_put,
+        },
     };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
@@ -723,5 +727,99 @@ pub mod tests {
             true,
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_prewrite_constraint_check_check_gc_fence() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 30);
+        force_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 30);
+        force_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0);
+
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 30);
+        must_prewrite_lock(&engine, b"k3", b"k3", 37);
+        must_commit(&engine, b"k3", 37, 38);
+        must_prewrite_lock(&engine, b"k3", b"k3", 42);
+        must_commit(&engine, b"k3", 42, 43);
+        force_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 30);
+        must_prewrite_lock(&engine, b"k4", b"k4", 37);
+        must_commit(&engine, b"k4", 37, 38);
+        must_prewrite_lock(&engine, b"k4", b"k4", 42);
+        must_commit(&engine, b"k4", 42, 43);
+        force_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0);
+
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
+        must_commit(&engine, b"k5", 13, 20);
+        must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
+        must_commit(&engine, b"k5", 21, 30);
+        force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
+        force_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 13);
+        must_commit(&engine, b"k6", 13, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 21);
+        must_commit(&engine, b"k6", 21, 30);
+        force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30);
+        force_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
+        let txn_props = TransactionProperties {
+            start_ts: 50.into(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: b"k1",
+            txn_size: 6,
+            lock_ttl: 2000,
+            min_commit_ts: 51.into(),
+        };
+
+        let cases = vec![
+            // (b"k1", true),
+            // (b"k2", false),
+            (b"k3", true),
+            (b"k4", false),
+            (b"k5", true),
+            (b"k6", false),
+        ];
+
+        for (key, success) in cases {
+            let res = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::CheckNotExists(Key::from_raw(key)),
+                &None,
+                false,
+            );
+            if success {
+                res.unwrap();
+            } else {
+                res.unwrap_err();
+            }
+
+            let res = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Insert((Key::from_raw(key), b"value".to_vec())),
+                &None,
+                false,
+            );
+            if success {
+                res.unwrap();
+            } else {
+                res.unwrap_err();
+            }
+        }
     }
 }
