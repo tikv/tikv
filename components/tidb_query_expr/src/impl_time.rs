@@ -361,9 +361,9 @@ pub fn make_time(
     let mut nanosecond = nanosecond as u32;
 
     let is_overflow = (hour, minute, second, nanosecond)
-        > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
+        > (MAX_HOUR_PART.into(), MAX_MINUTE_PART, MAX_SECOND_PART, 0);
     if is_overflow {
-        hour = MAX_HOUR_PART as _;
+        hour = MAX_HOUR_PART.into();
         minute = MAX_MINUTE_PART;
         second = MAX_SECOND_PART;
         nanosecond = 0;

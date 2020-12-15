@@ -224,21 +224,21 @@ mod parser {
                     return None;
                 }
 
-                match Duration::new_from_parts(
+                Some(Duration::new_from_parts(
                     neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
-                ) {
-                    Ok(duration) => Some(duration),
-                    Err(err) => ctx.handle_overflow_err(err).map_or(None, |_| {
-                        let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
-                        Some(Duration { nanos, fsp })
-                    }),
-                }
+                ))
             });
 
-        if duration.is_none() && fallback_to_daytime {
-            hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
-        } else {
-            duration
+        match duration {
+            Some(Ok(duration)) => Some(duration),
+            Some(Err(err)) => ctx.handle_overflow_err(err).map_or(None, |_| {
+                let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
+                Some(Duration { nanos, fsp })
+            }),
+            None if fallback_to_daytime => {
+                hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
+            }
+            _ => None,
         }
     }
 } /* parser */
@@ -753,28 +753,6 @@ mod tests {
     #[test]
     fn test_parse_duration() {
         let cases: Vec<(&str, i8, Option<&'static str>)> = vec![
-            ("2010-02-12", 0, None),
-            ("2010-02-12t12:23:34", 0, None),
-            ("2010-02-12T12:23:34", 0, Some("12:23:34")),
-            ("2010-02-12 12:23:34", 0, Some("12:23:34")),
-            ("2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
-            ("10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
-        ];
-
-        for (input, fsp, expected) in cases {
-            let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
-            assert_eq!(
-                actual.map(|d| d.to_string()),
-                expected.map(|s| s.to_string()),
-                "failed case: {}",
-                input
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse() {
-        let cases: Vec<(&str, i8, Option<&'static str>)> = vec![
             ("10:11:12", 0, Some("10:11:12")),
             ("101112", 0, Some("10:11:12")),
             ("10:11", 0, Some("10:11:00")),
@@ -847,6 +825,13 @@ mod tests {
             ("1:62:3", 0, None),
             ("1:02:63", 0, None),
             ("-231342080", 0, None),
+            // test fallback to datetime
+            ("2010-02-12", 0, None),
+            ("2010-02-12t12:23:34", 0, None),
+            ("2010-02-12T12:23:34", 0, Some("12:23:34")),
+            ("2010-02-12 12:23:34", 0, Some("12:23:34")),
+            ("2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+            ("10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
         ];
 
         for (input, fsp, expect) in cases {
