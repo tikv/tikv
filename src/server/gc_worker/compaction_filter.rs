@@ -20,7 +20,7 @@ use engine_traits::{
     IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
     CF_WRITE,
 };
-use pd_client::ClusterVersion;
+use pd_client::{Feature, FeatureGate};
 use txn_types::{Key, WriteRef, WriteType};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
@@ -31,13 +31,13 @@ const SINGLE_SST_RATIO_THRESHOLD_ADJUST: f64 = 0.2;
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
 // of GC are distributed to other replicas by Raft.
-const COMPACTION_FILTER_MINIMAL_VERSION: &str = "5.0.0";
+const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::acquire(5, 0, 0);
 
 struct GcContext {
     db: Arc<DB>,
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
-    cluster_version: ClusterVersion,
+    feature_gate: FeatureGate,
 }
 
 lazy_static! {
@@ -49,7 +49,7 @@ pub trait CompactionFilterInitializer {
         &self,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     );
 }
 
@@ -58,7 +58,7 @@ impl<T> CompactionFilterInitializer for T {
         &self,
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
-        _cluster_version: ClusterVersion,
+        _feature_gate: FeatureGate,
     ) {
     }
 }
@@ -68,7 +68,7 @@ impl CompactionFilterInitializer for RocksEngine {
         &self,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -76,7 +76,7 @@ impl CompactionFilterInitializer for RocksEngine {
             db: self.as_inner().clone(),
             safe_point,
             cfg_tracker,
-            cluster_version,
+            feature_gate,
         });
     }
 }
@@ -115,7 +115,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if !do_check_allowed(enable, skip_vcheck, &gc_context.cluster_version) {
+        if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
             debug!("skip gc in compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
@@ -417,22 +417,16 @@ fn parse_write(value: &[u8]) -> WriteRef {
     }
 }
 
-pub fn is_compaction_filter_allowd(cfg_value: &GcConfig, cluster_version: &ClusterVersion) -> bool {
+pub fn is_compaction_filter_allowed(cfg_value: &GcConfig, feature_gate: &FeatureGate) -> bool {
     do_check_allowed(
         cfg_value.enable_compaction_filter,
         cfg_value.compaction_filter_skip_version_check,
-        cluster_version,
+        feature_gate,
     )
 }
 
-fn do_check_allowed(enable: bool, skip_vcheck: bool, cluster_version: &ClusterVersion) -> bool {
-    enable
-        && (skip_vcheck || {
-            cluster_version.get().map_or(false, |cluster_version| {
-                let minimal = semver::Version::parse(COMPACTION_FILTER_MINIMAL_VERSION).unwrap();
-                cluster_version >= minimal
-            })
-        })
+fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
+    enable && (skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_GC_FEATURE))
 }
 
 #[cfg(test)]
@@ -472,8 +466,9 @@ pub mod tests {
         let safe_point = Arc::new(AtomicU64::new(safe_point));
         let cfg = GcWorkerConfigManager(Arc::new(Default::default()));
         cfg.0.update(|v| v.enable_compaction_filter = true);
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
-        engine.init_compaction_filter(safe_point, cfg, cluster_version);
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        engine.init_compaction_filter(safe_point, cfg, gate);
 
         let db = engine.as_inner();
         let handle = get_cf_handle(db, CF_WRITE).unwrap();
@@ -498,8 +493,9 @@ pub mod tests {
             v.enable_compaction_filter = true;
             v.ratio_threshold = ratio_threshold;
         });
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
-        engine.init_compaction_filter(safe_point, cfg, cluster_version);
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        engine.init_compaction_filter(safe_point, cfg, gate);
 
         let db = engine.as_inner();
         let handle = get_cf_handle(db, CF_WRITE).unwrap();
@@ -525,19 +521,20 @@ pub mod tests {
 
     #[test]
     fn test_is_compaction_filter_allowed() {
-        let cluster_version = ClusterVersion::new(semver::Version::new(4, 1, 0));
+        let gate = FeatureGate::default();
+        gate.set_version("4.1.0").unwrap();
         let mut cfg_value = GcConfig::default();
-        assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
+        assert!(!is_compaction_filter_allowed(&cfg_value, &gate));
 
         cfg_value.enable_compaction_filter = true;
-        assert!(!is_compaction_filter_allowd(&cfg_value, &cluster_version));
+        assert!(!is_compaction_filter_allowed(&cfg_value, &gate));
 
         cfg_value.compaction_filter_skip_version_check = true;
-        assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
+        assert!(is_compaction_filter_allowed(&cfg_value, &gate));
 
-        let cluster_version = ClusterVersion::new(semver::Version::new(5, 0, 0));
+        gate.set_version("5.0.0").unwrap();
         cfg_value.compaction_filter_skip_version_check = false;
-        assert!(is_compaction_filter_allowd(&cfg_value, &cluster_version));
+        assert!(is_compaction_filter_allowed(&cfg_value, &gate));
     }
 
     #[test]

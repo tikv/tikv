@@ -439,7 +439,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engine.clone(),
             self.router.clone(),
             self.config.gc.clone(),
-            self.pd_client.cluster_version(),
+            self.pd_client.feature_gate(),
         );
         gc_worker
             .start()

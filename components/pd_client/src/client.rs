@@ -23,7 +23,7 @@ use txn_types::TimeStamp;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
-use super::{ClusterVersion, Config, PdFuture, UnixSecs};
+use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
@@ -135,8 +135,8 @@ impl RpcClient {
         block_on(self.leader_client.reconnect())
     }
 
-    pub fn cluster_version(&self) -> ClusterVersion {
-        self.leader_client.inner.rl().cluster_version.clone()
+    pub fn feature_gate(&self) -> FeatureGate {
+        self.leader_client.inner.rl().feature_gate.clone()
     }
 
     /// Creates a new call option with default request timeout.
@@ -583,7 +583,7 @@ impl PdClient for RpcClient {
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
-            let cluster_version = client.rl().cluster_version.clone();
+            let feature_gate = client.rl().feature_gate.clone();
             let handler = client
                 .rl()
                 .client_stub
@@ -595,7 +595,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["store_heartbeat"])
                     .observe(duration_to_sec(timer.elapsed()));
                 check_resp_header(resp.get_header())?;
-                match cluster_version.set(resp.get_cluster_version()) {
+                match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
                     Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
                     _ => {}

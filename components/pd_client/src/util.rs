@@ -31,7 +31,7 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -47,7 +47,7 @@ pub struct Inner {
 
     last_update: Instant,
 
-    pub cluster_version: ClusterVersion,
+    pub feature_gate: FeatureGate,
 }
 
 pub struct HeartbeatReceiver {
@@ -117,7 +117,7 @@ impl LeaderClient {
                 on_reconnect: None,
 
                 last_update: Instant::now(),
-                cluster_version: ClusterVersion::default(),
+                feature_gate: FeatureGate::default(),
             })),
         }
     }
