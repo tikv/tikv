@@ -241,7 +241,54 @@ mod parser {
             _ => None,
         }
     }
-} /* parser */
+
+    pub fn parse_prev(ctx: &mut EvalContext, input: &str, fsp: u8) -> Option<Duration> {
+        let input = input.trim();
+        if input.is_empty() {
+            return Some(Duration::zero());
+        }
+
+        let (rest, neg) = negative(input).ok()?;
+        let (rest, _) = space0::<_, ()>(rest).ok()?;
+        day_hhmmss(rest)
+            .ok()
+            .and_then(|(rest, (day, [hh, mm, ss]))| {
+                Some((rest, [day.checked_mul(24)?.checked_add(hh)?, mm, ss]))
+            })
+            .or_else(|| hhmmss_delimited(rest, true).ok())
+            .or_else(|| hhmmss_compact(rest).ok())
+            .and_then(|(rest, hhmmss)| {
+                let (rest, _) = space0::<_, ()>(rest).ok()?;
+                let (rest, frac) = fraction(rest, fsp).ok()?;
+
+                if !rest.is_empty() {
+                    return None;
+                }
+
+                Some(Duration::new_from_parts(
+                    neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
+                ))
+            })
+            .or_else(|| {
+                hhmmss_datetime(ctx, rest, fsp)
+                    .ok()
+                    .map(|(_, duration)| Ok(duration))
+            })
+            .and_then(|result| {
+                result
+                    .or_else(|err| {
+                        if err.is_overflow() {
+                            ctx.handle_overflow_err(Error::truncated_wrong_val("TIME", input))?;
+                            let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
+                            Ok(Duration { nanos, fsp })
+                        } else {
+                            Err(err)
+                        }
+                    })
+                    .ok()
+            })
+    }
+} 
 
 #[inline]
 fn checked_round(nanos: i64, fsp: u8) -> Result<i64> {
@@ -428,7 +475,7 @@ impl Duration {
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp, true)
+        parser::parse_prev(ctx, input, fsp)
             .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
