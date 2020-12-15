@@ -339,7 +339,7 @@ pub fn make_time(
     };
 
     let nanosecond = second.fract().abs() * NANOS_PER_SEC as f64;
-    let second = second.trunc() as i64;
+    let second = second.trunc();
     let minute = *minute;
 
     // Filter out the number that is negative or greater than `MAX_MINUTE_PART`.
@@ -350,7 +350,7 @@ pub fn make_time(
     };
 
     // Filter out the number that is negative or greater than `MAX_SECOND_PART`.
-    let mut second = if 0 <= second && second <= MAX_SECOND_PART.into() {
+    let mut second = if 0.0 <= second && second <= MAX_SECOND_PART.into() {
         second as u32
     } else {
         return Ok(None);
