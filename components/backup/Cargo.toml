@@ -73,6 +73,7 @@ tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 txn_types = { path = "../txn_types" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 

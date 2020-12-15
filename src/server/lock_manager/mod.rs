@@ -26,12 +26,12 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
-use tikv_util::collections::HashSet;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
 

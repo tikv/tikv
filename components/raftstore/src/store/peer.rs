@@ -44,8 +44,8 @@ use crate::store::{
     SplitCheckTask,
 };
 use crate::{Error, Result};
+use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
@@ -1041,22 +1041,24 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             ctx.coprocessor_host.on_step_read_index(&mut m);
-
-            // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
-            // request directly, rather than send a heartbeat to check quorum.
-            if self.raft_group.raft.commit_to_current_term() {
-                // If the leader hasn't committed any entries in its term, it can't response read only
-                // requests. Please also take a look at raft-rs.
+            // Must use the commit index of `PeerStorage` instead of the commit index
+            // in raft-rs which may be greater than the former one.
+            // For more details, see the annotations above `on_leader_commit_idx_changed`.
+            let index = self.get_store().commit_index();
+            // Check if the log term of this index is equal to current term, if so,
+            // this index can be used to reply the read index request if the leader holds
+            // the lease. Please also take a look at raft-rs.
+            if self.get_store().term(index).unwrap() == self.term() {
                 let state = self.inspect_lease();
                 if let LeaseState::Valid = state {
+                    // If current peer has valid lease, then we could handle the
+                    // request directly, rather than send a heartbeat to check quorum.
                     let mut resp = eraftpb::Message::default();
                     resp.set_msg_type(MessageType::MsgReadIndexResp);
                     resp.term = self.term();
                     resp.to = m.from;
-                    // Must use the commit index of `PeerStorage` instead of the commit index
-                    // in raft-rs which may be greater than the former one.
-                    // For more details, see the annotations above `on_leader_commit_idx_changed`.
-                    resp.index = self.get_store().commit_index();
+
+                    resp.index = index;
                     resp.set_entries(m.take_entries());
 
                     self.raft_group.raft.msgs.push(resp);

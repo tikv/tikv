@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Local;
 use clap::ArgMatches;
+use collections::HashMap;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
-use tikv_util::collections::HashMap;
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.

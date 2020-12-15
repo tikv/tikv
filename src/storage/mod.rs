@@ -1724,6 +1724,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
@@ -1737,7 +1738,6 @@ mod tests {
         },
         time::Duration,
     };
-    use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
     use txn_types::Mutation;
 
@@ -4577,6 +4577,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -4601,6 +4602,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -4655,6 +4657,7 @@ mod tests {
                     0.into(),
                     0.into(),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -4698,6 +4701,7 @@ mod tests {
                     ts(12, 0),
                     ts(15, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -4727,6 +4731,7 @@ mod tests {
                     ts(126, 0),
                     ts(127, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -5493,6 +5498,7 @@ mod tests {
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(150, 0),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -5526,6 +5532,7 @@ mod tests {
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),
+                    false,
                     false,
                     Context::default(),
                 ),

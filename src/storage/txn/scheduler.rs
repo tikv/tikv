@@ -26,9 +26,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
+use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{

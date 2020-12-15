@@ -125,7 +125,7 @@ pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
 prost = "0.6"
-pprof = { version = "0.3.16", features = ["flamegraph", "protobuf"] }
+pprof = { version = "=0.3.20", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -157,6 +157,7 @@ tidb_query_aggr = { path = "components/tidb_query_aggr" }
 tidb_query_executors = { path = "components/tidb_query_executors" }
 tikv_alloc = { path = "components/tikv_alloc" }
 tikv_util = { path = "components/tikv_util" }
+collections = { path = "components/collections" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio = { version = "0.2", features = ["full"] }
@@ -216,6 +217,7 @@ members = [
   "components/error_code",
   "components/concurrency_manager",
   "components/file_system",
+  "components/collections",
 
   "tiflash-proxy",
 ]

@@ -10,6 +10,7 @@ use std::time::Instant;
 use std::{cmp, u64};
 
 use batch_system::{BasicMailbox, Fsm};
+use collections::HashMap;
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
@@ -30,7 +31,6 @@ use protobuf::Message;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
-use tikv_util::collections::HashMap;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};

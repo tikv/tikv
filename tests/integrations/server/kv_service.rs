@@ -1115,12 +1115,7 @@ fn test_prewrite_check_max_commit_ts() {
     req.set_lock_ttl(20000);
     req.set_use_async_commit(true);
     let resp = client.kv_prewrite(&req).unwrap();
-    assert_eq!(
-        resp.get_errors()[0]
-            .get_commit_ts_too_large()
-            .get_commit_ts(),
-        101
-    );
+    assert_eq!(resp.get_min_commit_ts(), 0);
     // There shouldn't be locks remaining in the lock table.
     assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }
