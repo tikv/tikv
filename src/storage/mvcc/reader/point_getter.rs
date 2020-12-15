@@ -930,7 +930,7 @@ mod tests {
 
         must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
         must_commit(&engine, b"k4", 13, 14);
-        must_prewrite_put(&engine, b"k4", b"v4", b"k4x", 15);
+        must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
         must_commit(&engine, b"k4", 15, 20);
         force_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20);
         force_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30);

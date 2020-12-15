@@ -369,15 +369,13 @@ impl<S: Snapshot> MvccTxn<S> {
                         short_value: w.short_value,
                         start_ts: w.start_ts,
                     })
+                } else if w.as_ref().check_gc_fence_as_latest_version(self.start_ts) {
+                    Some(OldValue {
+                        short_value: w.short_value,
+                        start_ts: w.start_ts,
+                    })
                 } else {
-                    if w.as_ref().check_gc_fence_as_latest_version(self.start_ts) {
-                        Some(OldValue {
-                            short_value: w.short_value,
-                            start_ts: w.start_ts,
-                        })
-                    } else {
-                        None
-                    }
+                    None
                 }
             } else {
                 None
