@@ -15,7 +15,7 @@ use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
 use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
+use kvproto::kvrpcpb::{CheckLeaderRequest, ReadState, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -909,11 +909,17 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
+                            let mut read_state = ReadState::default();
+                            if let Some(rp) = meta.region_metas.get(&region_id) {
+                                read_state.set_applied_index(rp.applied_index());
+                                read_state.set_safe_ts(rp.safe_ts());
+                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(leader.id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
+                            leader_info.set_read_state(read_state);
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()

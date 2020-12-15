@@ -166,7 +166,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            safe_read_ts: peer.safe_read_ts.clone(),
+            safe_read_ts: peer.region_meta.get_safe_ts(),
         }
     }
 

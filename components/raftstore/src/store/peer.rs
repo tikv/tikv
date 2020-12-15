@@ -40,7 +40,7 @@ use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, RegionMeta,
     SplitCheckTask,
 };
 use crate::{Error, Result};
@@ -471,8 +471,8 @@ where
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
-    pending_ts: VecDeque<(u64, u64)>,
-    pub safe_read_ts: Arc<AtomicU64>,
+    pub region_meta: RegionMeta,
+
     /// The number of the last unpersisted ready.
     last_unpersisted_number: u64,
 
@@ -571,8 +571,7 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
-            pending_ts: VecDeque::new(),
-            safe_read_ts: Arc::new(AtomicU64::new(0)),
+            region_meta: RegionMeta::new(applied_index),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
@@ -1677,6 +1676,9 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+            if let Some(rp) = meta.region_metas.get(&self.region_id) {
+                rp.update_applied(self.get_store().applied_index());
+            }
         }
 
         apply_snap_result
@@ -1981,7 +1983,8 @@ where
         }
         self.pending_reads.gc();
 
-        self.handle_pending_ts();
+        self.region_meta
+            .update_applied(apply_state.get_applied_index());
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -3027,7 +3030,7 @@ where
         }
         if req.get_header().get_read_ts() > 0 {
             let read_ts = req.get_header().get_read_ts();
-            let safe_ts = self.safe_read_ts.load(Ordering::Relaxed);
+            let safe_ts = self.region_meta.safe_ts().load(Ordering::Relaxed);
             if safe_ts < read_ts {
                 debug!(
                     "read rejected by safe timestamp";
@@ -3284,8 +3287,8 @@ where
             && msg.get_msg_type() == MessageType::MsgHeartbeat
             && self.has_applied_to_current_term()
         {
-            send_msg.set_applied_index(self.get_store().applied_index());
-            send_msg.set_read_ts(self.safe_read_ts.load(Ordering::Relaxed));
+            send_msg.set_read_ts(self.region_meta.applied_index());
+            send_msg.set_read_ts(self.region_meta.safe_ts());
         }
 
         send_msg.set_message(msg);
@@ -3310,38 +3313,6 @@ where
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
-    }
-
-    pub fn forward_safe_read_ts(&mut self, applied_index: u64, ts: u64) {
-        if self.get_store().applied_index() < applied_index {
-            if let Some(item) = self.pending_ts.back_mut() {
-                if item.0 >= applied_index && item.1 < ts {
-                    item.1 = ts;
-                    return;
-                }
-                if *item >= (applied_index, ts) {
-                    return;
-                }
-            }
-            self.pending_ts.push_back((applied_index, ts));
-            return;
-        }
-        self.safe_read_ts.fetch_max(ts, Ordering::Relaxed);
-    }
-
-    pub fn handle_pending_ts(&mut self) {
-        let applied_index = self.get_store().applied_index();
-        let mut ts_to_update = self.safe_read_ts.load(Ordering::Relaxed);
-        while let Some((idx, ts)) = self.pending_ts.pop_front() {
-            if applied_index < idx {
-                self.pending_ts.push_front((idx, ts));
-                return;
-            }
-            if ts_to_update < ts {
-                ts_to_update = ts;
-            }
-        }
-        self.safe_read_ts.fetch_max(ts_to_update, Ordering::Relaxed);
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {

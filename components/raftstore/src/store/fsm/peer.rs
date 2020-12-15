@@ -1214,7 +1214,8 @@ where
         if msg_type == MessageType::MsgHeartbeat && msg_term == self.fsm.peer.term() {
             self.fsm
                 .peer
-                .forward_safe_read_ts(msg.get_applied_index(), msg.get_read_ts());
+                .region_meta
+                .forward_safe_ts(msg.get_applied_index(), msg.get_read_ts());
         }
 
         if is_snapshot {
@@ -1903,6 +1904,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        meta.region_metas.remove(&region_id);
     }
 
     // Update some region infos
@@ -2240,6 +2242,8 @@ where
             meta.regions.insert(new_region_id, new_region.clone());
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            meta.region_metas
+                .insert(new_region_id, new_peer.peer.region_meta.clone());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
