@@ -38,7 +38,6 @@ test-engines-panic = ["tikv/test-engines-panic"]
 [dependencies]
 bitflags = "1.0"
 crossbeam = "0.7"
-hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 failure = "0.1"

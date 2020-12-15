@@ -6,7 +6,6 @@ publish = false
 description = "Common utility of a query engine to run TiDB pushed down executors"
 
 [dependencies]
-hex = "0.4"
 time = "0.1"
 failure = "0.1"
 derive_more = "0.99.3"
