@@ -343,22 +343,22 @@ pub fn make_time(
     let minute = *minute;
 
     // Filter out the number that is negative or greater than `MAX_MINUTE_PART`.
-    let mut minute = if 0 <= minute && minute <= MAX_MINUTE_PART as _ {
-        minute as _
+    let mut minute = if 0 <= minute && minute <= MAX_MINUTE_PART.into() {
+        minute as u32
     } else {
         return Ok(None);
     };
 
     // Filter out the number that is negative or greater than `MAX_SECOND_PART`.
-    let mut second = if 0 <= second && second <= MAX_SECOND_PART as _ {
-        second as _
+    let mut second = if 0 <= second && second <= MAX_SECOND_PART.into() {
+        second as u32
     } else {
         return Ok(None);
     };
 
     // Ensure that the nanosecond part is valid.
-    assert!(0.0 <= nanosecond && nanosecond.floor() <= MAX_NANOS_PART as _);
-    let mut nanosecond = nanosecond as _;
+    debug_assert!(0.0 <= nanosecond && nanosecond.floor() <= MAX_NANOS_PART.into());
+    let mut nanosecond = nanosecond as u32;
 
     let is_overflow = (hour, minute, second, nanosecond)
         > (MAX_HOUR_PART as _, MAX_MINUTE_PART, MAX_SECOND_PART, 0);
