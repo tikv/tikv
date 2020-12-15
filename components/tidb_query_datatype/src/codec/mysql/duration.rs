@@ -516,16 +516,7 @@ impl Duration {
                     return t.convert(ctx);
                 }
             }
-            ctx.handle_overflow_err(Error::overflow("Duration", n))?;
-            // Returns max duration if overflow occurred
-            return Self::new_from_parts(
-                n.is_negative(),
-                MAX_HOUR_PART,
-                MAX_MINUTE_PART,
-                MAX_SECOND_PART,
-                0,
-                fsp,
-            );
+            return Err(Error::overflow("Duration", n));
         }
 
         let abs = n.abs();
@@ -1098,53 +1089,33 @@ mod tests {
                 false,
             ),
             // will overflow
-            (
-                8385960,
-                0,
-                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 0).unwrap()),
-                true,
-            ),
-            (
-                8385960,
-                1,
-                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 1).unwrap()),
-                true,
-            ),
-            (
-                8385960,
-                5,
-                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 5).unwrap()),
-                true,
-            ),
-            (
-                8385960,
-                6,
-                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 6).unwrap()),
-                true,
-            ),
+            (8385960, 0, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 1, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 5, Err(Error::overflow("Duration", 8385960)), false),
+            (8385960, 6, Err(Error::overflow("Duration", 8385960)), false),
             (
                 -8385960,
                 0,
-                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 0).unwrap()),
-                true,
+                Err(Error::overflow("Duration", 8385960)),
+                false,
             ),
             (
                 -8385960,
                 1,
-                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 1).unwrap()),
-                true,
+                Err(Error::overflow("Duration", 8385960)),
+                false,
             ),
             (
                 -8385960,
                 5,
-                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 5).unwrap()),
-                true,
+                Err(Error::overflow("Duration", 8385960)),
+                false,
             ),
             (
                 -8385960,
                 6,
-                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 6).unwrap()),
-                true,
+                Err(Error::overflow("Duration", 8385960)),
+                false,
             ),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
@@ -1165,15 +1136,7 @@ mod tests {
             (
                 -10000235959,
                 0,
-                Ok(Duration::new_from_parts(
-                    true,
-                    MAX_HOUR_PART,
-                    MAX_MINUTE_PART,
-                    MAX_SECOND_PART,
-                    0,
-                    0,
-                )
-                .unwrap()),
+                Err(Error::overflow("Duration", "-10000235959")),
                 false,
             ),
         ];
