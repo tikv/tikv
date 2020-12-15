@@ -290,7 +290,7 @@ impl TestSuite {
             lock_resp.get_region_error()
         );
         assert!(
-            lock_resp.get_errors().len() == 0,
+            lock_resp.get_errors().is_empty(),
             "{:?}",
             lock_resp.get_errors()
         );

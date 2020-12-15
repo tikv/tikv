@@ -803,7 +803,7 @@ fn test_old_value_basic() {
     m7.key = k1.clone();
     suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), 9.into(), 12.into());
     m7.set_op(Op::Del);
-    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1.clone(), 9.into(), 12.into());
+    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, 9.into(), 12.into());
 
     let mut event_count = 0;
     loop {
