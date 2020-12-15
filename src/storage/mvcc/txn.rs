@@ -1,16 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{CfStatistics, Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{reader::MvccReader, Result};
-use crate::storage::IterOptions;
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
+use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite};
+use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use std::fmt;
-use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{
-    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, Value, Write, WriteRef,
-    WriteType,
+    Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, Value, Write, WriteType,
 };
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
@@ -22,68 +20,25 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
-/// Get the GC fence for `key`. PTAL at `txn_types::Write::gc_fence`.
-pub struct GcFenceGetter<'a, S: Snapshot> {
-    pub snapshot: &'a S,
-    pub key: &'a Key,
-}
-
-impl<'a, S: Snapshot> GcFenceGetter<'a, S> {
-    pub fn new(snapshot: &'a S, key: &'a Key) -> Self {
-        GcFenceGetter { snapshot, key }
-    }
-
-    pub fn get(&self, ts: TimeStamp) -> Result<TimeStamp> {
-        let key = self.key;
-        let start = key.clone().append_ts(u64::MAX.into());
-        let end = key.clone().append_ts(0.into());
-        let prefix_len = S::iter_boundaries_prefix_len();
-        let iter_opt = IterOptions::new(
-            Some(KeyBuilder::from_vec(start.into_encoded(), prefix_len, 0)),
-            Some(KeyBuilder::from_vec(end.into_encoded(), prefix_len, 0)),
-            false, /*fill_cache*/
-        );
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
-
-        let mut cf_stats = CfStatistics::default();
-        let mut valid = cursor.seek(&key.clone().append_ts(ts), &mut cf_stats)?;
-        debug_assert!(valid, "the key must keep valid in one snapshot");
-        valid = cursor.prev(&mut cf_stats);
-        while valid {
-            let key = cursor.key(&mut cf_stats);
-            let value = cursor.value(&mut cf_stats);
-            let write_ref = WriteRef::parse(value)?;
-            match write_ref.write_type {
-                WriteType::Put | WriteType::Delete => return Ok(Key::decode_ts_from(key)?),
-                _ => valid = cursor.prev(&mut cf_stats),
-            }
-        }
-        Ok(0.into())
-    }
-}
-
 /// Generate the Write record that should be written that means to to perform a specified rollback
 /// operation.
-pub(crate) fn make_rollback<S: Snapshot>(
+pub(crate) fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
-    overlapped_write: Option<Write>,
-    gc_fence: GcFenceGetter<'_, S>,
-) -> Result<Option<Write>> {
-    let write = match overlapped_write {
-        Some(write) => {
+    overlapped_write: Option<OverlappedWrite>,
+) -> Option<Write> {
+    match overlapped_write {
+        Some(OverlappedWrite { write, gc_fence }) => {
             assert!(start_ts > write.start_ts);
             if protected {
-                let fence = gc_fence.get(start_ts)?;
-                Some(write.set_overlapped_rollback(true, Some(fence)))
+                Some(write.set_overlapped_rollback(true, Some(gc_fence)))
             } else {
                 // No need to update the original write.
                 None
             }
         }
         None => Some(Write::new_rollback(start_ts, protected)),
-    };
-    Ok(write)
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -110,18 +65,17 @@ impl MissingLockAction {
         }
     }
 
-    pub fn construct_write<S: Snapshot>(
+    pub fn construct_write(
         &self,
         ts: TimeStamp,
-        overlapped_write: Option<Write>,
-        gc_fence: GcFenceGetter<'_, S>,
-    ) -> Result<Option<Write>> {
+        overlapped_write: Option<OverlappedWrite>,
+    ) -> Option<Write> {
         let protected = match self {
             MissingLockAction::Rollback => false,
             MissingLockAction::ProtectedRollback => true,
             _ => unreachable!(),
         };
-        make_rollback(ts, protected, overlapped_write, gc_fence)
+        make_rollback(ts, protected, overlapped_write)
     }
 }
 
@@ -322,7 +276,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
-        overlapped_write: Option<Write>,
+        overlapped_write: Option<OverlappedWrite>,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -331,12 +285,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        if let Some(write) = make_rollback(
-            self.start_ts,
-            protected,
-            overlapped_write,
-            GcFenceGetter::new(&self.reader.snapshot, &key),
-        )? {
+        if let Some(write) = make_rollback(self.start_ts, protected, overlapped_write) {
             self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         }
         if self.collapse_rollback {

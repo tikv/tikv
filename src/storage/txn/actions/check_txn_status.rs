@@ -3,7 +3,7 @@
 use txn_types::{Key, Lock, TimeStamp, WriteType};
 
 use crate::storage::{
-    mvcc::txn::{GcFenceGetter, MissingLockAction},
+    mvcc::txn::MissingLockAction,
     mvcc::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, ErrorInner, MvccTxn, ReleasedLock, Result,
         TxnCommitRecord,
@@ -117,11 +117,7 @@ pub fn check_txn_status_missing_lock<S: Snapshot>(
 
             // Insert a Rollback to Write CF in case that a stale prewrite
             // command is received after a cleanup command.
-            if let Some(write) = action.construct_write(
-                ts,
-                overlapped_write,
-                GcFenceGetter::new(&txn.reader.snapshot, &primary_key),
-            )? {
+            if let Some(write) = action.construct_write(ts, overlapped_write) {
                 txn.put_write(primary_key, ts, write.as_ref().to_bytes());
             }
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
