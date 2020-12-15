@@ -12,8 +12,9 @@ use std::time::SystemTime;
 use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
-    ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
+    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerCredentialsBuilder,
+    ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -152,10 +153,23 @@ impl SecurityManager {
         }
     }
 
-    pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
+    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
         if self.cfg.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
+            if !self.cfg.cert_allowed_cn.is_empty() {
+                let cert_allowed_cn = self.cfg.cert_allowed_cn.clone();
+                sb = sb.add_checker(move |ctx| {
+                    if check_common_name(&cert_allowed_cn, ctx) {
+                        CheckResult::Continue
+                    } else {
+                        CheckResult::Abort(RpcStatus::new(
+                            RpcStatusCode::PERMISSION_DENIED,
+                            Some("Failed to check common name".to_owned()),
+                        ))
+                    }
+                });
+            }
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
@@ -167,10 +181,6 @@ impl SecurityManager {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
-    }
-
-    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
-        &self.cfg.cert_allowed_cn
     }
 }
 
@@ -206,11 +216,8 @@ impl ServerCredentialsFetcher for Fetcher {
 
 /// Check peer CN with cert-allowed-cn field.
 /// Return true when the match is successful (support wildcard pattern).
-/// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
-pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
-    if cert_allowed_cn.is_empty() {
-        return true;
-    }
+/// Skip the check when the secure channel is not used.
+fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
     if let Some(auth_ctx) = ctx.auth_context() {
         if let Some(auth_property) = auth_ctx
             .into_iter()
