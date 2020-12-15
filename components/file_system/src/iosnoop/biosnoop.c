@@ -23,8 +23,8 @@ typedef enum {
 } io_type;
 
 struct info_t {
-    u64 start_ts;
     io_type type;
+    u64 start_ts;
 };
 
 BPF_HASH(info_by_req, struct request *, struct info_t);
@@ -33,16 +33,27 @@ BPF_HASH(stats_by_type, io_type, struct stats_t);
 
 // the latency includes OS queued time
 // When using BPF_ARRAY_OF_MAPS, it can't call something like hist_arrays[idx].increment() due .
-BPF_HISTOGRAM(other_latency);
-BPF_HISTOGRAM(read_latency);
-BPF_HISTOGRAM(write_latency);
-BPF_HISTOGRAM(coprocessor_latency);
-BPF_HISTOGRAM(flush_latency);
-BPF_HISTOGRAM(compaction_latency);
-BPF_HISTOGRAM(replication_latency);
-BPF_HISTOGRAM(loadbalance_latency);
-BPF_HISTOGRAM(import_latency);
-BPF_HISTOGRAM(export_latency);
+BPF_HISTOGRAM(other_read_latency);
+BPF_HISTOGRAM(read_read_latency);
+BPF_HISTOGRAM(write_read_latency);
+BPF_HISTOGRAM(coprocessor_read_latency);
+BPF_HISTOGRAM(flush_read_latency);
+BPF_HISTOGRAM(compaction_read_latency);
+BPF_HISTOGRAM(replication_read_latency);
+BPF_HISTOGRAM(loadbalance_read_latency);
+BPF_HISTOGRAM(import_read_latency);
+BPF_HISTOGRAM(export_read_latency);
+
+BPF_HISTOGRAM(other_write_latency);
+BPF_HISTOGRAM(read_write_latency);
+BPF_HISTOGRAM(write_write_latency);
+BPF_HISTOGRAM(coprocessor_write_latency);
+BPF_HISTOGRAM(flush_write_latency);
+BPF_HISTOGRAM(compaction_write_latency);
+BPF_HISTOGRAM(replication_write_latency);
+BPF_HISTOGRAM(loadbalance_write_latency);
+BPF_HISTOGRAM(import_write_latency);
+BPF_HISTOGRAM(export_write_latency);
 
 // cache PID by req
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
@@ -66,6 +77,7 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
     io_type** type_ptr = type_by_pid.lookup(&pid);
     if (type_ptr == 0) return 0;
     struct info_t info;
+    __builtin_memset(&info, 0, sizeof(info)); // ensure padding is always zeroed, otherwise verifier will complain.
     int err = bpf_probe_read(&info.type, sizeof(io_type), (void*)*type_ptr);
     if (err != 0) {
         info.type = Other;
@@ -112,34 +124,74 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req)
     u64 delta = (bpf_ktime_get_ns() - info->start_ts) / 1000; // microseconds
     switch (type) {
         case Other:
-            other_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                other_write_latency.increment(bpf_log2l(delta));
+            } else {
+                other_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Read:
-            read_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                read_write_latency.increment(bpf_log2l(delta));
+            } else {
+                read_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Write:
-            write_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                write_write_latency.increment(bpf_log2l(delta));
+            } else {
+                write_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Coprocessor:
-            coprocessor_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                coprocessor_write_latency.increment(bpf_log2l(delta));
+            } else {
+                coprocessor_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Flush:
-            flush_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                flush_write_latency.increment(bpf_log2l(delta));
+            } else {
+                flush_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Compaction:
-            compaction_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                compaction_write_latency.increment(bpf_log2l(delta));
+            } else {
+                compaction_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Replication:
-            replication_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                replication_write_latency.increment(bpf_log2l(delta));
+            } else {
+                replication_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case LoadBalance:
-            loadbalance_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                loadbalance_write_latency.increment(bpf_log2l(delta));
+            } else {
+                loadbalance_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Import:
-            import_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                import_write_latency.increment(bpf_log2l(delta));
+            } else {
+                import_read_latency.increment(bpf_log2l(delta));
+            }
             break;
         case Export:
-            export_latency.increment(bpf_log2l(delta));
+            if (rwflag == 1) {
+                export_write_latency.increment(bpf_log2l(delta));
+            } else {
+                export_read_latency.increment(bpf_log2l(delta));
+            }
             break;
     }
 
