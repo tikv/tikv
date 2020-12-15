@@ -554,7 +554,7 @@ impl Delegate {
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
-        let mut rows = HashMap::default();
+        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -611,8 +611,15 @@ impl Delegate {
                         }
                     }
 
-                    let r = rows.insert(row.key.clone(), row);
-                    assert!(r.is_none());
+                    match rows.get_mut(&row.key) {
+                        Some(row_with_value) => {
+                            row.value = mem::take(&mut row_with_value.value);
+                            *row_with_value = row;
+                        }
+                        None => {
+                            rows.insert(row.key.clone(), row);
+                        }
+                    }
                 }
                 "lock" => {
                     let mut row = EventRow::default();

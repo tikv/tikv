@@ -999,7 +999,7 @@ fn test_cdc_1pc() {
         .unwrap();
 
     let (k1, v1) = (b"k1", b"v1");
-    let (k2, v2) = (b"k2", b"v2");
+    let (k2, v2) = (b"k2", &[0u8; 512]);
 
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
 
