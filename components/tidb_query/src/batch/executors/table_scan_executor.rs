@@ -187,8 +187,8 @@ impl TableScanExecutorImpl {
                     // but will output a log anyway.
                     warn!(
                         "Ignored duplicated row datum in table scan";
-                        "key" => hex::encode_upper(&key),
-                        "value" => hex::encode_upper(&value),
+                        "key" => log_wrappers::Value::key(&key),
+                        "value" => log_wrappers::Value::value(&value),
                         "dup_column_id" => column_id,
                     );
                 }
