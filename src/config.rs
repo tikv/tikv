@@ -1436,6 +1436,12 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_auto_tuned(&self, auto_tuned: bool) -> Result<(), Box<dyn Error>> {
+        let mut opt = self.db.as_inner().get_db_options();
+        opt.set_auto_tuned(auto_tuned)?;
+        Ok(())
+    }
+
     fn set_max_background_jobs(&self, max_background_jobs: i32) -> Result<(), Box<dyn Error>> {
         let opt = self.db.as_inner().get_db_options();
         if max_background_jobs < opt.get_max_background_jobs() {
@@ -1505,6 +1511,13 @@ impl ConfigManager for DBConfigManger {
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
             self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
+        }
+
+        if let Some(rate_bytes_config) =
+            change.drain_filter(|(name, _)| name == "auto_tuned").next()
+        {
+            let auto_tuned: bool = rate_bytes_config.1.into();
+            self.set_auto_tuned(auto_tuned)?;
         }
 
         if let Some(background_jobs_config) = change
@@ -3265,7 +3278,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
-        cfg.rocksdb.auto_tuned = false;
+        cfg.rocksdb.auto_tuned = true;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
@@ -3299,6 +3312,14 @@ mod tests {
             db.get_db_options().get_rate_bytes_per_sec().unwrap(),
             ReadableSize::mb(128).0 as i64
         );
+
+        // update auto_tuned
+        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), true);
+
+        cfg_controller
+            .update_config("rocksdb.auto_tuned", "false")
+            .unwrap();
+        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();

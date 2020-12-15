@@ -58,6 +58,14 @@ impl DBOptions for RocksDBOptions {
             .map_err(|e| box_err!(e))
     }
 
+    fn get_auto_tuned(&self) -> Option<bool> {
+        self.0.get_auto_tuned()
+    }
+
+    fn set_auto_tuned(&mut self, auto_tuned: bool) -> Result<()> {
+        self.0.set_auto_tuned(auto_tuned).map_err(|e| box_err!(e))
+    }
+
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
