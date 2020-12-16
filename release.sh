@@ -13,6 +13,7 @@ if [[ $(uname -s) == "Darwin" ]]; then
 #  export OPENSSL_INCLUDE_DIR=$(brew --prefix openssl)"/include"
 #  export OPENSSL_NO_VENDOR=1
   make build_by_type
+  mkdir -p target/release
   cp target/debug/libtiflash_proxy.dylib target/release/libtiflash_proxy.dylib
 else
   make build_by_type
