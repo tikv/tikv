@@ -33,27 +33,27 @@ BPF_HASH(stats_by_type, io_type, struct stats_t);
 
 // the latency includes OS queued time
 // When using BPF_ARRAY_OF_MAPS, it can't call something like hist_arrays[idx].increment() due .
-BPF_HISTOGRAM(other_read_latency);
-BPF_HISTOGRAM(read_read_latency);
-BPF_HISTOGRAM(write_read_latency);
-BPF_HISTOGRAM(coprocessor_read_latency);
-BPF_HISTOGRAM(flush_read_latency);
-BPF_HISTOGRAM(compaction_read_latency);
-BPF_HISTOGRAM(replication_read_latency);
-BPF_HISTOGRAM(loadbalance_read_latency);
-BPF_HISTOGRAM(import_read_latency);
-BPF_HISTOGRAM(export_read_latency);
+BPF_HISTOGRAM(other_read_latency, int, 25);
+BPF_HISTOGRAM(read_read_latency, int, 25);
+BPF_HISTOGRAM(write_read_latency, int, 25);
+BPF_HISTOGRAM(coprocessor_read_latency, int, 25);
+BPF_HISTOGRAM(flush_read_latency, int, 25);
+BPF_HISTOGRAM(compaction_read_latency, int, 25);
+BPF_HISTOGRAM(replication_read_latency, int, 25);
+BPF_HISTOGRAM(loadbalance_read_latency, int, 25);
+BPF_HISTOGRAM(import_read_latency, int, 25);
+BPF_HISTOGRAM(export_read_latency, int, 25);
 
-BPF_HISTOGRAM(other_write_latency);
-BPF_HISTOGRAM(read_write_latency);
-BPF_HISTOGRAM(write_write_latency);
-BPF_HISTOGRAM(coprocessor_write_latency);
-BPF_HISTOGRAM(flush_write_latency);
-BPF_HISTOGRAM(compaction_write_latency);
-BPF_HISTOGRAM(replication_write_latency);
-BPF_HISTOGRAM(loadbalance_write_latency);
-BPF_HISTOGRAM(import_write_latency);
-BPF_HISTOGRAM(export_write_latency);
+BPF_HISTOGRAM(other_write_latency, int, 25);
+BPF_HISTOGRAM(read_write_latency, int, 25);
+BPF_HISTOGRAM(write_write_latency, int, 25);
+BPF_HISTOGRAM(coprocessor_write_latency, int, 25);
+BPF_HISTOGRAM(flush_write_latency, int, 25);
+BPF_HISTOGRAM(compaction_write_latency, int, 25);
+BPF_HISTOGRAM(replication_write_latency, int, 25);
+BPF_HISTOGRAM(loadbalance_write_latency, int, 25);
+BPF_HISTOGRAM(import_write_latency, int, 25);
+BPF_HISTOGRAM(export_write_latency, int, 25);
 
 // cache PID by req
 int trace_pid_start(struct pt_regs *ctx, struct request *req)

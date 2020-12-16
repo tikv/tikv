@@ -48,12 +48,12 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv");
                     raft_db.flush_metrics("raft");
+                    unsafe { flush_io_metrics() };
                     if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
                         kv_db.reset_statistics();
                         raft_db.reset_statistics();
                         last_reset = Instant::now();
                     }
-                    flush_io_metrics();
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;

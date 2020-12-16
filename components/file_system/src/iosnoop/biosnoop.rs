@@ -143,6 +143,7 @@ pub fn init_io_snooper() -> Result<(), String> {
     unsafe {
         BPF_TABLE = Some((bpf, stats_table, type_table));
     }
+    let _ = IO_CONTEXT.lock().unwrap(); // trigger init of io context
     Ok(())
 }
 
@@ -155,30 +156,33 @@ macro_rules! flush_io_latency_and_bytes {
         let mut t = $bpf
             .table(concat!(stringify!($metrics), "_read_latency"))
             .unwrap();
-        for e in t.iter() {
-            let bucket = ptr::read(e.key.as_ptr() as *const u64);
+        for mut e in t.iter() {
+            let bucket = 2_u64.pow(ptr::read(e.key.as_ptr() as *const libc::c_int) as u32);
             let count = ptr::read(e.value.as_ptr() as *const u64);
 
             for _ in 0..count {
-                IO_LATENCY_MICROS.$metrics.read.observe(bucket as f64);
+                IO_LATENCY_MICROS_VEC.$metrics.read.observe(bucket as f64);
             }
+            let zero: u64 = 0;
+            t.set(&mut e.key, &mut zero.to_ne_bytes()).unwrap();
         }
-        t.delete_all().unwrap();
+
         let mut t = $bpf
             .table(concat!(stringify!($metrics), "_write_latency"))
             .unwrap();
-        for e in t.iter() {
-            let bucket = ptr::read(e.key.as_ptr() as *const u64);
+        for mut e in t.iter() {
+            let bucket = 2_u64.pow(ptr::read(e.key.as_ptr() as *const libc::c_int) as u32);
             let count = ptr::read(e.value.as_ptr() as *const u64);
 
             for _ in 0..count {
-                IO_LATENCY_MICROS.$metrics.write.observe(bucket as f64);
+                IO_LATENCY_MICROS_VEC.$metrics.write.observe(bucket as f64);
             }
+            let zero: u64 = 0;
+            t.set(&mut e.key, &mut zero.to_ne_bytes()).unwrap();
         }
-        t.delete_all().unwrap();
         if let Some(v) = $delta.get(&$type) {
-            IO_BYTES.$metrics.read.inc_by(v.read as i64);
-            IO_BYTES.$metrics.write.inc_by(v.write as i64);
+            IO_BYTES_VEC.$metrics.read.inc_by(v.read as i64);
+            IO_BYTES_VEC.$metrics.write.inc_by(v.write as i64);
         }
     };
 }
@@ -201,7 +205,8 @@ pub unsafe fn flush_io_metrics() {
 
 #[cfg(test)]
 mod tests {
-    use crate::{get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
+    use crate::iosnoop::metrics::*;
+    use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
     use std::{fs::OpenOptions, io::Read, io::Write, os::unix::fs::OpenOptionsExt};
     use tempfile::TempDir;
 
@@ -251,5 +256,11 @@ mod tests {
         assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
         assert_eq!(delta.get(&IOType::Other).unwrap().write, 0);
         assert_ne!(delta.get(&IOType::Other).unwrap().read, 0);
+
+        unsafe { flush_io_metrics() };
+        assert_ne!(IO_LATENCY_MICROS_VEC.compaction.write.get_sample_count(), 0);
+        assert_ne!(IO_LATENCY_MICROS_VEC.other.read.get_sample_count(), 0);
+        assert_ne!(IO_BYTES_VEC.compaction.write.get(), 0);
+        assert_ne!(IO_BYTES_VEC.other.read.get(), 0);
     }
 }

@@ -2222,6 +2222,9 @@ pub struct TiKvConfig {
     pub panic_when_unexpected_key_or_data: bool,
 
     #[config(skip)]
+    pub io_snoop: bool,
+
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
 
     #[config(skip)]
@@ -2286,6 +2289,7 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
+            io_snoop: true,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),

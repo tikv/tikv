@@ -101,7 +101,11 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
+            let enable_io_snoop = config.io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
+            if enable_io_snoop {
+                tikv.init_io_snooper();
+            }
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -112,7 +116,6 @@ pub fn run_tikv(config: TiKvConfig) {
             let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
             tikv.init_metrics_flusher();
-            tikv.init_io_snooper();
             tikv.run_server(server_config);
             tikv.run_status_server();
 
