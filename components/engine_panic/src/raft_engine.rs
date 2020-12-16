@@ -63,10 +63,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn append_slice(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
-        panic!()
-    }
-
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         panic!()
     }
@@ -98,10 +94,6 @@ impl RaftEngine for PanicEngine {
 
 impl RaftLogBatch for PanicWriteBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
-        panic!()
-    }
-
-    fn append_slice(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
         panic!()
     }
 

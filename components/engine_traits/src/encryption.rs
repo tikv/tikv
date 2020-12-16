@@ -7,7 +7,7 @@ pub trait EncryptionKeyManager: Sync + Send {
     fn get_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
     fn new_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
     fn delete_file(&self, fname: &str) -> Result<()>;
-    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> Result<()>;
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
 }
 

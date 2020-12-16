@@ -15,8 +15,8 @@ use protobuf::Message;
 use crate::config::{EncryptionConfig, MasterKeyConfig};
 use crate::crypter::{self, compat, Iv};
 use crate::encrypted_file::EncryptedFile;
+use crate::file_dict_file::FileDictionaryFile;
 use crate::io::EncrypterWriter;
-use crate::log_file::LogFile;
 use crate::master_key::{create_backend, Backend};
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -28,7 +28,7 @@ const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
     file_dict: Mutex<FileDictionary>,
-    log_file: Mutex<LogFile>,
+    file_dict_file: Mutex<FileDictionaryFile>,
     // Maps data key id to data keys, together with metadata. Also stores the data
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
@@ -42,13 +42,19 @@ struct Dicts {
 }
 
 impl Dicts {
-    fn new(path: &str, rotation_period: Duration, file_rewrite_threshold: u64) -> Result<Dicts> {
+    fn new(
+        path: &str,
+        rotation_period: Duration,
+        enable_file_dictionary_log: bool,
+        file_dictionary_rewrite_threshold: u64,
+    ) -> Result<Dicts> {
         Ok(Dicts {
             file_dict: Mutex::new(FileDictionary::default()),
-            log_file: Mutex::new(LogFile::new(
+            file_dict_file: Mutex::new(FileDictionaryFile::new(
                 Path::new(path).to_owned(),
                 FILE_DICT_NAME,
-                file_rewrite_threshold,
+                enable_file_dictionary_log,
+                file_dictionary_rewrite_threshold,
             )?),
             key_dict: Mutex::new(KeyDictionary {
                 current_key_id: 0,
@@ -64,19 +70,26 @@ impl Dicts {
         path: &str,
         rotation_period: Duration,
         master_key: &dyn Backend,
-        file_rewrite_threshold: u64,
+        enable_file_dictionary_log: bool,
+        file_dictionary_rewrite_threshold: u64,
     ) -> Result<Option<Dicts>> {
         let base = Path::new(path);
 
         // File dict is saved in plaintext.
-        let log_content = LogFile::open(base, FILE_DICT_NAME, file_rewrite_threshold, false);
+        let log_content = FileDictionaryFile::open(
+            base,
+            FILE_DICT_NAME,
+            enable_file_dictionary_log,
+            file_dictionary_rewrite_threshold,
+            false,
+        );
 
         let key_file = EncryptedFile::new(base, KEY_DICT_NAME);
         let key_bytes = key_file.read(master_key);
 
         match (log_content, key_bytes) {
             // Both files are found.
-            (Ok((log_file, file_dict)), Ok(key_bytes)) => {
+            (Ok((file_dict_file, file_dict)), Ok(key_bytes)) => {
                 info!("encryption: found both of key dictionary and file dictionary.");
                 let mut key_dict = KeyDictionary::default();
                 key_dict.merge_from_bytes(&key_bytes)?;
@@ -87,7 +100,7 @@ impl Dicts {
 
                 Ok(Some(Dicts {
                     file_dict: Mutex::new(file_dict),
-                    log_file: Mutex::new(log_file),
+                    file_dict_file: Mutex::new(file_dict_file),
                     key_dict: Mutex::new(key_dict),
                     current_key_id,
                     rotation_period,
@@ -103,13 +116,13 @@ impl Dicts {
                 Ok(None)
             }
             // ...else, return either error.
-            (log_file, key_bytes) => {
+            (file_dict_file, key_bytes) => {
                 if let Err(key_err) = key_bytes {
                     error!("encryption: failed to load key dictionary.");
                     Err(key_err)
                 } else {
                     error!("encryption: failed to load file dictionary.");
-                    Err(log_file.unwrap_err())
+                    Err(file_dict_file.unwrap_err())
                 }
             }
         }
@@ -171,7 +184,7 @@ impl Dicts {
     }
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
-        let mut log_file = self.log_file.lock().unwrap();
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = Iv::new_ctr();
         let mut file = FileInfo::default();
         file.iv = iv.as_slice().to_vec();
@@ -183,7 +196,7 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        log_file.insert(fname, &file)?;
+        file_dict_file.insert(fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -198,7 +211,7 @@ impl Dicts {
     }
 
     fn delete_file(&self, fname: &str) -> Result<()> {
-        let mut log_file = self.log_file.lock().unwrap();
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
 
@@ -215,7 +228,7 @@ impl Dicts {
             }
         };
 
-        log_file.remove(fname)?;
+        file_dict_file.remove(fname)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != compat(EncryptionMethod::Plaintext) {
             info!("delete encrypted file"; "fname" => fname);
@@ -225,8 +238,8 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> Result<()> {
-        let mut log_file = self.log_file.lock().unwrap();
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
             let file = match file_dict.files.get(src_fname) {
@@ -248,10 +261,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        log_file.insert(dst_fname, &file)?;
-        if sync {
-            log_file.sync()?;
-        }
+        file_dict_file.insert(dst_fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != compat(EncryptionMethod::Plaintext) {
@@ -263,7 +273,7 @@ impl Dicts {
     }
 
     fn rename_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
-        let mut log_file = self.log_file.lock().unwrap();
+        let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
             let file = match file_dict.files.remove(src_fname) {
@@ -279,7 +289,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        log_file.replace(src_fname, dst_fname, file)?;
+        file_dict_file.replace(src_fname, dst_fname, file)?;
 
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
@@ -304,11 +314,6 @@ impl Dicts {
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
         Ok(())
-    }
-
-    fn sync(&self) -> Result<()> {
-        let f = self.log_file.lock().unwrap();
-        f.sync()
     }
 
     fn maybe_rotate_data_key(
@@ -409,7 +414,8 @@ impl DataKeyManager {
             &config.previous_master_key,
             config.data_encryption_method,
             config.data_key_rotation_period.into(),
-            config.file_rewrite_threshold,
+            config.enable_file_dictionary_log,
+            config.file_dictionary_rewrite_threshold,
             dict_path,
         )
     }
@@ -419,7 +425,8 @@ impl DataKeyManager {
         previous_master_key_config: &MasterKeyConfig,
         method: EncryptionMethod,
         rotation_period: Duration,
-        file_rewrite_threshold: u64,
+        enable_file_dictionary_log: bool,
+        file_dictionary_rewrite_threshold: u64,
         dict_path: &str,
     ) -> Result<Option<DataKeyManager>> {
         let master_key = create_backend(master_key_config).map_err(|e| {
@@ -436,7 +443,8 @@ impl DataKeyManager {
                 dict_path,
                 rotation_period,
                 master_key.as_ref(),
-                file_rewrite_threshold,
+                enable_file_dictionary_log,
+                file_dictionary_rewrite_threshold,
             ),
             method,
         ) {
@@ -448,7 +456,12 @@ impl DataKeyManager {
             // Encryption is being enabled.
             (Ok(None), _) => {
                 info!("encryption is being enabled. method = {:?}", method);
-                Dicts::new(dict_path, rotation_period, file_rewrite_threshold)?
+                Dicts::new(
+                    dict_path,
+                    rotation_period,
+                    enable_file_dictionary_log,
+                    file_dictionary_rewrite_threshold,
+                )?
             }
             // Encryption was enabled and master key didn't change.
             (Ok(Some(dicts)), _) => {
@@ -469,7 +482,8 @@ impl DataKeyManager {
                     dict_path,
                     rotation_period,
                     previous_master_key.as_ref(),
-                    file_rewrite_threshold,
+                    enable_file_dictionary_log,
+                    file_dictionary_rewrite_threshold,
                 )
                 .map_err(|e| {
                     if let Error::WrongMasterKey(e_previous) = e {
@@ -531,10 +545,6 @@ impl DataKeyManager {
         )
     }
 
-    pub fn sync(&self) -> Result<()> {
-        self.dicts.sync()
-    }
-
     pub fn dump_key_dict(
         config: &EncryptionConfig,
         dict_path: &str,
@@ -563,7 +573,13 @@ impl DataKeyManager {
     }
 
     pub fn dump_file_dict(dict_path: &str, file_path: Option<&str>) -> Result<()> {
-        let (_, file_dict) = LogFile::open(dict_path, FILE_DICT_NAME, 1, true)?;
+        let (_, file_dict) = FileDictionaryFile::open(
+            dict_path,
+            FILE_DICT_NAME,
+            true, /*enable_file_dictionary_log*/
+            1,
+            true, /*skip_rewrite*/
+        )?;
         if let Some(file_path) = file_path {
             if let Some(info) = file_dict.files.get(file_path) {
                 println!("{}: {:?}", file_path, info);
@@ -633,8 +649,8 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname, sync)?;
+    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+        self.dicts.link_file(src_fname, dst_fname)?;
         Ok(())
     }
 
@@ -676,6 +692,7 @@ mod tests {
             &previous_master_key,
             method.unwrap_or(EncryptionMethod::Aes256Ctr),
             Duration::from_secs(60),
+            true, /*enable_file_dictionary_log*/
             2,
             tmp.path().as_os_str().to_str().unwrap(),
         );
@@ -877,19 +894,17 @@ mod tests {
         let manager = manager.unwrap().unwrap();
 
         let file = manager.new_file("foo").unwrap();
-        manager.link_file("foo", "foo1", false).unwrap();
+        manager.link_file("foo", "foo1").unwrap();
 
         // Must be the same.
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
         // Source file not exists.
-        manager
-            .link_file("not exists", "not exists1", false)
-            .unwrap();
+        manager.link_file("not exists", "not exists1").unwrap();
         // Target file already exists.
         manager.new_file("foo2").unwrap();
-        manager.link_file("foo2", "foo1", false).unwrap_err();
+        manager.link_file("foo2", "foo1").unwrap_err();
     }
 
     #[test]
