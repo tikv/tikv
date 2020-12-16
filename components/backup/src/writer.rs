@@ -229,7 +229,7 @@ impl BackupWriter {
     }
 
     pub fn rebuild(&self, start_key: Option<Key>) -> Result<Self> {
-        let key = start_key.clone().and_then(|k| {
+        let key = start_key.and_then(|k| {
             // use start_key sha256 instead of start_key to avoid file name too long os error
             let input = k.into_raw().unwrap();
             file_system::sha256(&input).ok().map(hex::encode)
@@ -475,7 +475,7 @@ mod tests {
             None,
             0,
             144 * 1024 * 1024,
-            r.clone(),
+            r,
         )
         .unwrap();
         writer

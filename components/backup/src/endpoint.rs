@@ -230,7 +230,7 @@ impl BackupRange {
                             Ok(k) => writer.rebuild(Option::from(Key::from_raw(&k))),
                             Err(e) => {
                                 error!(?e; "backup save file failed");
-                                return Err(Error::Other(box_err!("Decode error: {:?}", e)));
+                                Err(Error::Other(box_err!("Decode error: {:?}", e)))
                             }
                         },
                     )
