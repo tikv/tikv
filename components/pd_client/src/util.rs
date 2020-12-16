@@ -46,13 +46,11 @@ pub struct Inner {
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
-
-    pub feature_gate: FeatureGate,
 }
 
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
-    inner: Arc<RwLock<Inner>>,
+    inner: Arc<LeaderClient>,
 }
 
 impl Stream for HeartbeatReceiver {
@@ -71,7 +69,7 @@ impl Stream for HeartbeatReceiver {
 
             self.receiver.take();
 
-            let mut inner = self.inner.wl();
+            let mut inner = self.inner.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
@@ -91,7 +89,8 @@ impl Stream for HeartbeatReceiver {
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     timer: Handle,
-    pub(crate) inner: Arc<RwLock<Inner>>,
+    pub(crate) inner: RwLock<Inner>,
+    pub feature_gate: FeatureGate,
 }
 
 impl LeaderClient {
@@ -107,7 +106,7 @@ impl LeaderClient {
 
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
-            inner: Arc::new(RwLock::new(Inner {
+            inner: RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
                 hb_receiver: Either::Left(Some(rx)),
@@ -117,18 +116,18 @@ impl LeaderClient {
                 on_reconnect: None,
 
                 last_update: Instant::now(),
-                feature_gate: FeatureGate::default(),
-            })),
+            }),
+            feature_gate: FeatureGate::default(),
         }
     }
 
-    pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
+    pub fn handle_region_heartbeat_response<F>(self: &Arc<Self>, f: F) -> PdFuture<()>
     where
         F: Fn(RegionHeartbeatResponse) + Send + 'static,
     {
         let recv = HeartbeatReceiver {
             receiver: None,
-            inner: Arc::clone(&self.inner),
+            inner: self.clone(),
         };
         Box::pin(
             recv.try_for_each(move |resp| {
@@ -144,18 +143,20 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, F>
+    pub fn request<Req, Resp, F>(
+        self: &Arc<Self>,
+        req: Req,
+        func: F,
+        retry: usize,
+    ) -> Request<Req, F>
     where
         Req: Clone + 'static,
-        F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
+        F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            client: LeaderClient {
-                timer: self.timer.clone(),
-                inner: Arc::clone(&self.inner),
-            },
+            client: self.clone(),
             req,
             func,
         }
@@ -222,7 +223,7 @@ pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, F> {
     reconnect_count: usize,
     request_sent: usize,
-    client: LeaderClient,
+    client: Arc<LeaderClient>,
     req: Req,
     func: F,
 }
@@ -232,7 +233,7 @@ const MAX_REQUEST_COUNT: usize = 3;
 impl<Req, Resp, F> Request<Req, F>
 where
     Req: Clone + Send + 'static,
-    F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
+    F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
@@ -268,7 +269,7 @@ where
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        (self.func)(&self.client.inner, r).await
+        (self.func)(&self.client, r).await
     }
 
     fn should_not_retry(resp: &Result<Resp>) -> bool {

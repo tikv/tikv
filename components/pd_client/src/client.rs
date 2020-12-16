@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,7 @@ use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
 
 use super::metrics::*;
-use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
+use super::util::{check_resp_header, sync_request, validate_endpoints, LeaderClient};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -135,8 +135,8 @@ impl RpcClient {
         block_on(self.leader_client.reconnect())
     }
 
-    pub fn feature_gate(&self) -> FeatureGate {
-        self.leader_client.inner.rl().feature_gate.clone()
+    pub fn feature_gate(&self) -> &FeatureGate {
+        &self.leader_client.feature_gate
     }
 
     /// Creates a new call option with default request timeout.
@@ -289,8 +289,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetStoreRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::GetStoreRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .get_store_async_opt(&req, Self::call_option())
@@ -365,8 +366,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::GetRegionByIdRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .get_region_by_id_async_opt(&req, Self::call_option())
@@ -402,8 +404,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::GetRegionByIdRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .get_region_by_id_async_opt(&req, Self::call_option())
@@ -460,8 +463,8 @@ impl PdClient for RpcClient {
         interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
 
-        let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
-            let mut inner = client.wl();
+        let executor = |client: &LeaderClient, req: pdpb::RegionHeartbeatRequest| {
+            let mut inner = client.inner.wl();
             if let Either::Right(ref sender) = inner.hb_sender {
                 let ret = sender
                     .unbounded_send(req)
@@ -514,8 +517,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::AskSplitRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .ask_split_async_opt(&req, Self::call_option())
@@ -548,8 +552,9 @@ impl PdClient for RpcClient {
         req.set_region(region);
         req.set_split_count(count as u32);
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::AskBatchSplitRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::AskBatchSplitRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .ask_batch_split_async_opt(&req, Self::call_option())
@@ -582,9 +587,10 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
-            let feature_gate = client.rl().feature_gate.clone();
+        let executor = move |client: &LeaderClient, req: pdpb::StoreHeartbeatRequest| {
+            let feature_gate = client.feature_gate.clone();
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
@@ -616,8 +622,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_regions(regions.into());
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::ReportBatchSplitRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::ReportBatchSplitRequest| {
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .report_batch_split_async_opt(&req, Self::call_option())
@@ -668,9 +675,10 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetGcSafePointRequest::default();
         req.set_header(self.header());
 
-        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGcSafePointRequest| {
+        let executor = move |client: &LeaderClient, req: pdpb::GetGcSafePointRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
+                .inner
                 .rl()
                 .client_stub
                 .get_gc_safe_point_async_opt(&req, option)
@@ -739,8 +747,8 @@ impl PdClient for RpcClient {
         let mut req = pdpb::TsoRequest::default();
         req.set_count(1);
         req.set_header(self.header());
-        let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
-            let cli = client.read().unwrap();
+        let executor = move |client: &LeaderClient, req: pdpb::TsoRequest| {
+            let cli = client.inner.read().unwrap();
             let (mut req_sink, mut resp_stream) = cli
                 .client_stub
                 .tso()
