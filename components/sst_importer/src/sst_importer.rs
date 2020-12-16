@@ -28,7 +28,6 @@ use engine_traits::{
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
 use file_system::sync_dir;
-use keys::DATA_PREFIX_KEY;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -490,33 +489,25 @@ impl<E: KvEngine> SSTWriter<E> {
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
         for m in batch.get_pairs().iter() {
-            let k = Key::from_raw_with_prefix(DATA_PREFIX_KEY, m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value(), commit_ts, m.get_op())?;
+            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
+            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
         }
         Ok(())
     }
 
-    fn put(&mut self, key: &[u8], value: &[u8], commit_ts: TimeStamp, op: PairOp) -> Result<()> {
+    fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
+        let k = keys::data_key(key);
+        let (_, commit_ts) = Key::split_on_ts_for(key)?;
         let w = match (op, is_short_value(value)) {
-            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None)
-                .as_ref()
-                .to_bytes(),
-            (PairOp::Put, true) => WriteRef {
-                write_type: WriteType::Put,
-                start_ts: commit_ts,
-                short_value: Some(value),
-                has_overlapped_rollback: false,
-            }
-            .to_bytes(),
+            (PairOp::Delete, _) => KvWrite::new(WriteType::Delete, commit_ts, None),
+            (PairOp::Put, true) => KvWrite::new(WriteType::Put, commit_ts, Some(value.to_vec())),
             (PairOp::Put, false) => {
-                self.default.put(key, value)?;
+                self.default.put(&k, value)?;
                 self.default_entries += 1;
                 KvWrite::new(WriteType::Put, commit_ts, None)
-                    .as_ref()
-                    .to_bytes()
             }
         };
-        self.write.put(key, &w)?;
+        self.write.put(&k, &w.as_ref().to_bytes())?;
         self.write_entries += 1;
         Ok(())
     }

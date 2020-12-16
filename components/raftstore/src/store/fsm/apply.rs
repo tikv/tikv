@@ -579,7 +579,10 @@ where
         self.committed_count = 0;
     }
 
-    fn has_ingest_overlap(&self, start_key: &[u8], end_key: &[u8]) -> bool {
+    fn is_ingest_overlap(&self, start_key: &[u8], end_key: &[u8]) -> bool {
+        if self.pending_ingest_ranges.is_empty() {
+            return false;
+        }
         let sub_range = self
             .pending_ingest_ranges
             .range((Unbounded, Excluded(start_key.to_vec())));
@@ -591,11 +594,10 @@ where
         }
 
         // find the rest ranges that overlap with [start_key, end_key)
-        return self
-            .pending_ingest_ranges
+        self.pending_ingest_ranges
             .range((Included(s_key), Excluded(end_key.to_vec())))
             .last()
-            .is_some();
+            .is_some()
     }
 }
 
@@ -1369,7 +1371,7 @@ where
             responses.push(resp);
         }
         if !ssts.is_empty() {
-            if ctx.has_ingest_overlap(self.region.get_start_key(), self.region.get_end_key()) {
+            if ctx.is_ingest_overlap(self.region.get_start_key(), self.region.get_end_key()) {
                 ctx.flush_ingest();
             }
             ctx.pending_ingest_ranges.insert(
@@ -5228,9 +5230,6 @@ mod tests {
                 7,
                 1,
                 vec![put_entry],
-                0,
-                1,
-                1,
                 vec![proposal(
                     false,
                     1,
@@ -5268,9 +5267,6 @@ mod tests {
                     region_id,
                     1,
                     entries,
-                    0,
-                    1,
-                    1,
                     vec![proposal(
                         false,
                         1,
