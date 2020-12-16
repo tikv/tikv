@@ -263,7 +263,8 @@ impl Datum {
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
-                let d2 = Duration::parse(ctx, bs, MAX_FSP)?;
+                let s = str::from_utf8(bs)?;
+                let d2 = Duration::parse(ctx, s, MAX_FSP)?;
                 Ok(d.cmp(&d2))
             }
             _ => {
@@ -293,7 +294,8 @@ impl Datum {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
-                let d2 = Duration::parse(ctx, bs, MAX_FSP)?;
+                let s = str::from_utf8(bs)?;
+                let d2 = Duration::parse(ctx, s, MAX_FSP)?;
                 Ok(d2.cmp(&d))
             }
             _ => self.cmp_f64(ctx, d.to_secs_f64()),
@@ -1800,7 +1802,7 @@ mod tests {
                 Some(true),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"11:11:11.999999", MAX_FSP)
+                Duration::parse(&mut EvalContext::default(), "11:11:11.999999", MAX_FSP)
                     .unwrap()
                     .into(),
                 Some(true),
@@ -1977,7 +1979,7 @@ mod tests {
                 20121231113045f64,
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"11:30:45", 0).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), "11:30:45", 0).unwrap()),
                 f64::from(113045),
             ),
             (
@@ -2013,7 +2015,7 @@ mod tests {
             ),
             (
                 Datum::Dur(
-                    Duration::parse(&mut EvalContext::default(), b"11:30:45.999", 0).unwrap(),
+                    Duration::parse(&mut EvalContext::default(), "11:30:45.999", 0).unwrap(),
                 ),
                 113046,
             ),

@@ -259,7 +259,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
             None => continue,
         };
         replica_count = region.get_peers().len();
-        if replica_count == c {
+        if replica_count >= c {
             return;
         }
         thread::sleep(Duration::from_millis(10));

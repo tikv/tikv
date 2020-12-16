@@ -99,11 +99,11 @@ fn find_str(text: &str, pattern: &str) -> Option<usize> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    let substr = match String::from_utf8(substr.to_vec()) {
+    let substr = match str::from_utf8(substr) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match String::from_utf8(s.to_vec()) {
+    let s = match str::from_utf8(s) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
@@ -125,11 +125,11 @@ pub fn locate_3_args_utf8<C: Collator>(
     if *pos < 1 {
         return Ok(Some(0));
     }
-    let substr = match String::from_utf8(substr.to_vec()) {
+    let substr = match str::from_utf8(substr) {
         Ok(substr) => substr,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let s = match String::from_utf8(s.to_vec()) {
+    let s = match str::from_utf8(s) {
         Ok(s) => s,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
@@ -951,13 +951,12 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::{f64, i64};
 
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
