@@ -1770,7 +1770,17 @@ mod tests {
             must_cleanup(engine, k, start_ts, 0);
         };
         let check_status = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
-            check_txn_status::tests::must_success(engine, k, start_ts, 0, 0, true, false, |_| true);
+            check_txn_status::tests::must_success(
+                engine,
+                k,
+                start_ts,
+                0,
+                0,
+                true,
+                false,
+                false,
+                |_| true,
+            );
         };
         let check_secondary = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
             check_secondary_locks::tests::must_success(
