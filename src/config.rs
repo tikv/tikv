@@ -1435,13 +1435,16 @@ impl DBConfigManger {
         Ok(())
     }
 
-    fn set_auto_tuned(&self, auto_tuned: bool) -> Result<(), Box<dyn Error>> {
+    fn set_rate_limiter_auto_tuned(
+        &self,
+        rate_limiter_auto_tuned: bool,
+    ) -> Result<(), Box<dyn Error>> {
         let mut opt = self.db.as_inner().get_db_options();
-        opt.set_auto_tuned(auto_tuned)?;
+        opt.set_auto_tuned(rate_limiter_auto_tuned)?;
         // double check the new state
         let new_auto_tuned = opt.get_auto_tuned();
-        if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != auto_tuned {
-            return Err("fail to set auto_tuned mode".into());
+        if new_auto_tuned.is_none() || new_auto_tuned.unwrap() != rate_limiter_auto_tuned {
+            return Err("fail to set rate_limiter_auto_tuned".into());
         }
         Ok(())
     }
@@ -1517,11 +1520,12 @@ impl ConfigManager for DBConfigManger {
             self.set_rate_bytes_per_sec(rate_bytes_per_sec.0 as i64)?;
         }
 
-        if let Some(rate_bytes_config) =
-            change.drain_filter(|(name, _)| name == "auto_tuned").next()
+        if let Some(rate_bytes_config) = change
+            .drain_filter(|(name, _)| name == "rate_limiter_auto_tuned")
+            .next()
         {
-            let auto_tuned: bool = rate_bytes_config.1.into();
-            self.set_auto_tuned(auto_tuned)?;
+            let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
+            self.set_rate_limiter_auto_tuned(rate_limiter_auto_tuned)?;
         }
 
         if let Some(background_jobs_config) = change
@@ -3351,19 +3355,26 @@ mod tests {
     }
 
     #[test]
-    fn test_change_auto_tuned() {
+    fn test_change_rate_limiter_auto_tuned() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.auto_tuned = true;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
-        // update auto_tuned
-        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), true);
+        // update rate_limiter_auto_tuned
+        assert_eq!(
+            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
+            true
+        );
 
         cfg_controller
-            .update_config("rocksdb.auto_tuned", "false")
+            .update_config("rocksdb.rate_limiter_auto_tuned", "false")
             .unwrap();
-        assert_eq!(db.get_db_options().get_auto_tuned().unwrap(), false);
+        assert_eq!(
+            db.get_db_options().get_rate_limiter_auto_tuned().unwrap(),
+            false
+        );
     }
 
     #[test]
