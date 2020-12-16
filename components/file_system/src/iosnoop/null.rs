@@ -39,4 +39,4 @@ pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
-pub unsafe fn flush_io_metrics() {}
+pub fn flush_io_metrics() {}

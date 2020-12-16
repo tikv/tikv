@@ -187,19 +187,21 @@ macro_rules! flush_io_latency_and_bytes {
     };
 }
 
-pub unsafe fn flush_io_metrics() {
-    if let Some((bpf, _, _)) = BPF_TABLE.as_mut() {
-        let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
-        flush_io_latency_and_bytes!(bpf, delta, other, IOType::Other);
-        flush_io_latency_and_bytes!(bpf, delta, read, IOType::Read);
-        flush_io_latency_and_bytes!(bpf, delta, write, IOType::Write);
-        flush_io_latency_and_bytes!(bpf, delta, coprocessor, IOType::Coprocessor);
-        flush_io_latency_and_bytes!(bpf, delta, flush, IOType::Flush);
-        flush_io_latency_and_bytes!(bpf, delta, compaction, IOType::Compaction);
-        flush_io_latency_and_bytes!(bpf, delta, replication, IOType::Replication);
-        flush_io_latency_and_bytes!(bpf, delta, loadbalance, IOType::LoadBalance);
-        flush_io_latency_and_bytes!(bpf, delta, import, IOType::Import);
-        flush_io_latency_and_bytes!(bpf, delta, export, IOType::Export);
+pub fn flush_io_metrics() {
+    unsafe {
+        if let Some((bpf, _, _)) = BPF_TABLE.as_mut() {
+            let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
+            flush_io_latency_and_bytes!(bpf, delta, other, IOType::Other);
+            flush_io_latency_and_bytes!(bpf, delta, read, IOType::Read);
+            flush_io_latency_and_bytes!(bpf, delta, write, IOType::Write);
+            flush_io_latency_and_bytes!(bpf, delta, coprocessor, IOType::Coprocessor);
+            flush_io_latency_and_bytes!(bpf, delta, flush, IOType::Flush);
+            flush_io_latency_and_bytes!(bpf, delta, compaction, IOType::Compaction);
+            flush_io_latency_and_bytes!(bpf, delta, replication, IOType::Replication);
+            flush_io_latency_and_bytes!(bpf, delta, loadbalance, IOType::LoadBalance);
+            flush_io_latency_and_bytes!(bpf, delta, import, IOType::Import);
+            flush_io_latency_and_bytes!(bpf, delta, export, IOType::Export);
+        }
     }
 }
 

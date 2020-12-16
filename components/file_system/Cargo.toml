@@ -18,7 +18,6 @@ nix = "0.19"
 libc = "0.2"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
-casey = "0.3.3"
 
 [dev-dependencies]
 rand = "0.7"

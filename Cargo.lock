@@ -260,6 +260,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
+ "file_system",
  "serde",
  "serde_derive",
  "slog",
@@ -449,15 +450,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
-]
-
-[[package]]
-name = "casey"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe85130dda9cf267715582ce6cf1ab581c8dfe3cb33f7065fee0f14e3fea14"
-dependencies = [
- "syn",
 ]
 
 [[package]]
@@ -1361,7 +1353,6 @@ name = "file_system"
 version = "0.1.0"
 dependencies = [
  "bcc",
- "casey",
  "collections",
  "crc32fast",
  "crossbeam-utils 0.8.1",
@@ -2459,19 +2450,6 @@ name = "nix"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "becb657d662f1cd2ef38c7ad480ec6b8cf9e96b27adb543e594f9cf0f2e6065c"
-dependencies = [
- "bitflags",
- "cc",
- "cfg-if 0.1.10",
- "libc",
- "void",
-]
-
-[[package]]
-name = "nix"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd0eaf8df8bab402257e0a5c17a254e4cc1f72a93588a1ddfb5d356c801aa7cb"
 dependencies = [
  "bitflags",
  "cc",
