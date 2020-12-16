@@ -57,8 +57,6 @@ pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
 
-pub use crate::hex::*;
-
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 

@@ -227,7 +227,7 @@ pub fn decode_index_key(
         if buf.is_empty() {
             return Err(box_err!(
                 "{} is too short.",
-                tikv_util::hex_encode_upper(encoded)
+                log_wrappers::Value::key(encoded)
             ));
         }
         let mut v = buf.read_datum()?;
