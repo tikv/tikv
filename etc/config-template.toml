@@ -663,7 +663,7 @@
 ## The upper bound of SST file size when compaction guard is enabled. The config prevent SST files
 ## being too large when compaction guard is enabled. This config overrides target-file-size-base
 ## for the same CF.
-# compaction-guard-min-output-file-size = "128M"
+# compaction-guard-max-output-file-size = "128M"
 
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
