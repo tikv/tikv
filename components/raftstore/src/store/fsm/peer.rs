@@ -2704,14 +2704,12 @@ where
                 result: MergeResultKind::FromTargetLog,
             }),
         ) {
-            if !self.ctx.router.is_shutdown() {
-                panic!(
-                    "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
-                    self.fsm.peer.tag,
-                    source.get_id(),
-                    e
-                );
-            }
+            panic!(
+                "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
+                self.fsm.peer.tag,
+                source.get_id(),
+                e
+            );
         }
     }
 
@@ -2951,9 +2949,8 @@ where
                     result: MergeResultKind::FromTargetSnapshotStep2,
                 }),
             ) {
-                if !self.ctx.router.is_shutdown() {
-                    panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}", self.fsm.peer.tag, r.get_id(), e);
-                }
+                panic!("{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
+                       self.fsm.peer.tag, r.get_id(), e);
             }
         }
     }
