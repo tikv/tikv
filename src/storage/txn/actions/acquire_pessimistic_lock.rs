@@ -131,8 +131,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         if need_value {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
-                WriteType::Put => Some(txn.reader.load_data(&key, write)?),
-                WriteType::Delete => None,
+                WriteType::Put
+                    if write
+                        .as_ref()
+                        .check_gc_fence_as_latest_version(txn.start_ts) =>
+                {
+                    Some(txn.reader.load_data(&key, write)?)
+                }
+                WriteType::Delete | WriteType::Put => None,
                 WriteType::Lock | WriteType::Rollback => {
                     txn.reader
                         .get(&key, commit_ts.prev(), Some(txn.start_ts), true)?
