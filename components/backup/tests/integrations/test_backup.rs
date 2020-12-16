@@ -15,7 +15,6 @@ use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
 use collections::HashMap;
-use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
@@ -25,7 +24,6 @@ use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb::TikvClient;
-use pd_client::PdClient;
 use rand::Rng;
 use tempfile::Builder;
 use test_raftstore::*;
@@ -78,8 +76,6 @@ impl TestSuite {
         configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
-        let concurrency_manager =
-            ConcurrencyManager::new(block_on(cluster.pd_client.get_tso()).unwrap());
         let mut endpoints = HashMap::default();
         let bg_worker = Worker::new("backup-test");
         for (id, engines) in &cluster.engines {
@@ -91,7 +87,7 @@ impl TestSuite {
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
                 BackupConfig { num_threads: 4 },
-                concurrency_manager.clone(),
+                sim.get_concurrency_manager(*id),
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
             worker.start(backup_endpoint);
@@ -690,4 +686,79 @@ fn test_invalid_external_storage() {
     f.set_permissions(perms).unwrap();
 
     suite.stop();
+}
+
+#[test]
+fn calculated_commit_ts_after_commit() {
+    fn test_impl(
+        commit_fn: impl FnOnce(&mut TestSuite, /* txn_start_ts */ TimeStamp) -> TimeStamp,
+    ) {
+        let mut suite = TestSuite::new(1);
+        // Put some data.
+        suite.must_kv_put(3, 1);
+
+        // Begin a txn before backup
+        let txn_start_ts = suite.alloc_ts();
+
+        // Trigger backup request.
+        let tmp = Builder::new().tempdir().unwrap();
+        let backup_ts = suite.alloc_ts();
+        let storage_path = make_unique_dir(tmp.path());
+        let rx = suite.backup(
+            vec![],   // start
+            vec![],   // end
+            0.into(), // begin_ts
+            backup_ts,
+            &storage_path,
+        );
+        let _ = block_on(rx.collect::<Vec<_>>());
+
+        let commit_ts = commit_fn(&mut suite, txn_start_ts);
+        assert!(commit_ts > backup_ts);
+
+        suite.stop();
+    }
+
+    // Async commit
+    test_impl(|suite, start_ts| {
+        let (k, v) = (b"my_key", b"my_value");
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = k.to_vec();
+        mutation.value = v.to_vec();
+
+        let mut prewrite_req = PrewriteRequest::default();
+        prewrite_req.set_context(suite.context.clone());
+        prewrite_req.mut_mutations().push(mutation);
+        prewrite_req.set_primary_lock(k.to_vec());
+        prewrite_req.set_start_version(start_ts.into_inner());
+        prewrite_req.set_lock_ttl(2000);
+        prewrite_req.set_use_async_commit(true);
+        let prewrite_resp = suite.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let min_commit_ts: TimeStamp = prewrite_resp.get_min_commit_ts().into();
+        assert!(!min_commit_ts.is_zero());
+        suite.must_kv_commit(vec![k.to_vec()], start_ts, min_commit_ts);
+        min_commit_ts
+    });
+
+    // 1PC
+    test_impl(|suite, start_ts| {
+        let (k, v) = (b"my_key", b"my_value");
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = k.to_vec();
+        mutation.value = v.to_vec();
+
+        let mut prewrite_req = PrewriteRequest::default();
+        prewrite_req.set_context(suite.context.clone());
+        prewrite_req.mut_mutations().push(mutation);
+        prewrite_req.set_primary_lock(k.to_vec());
+        prewrite_req.set_start_version(start_ts.into_inner());
+        prewrite_req.set_lock_ttl(2000);
+        prewrite_req.set_try_one_pc(true);
+        let prewrite_resp = suite.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let commit_ts: TimeStamp = prewrite_resp.get_one_pc_commit_ts().into();
+        assert!(!commit_ts.is_zero());
+        commit_ts
+    });
 }
