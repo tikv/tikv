@@ -159,15 +159,12 @@ impl SecurityManager {
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
                 let cert_allowed_cn = self.cfg.cert_allowed_cn.clone();
-                sb = sb.add_checker(move |ctx| {
-                    if check_common_name(&cert_allowed_cn, ctx) {
-                        CheckResult::Continue
-                    } else {
-                        CheckResult::Abort(RpcStatus::new(
-                            RpcStatusCode::PERMISSION_DENIED,
-                            Some("Failed to check common name".to_owned()),
-                        ))
-                    }
+                sb = sb.add_checker(move |ctx| match check_common_name(&cert_allowed_cn, ctx) {
+                    Ok(()) => CheckResult::Continue,
+                    Err(reason) => CheckResult::Abort(RpcStatus::new(
+                        RpcStatusCode::UNAUTHENTICATED,
+                        Some(format!("Failed to check common name, reason: {}", reason)),
+                    )),
                 });
             }
             let fetcher = Box::new(Fetcher {
@@ -217,19 +214,23 @@ impl ServerCredentialsFetcher for Fetcher {
 /// Check peer CN with cert-allowed-cn field.
 /// Return true when the match is successful (support wildcard pattern).
 /// Skip the check when the secure channel is not used.
-fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
+fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> Result<(), String> {
     if let Some(auth_ctx) = ctx.auth_context() {
         if let Some(auth_property) = auth_ctx
             .into_iter()
             .find(|x| x.name() == "x509_common_name")
         {
             let peer_cn = auth_property.value_str().unwrap();
-            match_peer_names(cert_allowed_cn, peer_cn)
+            if match_peer_names(cert_allowed_cn, peer_cn) {
+                Ok(())
+            } else {
+                Err(format!("x509_common_name from peer is {}", peer_cn))
+            }
         } else {
-            false
+            Err("x509_common_name doesn't exist".to_owned())
         }
     } else {
-        true
+        Ok(())
     }
 }
 
