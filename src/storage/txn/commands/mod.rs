@@ -345,7 +345,7 @@ pub enum ResponsePolicy {
     OnApplied,
     /// Return the response after finishing Raft committing.
     OnCommitted,
-    /// Return the response after finishing raft porposing.
+    /// Return the response after finishing raft proposing.
     OnProposed,
 }
 
