@@ -745,7 +745,7 @@
 # optimize-filters-for-hits = false
 # enable-compaction-guard = true
 # compaction-guard-min-output-file-size = "8M"
-# compaction-guard-min-output-file-size = "128M"
+# compaction-guard-max-output-file-size = "128M"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
