@@ -5823,8 +5823,8 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::Put((key1.clone(), value1.clone())), true),
-                        (Mutation::Put((key2.clone(), value2.clone())), false),
+                        (Mutation::Put((key1.clone(), value1)), true),
+                        (Mutation::Put((key2.clone(), value2)), false),
                     ],
                     k1.to_vec(),
                     1.into(),
@@ -5845,11 +5845,7 @@ mod tests {
         // T1.commit_ts must be pushed to be larger than T2.start_ts (if we resolve T1)
         storage
             .sched_txn_command(
-                commands::CheckSecondaryLocks::new(
-                    vec![key1.clone(), key2.clone()],
-                    1.into(),
-                    Default::default(),
-                ),
+                commands::CheckSecondaryLocks::new(vec![key1, key2], 1.into(), Default::default()),
                 Box::new(move |res| {
                     let pr = res.unwrap();
                     match pr {
@@ -5866,7 +5862,7 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert!(rx.recv().unwrap() > 10.into());
+        assert!(rx.recv().unwrap() > 10);
     }
     // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
     // ie. call the callback at expected stage when writing to the engine

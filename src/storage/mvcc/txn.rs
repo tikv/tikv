@@ -1764,7 +1764,7 @@ mod tests {
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
         let key2 = k2.to_vec();
-        let secondaries = Some(vec![key2.clone()]);
+        let secondaries = Some(vec![key2]);
 
         // T1, start_ts = 10, commit_ts = 20; write k1, k2
         must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
@@ -1793,7 +1793,7 @@ mod tests {
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
         let key2 = k2.to_vec();
-        let secondaries = Some(vec![key2.clone()]);
+        let secondaries = Some(vec![key2]);
 
         // T1, start_ts = 10
         must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
