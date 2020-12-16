@@ -614,14 +614,17 @@ impl Delegate {
                     }
 
                     if self.txn_extra_op == TxnExtraOp::ReadOldValue {
-                        let key = Key::from_raw(&row.key)
-                            .append_ts(std::cmp::max(for_update_ts, row.start_ts.into()));
+                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
                         let start = Instant::now();
 
                         let mut statistics = Statistics::default();
-                        row.old_value =
-                            old_value_cb.borrow_mut()(key, old_value_cache, &mut statistics)
-                                .unwrap_or_default();
+                        row.old_value = old_value_cb.borrow_mut()(
+                            key,
+                            std::cmp::max(for_update_ts, row.start_ts.into()),
+                            old_value_cache,
+                            &mut statistics,
+                        )
+                        .unwrap_or_default();
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
                             .observe(start.elapsed().as_secs_f64());

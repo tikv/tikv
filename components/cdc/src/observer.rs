@@ -127,6 +127,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key,
+                                      query_ts,
                                       old_value_cache: &mut OldValueCache,
                                       statistics: &mut Statistics| {
                 old_value_cache.access_count += 1;
@@ -158,6 +159,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 // Cannot get old value from cache, seek for it in engine.
                 old_value_cache.miss_count += 1;
                 let start = Instant::now();
+                let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
                     .near_seek_old_value(&key, statistics)
                     .unwrap_or_default();
