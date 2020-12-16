@@ -130,7 +130,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
-            let get_old_value = move |key, statistics: &mut Statistics| {
+            let get_old_value = move |key, query_ts, statistics: &mut Statistics| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
@@ -158,6 +158,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                 }
                 // Cannot get old value from cache, seek for it in engine.
                 let start = Instant::now();
+                let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
                     .near_seek_old_value(&key, statistics)
                     .unwrap_or_default();
@@ -266,7 +267,8 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         match self.snapshot.get_cf_opt(opts, CF_LOCK, &user_key).unwrap() {
             Some(v) => {
                 let lock = Lock::parse(v.deref()).unwrap();
-                lock.ts == Key::decode_ts_from(key_slice).unwrap()
+                std::cmp::max(lock.ts, lock.for_update_ts)
+                    == Key::decode_ts_from(key_slice).unwrap()
             }
             None => false,
         }
@@ -291,10 +293,10 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                     return Ok(Some(Vec::default()));
                 }
             } else if !self.check_lock(key, statistics) {
+                // Key was not committed, check if the lock is corresponding to the key.
                 return Ok(None);
             }
 
-            // Key was not committed, check if the lock is corresponding to the key.
             let mut old_value = Some(Vec::default());
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
