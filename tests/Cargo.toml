@@ -134,6 +134,7 @@ sst_importer = {path = "../components/sst_importer" }
 tipb_helper = { path = "../components/tipb_helper" }
 tidb_query_datatype = { path = "../components/tidb_query_datatype" }
 test_util = { path = "../components/test_util" }
+test_backup = { path = "../components/test_backup" }
 test_storage = { path = "../components/test_storage" }
 test_coprocessor = { path = "../components/test_coprocessor" }
 test_sst_importer = { path = "../components/test_sst_importer" }
@@ -144,6 +145,7 @@ serde_json = "1.0"
 tokio = { version = "0.2", features = ["rt-threaded"] }
 semver = "0.10"
 concurrency_manager = { path = "../components/concurrency_manager" }
+file_system = { path = "../components/file_system" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 criterion-papi = "0.1"

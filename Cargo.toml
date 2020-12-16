@@ -196,6 +196,7 @@ members = [
   "fuzz/fuzzer-honggfuzz",
   "tests",
   "cmd",
+  "components/test_backup",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
