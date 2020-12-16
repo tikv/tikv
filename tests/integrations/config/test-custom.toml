@@ -226,6 +226,9 @@ compression-per-level = [
     "zstd",
     "lz4",
 ]
+bottommost-zstd-compression = false
+bottommost-zstd-compression-dict-size = 1024
+bottommost-zstd-compression-sample-size = 1024
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12

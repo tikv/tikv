@@ -768,7 +768,7 @@ impl Default for RaftCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            bottommost_zstd_compression: true,
+            bottommost_zstd_compression: false,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -1189,7 +1189,7 @@ impl Default for RaftDefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            bottommost_zstd_compression: true,
+            bottommost_zstd_compression: false,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
