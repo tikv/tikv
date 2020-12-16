@@ -1732,6 +1732,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     let primary = lock.primary.clone();
                     resp.set_lock_info(lock.into_lock_info(primary));
                 }
+                TxnStatus::PessimisticRollBack => resp.set_action(Action::TtlExpirePessimisticRollback),
+                TxnStatus::LockNotExistDoNothing => resp.set_action(Action::LockNotExistDoNothing),
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }
