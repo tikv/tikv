@@ -161,6 +161,7 @@ mod tests {
     #[test]
     fn test_compaction_guard_should_partition() {
         let guard = CompactionGuardGenerator {
+            cf_name: CfNames::default,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
             min_output_file_size: 8 << 20, // 8MB
             pos: Cell::new(0),
@@ -208,6 +209,7 @@ mod tests {
     #[test]
     fn test_compaction_guard_should_partition_binary_search() {
         let guard = CompactionGuardGenerator {
+            cf_name: CfNames::default,
             boundaries: vec![
                 b"aaa00".to_vec(),
                 b"aaa01".to_vec(),
@@ -261,7 +263,8 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
         cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
-            CompactionGuardGeneratorFactory::new(provider, MIN_OUTPUT_FILE_SIZE),
+            CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE)
+                .unwrap(),
         ));
         cf_opts.set_disable_auto_compactions(true);
         cf_opts.compression_per_level(&[

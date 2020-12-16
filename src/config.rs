@@ -3481,7 +3481,7 @@ mod tests {
             config.target_file_size_base = ReadableSize::mb(16);
             config.enable_compaction_guard = false;
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -3493,7 +3493,7 @@ mod tests {
             config.target_file_size_base = ReadableSize::mb(16);
             config.enable_compaction_guard = true;
             let provider: Option<MockRegionInfoProvider> = None;
-            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -3507,7 +3507,7 @@ mod tests {
             config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
             config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
                 config.compaction_guard_max_output_file_size.0,
                 cf_opts.get_target_file_size_base()
