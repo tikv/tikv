@@ -984,13 +984,13 @@ pub mod tests {
             true,
             |s| s == LockNotExistDoNothing,
         );
-        must_get_none(&engine, k, ts(5, 0));
+        must_get_rollback_ts_none(&engine, k, ts(5, 0));
 
         // Path: there is no commit or rollback record, error should be reported if
         // rollback_if_not_exist is set to false.
         must_err(&engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
 
-        // Path: the pessimistic primary key lock dose exist, and it's not expired yet.
+        // Path: the pessimistic primary key lock does exist, and it's not expired yet.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(10, 0), ts(10, 0), 10);
         must_pessimistic_locked(&engine, k, ts(10, 0), ts(10, 0));
         must_success(
@@ -1005,7 +1005,7 @@ pub mod tests {
             uncommitted(10, TimeStamp::zero(), false),
         );
 
-        // Path: the pessimistic primary key lock dose exist, and it's expired, the primary lock will
+        // Path: the pessimistic primary key lock does exist, and it's expired, the primary lock will
         // be pessimistically rolled back but there will not be a rollback record.
         must_success(
             &engine,
@@ -1019,9 +1019,9 @@ pub mod tests {
             |s| s == PessimisticRollBack,
         );
         must_unlocked(&engine, k);
-        must_get_none(&engine, k, ts(22, 0));
+        must_get_rollback_ts_none(&engine, k, ts(22, 0));
 
-        // Path: the prewrite primary key lock dose exist, and it's not expired yet.
+        // Path: the prewrite primary key lock does exist, and it's not expired yet.
         // Should return locked status.
         must_prewrite_put_impl(
             &engine,
@@ -1064,6 +1064,24 @@ pub mod tests {
         );
         must_unlocked(&engine, k);
         must_get_rollback_ts(&engine, k, ts(30, 0));
+
+        // Path: the resolving_pessimistic_lock is false and the primary key lock is pessimistic
+        // lock, the transaction is in commit phase and the rollback record should be written.
+        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(50, 0), ts(50, 0), 10);
+        must_pessimistic_locked(&engine, k, ts(50, 0), ts(50, 0));
+        must_success(
+            &engine,
+            k,
+            ts(50, 0),
+            ts(61, 0),
+            ts(61, 0),
+            true,
+            false,
+            /* resolving_pessimistic_lock */ false,
+            |s| s == TtlExpire,
+        );
+        must_unlocked(&engine, k);
+        must_get_rollback_ts(&engine, k, ts(50, 0));
     }
 
     #[test]
