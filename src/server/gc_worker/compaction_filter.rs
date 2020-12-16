@@ -17,7 +17,7 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksUserCollectedPropertiesNoRc,
     RocksWriteBatch,
 };
-use engine_traits::{Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt, CF_WRITE};
+use engine_traits::{Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatch, CF_WRITE};
 use pd_client::ClusterVersion;
 use prometheus::{local::*, *};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
@@ -490,7 +490,7 @@ impl WriteCompactionFilter {
 
     fn flush_pending_writes_if_need(&mut self) -> Result<(), String> {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            self.engine.write(&self.write_batch)?;
+            self.write_batch.write()?;
             self.write_batch.clear();
         }
         Ok(())
@@ -554,7 +554,7 @@ impl Drop for WriteCompactionFilter {
         self.handle_delete_mark();
         self.switch_key_metrics();
         if !self.write_batch.is_empty() {
-            self.engine.write(&self.write_batch).unwrap();
+            self.write_batch.write().unwrap();
             self.write_batch.clear();
         }
         self.engine.sync_wal().unwrap();
@@ -574,10 +574,12 @@ impl Drop for WriteCompactionFilter {
             }
             None
         }) {
-            info!(
-                "Compaction filter reports"; "total" => versions,
-                "filtered" => filtered, "deleted" => deleted,
-            );
+            if filtered > 0 || deleted > 0 {
+                info!(
+                    "Compaction filter reports"; "total" => versions,
+                    "filtered" => filtered, "deleted" => deleted,
+                );
+            }
         }
 
         #[cfg(test)]
