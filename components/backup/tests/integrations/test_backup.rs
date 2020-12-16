@@ -39,6 +39,7 @@ use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
+use tikv_util::config::ReadableSize;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
@@ -90,7 +91,7 @@ impl TestSuite {
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
-                BackupConfig { num_threads: 4 },
+                BackupConfig { num_threads: 4 , region_max_size: ReadableSize::mb(144)},
                 concurrency_manager.clone(),
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));

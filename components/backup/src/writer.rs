@@ -267,6 +267,10 @@ impl BackupWriter {
     pub fn need_split_keys(&self) -> bool {
         self.default.total_bytes + self.write.total_bytes >= self.region_max_size
     }
+
+    pub fn need_flush_keys(&self) -> bool {
+        self.default.total_bytes + self.write.total_bytes > 0
+    }
 }
 
 /// A writer writes Raw kv into SST files.
@@ -352,6 +356,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
+    use raftstore::store::util::new_peer;
 
     type CfKvs<'a> = (engine_traits::CfName, &'a [(&'a [u8], &'a [u8])]);
 
@@ -408,14 +413,17 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
+        let mut r = kvproto::metapb::Region::default();
+        r.set_id(1);
+        r.mut_peers().push(new_peer(1, 1));
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
+            BackupWriter::new(db.get_sync_db(), 1, "foo", Limiter::new(INFINITY), None, 0, 144 * 1024 * 1024, r.clone()).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
+            BackupWriter::new(db.get_sync_db(), 1, "foo1", Limiter::new(INFINITY), None, 0, 144 * 1024 * 1024, r.clone()).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -442,7 +450,7 @@ mod tests {
 
         // Test write and default.
         let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
+            BackupWriter::new(db.get_sync_db(), 1, "foo2", Limiter::new(INFINITY), None, 0, 144 * 1024 * 1024, r.clone()).unwrap();
         writer
             .write(
                 vec![

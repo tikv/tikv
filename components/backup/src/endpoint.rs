@@ -266,6 +266,19 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
             .observe(start.elapsed().as_secs_f64());
+
+        if writer.need_flush_keys() {
+            match writer.save(&storage.storage) {
+                Ok(mut split_files) => {
+                    files.append(&mut split_files);
+                }
+                Err(e) => {
+                    error!(?e; "backup save file failed");
+                    return Err(e);
+                }
+            }
+        }
+
         let stat = scanner.take_statistics();
         Ok((files, stat))
     }
@@ -954,6 +967,7 @@ pub mod tests {
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
+    use tikv_util::config::ReadableSize;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -1022,7 +1036,7 @@ pub mod tests {
                 rocks,
                 MockRegionInfoProvider::new(),
                 db,
-                BackupConfig { num_threads: 4 },
+                BackupConfig { num_threads: 4 , region_max_size: ReadableSize::mb(144)},
                 concurrency_manager,
             ),
         )
@@ -1275,8 +1289,10 @@ pub mod tests {
             let resp = resp.unwrap();
             assert!(!resp.has_error(), "{:?}", resp);
             let file_len = if *len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
+            let files = resp.get_files();
+            info!("{:?}", files);
             assert_eq!(
-                resp.get_files().len(),
+                files.len(),
                 file_len, /* default and write */
                 "{:?}",
                 resp
