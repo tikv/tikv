@@ -103,6 +103,7 @@ make_auto_flush_static_metric! {
         lock,
         write,
         raft,
+        ver_default,
     }
 
     pub label_enum RaftEntryType {
@@ -186,6 +187,7 @@ make_auto_flush_static_metric! {
     }
 
     pub struct CompactionGuardActionVec: LocalIntCounter {
+        "cf" => CfNames,
         "type" => CompactionGuardAction,
     }
 }

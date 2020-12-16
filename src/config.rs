@@ -398,7 +398,7 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident, $cache:ident, $region_info_provider:ident) => {{
+    ($opt:ident, $cf_name:ident, $cache:ident, $region_info_provider:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
@@ -449,12 +449,13 @@ macro_rules! build_cf_opt {
         }
         if $opt.enable_compaction_guard {
             if let Some(provider) = $region_info_provider {
-                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
-                    CompactionGuardGeneratorFactory::new(
-                        provider.clone(),
-                        $opt.compaction_guard_min_output_file_size.0,
-                    ),
-                ));
+                let factory = CompactionGuardGeneratorFactory::new(
+                    $cf_name,
+                    provider.clone(),
+                    $opt.compaction_guard_min_output_file_size.0,
+                )
+                .unwrap();
+                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
                 cf_opts.set_target_file_size_base($opt.compaction_guard_max_output_file_size.0);
             } else {
                 warn!("compaction guard is disabled due to region info provider not available")
@@ -524,7 +525,7 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
     ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+        let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -598,7 +599,7 @@ impl WriteCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
     ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+        let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
@@ -675,12 +676,9 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(
-        &self,
-        cache: &Option<Cache>,
-        region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
+        let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -746,12 +744,9 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(
-        &self,
-        cache: &Option<Cache>,
-        region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
+        let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -822,7 +817,7 @@ impl VersionCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
     ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+        let mut cf_opts = build_cf_opt!(self, CF_VER_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -1065,13 +1060,13 @@ impl DbConfig {
                 CF_DEFAULT,
                 self.defaultcf.build_opt(cache, region_info_accessor),
             ),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache, region_info_accessor)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
                 CF_WRITE,
                 self.writecf.build_opt(cache, region_info_accessor),
             ),
             // TODO: remove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache, region_info_accessor)),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
             CFOptions::new(
                 CF_VER_DEFAULT,
                 self.ver_defaultcf.build_opt(cache, region_info_accessor),
@@ -1161,12 +1156,9 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(
-        &self,
-        cache: &Option<Cache>,
-        region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self, cache, region_info_accessor);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
+        let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
@@ -1317,15 +1309,8 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(
-        &self,
-        cache: &Option<Cache>,
-        region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(
-            CF_DEFAULT,
-            self.defaultcf.build_opt(cache, region_info_accessor),
-        )]
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
+        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {

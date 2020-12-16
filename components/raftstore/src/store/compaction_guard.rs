@@ -2,10 +2,10 @@
 
 use std::{cell::Cell, ffi::CString};
 
-use crate::coprocessor::RegionInfoProvider;
+use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
-    SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
-    SstPartitionerResult,
+    CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
+    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE,
 };
 use keys::data_end_key;
 
@@ -18,16 +18,31 @@ lazy_static! {
 }
 
 pub struct CompactionGuardGeneratorFactory<P: RegionInfoProvider> {
+    cf_name: CfNames,
     provider: P,
     min_output_file_size: u64,
 }
 
 impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
-    pub fn new(provider: P, min_output_file_size: u64) -> Self {
-        CompactionGuardGeneratorFactory {
+    pub fn new(cf: CfName, provider: P, min_output_file_size: u64) -> Result<Self> {
+        let cf_name = match cf {
+            CF_DEFAULT => CfNames::default,
+            CF_LOCK => CfNames::lock,
+            CF_WRITE => CfNames::write,
+            CF_RAFT => CfNames::raft,
+            CF_VER_DEFAULT => CfNames::ver_default,
+            _ => {
+                return Err(Error::Other(From::from(format!(
+                    "fail to enable compaction guard, unrecognized cf name: {}",
+                    cf
+                ))))
+            }
+        };
+        Ok(CompactionGuardGeneratorFactory {
+            cf_name,
             provider,
             min_output_file_size,
-        }
+        })
     }
 }
 
@@ -48,20 +63,27 @@ impl<P: RegionInfoProvider + Sync> SstPartitionerFactory for CompactionGuardGene
             Ok(regions) => {
                 // The regions returned from region_info_provider should have been sorted,
                 // but we sort it again just in case.
-                COMPACTION_GUARD_ACTION_COUNTER.create.inc();
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .create
+                    .inc();
                 let mut boundaries = regions
                     .iter()
                     .map(|region| data_end_key(&region.end_key))
                     .collect::<Vec<Vec<u8>>>();
                 boundaries.sort();
                 Some(CompactionGuardGenerator {
+                    cf_name: self.cf_name,
                     boundaries,
                     min_output_file_size: self.min_output_file_size,
                     pos: Cell::new(0),
                 })
             }
             Err(e) => {
-                COMPACTION_GUARD_ACTION_COUNTER.create_failure.inc();
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .create_failure
+                    .inc();
                 warn!("failed to create compaction guard generator"; "err" => ?e);
                 None
             }
@@ -70,6 +92,7 @@ impl<P: RegionInfoProvider + Sync> SstPartitionerFactory for CompactionGuardGene
 }
 
 pub struct CompactionGuardGenerator {
+    cf_name: CfNames,
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
     min_output_file_size: u64,
@@ -95,10 +118,16 @@ impl SstPartitioner for CompactionGuardGenerator {
         self.pos.set(pos);
         if pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.current_user_key {
             if req.current_output_file_size >= self.min_output_file_size {
-                COMPACTION_GUARD_ACTION_COUNTER.partition.inc();
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .partition
+                    .inc();
                 SstPartitionerResult::Required
             } else {
-                COMPACTION_GUARD_ACTION_COUNTER.skip_partition.inc();
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .skip_partition
+                    .inc();
                 SstPartitionerResult::NotRequired
             }
         } else {

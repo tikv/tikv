@@ -654,6 +654,7 @@
 ## The optimization can help reduce compaction IO, and allow us to use larger SST file size
 ## (thus less SST files overall) while making sure we can still efficiently cleanup stale data on
 ## region migration.
+## This config is available to default CF and write CF.
 # enable-compaction-guard = true
 
 ## The lower bound of SST file size when compaction guard is enabled. The config prevent SST files
