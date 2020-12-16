@@ -264,7 +264,7 @@ where
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
-    delegates: HashMap<u64, Option<ReadDelegate>>,
+    delegates: HashMap<u64, Arc<ReadDelegate>>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
@@ -349,7 +349,26 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+    fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
+        match self.delegates.get(&region_id) {
+            Some(d) => Some(Arc::clone(d)),
+            None => {
+                let meta = self.store_meta.lock().unwrap();
+                match meta.readers.get(&region_id).cloned().map(Arc::new) {
+                    Some(reader) => {
+                        self.delegates.insert(region_id, Arc::clone(&reader));
+                        Some(reader)
+                    }
+                    None => None,
+                }
+            }
+        }
+    }
+
+    fn pre_propose_raft_command(
+        &mut self,
+        req: &RaftCmdRequest,
+    ) -> Result<Option<Arc<ReadDelegate>>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -365,14 +384,11 @@ where
 
         // Check region id.
         let region_id = req.get_header().get_region_id();
-        let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => match delegate.take() {
-                Some(d) => d,
-                None => return Ok(None),
-            },
+        let delegate = match self.get_delegate(region_id) {
+            Some(d) => d,
             None => {
-                self.metrics.rejected_by_cache_miss += 1;
-                debug!("rejected by cache miss"; "region_id" => region_id);
+                self.metrics.rejected_by_no_region += 1;
+                debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
         };
@@ -427,73 +443,48 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        let region_id = req.get_header().get_region_id();
-        loop {
-            match self.pre_propose_raft_command(&req) {
-                Ok(Some(delegate)) => {
-                    let snapshot_ts = match read_id.as_mut() {
-                        // If this peer became Leader not long ago and just after the cached
-                        // snapshot was created, this snapshot can not see all data of the peer.
-                        Some(id) => {
-                            if id.create_time <= delegate.last_valid_ts {
-                                id.create_time = monotonic_raw_now();
-                            }
-                            id.create_time
+        match self.pre_propose_raft_command(&req) {
+            Ok(Some(delegate)) => {
+                let snapshot_ts = match read_id.as_mut() {
+                    // If this peer became Leader not long ago and just after the cached
+                    // snapshot was created, this snapshot can not see all data of the peer.
+                    Some(id) => {
+                        if id.create_time <= delegate.last_valid_ts {
+                            id.create_time = monotonic_raw_now();
                         }
-                        None => monotonic_raw_now(),
-                    };
-                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
-                        // Cache snapshot_time for remaining requests in the same batch.
-                        let mut response = self.execute(&req, &delegate.region, None, read_id);
-                        // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut response.response, delegate.term);
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
-                        }
-                        response.txn_extra_op = delegate.txn_extra_op.load();
-                        cb.invoke_read(response);
-                        self.delegates.insert(region_id, Some(delegate));
-                        return;
+                        id.create_time
                     }
-                    break;
-                }
-                // It can not handle the request, forwards to raftstore.
-                Ok(None) => {
-                    if self.delegates.get(&region_id).is_some() {
-                        break;
+                    None => monotonic_raw_now(),
+                };
+                // Leader can read local if and only if it is in lease.
+                if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                    // Cache snapshot_time for remaining requests in the same batch.
+                    let mut response = self.execute(&req, &delegate.region, None, read_id);
+                    cmd_resp::bind_term(&mut response.response, delegate.term);
+                    if let Some(snap) = response.snapshot.as_mut() {
+                        snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
                     }
-                    let meta = self.store_meta.lock().unwrap();
-                    match meta.readers.get(&region_id).cloned() {
-                        Some(reader) => {
-                            self.delegates.insert(region_id, Some(reader));
-                        }
-                        None => {
-                            self.metrics.rejected_by_no_region += 1;
-                            debug!("rejected by no region"; "region_id" => region_id);
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let mut response = cmd_resp::new_error(e);
-                    if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
-                        cmd_resp::bind_term(&mut response, delegate.term);
-                    }
-                    cb.invoke_read(ReadResponse {
-                        response,
-                        snapshot: None,
-                        txn_extra_op: TxnExtraOp::Noop,
-                    });
-                    self.delegates.remove(&region_id);
-                    return;
+                    response.txn_extra_op = delegate.txn_extra_op.load();
+                    cb.invoke_read(response);
+                } else {
+                    // Forward to raftstore.
+                    self.redirect(RaftCommand::new(req, cb));
                 }
             }
+            // Forward to raftstore.
+            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Err(e) => {
+                let mut response = cmd_resp::new_error(e);
+                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                    cmd_resp::bind_term(&mut response, delegate.term);
+                }
+                cb.invoke_read(ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+            }
         }
-        // Remove delegate for updating it by next cmd execution.
-        self.delegates.remove(&region_id);
-        // Forward to raftstore.
-        let cmd = RaftCommand::new(req, cb);
-        self.redirect(cmd);
     }
 
     /// If read requests are received at the same RPC request, we can create one snapshot for all
