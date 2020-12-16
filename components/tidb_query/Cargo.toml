@@ -56,6 +56,7 @@ smallvec = "1.1"
 static_assertions = { version = "1.0", features = ["nightly"] }
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
+log_wrappers = { path = "../log_wrappers" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

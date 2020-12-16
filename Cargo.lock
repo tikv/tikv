@@ -4546,6 +4546,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4583,35 +4584,11 @@ dependencies = [
 name = "tidb_query_codegen"
 version = "0.0.1"
 dependencies = [
-<<<<<<< HEAD
  "darling",
  "heck",
  "proc-macro2",
  "quote",
  "syn",
-=======
- "codec",
- "collections",
- "fail",
- "failure",
- "hex 0.4.2",
- "kvproto",
- "log_wrappers",
- "match_template",
- "protobuf",
- "slog",
- "slog-global",
- "smallvec",
- "tidb_query_aggr",
- "tidb_query_codegen",
- "tidb_query_common",
- "tidb_query_datatype",
- "tidb_query_expr",
- "tikv_util",
- "tipb",
- "tipb_helper",
- "yatp",
->>>>>>> beb68dab0... copr: Redact remaining Coprocessor logs (#9247)
 ]
 
 [[package]]
