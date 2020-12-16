@@ -282,13 +282,13 @@ mod tests {
                 ..Default::default()
             },
             Region {
-                id: 1,
+                id: 2,
                 start_key: b"b".to_vec(),
                 end_key: b"c".to_vec(),
                 ..Default::default()
             },
             Region {
-                id: 1,
+                id: 3,
                 start_key: b"c".to_vec(),
                 end_key: b"d".to_vec(),
                 ..Default::default()
