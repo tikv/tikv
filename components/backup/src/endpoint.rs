@@ -34,8 +34,8 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
+use crate::Error;
 use crate::*;
-use crate::{Error};
 
 const WORKER_TAKE_RANGE: usize = 6;
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -224,18 +224,16 @@ impl BackupRange {
             let entries = batch.drain();
             if writer.need_split_keys() {
                 let res = {
-                    entries.as_slice().get(0).map_or_else(|| Err(Error::Other(box_err!("get entry error"))),
-                                      |x| {
-                        match x.form_key() {
-                            Ok(k) => {
-                                writer.rebuild(Option::from(Key::from_raw(&k)))
-                            }
+                    entries.as_slice().get(0).map_or_else(
+                        || Err(Error::Other(box_err!("get entry error"))),
+                        |x| match x.form_key() {
+                            Ok(k) => writer.rebuild(Option::from(Key::from_raw(&k))),
                             Err(e) => {
                                 error!(?e; "backup save file failed");
                                 return Err(Error::Other(box_err!("Decode error: {:?}", e)));
                             }
-                        }
-                    })
+                        },
+                    )
                 };
                 match writer.save(&storage.storage) {
                     Ok(mut split_files) => {
@@ -1036,7 +1034,10 @@ pub mod tests {
                 rocks,
                 MockRegionInfoProvider::new(),
                 db,
-                BackupConfig { num_threads: 4 , region_max_size: ReadableSize::mb(144)},
+                BackupConfig {
+                    num_threads: 4,
+                    region_max_size: ReadableSize::mb(144),
+                },
                 concurrency_manager,
             ),
         )
