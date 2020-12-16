@@ -1716,7 +1716,9 @@ mod tests {
     use super::{test_util::*, *};
 
     use crate::config::TitanDBConfig;
+    use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
+    use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -1724,6 +1726,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
@@ -1737,9 +1740,46 @@ mod tests {
         },
         time::Duration,
     };
-    use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
     use txn_types::Mutation;
+
+    #[test]
+    fn test_prewrite_blocks_read() {
+        use kvproto::kvrpcpb::ExtraOp;
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+
+        // We have to do the prewrite manually so that the mem locks don't get released.
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let mutations = vec![Mutation::Put((Key::from_raw(b"x"), b"z".to_vec()))];
+        let mut cmd = commands::Prewrite::with_defaults(mutations, vec![1, 2, 3], 10.into());
+        if let Command::Prewrite(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        let wr = cmd
+            .cmd
+            .process_write(
+                snapshot,
+                commands::WriteContext {
+                    lock_mgr: &DummyLockManager {},
+                    concurrency_manager: storage.concurrency_manager.clone(),
+                    extra_op: ExtraOp::Noop,
+                    statistics: &mut Statistics::default(),
+                    async_apply_prewrite: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(wr.lock_guards.len(), 1);
+
+        let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
+        assert!(matches!(
+            result,
+            Err(Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
+                ..
+            }))))
+        ));
+    }
 
     #[test]
     fn test_get_put() {
@@ -4539,6 +4579,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -4563,6 +4604,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -4617,6 +4659,7 @@ mod tests {
                     0.into(),
                     0.into(),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -4660,6 +4703,7 @@ mod tests {
                     ts(12, 0),
                     ts(15, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -4689,6 +4733,7 @@ mod tests {
                     ts(126, 0),
                     ts(127, 0),
                     true,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -5455,6 +5500,7 @@ mod tests {
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(150, 0),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -5488,6 +5534,7 @@ mod tests {
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),
+                    false,
                     false,
                     Context::default(),
                 ),
@@ -5652,5 +5699,157 @@ mod tests {
             .unwrap();
         let res = rx.recv().unwrap().unwrap();
         assert_eq!(res.min_commit_ts, 1001.into());
+    }
+
+    // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
+    // ie. call the callback at expected stage when writing to the engine
+    #[test]
+    fn test_scheduler_response_policy() {
+        struct Case<T: 'static + StorageCallbackType + Send> {
+            expected_writes: Vec<ExpectedWrite>,
+
+            command: TypedCommand<T>,
+            pipelined_pessimistic_lock: bool,
+        }
+
+        impl<T: 'static + StorageCallbackType + Send> Case<T> {
+            fn run(self) {
+                let mut builder =
+                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
+                for expected_write in self.expected_writes {
+                    builder = builder.add_expected_write(expected_write)
+                }
+                let engine = builder.build();
+                let mut builder =
+                    TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
+                builder.config.enable_async_apply_prewrite = true;
+                if self.pipelined_pessimistic_lock {
+                    builder
+                        .pipelined_pessimistic_lock
+                        .store(true, Ordering::Relaxed);
+                }
+                let storage = builder.build().unwrap();
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        self.command,
+                        Box::new(move |res| {
+                            tx.send(res).unwrap();
+                        }),
+                    )
+                    .unwrap();
+                rx.recv().unwrap().unwrap();
+            }
+        }
+
+        let keys = [b"k1", b"k2"];
+        let values = [b"v1", b"v2"];
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
+            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+        ];
+
+        let on_applied_case = Case {
+            // this case's command return ResponsePolicy::OnApplied
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations.clone(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                None,
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_commited_case = Case {
+            // this case's command return ResponsePolicy::OnCommitted
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new().expect_committed_cb(),
+                ExpectedWrite::new().expect_committed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations,
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_proposed_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // untested, but all AcquirePessimisticLock should return ResponsePolicy::OnProposed now
+            // and the scheduler expected to take OnProposed serious when
+            // enable pipelined pessimistic lock
+            expected_writes: vec![
+                ExpectedWrite::new().expect_proposed_cb(),
+                ExpectedWrite::new().expect_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: true,
+        };
+        let on_proposed_fallback_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // but when pipelined pessimistic lock is off,
+            // the scheduler should fallback to use OnApplied
+            expected_writes: vec![
+                ExpectedWrite::new().expect_no_proposed_cb(),
+                ExpectedWrite::new().expect_no_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+
+        on_applied_case.run();
+        on_commited_case.run();
+        on_proposed_case.run();
+        on_proposed_fallback_case.run();
     }
 }

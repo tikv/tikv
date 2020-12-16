@@ -17,6 +17,7 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
+use collections::HashSet;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -26,7 +27,6 @@ use kvproto::pdpb::{
     RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use security::SecurityManager;
-use tikv_util::collections::HashSet;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;

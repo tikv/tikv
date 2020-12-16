@@ -448,6 +448,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
+
         gc_worker
     }
 
@@ -459,10 +465,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         >,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Gc,
-            Box::new(gc_worker.get_config_manager()),
-        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -632,7 +634,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             raft_store,
             self.pd_client.clone(),
             self.state.clone(),
-            Some(self.background_worker.clone()),
+            self.background_worker.clone(),
         );
 
         node.start(
@@ -685,6 +687,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);

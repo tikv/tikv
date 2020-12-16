@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{reader::MvccReader, ErrorInner, Result};
+use crate::storage::mvcc::{reader::MvccReader, Result};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -30,7 +30,8 @@ pub(crate) fn make_rollback(
         Some(write) => {
             assert!(start_ts > write.start_ts);
             if protected {
-                Some(write.set_overlapped_rollback(true))
+                // TODO: Set the GC fence ts to the next version's commit_ts.
+                Some(write.set_overlapped_rollback(true, Some(0.into())))
             } else {
                 // No need to update the original write.
                 None
@@ -249,6 +250,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
+
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
     pub(crate) fn check_write_and_rollback_lock(
@@ -388,7 +390,12 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 #[cfg(feature = "failpoints")]
-pub(crate) fn make_txn_error(s: Option<String>, key: &Key, start_ts: TimeStamp) -> ErrorInner {
+pub(crate) fn make_txn_error(
+    s: Option<String>,
+    key: &Key,
+    start_ts: TimeStamp,
+) -> crate::storage::mvcc::ErrorInner {
+    use crate::storage::mvcc::ErrorInner;
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -752,7 +759,7 @@ mod tests {
         let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
         assert!(w1r.has_overlapped_rollback);
         // The only difference between w1r and w1 is the overlapped_rollback flag.
-        assert_eq!(w1r.set_overlapped_rollback(false), w1);
+        assert_eq!(w1r.set_overlapped_rollback(false, None), w1);
 
         let w2r = must_written(&engine, k2, 11, 20, WriteType::Put);
         // Rollback is invoked on secondaries, so the rollback is not protected and overlapped_rollback
@@ -1704,7 +1711,7 @@ mod tests {
         assert!(w.has_overlapped_rollback);
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
-        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, |s| {
+        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, false, |s| {
             s == TxnStatus::LockNotExist
         });
         must_commit(&engine, k, 20, 25);

@@ -135,7 +135,10 @@ impl super::AggrFunctionState for AggrFnStateCount {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use tidb_query_datatype::EvalType;
+    use tikv_util::buffer_vec::BufferVec;
 
     use super::super::AggrFunction;
     use super::*;
@@ -178,5 +181,45 @@ mod tests {
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_int_vec(), &[Some(7)]);
+    }
+
+    #[test]
+    fn test_update_enum() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnCount;
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(1)]);
+    }
+
+    #[test]
+    fn test_update_set() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnCount;
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b11))).unwrap();
+
+        result[0].clear();
+        state.push_result(&mut ctx, &mut result).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(1)]);
     }
 }

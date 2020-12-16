@@ -3,6 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -13,7 +14,6 @@ use tikv::storage::kv::{Engine, Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
-use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
