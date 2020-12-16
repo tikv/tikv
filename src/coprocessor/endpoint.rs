@@ -1273,15 +1273,8 @@ mod tests {
                 PAYLOAD_SMALL - COARSE_ERROR_MS
             );
             assert_lt!(
-<<<<<<< HEAD
                 resp.get_exec_details().get_handle_time().get_process_ms(),
-                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
-=======
-                resp.get_exec_details()
-                    .get_time_detail()
-                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
->>>>>>> 5f6f1e2b1... copr: add suspend time into tracker (#9257)
             );
 
             // Response 2
@@ -1298,15 +1291,8 @@ mod tests {
                 PAYLOAD_LARGE - COARSE_ERROR_MS
             );
             assert_lt!(
-<<<<<<< HEAD
                 resp.get_exec_details().get_handle_time().get_process_ms(),
-                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
-=======
-                resp.get_exec_details()
-                    .get_time_detail()
-                    .get_process_wall_time_ms(),
                 PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
->>>>>>> 5f6f1e2b1... copr: add suspend time into tracker (#9257)
             );
         }
 
