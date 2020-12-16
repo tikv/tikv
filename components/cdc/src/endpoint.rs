@@ -96,28 +96,7 @@ impl fmt::Debug for Deregister {
 }
 
 type InitCallback = Box<dyn FnOnce() + Send>;
-<<<<<<< HEAD
-pub(crate) type OldValueCallback = Box<dyn FnMut(Key, &mut Statistics) -> Option<Vec<u8>> + Send>;
-=======
-pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
-
-pub struct OldValueCache {
-    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
-    pub miss_count: usize,
-    pub access_count: usize,
-}
-
-impl OldValueCache {
-    pub fn new(size: usize) -> OldValueCache {
-        OldValueCache {
-            cache: LruCache::with_capacity(size),
-            miss_count: 0,
-            access_count: 0,
-        }
-    }
-}
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
+pub(crate) type OldValueCallback = Box<dyn FnMut(Key, TimeStamp, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub enum Task {
     Register {

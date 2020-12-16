@@ -612,18 +612,8 @@ impl Delegate {
                         let start = Instant::now();
 
                         let mut statistics = Statistics::default();
-<<<<<<< HEAD
-                        row.old_value = old_value_cb.borrow_mut().as_mut()(key, &mut statistics)
+                        row.old_value = old_value_cb.borrow_mut().as_mut()(key, std::cmp::max(for_update_ts, row.start_ts.into()), &mut statistics)
                             .unwrap_or_default();
-=======
-                        row.old_value = old_value_cb.borrow_mut()(
-                            key,
-                            std::cmp::max(for_update_ts, row.start_ts.into()),
-                            old_value_cache,
-                            &mut statistics,
-                        )
-                        .unwrap_or_default();
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
                             .observe(start.elapsed().as_secs_f64());

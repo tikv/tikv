@@ -768,58 +768,26 @@ fn test_old_value_basic() {
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
-<<<<<<< HEAD
-    let m1_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m1], k1.clone(), m1_start_ts);
-    let m1_commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k1.clone()], m1_start_ts, m1_commit_ts);
-=======
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), 1.into());
     suite.must_kv_commit(1, vec![k1.clone()], 1.into(), 2.into());
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
     // Rollback
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
     m2.key = k1.clone();
     m2.value = b"v2".to_vec();
-<<<<<<< HEAD
-    let m2_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m2], k1.clone(), m2_start_ts);
-    suite.must_kv_rollback(1, vec![k1.clone()], m2_start_ts);
-=======
     suite.must_kv_prewrite(1, vec![m2], k1.clone(), 3.into());
     suite.must_kv_rollback(1, vec![k1.clone()], 3.into());
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
     // Update value
     let mut m3 = Mutation::default();
     m3.set_op(Op::Put);
     m3.key = k1.clone();
     m3.value = vec![b'3'; 5120];
-<<<<<<< HEAD
-    let m3_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m3], k1.clone(), m3_start_ts);
-    let m3_commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k1.clone()], m3_start_ts, m3_commit_ts);
-=======
     suite.must_kv_prewrite(1, vec![m3], k1.clone(), 4.into());
     suite.must_kv_commit(1, vec![k1.clone()], 4.into(), 5.into());
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
     // Lock
     let mut m4 = Mutation::default();
     m4.set_op(Op::Lock);
     m4.key = k1.clone();
-<<<<<<< HEAD
-    let m4_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m4], k1.clone(), m4_start_ts);
-    let m4_commit_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_commit(1, vec![k1.clone()], m4_start_ts, m4_commit_ts);
-    // Delete value
-    let mut m5 = Mutation::default();
-    m5.set_op(Op::Del);
-    m5.key = k1.clone();
-    let m5_start_ts = suite.cluster.pd_client.get_tso().wait().unwrap();
-    suite.must_kv_prewrite(1, vec![m5], k1, m5_start_ts);
-=======
     suite.must_kv_prewrite(1, vec![m4], k1.clone(), 6.into());
     suite.must_kv_commit(1, vec![k1.clone()], 6.into(), 7.into());
     // Delete value and rollback
@@ -842,7 +810,6 @@ fn test_old_value_basic() {
     suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), 9.into(), 12.into());
     m7.set_op(Op::Del);
     suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, 9.into(), 12.into());
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
 
     let mut event_count = 0;
     loop {
@@ -894,11 +861,7 @@ fn test_old_value_basic() {
                         } else if row.get_type() == EventLogType::Prewrite
                             && row.get_start_ts() == 9
                         {
-<<<<<<< HEAD
-                            assert_eq!(row.get_old_value(), vec![b'3'; 5120].as_slice());
-=======
                             assert_eq!(row.get_old_value(), b"v6");
->>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
                             event_count += 1;
                         }
                     }
