@@ -263,9 +263,9 @@ macro_rules! cf_config {
             #[config(skip)]
             pub compaction_guard_max_output_file_size: ReadableSize,
             #[config(skip)]
-            pub zstd_dict_size: i32,
+            pub bottommost_compression_zstd_dict_size: i32,
             #[config(skip)]
-            pub zstd_sample_size: i32,
+            pub bottommost_compression_zstd_sample_size: i32,
             #[config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -437,12 +437,12 @@ macro_rules! build_cf_opt {
             -14,
             32767,
             0,
-            $opt.zstd_dict_size,
-            $opt.zstd_sample_size,
+            $opt.bottommost_compression_zstd_dict_size,
+            $opt.bottommost_compression_zstd_sample_size,
         );
         info!(
-            "zstd_dict_size: {}; zstd_sample_size: {}",
-            $opt.zstd_dict_size, $opt.zstd_sample_size
+            "bottommost_compression_zstd_dict_size: {}; zstd_sample_size: {}",
+            $opt.bottommost_compression_zstd_dict_size, $opt.bottommost_compression_zstd_sample_size
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -532,8 +532,8 @@ impl Default for DefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
@@ -608,8 +608,8 @@ impl Default for WriteCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
@@ -692,8 +692,8 @@ impl Default for LockCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
@@ -765,8 +765,8 @@ impl Default for RaftCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
@@ -838,8 +838,8 @@ impl Default for VersionCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
@@ -1184,8 +1184,8 @@ impl Default for RaftDefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            zstd_dict_size: 0,
-            zstd_sample_size: 0,
+            bottommost_compression_zstd_dict_size: 0,
+            bottommost_compression_zstd_sample_size: 0,
         }
     }
 }
