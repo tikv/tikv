@@ -203,6 +203,19 @@ impl<'a> JsonRef<'a> {
     pub(crate) fn get_str(&self) -> Result<&'a str> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
+
+    // Return whether the value is zero.
+    pub(crate) fn is_zero(&self) -> bool {
+        match self.get_type() {
+            JsonType::Object => false,
+            JsonType::Array => false,
+            JsonType::Literal => false,
+            JsonType::I64 => self.get_i64() == 0,
+            JsonType::U64 => self.get_u64() == 0,
+            JsonType::Double => self.get_double() == 0f64,
+            JsonType::String => false,
+        }
+    }
 }
 
 /// Json implements type json used in tikv by Binary Json.

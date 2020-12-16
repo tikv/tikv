@@ -95,8 +95,7 @@ where
 
 impl<'a> AsMySQLBool for JsonRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        // TODO: This logic is not correct. See pingcap/tidb#9593
-        Ok(false)
+        Ok(!self.is_zero())
     }
 }
 
