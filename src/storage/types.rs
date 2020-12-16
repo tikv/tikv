@@ -93,6 +93,10 @@ pub enum TxnStatus {
     },
     /// The txn was committed.
     Committed { commit_ts: TimeStamp },
+    /// The primary key is pessimistically rolled back.
+    PessimisticRollBack,
+    /// The txn primary key is not found and nothing is done.
+    LockNotExistDoNothing,
 }
 
 impl TxnStatus {
