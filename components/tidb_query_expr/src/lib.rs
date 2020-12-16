@@ -625,7 +625,6 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
         ScalarFuncSig::LastDay => last_day_fn_meta(),
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
-        ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         _ => return Err(other_err!(
