@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str;
+use std::{iter, str};
 use tidb_query_codegen::rpn_fn;
 
 use crate::impl_math::i64_to_usize;
 use tidb_query_common::Result;
+use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::*;
 
@@ -88,6 +89,65 @@ pub fn unhex(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     }
     padded_content.extend_from_slice(arg);
     Ok(writer.write(hex::decode(padded_content).ok()))
+}
+
+#[inline]
+fn find_str(text: &str, pattern: &str) -> Option<usize> {
+    twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
+    let substr = match str::from_utf8(substr) {
+        Ok(substr) => substr,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let s = match str::from_utf8(s) {
+        Ok(s) => s,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let offset = if C::IS_CASE_INSENSITIVE {
+        find_str(&s.to_lowercase(), &substr.to_lowercase())
+    } else {
+        find_str(&s, &substr)
+    };
+    Ok(Some(offset.map_or(0, |i| 1 + i as i64)))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_3_args_utf8<C: Collator>(
+    substr: BytesRef,
+    s: BytesRef,
+    pos: &Int,
+) -> Result<Option<i64>> {
+    if *pos < 1 {
+        return Ok(Some(0));
+    }
+    let substr = match str::from_utf8(substr) {
+        Ok(substr) => substr,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let s = match str::from_utf8(s) {
+        Ok(s) => s,
+        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+    };
+    let start = match s
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(iter::once(s.len()))
+        .nth(*pos as usize - 1)
+    {
+        Some(start) => start,
+        None => return Ok(Some(0)),
+    };
+    let offset = if C::IS_CASE_INSENSITIVE {
+        find_str(&s[start..].to_lowercase(), &substr.to_lowercase())
+    } else {
+        find_str(&s[start..], &substr)
+    };
+    Ok(Some(offset.map_or(0, |i| pos + i as i64)))
 }
 
 #[rpn_fn]
@@ -891,11 +951,12 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::{f64, i64};
+
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -1236,6 +1297,375 @@ mod tests {
                 .evaluate(ScalarFuncSig::ConcatWs)
                 .unwrap();
             assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_locate_2_args_utf8() {
+        let cases = vec![
+            // normal cases
+            (
+                Some(b"bar".to_vec()),
+                Some(b"foobarbar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(4i64),
+            ),
+            (
+                Some(b"xbar".to_vec()),
+                Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1i64),
+            ),
+            (
+                Some("好世".as_bytes().to_vec()),
+                Some("你好世界".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(2i64),
+            ),
+            (
+                Some("界面".as_bytes().to_vec()),
+                Some("你好世界".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"b".to_vec()),
+                Some("中a英b文".as_bytes().to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(4i64),
+            ),
+            (
+                Some(b"BaR".to_vec()),
+                Some(b"foobArbar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0i64),
+            ),
+            (
+                Some(b"BaR".to_vec()),
+                Some(b"foobArbar".to_vec()),
+                Collation::Utf8Mb4GeneralCi,
+                Some(4i64),
+            ),
+            // null cases
+            (None, Some(b"".to_vec()), Collation::Utf8Mb4Bin, None),
+            (None, Some(b"foobar".to_vec()), Collation::Utf8Mb4Bin, None),
+            (Some(b"".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (Some(b"foobar".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, None, Collation::Utf8Mb4Bin, None),
+            // invalid cases: use invalid value to sign error result
+            (
+                Some(b"bar".to_vec()),
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"foo".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(b"foobar".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                None,
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                None,
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                None,
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+        ];
+
+        for (substr, s, collation, exp) in cases {
+            match RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
+                .push_param(substr)
+                .push_param(s)
+                .evaluate(ScalarFuncSig::Locate2ArgsUtf8)
+            {
+                Ok(output) => assert_eq!(output, exp),
+                Err(_) => assert_eq!(exp.unwrap(), -1i64),
+            };
+        }
+    }
+
+    #[test]
+    fn test_locate_3_args_utf8() {
+        let cases = vec![
+            // normal case
+            (
+                Some(b"bar".to_vec()),
+                Some(b"foobarbar".to_vec()),
+                Some(5),
+                Collation::Utf8Mb4Bin,
+                Some(7),
+            ),
+            (
+                Some(b"xbar".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(2),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"".to_vec()),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(0),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(-1),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                Some(2),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(2),
+            ),
+            (
+                Some(b"A".to_vec()),
+                Some("大A写的A".as_bytes().to_vec()),
+                Some(3),
+                Collation::Utf8Mb4Bin,
+                Some(5),
+            ),
+            (
+                Some(b"bAr".to_vec()),
+                Some(b"foobarBaR".to_vec()),
+                Some(5),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"bAr".to_vec()),
+                Some(b"foobarBaR".to_vec()),
+                Some(5),
+                Collation::Utf8Mb4GeneralCi,
+                Some(7),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(2),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(3),
+                Collation::Utf8Mb4Bin,
+                Some(3),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"aa".to_vec()),
+                Some(4),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            // null case
+            (None, None, Some(1), Collation::Utf8Mb4Bin, None),
+            (
+                Some(b"".to_vec()),
+                None,
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"".to_vec()),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(b"foo".to_vec()),
+                None,
+                Some(-1),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"bar".to_vec()),
+                Some(0),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            // invalid cases: use invalid value to sign error result
+            (
+                Some(b"bar".to_vec()),
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(1),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(b"foobar".to_vec()),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(2),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"foo".to_vec()),
+                Some(3),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(b"foobar".to_vec()),
+                Some(4),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(5),
+                Collation::Utf8Mb4Bin,
+                Some(-1i64),
+            ),
+            (
+                None,
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                Some(6),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                None,
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                Some(7),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(vec![0x00, 0x9f, 0x92, 0x96]),
+                None,
+                Some(8),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+            (
+                Some(b"Hello\xF0\x90\x80World".to_vec()),
+                None,
+                Some(9),
+                Collation::Utf8Mb4Bin,
+                None,
+            ),
+        ];
+
+        for (substr, s, pos, collation, exp) in cases {
+            match RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
+                .push_param(substr)
+                .push_param(s)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::Locate3ArgsUtf8)
+            {
+                Ok(output) => assert_eq!(output, exp),
+                Err(_) => assert_eq!(exp.unwrap(), -1i64),
+            }
         }
     }
 
