@@ -666,11 +666,12 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    if ratio_threshold < 1.0 {
+    if ratio_threshold < 1.0 || context.is_bottommost_level() {
+        // According to our tests, `split_ts` on keys and `parse_write` on values
+        // won't utilize much CPU.
         return true;
     }
 
-    let is_bottommost = context.is_bottommost_level();
     let check_props = |props: &MvccProperties| {
         if props.min_ts > safe_point {
             return false;
@@ -683,11 +684,7 @@ fn check_need_gc(
 
         // When comparing `num_versions` with `num_puts`, trait internal levels specially
         // because MVCC-delete marks can't be handled at those levels.
-        let num_versions = if is_bottommost {
-            props.num_versions as f64
-        } else {
-            (props.num_versions - props.num_deletes) as f64
-        };
+        let num_versions = (props.num_versions - props.num_deletes) as f64;
         if num_versions > props.num_puts as f64 * ratio_threshold {
             return true;
         }
