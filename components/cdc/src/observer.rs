@@ -130,8 +130,17 @@ impl CmdObserver<RocksEngine> for CdcObserver {
             // Create a snapshot here for preventing the old value was GC-ed.
             let snapshot = RegionSnapshot::from_snapshot(engine.snapshot().into_sync(), region);
             let mut reader = OldValueReader::new(snapshot);
+<<<<<<< HEAD
             let get_old_value = move |key, statistics: &mut Statistics| {
                 if let Some((old_value, mutation_type)) = txn_extra.mut_old_values().remove(&key) {
+=======
+            let get_old_value = move |key,
+                                      query_ts,
+                                      old_value_cache: &mut OldValueCache,
+                                      statistics: &mut Statistics| {
+                old_value_cache.access_count += 1;
+                if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
+>>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
                     match mutation_type {
                         MutationType::Insert => {
                             assert!(old_value.is_none());
@@ -158,6 +167,7 @@ impl CmdObserver<RocksEngine> for CdcObserver {
                 }
                 // Cannot get old value from cache, seek for it in engine.
                 let start = Instant::now();
+                let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
                     .near_seek_old_value(&key, statistics)
                     .unwrap_or_default();
@@ -266,7 +276,8 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         match self.snapshot.get_cf_opt(opts, CF_LOCK, &user_key).unwrap() {
             Some(v) => {
                 let lock = Lock::parse(v.deref()).unwrap();
-                lock.ts == Key::decode_ts_from(key_slice).unwrap()
+                std::cmp::max(lock.ts, lock.for_update_ts)
+                    == Key::decode_ts_from(key_slice).unwrap()
             }
             None => false,
         }
@@ -291,10 +302,10 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                     return Ok(Some(Vec::default()));
                 }
             } else if !self.check_lock(key, statistics) {
+                // Key was not committed, check if the lock is corresponding to the key.
                 return Ok(None);
             }
 
-            // Key was not committed, check if the lock is corresponding to the key.
             let mut old_value = Some(Vec::default());
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
@@ -334,6 +345,10 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
+<<<<<<< HEAD
+=======
+    use tikv::storage::txn::tests::*;
+>>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
 
     #[test]
     fn test_register_and_deregister() {
@@ -401,4 +416,62 @@ mod tests {
         observer.on_role_change(&mut ctx, StateRole::Follower);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_old_value_reader() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let kv_engine = engine.get_rocksdb();
+        let k = b"k";
+        let key = Key::from_raw(k);
+
+        let must_get_eq = |ts: u64, value| {
+            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let mut statistics = Statistics::default();
+            assert_eq!(
+                old_value_reader
+                    .near_seek_old_value(&key.clone().append_ts(ts.into()), &mut statistics)
+                    .unwrap(),
+                value
+            );
+            let mut opts = ReadOptions::new();
+            opts.set_fill_cache(false);
+        };
+
+        must_prewrite_put(&engine, k, b"v1", k, 1);
+        must_get_eq(2, None);
+        must_get_eq(1, Some(vec![]));
+        must_commit(&engine, k, 1, 1);
+        must_get_eq(1, Some(vec![]));
+
+        must_prewrite_put(&engine, k, b"v2", k, 2);
+        must_get_eq(2, Some(b"v1".to_vec()));
+        must_rollback(&engine, k, 2);
+
+        must_prewrite_put(&engine, k, b"v3", k, 3);
+        must_get_eq(3, Some(b"v1".to_vec()));
+        must_commit(&engine, k, 3, 3);
+
+        must_prewrite_delete(&engine, k, k, 4);
+        must_get_eq(4, Some(b"v3".to_vec()));
+        must_commit(&engine, k, 4, 4);
+
+        must_prewrite_put(&engine, k, vec![b'v'; 5120].as_slice(), k, 5);
+        must_get_eq(5, Some(vec![]));
+        must_commit(&engine, k, 5, 5);
+
+        must_prewrite_delete(&engine, k, k, 6);
+        must_get_eq(6, Some(vec![b'v'; 5120]));
+        must_rollback(&engine, k, 6);
+
+        must_prewrite_put(&engine, k, b"v4", k, 7);
+        must_commit(&engine, k, 7, 9);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 8, 10);
+        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, true);
+        must_get_eq(10, Some(b"v4".to_vec()));
+        must_commit(&engine, k, 8, 11);
+    }
+>>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
 }

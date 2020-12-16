@@ -470,7 +470,7 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, &lock.1, &mut row);
+                    let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
                     if skip {
                         continue;
                     }
@@ -600,7 +600,9 @@ impl Delegate {
                 }
                 "lock" => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(put.take_key(), put.get_value(), &mut row);
+                    let lock = Lock::parse(put.get_value()).unwrap();
+                    let for_update_ts = lock.for_update_ts;
+                    let skip = decode_lock(put.take_key(), lock, &mut row);
                     if skip {
                         continue;
                     }
@@ -610,8 +612,18 @@ impl Delegate {
                         let start = Instant::now();
 
                         let mut statistics = Statistics::default();
+<<<<<<< HEAD
                         row.old_value = old_value_cb.borrow_mut().as_mut()(key, &mut statistics)
                             .unwrap_or_default();
+=======
+                        row.old_value = old_value_cb.borrow_mut()(
+                            key,
+                            std::cmp::max(for_update_ts, row.start_ts.into()),
+                            old_value_cache,
+                            &mut statistics,
+                        )
+                        .unwrap_or_default();
+>>>>>>> 45efd0751... cdc: use for_update_ts to get old value (#9275)
                         CDC_OLD_VALUE_DURATION_HISTOGRAM
                             .with_label_values(&["all"])
                             .observe(start.elapsed().as_secs_f64());
@@ -741,8 +753,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
-    let lock = Lock::parse(value).unwrap();
+fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
