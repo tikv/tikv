@@ -32,7 +32,8 @@ BPF_HASH(type_by_pid, u32, io_type*);
 BPF_HASH(stats_by_type, io_type, struct stats_t);
 
 // the latency includes OS queued time
-// When using BPF_ARRAY_OF_MAPS, it can't call something like hist_arrays[idx].increment() due .
+// When using BPF_ARRAY_OF_MAPS, hist_arrays[idx].increment() is not availble
+// due to bpf API limition. So define separate hists for every io type.
 BPF_HISTOGRAM(other_read_latency, int, 25);
 BPF_HISTOGRAM(read_read_latency, int, 25);
 BPF_HISTOGRAM(write_read_latency, int, 25);
