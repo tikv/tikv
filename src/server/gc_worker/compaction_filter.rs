@@ -371,8 +371,8 @@ impl WriteCompactionFilter {
         Ok(decision)
     }
 
-    // It's possible that elder versions than a MVCC-delete mark occurs in a higher level.
-    // So those versions needs to be handled by scan + delete.
+    // It's possible that elder versions than a MVCC-delete mark occurs in a higher level due to
+    // replica migration. So those versions needs to be handled by scan + delete.
     fn handle_delete_mark(&mut self) {
         if let Err(e) = self.handle_delete_mark_impl() {
             error!(
@@ -414,7 +414,8 @@ impl WriteCompactionFilter {
                     }
                     CmpOrdering::Equal => {
                         // It's possible that there are multiple `key_ts` in different levels.
-                        // A potential case is that a snapshot has been ingested.
+                        // A potential case is that a snapshot has been ingested. So using seqno
+                        // to identify different RocksDB versions for one user key.
                         let seq = match write_iter.sequence() {
                             Some(seqno) => seqno,
                             // The iterator should support to get sequence numbers.
@@ -422,7 +423,8 @@ impl WriteCompactionFilter {
                         };
                         debug_assert!(seq >= *filtered_seqno);
                         // NOTE: in the bottommost level sequence could be 0. So it's required that
-                        // an ingested file's sequence is not 0 if it overlaps with the DB.
+                        // an ingested file's sequence is not 0 if it overlaps with the DB. PTAL at
+                        // test case `test_ingested_ssts_seqno`.
                         need_delete = seq > *filtered_seqno;
                         let _ = filtered.next().unwrap();
                         break;
