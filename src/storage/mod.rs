@@ -5806,6 +5806,8 @@ mod tests {
                     ((1 << 18) + 8).into(),
                     ((1 << 18) + 8).into(),
                     true,
+                    false,
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -5865,6 +5867,7 @@ mod tests {
             )
             .unwrap();
         assert!(rx.recv().unwrap() > 10.into());
+    }
     // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
     // ie. call the callback at expected stage when writing to the engine
     #[test]
