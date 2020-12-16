@@ -8,46 +8,68 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::Semaphore as AsyncSemaphore;
 
-enum LinkedNotifiable {
-    Sync(StdCondvar, Cell<Option<NonNull<LinkedNotifiable>>>),
-    Async(AsyncSemaphore, Cell<Option<NonNull<LinkedNotifiable>>>),
+enum CondvarNode {
+    Sync(
+        StdCondvar,
+        Cell<Option<NonNull<CondvarNode>>>,
+        Cell<Option<NonNull<CondvarNode>>>,
+    ),
+    Async(
+        AsyncSemaphore,
+        Cell<Option<NonNull<CondvarNode>>>,
+        Cell<Option<NonNull<CondvarNode>>>,
+    ),
 }
 
-impl LinkedNotifiable {
-    pub fn new_sync() -> LinkedNotifiable {
-        LinkedNotifiable::Sync(StdCondvar::new(), Cell::new(None))
+impl CondvarNode {
+    pub fn new_sync() -> CondvarNode {
+        CondvarNode::Sync(StdCondvar::new(), Cell::new(None), Cell::new(None))
     }
 
-    pub fn new_async() -> LinkedNotifiable {
-        LinkedNotifiable::Async(AsyncSemaphore::new(0), Cell::new(None))
+    pub fn new_async() -> CondvarNode {
+        CondvarNode::Async(AsyncSemaphore::new(0), Cell::new(None), Cell::new(None))
     }
 
     pub fn notify(&self) {
         match *self {
-            LinkedNotifiable::Sync(ref condv, _) => condv.notify_one(),
-            LinkedNotifiable::Async(ref sem, _) => sem.add_permits(1),
+            CondvarNode::Sync(ref condv, _, _) => condv.notify_one(),
+            CondvarNode::Async(ref sem, _, _) => sem.add_permits(1),
         }
     }
 
-    pub fn get_next(&self) -> Option<NonNull<LinkedNotifiable>> {
+    pub fn get_prev(&self) -> Option<NonNull<CondvarNode>> {
         match *self {
-            LinkedNotifiable::Sync(_, ref ptr) => ptr.get(),
-            LinkedNotifiable::Async(_, ref ptr) => ptr.get(),
+            CondvarNode::Sync(_, ref ptr, _) => ptr.get(),
+            CondvarNode::Async(_, ref ptr, _) => ptr.get(),
         }
     }
 
-    pub fn set_next(&self, next: Option<NonNull<LinkedNotifiable>>) {
+    pub fn get_next(&self) -> Option<NonNull<CondvarNode>> {
         match *self {
-            LinkedNotifiable::Sync(_, ref ptr) => ptr.set(next),
-            LinkedNotifiable::Async(_, ref ptr) => ptr.set(next),
+            CondvarNode::Sync(_, _, ref ptr) => ptr.get(),
+            CondvarNode::Async(_, _, ref ptr) => ptr.get(),
+        }
+    }
+
+    pub fn set_prev(&self, prev: Option<NonNull<CondvarNode>>) {
+        match *self {
+            CondvarNode::Sync(_, ref ptr, _) => ptr.set(prev),
+            CondvarNode::Async(_, ref ptr, _) => ptr.set(prev),
+        }
+    }
+
+    pub fn set_next(&self, next: Option<NonNull<CondvarNode>>) {
+        match *self {
+            CondvarNode::Sync(_, _, ref ptr) => ptr.set(next),
+            CondvarNode::Async(_, _, ref ptr) => ptr.set(next),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Condvar {
-    head: Cell<Option<NonNull<LinkedNotifiable>>>,
-    tail: Cell<Option<NonNull<LinkedNotifiable>>>,
+    head: Cell<Option<NonNull<CondvarNode>>>,
+    tail: Cell<Option<NonNull<CondvarNode>>>,
 }
 
 unsafe impl Send for Condvar {}
@@ -62,61 +84,56 @@ impl Condvar {
     }
 
     #[inline]
-    fn enqueue(&self, raw_node_ptr: *mut LinkedNotifiable) {
-        assert!(!raw_node_ptr.is_null());
-        let node_ptr = unsafe { NonNull::new_unchecked(raw_node_ptr) };
+    fn enqueue(&self, raw_node: &mut CondvarNode) {
+        let node = unsafe { Some(NonNull::new_unchecked(raw_node)) };
+        raw_node.set_prev(self.tail.get());
         if let Some(tail) = self.tail.get() {
             unsafe {
-                tail.as_ref().set_next(Some(node_ptr));
+                tail.as_ref().set_next(node);
             }
         } else {
-            self.head.set(Some(node_ptr));
+            self.head.set(node);
         }
-        self.tail.set(Some(node_ptr));
+        self.tail.set(node);
     }
 
-    /// Notifies all the peers until encounter node at provided address, then
-    /// remove the node from queue and notify its successor if any.
     #[inline]
-    fn notify_by(&self, caller: &mut LinkedNotifiable) {
+    fn dequeue(&self, raw_node: &mut CondvarNode) {
+        let prev = raw_node.get_prev();
+        let next = raw_node.get_next();
+        if let Some(prev) = prev {
+            unsafe {
+                prev.as_ref().set_next(next);
+            }
+        } else {
+            assert!(self.head.get().is_none() || self.head.get().unwrap().as_ptr() == raw_node);
+            self.head.set(next);
+        }
+        if let Some(next) = next {
+            unsafe {
+                next.as_ref().set_prev(prev);
+            }
+        } else {
+            assert!(self.tail.get().is_none() || self.tail.get().unwrap().as_ptr() == raw_node);
+            self.tail.set(prev);
+        }
+    }
+
+    /// Notifies all waiters in queue as till now. Effectively notify the oldest
+    /// waiter to start a chained wakeup.
+    pub fn notify_all(&self) {
         let mut ptr = self.head.get();
         loop {
             if let Some(inner) = ptr {
                 unsafe {
                     let node = inner.as_ref();
-                    if inner.as_ptr() == caller {
-                        let next = node.get_next();
-                        self.head.set(next);
-                        if let Some(next) = next {
-                            next.as_ref().notify();
-                        } else {
-                            self.tail.set(None);
-                        }
-                        break;
-                    } else {
-                        node.notify();
-                        ptr = node.get_next();
-                    }
+                    node.notify();
+                    ptr = node.get_next();
                 }
             } else {
                 self.head.set(None);
                 self.tail.set(None);
-                return;
-            }
-        }
-    }
-
-    /// Notifies the oldest waiter.
-    #[inline]
-    fn notify_head(&self) {
-        if let Some(head) = self.head.get() {
-            unsafe {
-                let node = head.as_ref();
-                node.notify();
-                self.head.set(node.get_next());
-            }
-            if self.head.get().is_none() {
-                self.tail.set(None);
+                break;
             }
         }
     }
@@ -129,14 +146,16 @@ impl Condvar {
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
         // mutable to indulge NonNull
-        let mut node = LinkedNotifiable::new_sync();
+        let mut node = CondvarNode::new_sync();
         self.enqueue(&mut node);
         // alternative: std::thread::park_timeout suffers from spurious wake
         let (guard, res) = match node {
-            LinkedNotifiable::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
+            CondvarNode::Sync(ref condv, _, _) => condv.wait_timeout(guard, timeout).unwrap(),
             _ => unreachable!(),
         };
-        self.notify_by(&mut node);
+        if res.timed_out() {
+            self.dequeue(&mut node);
+        }
         (guard, res.timed_out())
     }
 
@@ -149,13 +168,12 @@ impl Condvar {
         guard: MutexGuard<'b, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
-        // it's safe to drop early because semaphore is state preserving
-        std::mem::drop(guard);
-        let mut node = LinkedNotifiable::new_async();
+        let mut node = CondvarNode::new_async();
         self.enqueue(&mut node);
+        std::mem::drop(guard);
         let timed_out = {
             let f = match node {
-                LinkedNotifiable::Async(ref sem, _) => sem.acquire().fuse(),
+                CondvarNode::Async(ref sem, _, _) => sem.acquire().fuse(),
                 _ => unreachable!(),
             };
             pin_mut!(f);
@@ -165,21 +183,76 @@ impl Condvar {
             }
         };
         let guard = mu.lock().unwrap();
-        self.notify_by(&mut node);
+        if timed_out {
+            self.dequeue(&mut node);
+        }
         (guard, timed_out)
-    }
-
-    /// Notifies all waiters in queue as till now. Effectively notify the oldest
-    /// waiter to start a chained wakeup.
-    pub fn notify_all(&self) {
-        self.notify_head();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::time_util;
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use test::Bencher;
+
+    #[test]
+    fn test_condvar() {
+        let long_timeout_millis = 1000 * 100;
+        let short_timeout_millis = 1;
+        let mu = Arc::new(Mutex::new(()));
+        let condv = Arc::new(Condvar::new());
+        let mut ts = vec![];
+        let enter_ticket = Arc::new(AtomicUsize::new(0));
+        let exit_ticket = Arc::new(AtomicUsize::new(0));
+
+        let begin = time_util::monotonic_now();
+        for i in 0..50 {
+            let (mu, condv, enter, exit) = (
+                mu.clone(),
+                condv.clone(),
+                enter_ticket.clone(),
+                exit_ticket.clone(),
+            );
+            while enter.load(Ordering::Relaxed) != i {
+                std::thread::yield_now();
+            }
+            let t = std::thread::spawn(move || {
+                let guard = mu.lock().unwrap();
+                assert_eq!(enter.fetch_add(1, Ordering::Relaxed), i);
+                if i % 2 == 0 {
+                    let (_, timed_out) = condv.wait_timeout(
+                        guard,
+                        Duration::from_millis(short_timeout_millis * (i / 2) as u64),
+                    );
+                    assert_eq!(timed_out, true);
+                    assert_eq!(exit.fetch_add(1, Ordering::Relaxed), i / 2);
+                } else {
+                    let (_, timed_out) =
+                        condv.wait_timeout(guard, Duration::from_millis(long_timeout_millis));
+                    assert_eq!(timed_out, false);
+                }
+            });
+            ts.push(t);
+        }
+        while exit_ticket.load(Ordering::Relaxed) != 25
+            || enter_ticket.load(Ordering::Relaxed) != 50
+        {
+            std::thread::yield_now();
+        }
+        {
+            let _guard = mu.lock().unwrap();
+            condv.notify_all();
+        }
+        for t in ts {
+            t.join().unwrap();
+        }
+        let end = time_util::monotonic_now();
+        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(100));
+    }
 
     #[bench]
     fn bench_std_condvar(b: &mut Bencher) {

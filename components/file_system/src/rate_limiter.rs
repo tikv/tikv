@@ -58,6 +58,8 @@ impl PerTypeIORateLimiter {
     #[inline]
     fn request_fast(&self, bytes_per_refill: usize, bytes: usize) -> Option<usize> {
         if self.consumed.load(Ordering::Relaxed) < bytes_per_refill {
+            // consumed bytes are allowed to be larger than the actual bytes
+            // through when quotas are drained.
             let before = self.consumed.fetch_add(bytes, Ordering::Relaxed);
             if before < bytes_per_refill {
                 return Some(std::cmp::min(bytes_per_refill - before, bytes));
@@ -66,6 +68,7 @@ impl PerTypeIORateLimiter {
         None
     }
 
+    // must hold lock
     #[inline]
     fn refill_and_request(&self, bytes: usize) -> usize {
         let token = std::cmp::min(self.bytes_per_refill.load(Ordering::Relaxed), bytes);
