@@ -218,7 +218,7 @@ struct WriteCompactionFilter {
     write_batch: RocksWriteBatch,
     encountered_errors: bool,
 
-    key_prefix: Vec<u8>,
+    mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
 
     // For handling MVCC delete marks at the bottommost level.
@@ -263,7 +263,7 @@ impl WriteCompactionFilter {
             write_batch: RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE),
             encountered_errors: false,
 
-            key_prefix: vec![],
+            mvcc_key_prefix: vec![],
             remove_older: false,
 
             is_bottommost_level: context.is_bottommost_level(),
@@ -291,8 +291,12 @@ impl WriteCompactionFilter {
         };
 
         if filter.is_bottommost_level {
-            // MVCC-delete marks can only be handled in the bottommost level.
-            // PTAL at test case `test_remove_and_skip_until`.
+            // MVCC-delete marks can only be handled at the bottommost level to firbid deleted
+            // RocksDB key/value pairs get exposed incorrectly. For example:
+            //   L0: |key_130_MVCC_DEL, key_110_MVCC_PUT(tombstone)|
+            //   L6: |key_110_MVCC_PUT|
+            // If key_130_MVCC_DEL is handled at L0 and the SST in L6 is not involved,
+            // key_110_MVCC_PUT could be exposed incorrectly.
             let db = filter.engine.as_inner();
             let cf = db.cf_handle(CF_WRITE).unwrap();
             let iter = DBIterator::new_cf(db.clone(), cf, ReadOptions::new());
@@ -309,19 +313,22 @@ impl WriteCompactionFilter {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {
-        self.meet_a_key_in_filter();
+        if self.is_bottommost_level && self.deleting_filtered.is_none() {
+            // The compaction hasn't met the next MVCC-delete mark.
+            self.near_seek_distance += 1;
+        }
 
-        let (key_prefix, commit_ts) = split_ts(key)?;
+        let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
         }
 
         self.versions += 1;
-        if self.key_prefix != key_prefix {
+        if self.mvcc_key_prefix != mvcc_key_prefix {
             self.handle_delete_mark();
             self.switch_key_metrics();
-            self.key_prefix.clear();
-            self.key_prefix.extend_from_slice(key_prefix);
+            self.mvcc_key_prefix.clear();
+            self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
         }
 
@@ -355,20 +362,13 @@ impl WriteCompactionFilter {
             // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
             // leaving tombstones, which can only be freed at the bottommost level.
             debug_assert!(commit_ts > 0);
-            let prefix = Key::from_encoded_slice(key_prefix);
+            let prefix = Key::from_encoded_slice(mvcc_key_prefix);
             let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
             CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
         } else {
             CompactionFilterDecision::Remove
         };
         Ok(decision)
-    }
-
-    fn meet_a_key_in_filter(&mut self) {
-        if self.is_bottommost_level && self.deleting_filtered.is_none() {
-            // The compaction hasn't met the next MVCC-delete mark.
-            self.near_seek_distance += 1;
-        }
     }
 
     // It's possible that elder versions than a MVCC-delete mark occurs in a higher level.
@@ -401,7 +401,7 @@ impl WriteCompactionFilter {
 
         while valid {
             let (key, value) = (write_iter.key(), write_iter.value());
-            if truncate_ts(key)? != self.key_prefix.as_slice() {
+            if truncate_ts(key)? != self.mvcc_key_prefix.as_slice() {
                 break;
             }
             let (_, current_ts) = split_ts(key)?;
@@ -473,7 +473,7 @@ impl WriteCompactionFilter {
 
     fn handle_filtered_write(&mut self, write: WriteRef) -> Result<(), String> {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
-            let prefix = Key::from_encoded_slice(&self.key_prefix);
+            let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
             self.write_batch.delete(&def_key)?;
             self.flush_pending_writes_if_need()?;
@@ -680,7 +680,7 @@ fn check_need_gc(
         }
         if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
-            // trait internal levels specially.
+            // treat internal levels specially.
             return true;
         }
 
