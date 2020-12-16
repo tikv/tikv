@@ -650,6 +650,22 @@
 ## while using `Raw` mode.
 # optimize-filters-for-hits = true
 
+## Enable compaction guard, which is an optimization to split SST files at TiKV region boundaries.
+## The optimization can help reduce compaction IO, and allow us to use larger SST file size
+## (thus less SST files overall) while making sure we can still efficiently cleanup stale data on
+## region migration.
+## This config is available to default CF and write CF.
+# enable-compaction-guard = true
+
+## The lower bound of SST file size when compaction guard is enabled. The config prevent SST files
+## being too small when compaction guard is enabled.
+# compaction-guard-min-output-file-size = "8M"
+
+## The upper bound of SST file size when compaction guard is enabled. The config prevent SST files
+## being too large when compaction guard is enabled. This config overrides target-file-size-base
+## for the same CF.
+# compaction-guard-max-output-file-size = "128M"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -728,6 +744,9 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
+# enable-compaction-guard = true
+# compaction-guard-min-output-file-size = "8M"
+# compaction-guard-max-output-file-size = "128M"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -746,6 +765,7 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
+# enable-compaction-guard = false
 
 [raftdb]
 # max-background-jobs = 4
@@ -795,6 +815,7 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
+# enable-compaction-guard = false
 
 [raft-engine]
 ## Enable raft-engine will ignore all settings about `raftdb`.
