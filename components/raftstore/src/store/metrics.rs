@@ -494,7 +494,7 @@ lazy_static! {
         register_int_counter_vec!(
             "tikv_raftstore_compaction_guard_action_total",
             "Total number of compaction guard actions.",
-            &["type"]
+            &["cf", "type"]
         ).unwrap();
     pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
