@@ -688,8 +688,8 @@ fn check_need_gc(
 
         // When comparing `num_versions` with `num_puts`, trait internal levels specially
         // because MVCC-delete marks can't be handled at those levels.
-        let num_versions = (props.num_versions - props.num_deletes) as f64;
-        if num_versions > props.num_puts as f64 * ratio_threshold {
+        let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
+        if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
             return true;
         }
         props.max_row_versions > 1024
