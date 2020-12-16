@@ -3,6 +3,7 @@
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
+use collections::{HashMap, HashSet};
 use crossbeam::queue::{ArrayQueue, PushError};
 use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
@@ -27,7 +28,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem, result};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -885,6 +885,10 @@ where
         }
         self.cache.remove(&(store_id, conn_id));
         Err(DiscardReason::Disconnected)
+    }
+
+    pub fn need_flush(&self) -> bool {
+        !self.need_flush.is_empty()
     }
 
     /// Flushes all buffered messages.

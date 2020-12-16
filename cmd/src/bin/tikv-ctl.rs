@@ -30,6 +30,7 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{Engines, RaftEngine};
+use file_system::calc_crc32;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -45,7 +46,7 @@ use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, file::calc_crc32, unescape};
+use tikv_util::{escape, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";

@@ -2,11 +2,11 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
+use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::Either;
 

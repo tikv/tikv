@@ -20,24 +20,17 @@ ALLOWED_CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::new_ret_no_self \
 	-A clippy::unnecessary_sort_by)
 
-if [[ "${TIKV_ENABLE_FEATURES}" == *prost-codec* ]] ; then
-	cargo clippy --workspace --all-targets --no-default-features \
-		--exclude cdc --exclude backup --exclude tests --exclude cmd \
-		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
-	for pkg in "components/cdc" "components/backup" "cmd" "tests"; do
-		cd $pkg
-		cargo clippy --all-targets --no-default-features \
-			--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
-		cd - >/dev/null
-	done
-	for pkg in "fuzz"; do
-		cd $pkg
-		cargo clippy --all-targets -- "${ALLOWED_CLIPPY_LINTS[@]}"
-		cd - >/dev/null
-	done
-else
-	cargo clippy --workspace \
-		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-		--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
-fi
+cargo clippy --workspace --all-targets --no-default-features \
+	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+	--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
+# for pkg in "components/cdc" "components/backup" "cmd" "tests"; do
+# 	cd $pkg
+# 	cargo clippy --all-targets --no-default-features \
+# 		--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
+# 	cd - >/dev/null
+# done
+# for pkg in "fuzz"; do
+# 	cd $pkg
+# 	cargo clippy --all-targets -- "${ALLOWED_CLIPPY_LINTS[@]}"
+# 	cd - >/dev/null
+# done
