@@ -6,7 +6,7 @@ use std::sync::Arc;
 use criterion::{Bencher, Criterion};
 use engine_rocks::raw::DB;
 use engine_rocks::Compat;
-use engine_traits::{Mutable, WriteBatchExt};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use test_raftstore::*;
 use test_util::*;
 
@@ -17,7 +17,7 @@ fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
-    db.c().write(&wb).unwrap();
+    wb.write().unwrap();
 }
 
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {

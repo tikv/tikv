@@ -17,7 +17,7 @@ use engine_rocks::{
     RocksWriteBatch,
 };
 use engine_traits::{
-    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatchExt,
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatch,
     CF_WRITE,
 };
 use pd_client::ClusterVersion;
@@ -268,7 +268,7 @@ impl WriteCompactionFilter {
 
     fn flush_pending_writes_if_need(&mut self) {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT {
-            self.engine.write(&self.write_batch).unwrap();
+            self.write_batch.write().unwrap();
             self.write_batch.clear();
         }
     }
@@ -327,7 +327,7 @@ thread_local! {
 impl Drop for WriteCompactionFilter {
     fn drop(&mut self) {
         if !self.write_batch.is_empty() {
-            self.engine.write(&self.write_batch).unwrap();
+            self.write_batch.write().unwrap();
             self.write_batch.clear();
         }
         self.engine.sync_wal().unwrap();
