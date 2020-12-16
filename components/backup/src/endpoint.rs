@@ -35,6 +35,7 @@ use yatp::ThreadPool;
 
 use crate::metrics::*;
 use crate::*;
+use crate::{Error};
 
 const WORKER_TAKE_RANGE: usize = 6;
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -145,12 +146,13 @@ impl BackupRange {
     /// Get entries from the scanner and save them to storage
     fn backup<E: Engine>(
         &self,
-        writer: &mut BackupWriter,
+        mut writer: BackupWriter,
         engine: &E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-    ) -> Result<Statistics> {
+        storage: &LimitedStorage,
+    ) -> Result<(Vec<File>, Statistics)> {
         assert!(!self.is_raw_kv);
 
         let mut ctx = Context::default();
@@ -207,6 +209,7 @@ impl BackupRange {
             .unwrap();
 
         let start = Instant::now();
+        let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
@@ -217,8 +220,45 @@ impl BackupRange {
                 break;
             }
             debug!("backup scan entries"; "len" => batch.len());
+
+            let entries = batch.drain();
+            if writer.need_split_keys() {
+                let res = {
+                    entries.as_slice().get(0).map_or_else(|| Err(Error::Other(box_err!("get entry error"))),
+                                      |x| {
+                        match x.form_key() {
+                            Ok(k) => {
+                                writer.rebuild(Option::from(Key::from_raw(&k)))
+                            }
+                            Err(e) => {
+                                error!(?e; "backup save file failed");
+                                return Err(Error::Other(box_err!("Decode error: {:?}", e)));
+                            }
+                        }
+                    })
+                };
+                match writer.save(&storage.storage) {
+                    Ok(mut split_files) => {
+                        files.append(&mut split_files);
+                    }
+                    Err(e) => {
+                        error!(?e; "backup save file failed");
+                        return Err(e);
+                    }
+                }
+                match res {
+                    Ok(w) => {
+                        writer = w;
+                    }
+                    Err(e) => {
+                        error!(?e; "backup writer failed");
+                        return Err(e);
+                    }
+                }
+            }
+
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain(), true) {
+            if let Err(e) = writer.write(entries, true) {
                 error!(?e; "backup build sst failed");
                 return Err(e);
             }
@@ -227,7 +267,7 @@ impl BackupRange {
             .with_label_values(&["scan"])
             .observe(start.elapsed().as_secs_f64());
         let stat = scanner.take_statistics();
-        Ok(stat)
+        Ok((files, stat))
     }
 
     fn backup_raw<E: Engine>(
@@ -298,18 +338,24 @@ impl BackupRange {
         db: Arc<DB>,
         storage: &LimitedStorage,
         concurrency_manager: ConcurrencyManager,
+        store_id: u64,
         file_name: String,
         backup_ts: TimeStamp,
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        region_max_size: u64,
+        region: Region,
     ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(
+        let writer = match BackupWriter::new(
             db,
+            store_id,
             &file_name,
             storage.limiter.clone(),
             compression_type,
             compression_level,
+            region_max_size,
+            region,
         ) {
             Ok(w) => w,
             Err(e) => {
@@ -317,19 +363,15 @@ impl BackupRange {
                 return Err(e);
             }
         };
-        let stat = match self.backup(
-            &mut writer,
+        match self.backup(
+            writer,
             engine,
             concurrency_manager,
             backup_ts,
             start_ts,
+            storage,
         ) {
-            Ok(s) => s,
-            Err(e) => return Err(e),
-        };
-        // Save sst files to storage.
-        match writer.save(&storage.storage) {
-            Ok(files) => Ok((files, stat)),
+            Ok((files, stat)) => Ok((files, stat)),
             Err(e) => {
                 error!(?e; "backup save file failed");
                 Err(e)
@@ -618,6 +660,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let db = self.db.clone();
         let store_id = self.store_id;
         let concurrency_manager = self.concurrency_manager.clone();
+        let region_max_size = self.config_manager.0.read().unwrap().region_max_size.0;
+
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || loop {
             let (branges, is_raw_kv, cf) = {
@@ -693,11 +737,14 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             db.clone(),
                             &storage,
                             concurrency_manager.clone(),
+                            store_id,
                             name,
                             backup_ts,
                             start_ts,
                             ct,
                             request.compression_level,
+                            region_max_size,
+                            brange.region.clone(),
                         ),
                         brange
                             .start_key
@@ -853,7 +900,7 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 /// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
 /// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
 /// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
-fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
     let start = SystemTime::now();
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)

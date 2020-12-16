@@ -2147,6 +2147,7 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
     pub num_threads: usize,
+    pub region_max_size: ReadableSize,
 }
 
 impl BackupConfig {
@@ -2160,10 +2161,12 @@ impl BackupConfig {
 
 impl Default for BackupConfig {
     fn default() -> Self {
+        let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            region_max_size: default_coprocessor.region_max_size,
         }
     }
 }
@@ -2511,6 +2514,7 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
         }
+        self.backup.region_max_size = self.coprocessor.region_max_size;
 
         self.readpool.adjust_use_unified_pool();
     }

@@ -16,7 +16,7 @@ mod metrics;
 mod service;
 mod writer;
 
-pub use endpoint::{Endpoint, Task};
+pub use endpoint::{Endpoint, Task, backup_file_name};
 pub use errors::{Error, Result};
 pub use service::Service;
 pub use writer::{BackupRawKVWriter, BackupWriter};

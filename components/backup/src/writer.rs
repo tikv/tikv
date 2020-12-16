@@ -14,10 +14,11 @@ use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, time::Limiter};
-use txn_types::KvPair;
+use txn_types::{KvPair, Key};
+use kvproto::metapb::Region;
 
 use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{Error, Result, backup_file_name};
 
 struct Writer {
     writer: RocksSstWriter,
@@ -113,20 +114,29 @@ impl Writer {
 
 /// A writer writes txn entries into SST files.
 pub struct BackupWriter {
+    store_id: u64,
     name: String,
     default: Writer,
     write: Writer,
     limiter: Limiter,
+    region_max_size: u64,
+    region: Region,
+    db: Arc<DB>,
+    compression_type: Option<SstCompressionType>,
+    compression_level: i32,
 }
 
 impl BackupWriter {
     /// Create a new BackupWriter.
     pub fn new(
         db: Arc<DB>,
+        store_id: u64,
         name: &str,
         limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        region_max_size: u64,
+        region: Region,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -144,10 +154,16 @@ impl BackupWriter {
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
+            store_id,
             name,
             default: Writer::new(default),
             write: Writer::new(write),
             limiter,
+            region_max_size,
+            region,
+            db,
+            compression_type,
+            compression_level
         })
     }
 
@@ -210,6 +226,46 @@ impl BackupWriter {
             .with_label_values(&["save"])
             .observe(start.elapsed().as_secs_f64());
         Ok(files)
+    }
+
+    pub fn rebuild(&self, start_key: Option<Key>) -> Result<Self> {
+        let key = start_key.clone().and_then(|k| {
+            // use start_key sha256 instead of start_key to avoid file name too long os error
+            let input = k.into_raw().unwrap();
+            file_system::sha256(&input).ok().map(hex::encode)
+        });
+        let store_id = self.store_id;
+        let name = backup_file_name(store_id, &self.region, key);
+        let default = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(CF_DEFAULT)
+            .set_db(RocksEngine::from_ref(&self.db))
+            .set_compression_type(self.compression_type)
+            .set_compression_level(self.compression_level)
+            .build(&*name)?;
+        let write = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(CF_WRITE)
+            .set_db(RocksEngine::from_ref(&self.db))
+            .set_compression_type(self.compression_type)
+            .set_compression_level(self.compression_level)
+            .build(&*name)?;
+        Ok(Self{
+            store_id: self.store_id,
+            name: self.name.clone(),
+            default: Writer::new(default),
+            write: Writer::new(write),
+            limiter: self.limiter.clone(),
+            region_max_size: self.region_max_size,
+            region: self.region.clone(),
+            db: self.db.clone(),
+            compression_type: self.compression_type,
+            compression_level: self.compression_level,
+        })
+    }
+
+    pub fn need_split_keys(&self) -> bool {
+        self.default.total_bytes + self.write.total_bytes >= self.region_max_size
     }
 }
 

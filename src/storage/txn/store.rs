@@ -170,6 +170,16 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+    /// This method will generate this kv pair's key
+    pub fn form_key(&self) -> Result<Vec<u8>> {
+        match self {
+            TxnEntry::Commit { default: _, write, .. } => {
+                Ok(Key::from_encoded(write.0.clone()).truncate_ts()?.into_raw()?)
+            }
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A batch of transaction entries.
