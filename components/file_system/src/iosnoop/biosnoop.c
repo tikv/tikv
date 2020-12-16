@@ -59,7 +59,7 @@ BPF_HISTOGRAM(export_write_latency, int, 25);
 // cache PID by req
 int trace_pid_start(struct pt_regs *ctx, struct request *req)
 {
-    // TODO: Using bpf_get_ns_current_pid_tgid of newer kernel to get
+    // TODO: Using bpf_get_ns_current_pid_tgid of newer kernel to get pid under namespace
     // 
     // struct bpf_pidns_info ns = {};
     // if (!bpf_get_ns_current_pid_tgid(##DEV##, ##INO##, &ns, sizeof(struct bpf_pidns_info))) {

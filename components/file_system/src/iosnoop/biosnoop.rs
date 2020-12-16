@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(delta.get(&IOType::Other).unwrap().write, 0);
         assert_ne!(delta.get(&IOType::Other).unwrap().read, 0);
 
-        unsafe { flush_io_metrics() };
+        flush_io_metrics();
         assert_ne!(IO_LATENCY_MICROS_VEC.compaction.write.get_sample_count(), 0);
         assert_ne!(IO_LATENCY_MICROS_VEC.other.read.get_sample_count(), 0);
         assert_ne!(IO_BYTES_VEC.compaction.write.get(), 0);

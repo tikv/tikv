@@ -48,7 +48,7 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv");
                     raft_db.flush_metrics("raft");
-                    unsafe { flush_io_metrics() };
+                    flush_io_metrics();
                     if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
                         kv_db.reset_statistics();
                         raft_db.reset_statistics();
