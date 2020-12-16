@@ -1232,6 +1232,7 @@ mod tests {
                     expected_lock_info.get_key(),
                     expected_lock_info.get_primary_lock(),
                     expected_lock_info.get_lock_version(),
+                    false,
                     expected_lock_info.get_lock_ttl(),
                     expected_lock_info.get_lock_for_update_ts(),
                     false,
@@ -1633,7 +1634,7 @@ mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
-        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, 20000, 2, false, 100);
+        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, false, 20000, 2, false, 100);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);

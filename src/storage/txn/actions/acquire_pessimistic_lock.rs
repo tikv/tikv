@@ -173,6 +173,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         lock_ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
@@ -187,7 +188,7 @@ pub mod tests {
             &mut txn,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             lock_ttl,
             for_update_ts.into(),
             need_value,
@@ -225,6 +226,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             0,
             for_update_ts.into(),
             true,
@@ -245,6 +247,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             ttl,
             for_update_ts.into(),
             false,
@@ -268,6 +271,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             lock_ttl,
             for_update_ts,
             false,
@@ -287,6 +291,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             false,
             TimeStamp::zero(),
@@ -305,6 +310,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             true,
             TimeStamp::zero(),
@@ -316,6 +322,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
         min_commit_ts: impl Into<TimeStamp>,
@@ -328,7 +335,7 @@ pub mod tests {
             &mut txn,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             0,
             for_update_ts.into(),
             need_value,
@@ -664,5 +671,82 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_succeed(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_check_gc_fence() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 30);
+        force_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 30);
+        force_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0);
+
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 30);
+        must_prewrite_lock(&engine, b"k3", b"k3", 37);
+        must_commit(&engine, b"k3", 37, 38);
+        must_prewrite_lock(&engine, b"k3", b"k3", 42);
+        must_commit(&engine, b"k3", 42, 43);
+        force_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 30);
+        must_prewrite_lock(&engine, b"k4", b"k4", 37);
+        must_commit(&engine, b"k4", 37, 38);
+        must_prewrite_lock(&engine, b"k4", b"k4", 42);
+        must_commit(&engine, b"k4", 42, 43);
+        force_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0);
+
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
+        must_commit(&engine, b"k5", 14, 20);
+        must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
+        must_commit(&engine, b"k5", 21, 30);
+        force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
+        force_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40);
+
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
+        must_commit(&engine, b"k6", 15, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
+        must_commit(&engine, b"k6", 22, 30);
+        force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30);
+        force_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0);
+
+        let cases = vec![
+            (b"k1" as &[u8], None),
+            (b"k2", Some(b"v2" as &[u8])),
+            (b"k3", None),
+            (b"k4", Some(b"v4")),
+            (b"k5", None),
+            (b"k6", Some(b"v6x")),
+        ];
+
+        for (key, expected_value) in cases {
+            // Test constraint check with `should_not_exist`.
+            if expected_value.is_none() {
+                assert!(must_succeed_impl(&engine, key, key, 50, true, 0, 50, false, 51).is_none());
+                must_pessimistic_rollback(&engine, key, 50, 51);
+                must_unlocked(&engine, key);
+            } else {
+                must_err_impl(&engine, key, key, 50, true, 50, false, 51);
+                must_unlocked(&engine, key);
+            }
+
+            // Test getting value.
+            let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+
+            // Test getting value when already locked.
+            must_succeed(&engine, key, key, 50, 51);
+            let res2 = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res2, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+        }
     }
 }
