@@ -346,7 +346,7 @@ impl Json {
     }
 }
 
-/// Create JSON arrayy by given elements
+/// Create JSON array by given elements
 /// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
@@ -399,7 +399,9 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
-            JsonType::Array | JsonType::Object => 0f64,
+            JsonType::Array | JsonType::Object => ctx
+                .handle_truncate_err(Error::incorrect_datetime_value("Float"))
+                .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
             JsonType::I64 => self.get_i64() as f64,
             JsonType::Double => self.get_double(),
@@ -494,6 +496,7 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use crate::expr::{EvalConfig, EvalContext};
 
     #[test]
@@ -571,6 +574,28 @@ mod tests {
                 (get - exp).abs() < std::f64::EPSILON,
                 "json.as_f64 get: {}, exp: {}",
                 get,
+                exp
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_err_when_json_array_or_object_to_real() {
+        let test_cases = vec![
+            ("{}", ERR_TRUNCATE_WRONG_VALUE),
+            ("[]", ERR_TRUNCATE_WRONG_VALUE),
+        ];
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let result: Result<f64> = json.convert(&mut ctx);
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.code(),
+                exp,
+                "json.as_f64 get: {}, exp: {}",
+                err.code(),
                 exp
             );
         }
