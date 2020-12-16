@@ -916,7 +916,7 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
-    pub auto_tuned: bool,
+    pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     #[config(skip)]
@@ -972,7 +972,7 @@ impl Default for DbConfig {
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
-            auto_tuned: true,
+            rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions,
@@ -1015,19 +1015,19 @@ impl DbConfig {
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         if self.rate_bytes_per_sec.0 > 0 {
-            if self.auto_tuned {
+            if self.rate_limiter_auto_tuned {
                 opts.set_writeampbasedratelimiter_with_auto_tuned(
                     self.rate_bytes_per_sec.0 as i64,
                     (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                     self.rate_limiter_mode,
-                    self.auto_tuned,
+                    self.rate_limiter_auto_tuned,
                 );
             } else {
                 opts.set_ratelimiter_with_auto_tuned(
                     self.rate_bytes_per_sec.0 as i64,
                     (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                     self.rate_limiter_mode,
-                    self.auto_tuned,
+                    self.rate_limiter_auto_tuned,
                 );
             }
         }
@@ -3286,7 +3286,7 @@ mod tests {
         cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
         cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
-        cfg.rocksdb.auto_tuned = false;
+        cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.storage.block_cache.shared = false;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
@@ -3358,7 +3358,7 @@ mod tests {
     fn test_change_rate_limiter_auto_tuned() {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         // vanilla limiter does not support dynamically changing auto-tuned mode.
-        cfg.rocksdb.auto_tuned = true;
+        cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
         let (db, cfg_controller) = new_engines(cfg);
 
