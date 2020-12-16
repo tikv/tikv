@@ -152,10 +152,10 @@ mod tests {
         );
         let mut ctx = EvalContext::default();
         let test_duration: &[Option<Duration>] = &[
-            Duration::parse(&mut ctx, b"17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"17:51:04.78", 0).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 0).ok(),
             None,
         ];
         assert_eq!(
