@@ -115,7 +115,7 @@ impl SstPartitioner for CompactionGuardGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::Result as CoprocessorResult;
+    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use engine_rocks::{
         raw::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBOptions},
         raw_util::{new_engine_opt, CFOptions},
@@ -126,10 +126,7 @@ mod tests {
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
-    use std::{
-        str,
-        sync::{Arc, Mutex},
-    };
+    use std::{str, sync::Arc};
     use tempfile::TempDir;
 
     #[test]
@@ -226,28 +223,10 @@ mod tests {
         assert_eq!(guard.pos.get(), 13);
     }
 
-    struct MockProvider(Mutex<Vec<Region>>);
-
-    impl Clone for MockProvider {
-        fn clone(&self) -> Self {
-            MockProvider(Mutex::new(self.0.lock().unwrap().clone()))
-        }
-    }
-
-    impl RegionInfoProvider for MockProvider {
-        fn get_regions_in_range(
-            &self,
-            _start_key: &[u8],
-            _end_key: &[u8],
-        ) -> CoprocessorResult<Vec<Region>> {
-            Ok(self.0.lock().unwrap().clone())
-        }
-    }
-
     const MIN_OUTPUT_FILE_SIZE: u64 = 1024;
     const MAX_OUTPUT_FILE_SIZE: u64 = 4096;
 
-    fn new_test_db(provider: MockProvider) -> (RocksEngine, TempDir) {
+    fn new_test_db(provider: MockRegionInfoProvider) -> (RocksEngine, TempDir) {
         let temp_dir = TempDir::new().unwrap();
 
         let mut cf_opts = ColumnFamilyOptions::new();
@@ -295,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_compaction_guard_with_rocks() {
-        let provider = MockProvider(Mutex::new(vec![
+        let provider = MockRegionInfoProvider::new(vec![
             Region {
                 id: 1,
                 start_key: b"a".to_vec(),
@@ -314,7 +293,7 @@ mod tests {
                 end_key: b"d".to_vec(),
                 ..Default::default()
             },
-        ]));
+        ]);
         let (db, dir) = new_test_db(provider);
 
         // The following test assume data key starts with "z".

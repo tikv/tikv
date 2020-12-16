@@ -260,6 +260,8 @@ macro_rules! cf_config {
             pub enable_compaction_guard: bool,
             #[config(skip)]
             pub compaction_guard_min_output_file_size: ReadableSize,
+            #[config(skip)]
+            pub compaction_guard_max_output_file_size: ReadableSize,
             #[config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -396,7 +398,7 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident, $cache:ident, $region_info_accessor:ident) => {{
+    ($opt:ident, $cache:ident, $region_info_provider:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
@@ -446,15 +448,16 @@ macro_rules! build_cf_opt {
             cf_opts.set_doubly_skiplist();
         }
         if $opt.enable_compaction_guard {
-            if let Some(accessor) = $region_info_accessor {
+            if let Some(provider) = $region_info_provider {
                 cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
                     CompactionGuardGeneratorFactory::new(
-                        accessor.clone(),
+                        provider.clone(),
                         $opt.compaction_guard_min_output_file_size.0,
                     ),
                 ));
+                cf_opts.set_target_file_size_base($opt.compaction_guard_max_output_file_size.0);
             } else {
-                warn!("compaction guard is disabled due to region info accessor not available")
+                warn!("compaction guard is disabled due to region info provider not available")
             }
         }
         cf_opts
@@ -490,7 +493,7 @@ impl Default for DefaultCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(128),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -509,6 +512,7 @@ impl Default for DefaultCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -563,7 +567,7 @@ impl Default for WriteCfConfig {
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(512),
-            target_file_size_base: ReadableSize::mb(128),
+            target_file_size_base: ReadableSize::mb(8),
             level0_file_num_compaction_trigger: 4,
             level0_slowdown_writes_trigger: 20,
             level0_stop_writes_trigger: 36,
@@ -582,6 +586,7 @@ impl Default for WriteCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -663,6 +668,7 @@ impl Default for LockCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -733,6 +739,7 @@ impl Default for RaftCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
         }
     }
@@ -803,6 +810,7 @@ impl Default for VersionCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -1146,6 +1154,7 @@ impl Default for RaftDefaultCfConfig {
             enable_doubly_skiplist: true,
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
         }
     }
@@ -2962,6 +2971,7 @@ mod tests {
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use slog::Level;
     use std::sync::Arc;
 
@@ -3476,5 +3486,47 @@ mod tests {
             cfg.raft_engine.config.dir,
             config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
         );
+    }
+
+    #[test]
+    fn test_compaction_guard() {
+        // Test comopaction guard disabled.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = false;
+            let provider = Some(MockRegionInfoProvider::new(vec![]));
+            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            assert_eq!(
+                config.target_file_size_base.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
+        // Test compaction guard enabled but region info provider is missing.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = true;
+            let provider: Option<MockRegionInfoProvider> = None;
+            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            assert_eq!(
+                config.target_file_size_base.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
+        // Test compaction guard enabled.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = true;
+            config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
+            config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
+            let provider = Some(MockRegionInfoProvider::new(vec![]));
+            let cf_opts = build_cf_opt!(config, None /*cache*/, provider);
+            assert_eq!(
+                config.compaction_guard_max_output_file_size.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
     }
 }
