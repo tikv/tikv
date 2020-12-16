@@ -218,6 +218,9 @@ impl<S: Snapshot> MvccReader<S> {
     /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
     /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
     /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
     pub fn get(
         &mut self,
         key: &Key,
@@ -245,6 +248,9 @@ impl<S: Snapshot> MvccReader<S> {
     /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
     /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
     /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
     pub fn get_write(
         &mut self,
         key: &Key,
