@@ -2250,9 +2250,9 @@ mod tests {
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
                 CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
         }
@@ -4580,6 +4580,7 @@ mod tests {
                     ts(9, 1),
                     false,
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -4604,6 +4605,7 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     true,
+                    false,
                     false,
                     Context::default(),
                 ),
@@ -4660,6 +4662,7 @@ mod tests {
                     0.into(),
                     true,
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -4704,6 +4707,7 @@ mod tests {
                     ts(15, 0),
                     true,
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -4733,6 +4737,7 @@ mod tests {
                     ts(126, 0),
                     ts(127, 0),
                     true,
+                    false,
                     false,
                     Context::default(),
                 ),
@@ -5501,6 +5506,7 @@ mod tests {
                     TimeStamp::compose(150, 0),
                     false,
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -5534,6 +5540,7 @@ mod tests {
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),
+                    false,
                     false,
                     false,
                     Context::default(),

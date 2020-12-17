@@ -17,31 +17,6 @@ impl WriteBatchExt for RocksEngine {
 
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        debug_assert_eq!(
-            wb.get_db().path(),
-            self.as_inner().path(),
-            "mismatched db path"
-        );
-        let opt: RocksWriteOptions = opts.into();
-        self.as_inner()
-            .write_opt(wb.as_inner(), &opt.into_raw())
-            .map_err(Error::Engine)
-    }
-
-    fn write_vec_opt(&self, wb: &RocksWriteBatchVec, opts: &WriteOptions) -> Result<()> {
-        let opt: RocksWriteOptions = opts.into();
-        if wb.index > 0 {
-            self.as_inner()
-                .multi_batch_write(wb.as_inner(), &opt.into_raw())
-                .map_err(Error::Engine)
-        } else {
-            self.as_inner()
-                .write_opt(&wb.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
-        }
-    }
-
     fn support_write_batch_vec(&self) -> bool {
         let options = self.as_inner().get_db_options();
         options.is_enable_multi_batch_write()
@@ -96,8 +71,11 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
         e.write_batch_with_cap(cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_opt(self, opts)
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        self.get_db()
+            .write_opt(self.as_inner(), &opt.into_raw())
+            .map_err(Error::Engine)
     }
 }
 
@@ -219,8 +197,17 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
         RocksWriteBatchVec::new(e.as_inner().clone(), WRITE_BATCH_LIMIT, cap)
     }
 
-    fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
-        e.write_vec_opt(self, opts)
+    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        let opt: RocksWriteOptions = opts.into();
+        if self.index > 0 {
+            self.get_db()
+                .multi_batch_write(self.as_inner(), &opt.into_raw())
+                .map_err(Error::Engine)
+        } else {
+            self.get_db()
+                .write_opt(&self.wbs[0], &opt.into_raw())
+                .map_err(Error::Engine)
+        }
     }
 }
 
