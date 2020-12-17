@@ -1237,6 +1237,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
         let sync_policy = new_sync_policy(
+            meta.get_id(),
             engines.raft.clone(),
             self.router.clone(),
             cfg.value().delay_sync_enabled(),

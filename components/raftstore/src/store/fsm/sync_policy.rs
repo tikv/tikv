@@ -88,6 +88,7 @@ impl UnsyncedReady {
 /// then the notifications will be sent to these unsynced regions.
 pub struct SyncPolicy<A: Action> {
     pub metrics: SyncEventMetrics,
+    store_id: u64,
     sync_action: A,
     delay_sync_enabled: bool,
     delay_sync_us: i64,
@@ -111,7 +112,7 @@ pub struct SyncPolicy<A: Action> {
     global_plan_sync_ts: Arc<CachePadded<AtomicI64>>,
     global_last_sync_ts: Arc<CachePadded<AtomicI64>>,
 
-    /// Notify them when 'sync' is triggered and finished.
+    /// Notify these readies when 'sync' is triggered and finished.
     unsynced_readies: VecDeque<UnsyncedReady>,
 }
 
@@ -119,6 +120,7 @@ impl<A: Action> Clone for SyncPolicy<A> {
     fn clone(&self) -> Self {
         SyncPolicy {
             metrics: SyncEventMetrics::default(),
+            store_id: self.store_id,
             sync_action: self.sync_action.clone(),
             delay_sync_enabled: self.delay_sync_enabled,
             delay_sync_us: self.delay_sync_us,
@@ -133,10 +135,16 @@ impl<A: Action> Clone for SyncPolicy<A> {
 }
 
 impl<A: Action> SyncPolicy<A> {
-    pub fn new(sync_action: A, delay_sync_enabled: bool, delay_sync_us: i64) -> SyncPolicy<A> {
+    pub fn new(
+        store_id: u64,
+        sync_action: A,
+        delay_sync_enabled: bool,
+        delay_sync_us: i64,
+    ) -> SyncPolicy<A> {
         let current_ts = sync_action.current_ts();
         SyncPolicy {
             metrics: SyncEventMetrics::default(),
+            store_id,
             sync_action,
             delay_sync_us,
             global_unsynced_version: Arc::new(CachePadded::new(AtomicU64::new(0))),
@@ -260,6 +268,9 @@ impl<A: Action> SyncPolicy<A> {
     /// If current_ts is close to last_sync_ts, or other threads are planning
     /// to sync, then this thread should not sync.
     fn check_sync_internal(&mut self, before_sync_ts: i64) -> bool {
+        fail_point!("skip_check_sync_internal_2", self.store_id == 2, |_| false);
+        fail_point!("skip_check_sync_internal_3", self.store_id == 3, |_| false);
+
         let last_sync_ts = self.global_last_sync_ts.load(Ordering::Acquire);
         let plan_sync_ts = self.global_plan_sync_ts.load(Ordering::Acquire);
         if last_sync_ts != plan_sync_ts {
@@ -355,12 +366,14 @@ impl<A: Action> SyncPolicy<A> {
 }
 
 pub fn new_sync_policy<EK: KvEngine, ER: RaftEngine>(
+    store_id: u64,
     raft_engine: ER,
     router: RaftRouter<EK, ER>,
     delay_sync_enabled: bool,
     delay_sync_us: i64,
 ) -> SyncPolicy<SyncAction<EK, ER>> {
     SyncPolicy::new(
+        store_id,
         SyncAction::new(raft_engine, router),
         delay_sync_enabled,
         delay_sync_us,
@@ -412,7 +425,7 @@ mod tests {
             time: time.clone(),
         };
         TestSyncPolicy {
-            sync_policy: SyncPolicy::new(action, delay_sync_enabled, delay_sync_us),
+            sync_policy: SyncPolicy::new(0, action, delay_sync_enabled, delay_sync_us),
             raft_rx,
             router_rx,
             time,
