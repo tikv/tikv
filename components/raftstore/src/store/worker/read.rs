@@ -146,6 +146,47 @@ pub struct ReadDelegate {
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
+
+    track_ver: TrackVer,
+}
+
+#[derive(Debug)]
+struct TrackVer {
+    version: Arc<AtomicU64>,
+    local_ver: u64,
+    source: bool,
+}
+
+impl TrackVer {
+    fn new() -> TrackVer {
+        TrackVer {
+            version: Arc::new(AtomicU64::from(0)),
+            local_ver: 0,
+            source: true,
+        }
+    }
+
+    // Take `&mut self` to prevent calling `inc` and `clone` at the same time
+    fn inc(&mut self) {
+        // Only the source `TrackVer` can increase version
+        if self.source {
+            self.version.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn any_new(&self) -> bool {
+        self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+}
+
+impl Clone for TrackVer {
+    fn clone(&self) -> Self {
+        TrackVer {
+            version: Arc::clone(&self.version),
+            local_ver: self.version.load(Ordering::Relaxed),
+            source: false,
+        }
+    }
 }
 
 impl ReadDelegate {
@@ -164,6 +205,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            track_ver: TrackVer::new(),
         }
     }
 
@@ -171,12 +213,13 @@ impl ReadDelegate {
         self.invalid.store(true, Ordering::Release);
     }
 
-    pub fn fresh_valid_ts(&mut self) {
+    fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
     }
 
     pub fn update(&mut self, progress: Progress) {
         self.fresh_valid_ts();
+        self.track_ver.inc();
         match progress {
             Progress::Region(region) => {
                 self.region = Arc::new(region);
@@ -351,8 +394,9 @@ where
 
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
         match self.delegates.get(&region_id) {
-            Some(d) => Some(Arc::clone(d)),
-            None => {
+            // The local `ReadDelegate` is up to date
+            Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
+            _ => {
                 let meta = self.store_meta.lock().unwrap();
                 match meta.readers.get(&region_id).cloned().map(Arc::new) {
                     Some(reader) => {
