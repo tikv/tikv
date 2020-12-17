@@ -26455,7 +26455,8 @@
       "type": "row"
     }
   ],
-  "refresh": "1m",  "schemaVersion": 18,
+  "refresh": "1m",
+  "schemaVersion": 18,
   "style": "dark",
   "tags": [],
   "templating": {
