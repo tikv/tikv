@@ -135,10 +135,6 @@ impl RpcClient {
         block_on(self.leader_client.reconnect())
     }
 
-    pub fn feature_gate(&self) -> &FeatureGate {
-        &self.leader_client.feature_gate
-    }
-
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option() -> CallOption {
@@ -779,6 +775,10 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+
+    fn feature_gate(&self) -> &FeatureGate {
+        &self.leader_client.feature_gate
     }
 }
 
