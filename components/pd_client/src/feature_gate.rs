@@ -45,7 +45,7 @@ pub struct Feature {
 }
 
 impl Feature {
-    pub const fn acquire(major: u64, minor: u64, patch: u64) -> Feature {
+    pub const fn require(major: u64, minor: u64, patch: u64) -> Feature {
         Feature {
             ver: ver_to_val(major, minor, patch),
         }

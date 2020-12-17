@@ -258,6 +258,10 @@ pub trait PdClient: Send + Sync {
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         unimplemented!()
     }
+
+    fn feature_gate(&self) -> &FeatureGate {
+        todo!()
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

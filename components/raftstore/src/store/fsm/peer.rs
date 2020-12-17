@@ -1235,6 +1235,13 @@ where
         {
             return true;
         }
+        if !self
+            .fsm
+            .hibernate_state
+            .should_bcast(&self.ctx.feature_gate)
+        {
+            return false;
+        }
         for peer in self.fsm.peer.region().get_peers() {
             if peer.get_id() == self.fsm.peer.peer_id() {
                 continue;

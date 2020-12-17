@@ -1,6 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::metapb::Region;
+use pd_client::{Feature, FeatureGate};
+
+/// Because negotiation protocol can't be recognized by old version of binaries,
+/// so enabling it directly can cause a lot of connection reset.
+const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
 
 /// Represents state of the group.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -55,6 +60,10 @@ impl HibernateState {
                 v.push(from);
             }
         }
+    }
+
+    pub fn should_bcast(&self, gate: &FeatureGate) -> bool {
+        gate.can_enable(NEGOTIATION_HIBERNATE)
     }
 
     pub fn maybe_hibernate(&mut self, my_id: u64, region: &Region) -> bool {
