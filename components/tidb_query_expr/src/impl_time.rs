@@ -565,8 +565,8 @@ pub fn add_duration_and_string(
         Ok(arg) => arg,
         Err(_) => return Ok(None),
     };
-    let res = arg1.checked_add(arg2);
-    let res = match res {
+
+    let res = match arg1.checked_add(arg2) {
         Some(res) => res,
         None => {
             return ctx
