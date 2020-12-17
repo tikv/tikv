@@ -5310,65 +5310,66 @@ mod tests {
 
         let mut ctx = EvalContext::default();
 
-        // This case copy from Duration.rs::tests::test_from_i64
-        let cs: Vec<(
+        struct TestCase(
             i64,
             isize,
             tidb_query_datatype::codec::Result<Option<Duration>>,
             bool,
             bool,
-        )> = vec![
+        );
+        // This case copy from Duration.rs::tests::test_from_i64
+        let cs: Vec<TestCase> = vec![
             // (input, fsp, expect, overflow, truncated)
-            (
+            TestCase(
                 101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "10:10:10", 0).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 101010,
                 5,
                 Ok(Some(Duration::parse(&mut ctx, "10:10:10", 5).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "838:59:59", 0).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 6,
                 Ok(Some(Duration::parse(&mut ctx, "838:59:59", 6).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 0).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 5,
                 Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 5).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 0).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 6,
                 Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 6).unwrap())),
@@ -5376,32 +5377,34 @@ mod tests {
                 false,
             ),
             // overflow as warning
-            (8385960, 0, Ok(None), true, false),
-            (-8385960, 0, Ok(None), true, false),
+            TestCase(8385960, 0, Ok(None), true, false),
+            TestCase(-8385960, 0, Ok(None), true, false),
             // will truncated
-            (8376049, 0, Ok(None), false, true),
-            (8375960, 0, Ok(None), false, true),
-            (8376049, 0, Ok(None), false, true),
-            (2002073, 0, Ok(None), false, true),
-            (2007320, 0, Ok(None), false, true),
-            (
+            TestCase(8376049, 0, Ok(None), false, true),
+            TestCase(8375960, 0, Ok(None), false, true),
+            TestCase(-8376049, 0, Ok(None), false, true),
+            TestCase(2002073, 0, Ok(None), false, true),
+            TestCase(2007320, 0, Ok(None), false, true),
+            TestCase(-2002073, 0, Ok(None), false, true),
+            TestCase(-2007320, 0, Ok(None), false, true),
+            TestCase(
                 10000000000,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "0:0:0", 0).unwrap())),
                 false,
                 false,
             ),
-            (
+            TestCase(
                 10000235959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "23:59:59", 0).unwrap())),
                 false,
                 false,
             ),
-            (-10000235959, 0, Ok(None), true, false),
+            TestCase(-10000235959, 0, Ok(None), true, false),
         ];
 
-        for (input, fsp, expected, overflow, truncated) in cs {
+        for TestCase(input, fsp, expected, overflow, truncated) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
