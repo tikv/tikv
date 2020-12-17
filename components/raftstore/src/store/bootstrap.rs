@@ -5,7 +5,7 @@ use super::peer_storage::{
 };
 use super::util::new_peer;
 use crate::Result;
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
+use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -78,7 +78,7 @@ pub fn prepare_bootstrap_cluster(
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
     write_initial_apply_state(&mut wb, region.get_id())?;
-    engines.kv.write(&wb)?;
+    wb.write()?;
     engines.sync_kv()?;
 
     let mut raft_wb = engines.raft.log_batch(1024);
@@ -103,7 +103,7 @@ pub fn clear_prepare_bootstrap_cluster(
     // should clear raft initial state too.
     box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-    engines.kv.write(&wb)?;
+    wb.write()?;
     engines.sync_kv()?;
     Ok(())
 }
