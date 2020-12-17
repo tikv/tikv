@@ -262,8 +262,9 @@ macro_rules! cf_config {
             pub compaction_guard_min_output_file_size: ReadableSize,
             #[config(skip)]
             pub compaction_guard_max_output_file_size: ReadableSize,
+            #[serde(with = "rocks_config::compression_type_serde")]
             #[config(skip)]
-            pub bottommost_zstd_compression: bool,
+            pub bottommost_level_compression: DBCompressionType,
             #[config(skip)]
             pub bottommost_zstd_compression_dict_size: i32,
             #[config(skip)]
@@ -432,18 +433,16 @@ macro_rules! build_cf_opt {
         assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
         let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
         cf_opts.compression_per_level(compression_per_level.as_slice());
-        if $opt.bottommost_zstd_compression {
-            cf_opts.bottommost_compression(DBCompressionType::Zstd);
-            // To set for bottommost level sst compression. The first 3 parameters refer to the
-            // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
-            cf_opts.set_bottommost_level_compression_options(
-                -14,
-                32767,
-                0,
-                $opt.bottommost_zstd_compression_dict_size,
-                $opt.bottommost_zstd_compression_sample_size,
-            );
-        }
+        cf_opts.bottommost_compression($opt.bottommost_level_compression);
+        // To set for bottommost level sst compression. The first 3 parameters refer to the
+        // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
+        cf_opts.set_bottommost_level_compression_options(
+            -14,
+            32767,
+            0,
+            $opt.bottommost_zstd_compression_dict_size,
+            $opt.bottommost_zstd_compression_sample_size,
+        );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
         cf_opts.set_min_write_buffer_number_to_merge($opt.min_write_buffer_number_to_merge);
@@ -532,7 +531,7 @@ impl Default for DefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            bottommost_zstd_compression: true,
+            bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -609,7 +608,7 @@ impl Default for WriteCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            bottommost_zstd_compression: true,
+            bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -694,7 +693,7 @@ impl Default for LockCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            bottommost_zstd_compression: false,
+            bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -768,7 +767,7 @@ impl Default for RaftCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan,
-            bottommost_zstd_compression: false,
+            bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -842,7 +841,7 @@ impl Default for VersionCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            bottommost_zstd_compression: true,
+            bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }
@@ -1189,7 +1188,7 @@ impl Default for RaftDefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             titan: TitanCfConfig::default(),
-            bottommost_zstd_compression: false,
+            bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
             bottommost_zstd_compression_sample_size: 0,
         }

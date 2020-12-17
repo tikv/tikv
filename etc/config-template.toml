@@ -551,7 +551,7 @@
 ## This config overrides compression-per-level. It use zstd for bottommost level to ensure
 ## consistent compression ratio, regardless of overall data size. If explicitly setting compression type
 ## for the bottommost level is not desired, false should be used.
-# bottommost-zstd-compression = true
+# bottommost-level-compression = "zstd"
 
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
