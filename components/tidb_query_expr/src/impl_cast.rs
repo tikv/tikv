@@ -108,7 +108,9 @@ fn get_cast_fn_rpn_meta(
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
-            if !from_field_type.is_unsigned() {
+            if from_field_type.tp() == FieldTypeTp::Year {
+                cast_year_as_string_fn_meta()
+            } else if !from_field_type.is_unsigned() {
                 cast_any_as_string_fn_meta::<Int>()
             } else {
                 cast_uint_as_string_fn_meta()
@@ -383,6 +385,22 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
     }
 }
 
+/// # TODO
+///
+/// This function is added to prove `rpn_fn` supports `enum`/`set` correctly. We will add enum/set
+/// related copr functions into `get_cast_fn_rpn_meta` after Enum/Set decode implemented.
+#[rpn_fn]
+#[inline]
+fn cast_enum_as_int(val: EnumRef) -> Result<Option<Int>> {
+    Ok(Some(val.value() as Int))
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_set_as_int(val: SetRef) -> Result<Option<Int>> {
+    Ok(Some(val.value() as Int))
+}
+
 #[rpn_fn(nullable, capture = [ctx, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_decimal_as_uint(
@@ -602,6 +620,21 @@ fn cast_any_as_string<T: ConvertTo<Bytes> + Evaluable + EvaluableRet>(
             cast_as_string_helper(ctx, extra, val)
         }
     }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_year_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Int,
+) -> Result<Option<Bytes>> {
+    let cast = if *val == 0 {
+        b"0000".to_vec()
+    } else {
+        val.to_string().into_bytes()
+    };
+    cast_as_string_helper(ctx, extra, cast)
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -955,6 +988,7 @@ fn cast_bytes_like_as_duration(
     extra: &RpnFnCallExtra,
     val: &[u8],
 ) -> Result<Option<Duration>> {
+    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
     let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
     match result {
         Ok(dur) => Ok(Some(dur)),
@@ -1315,6 +1349,7 @@ mod tests {
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+    use tikv_util::buffer_vec::BufferVec;
     use tipb::ScalarFuncSig;
 
     fn test_none_with_ctx_and_extra<F, Input, Ret>(func: F)
@@ -1618,6 +1653,50 @@ mod tests {
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_int() {
+        // TODO: we need to test None case here.
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+
+        let cs = vec![
+            // (input, expect)
+            (EnumRef::new(&buf, 0), 0),
+            (EnumRef::new(&buf, 1), 1),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_enum_as_int(input);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_set_as_int() {
+        // TODO: we need to test None case here.
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+
+        let cs = vec![
+            // (input, expect)
+            (SetRef::new(&buf, 0b01), 1),
+            (SetRef::new(&buf, 0b11), 3),
+        ];
+
+        for (input, expect) in cs {
+            let r = cast_set_as_int(input);
+            let r = r.map(|x| x.map(|x| x as u64));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
         }
     }
 
@@ -2107,6 +2186,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_cast_real_time() {
         let cases = vec![
             ("2019-09-16 10:11:12", 190916101112.111, 0),
@@ -2214,7 +2294,7 @@ mod tests {
         for case in cases {
             let mut ctx = EvalContext::default();
 
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP).unwrap();
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
             let now = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .return_field_type(
@@ -2308,20 +2388,14 @@ mod tests {
         let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
+            (Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175105,
             ),
+            (Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105,
             ),
         ];
@@ -3129,6 +3203,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_time_as_real() {
         let mut ctx = EvalContext::default();
         test_none_with_ctx(cast_any_as_any::<Time, Real>);
@@ -3169,19 +3244,19 @@ mod tests {
         let cs = vec![
             // (input, expect)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 175105.0,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105.0,
             ),
         ];
@@ -3575,6 +3650,25 @@ mod tests {
     }
 
     #[test]
+    fn test_year_as_string() {
+        let cs: Vec<(i64, Vec<u8>, String)> = vec![
+            (0, b"0000".to_vec(), "0000".to_string()),
+            (2000, b"2000".to_vec(), "2000".to_string()),
+        ];
+
+        let ref_cs = helper_get_cs_ref(&cs);
+
+        test_as_string_helper(
+            ref_cs,
+            |ctx, extra, val| {
+                let val = val.map(|x| *x as i64);
+                cast_year_as_string(ctx, extra, &val.unwrap())
+            },
+            "cast_year_as_string",
+        );
+    }
+
+    #[test]
     fn test_float_real_as_string() {
         test_none_with_ctx_and_extra(cast_float_real_as_string);
 
@@ -3783,22 +3877,22 @@ mod tests {
         let mut ctx = EvalContext::default();
         let cs = vec![
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 "17:51:04.78".to_string().into_bytes(),
                 "17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 "-17:51:04.78".to_string().into_bytes(),
                 "-17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 "17:51:05".to_string().into_bytes(),
                 "17:51:05".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 "-17:51:05".to_string().into_bytes(),
                 "-17:51:05".to_string(),
             ),
@@ -5042,25 +5136,25 @@ mod tests {
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(-175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(175105),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(-175105),
@@ -5217,64 +5311,54 @@ mod tests {
             (
                 101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 6).unwrap())),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 0).unwrap())),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 5).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 0).unwrap())),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 6).unwrap())),
                 false,
             ),
             // overflow as warning
-            (
-                8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
-                true,
-            ),
-            (
-                -8385960,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                true,
-            ),
+            (8385960, 0, Ok(None), true),
+            (-8385960, 0, Ok(None), true),
             // will truncated
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
@@ -5282,21 +5366,16 @@ mod tests {
             (
                 10000000000,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "0:0:0", 0).unwrap())),
                 false,
             ),
             (
                 10000235959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "23:59:59", 0).unwrap())),
                 false,
             ),
-            (
-                -10000235959,
-                0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
-                false,
-            ),
+            (-10000235959, 0, Ok(None), false),
         ];
 
         for (input, fsp, expected, overflow) in cs {
@@ -5371,7 +5450,7 @@ mod tests {
                 let result = func_cast(&mut ctx, &extra, Some(val.clone()));
 
                 let val_str = func_to_cast_str(val.clone());
-                let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
+                let base_expect = Duration::parse(&mut ctx, &val_str, fsp);
 
                 // make log
                 let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5567,8 +5646,7 @@ mod tests {
             let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
-            let expect_time =
-                Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
+            let expect_time = Duration::parse(&mut ctx, expect, expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, Some(&input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5602,8 +5680,8 @@ mod tests {
             let extra = make_extra(&rft);
 
             let mut ctx = EvalContext::default();
-            let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
-            let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
+            let dur = Duration::parse(&mut ctx, input, input_fsp).unwrap();
+            let expect = Duration::parse(&mut ctx, expect, output_fsp).unwrap();
             let r = cast_duration_as_duration(&extra, Some(&dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5933,7 +6011,7 @@ mod tests {
                 Json::from_string("00:00:00.000000".to_string()).unwrap(),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
+                Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
                 Json::from_string("10:10:10.000000".to_string()).unwrap(),
             ),
         ];

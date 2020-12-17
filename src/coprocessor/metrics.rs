@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::mem;
 
 use crate::storage::{kv::PerfStatisticsDelta, FlowStatsReporter, Statistics};
+use collections::HashMap;
 use kvproto::metapb;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
-use tikv_util::collections::HashMap;
 
 use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use prometheus::*;

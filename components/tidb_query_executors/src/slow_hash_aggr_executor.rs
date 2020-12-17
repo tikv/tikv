@@ -5,9 +5,9 @@ use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use collections::HashMap;
+use collections::HashMapEntry;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::collections::HashMap;
-use tikv_util::collections::HashMapEntry;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 

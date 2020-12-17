@@ -6,7 +6,7 @@ use crate::storage::{
             CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
             MVCC_DUPLICATE_CMD_COUNTER_VEC,
         },
-        ErrorInner, Lock, LockType, MvccTxn, Result,
+        Error, ErrorInner, Lock, LockType, MvccTxn, Result,
     },
     txn::actions::check_data_constraint::check_data_constraint,
     txn::LockInfo,
@@ -44,22 +44,17 @@ pub fn prewrite<S: Snapshot>(
         return Ok(ts);
     }
 
-    let prev_write =
-        if !mutation.skip_constraint_check() && !lock_status.fallback_from_async_commit() {
-            mutation.check_for_newer_version(txn)?
-        } else {
-            None
-        };
+    let prev_write = if !mutation.skip_constraint_check() {
+        mutation.check_for_newer_version(txn)?
+    } else {
+        None
+    };
 
     if mutation.should_not_write {
         return Ok(TimeStamp::zero());
     }
 
-    if lock_status.fallback_from_async_commit() {
-        mutation.value = None;
-    } else {
-        txn.check_extra_op(&mutation.key, mutation.mutation_type, prev_write)?;
-    }
+    txn.check_extra_op(&mutation.key, mutation.mutation_type, prev_write)?;
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 
@@ -123,7 +118,6 @@ pub enum TransactionKind {
 enum LockStatus {
     // Lock has already been locked; min_commit_ts of lock.
     Locked(TimeStamp),
-    AsyncFallback,
     Pessimistic,
     None,
 }
@@ -131,10 +125,6 @@ enum LockStatus {
 impl LockStatus {
     fn has_pessimistic_lock(&self) -> bool {
         matches!(self, LockStatus::Pessimistic)
-    }
-
-    fn fallback_from_async_commit(&self) -> bool {
-        matches!(self, LockStatus::AsyncFallback)
     }
 }
 
@@ -241,13 +231,6 @@ impl<'a> PrewriteMutation<'a> {
             return Ok(LockStatus::Pessimistic);
         }
 
-        // Allow to overwrite the primary lock to fallback from async commit.
-        if lock.use_async_commit && !self.has_secondary_keys() {
-            info!("fallback from async commit"; "start_ts" => self.txn_props.start_ts);
-            // needn't clear pessimistic locks
-            return Ok(LockStatus::AsyncFallback);
-        }
-
         // Duplicated command. No need to overwrite the lock and data.
         MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
         Ok(LockStatus::Locked(lock.min_commit_ts))
@@ -288,7 +271,7 @@ impl<'a> PrewriteMutation<'a> {
         lock_status: LockStatus,
         txn: &mut MvccTxn<S>,
     ) -> Result<TimeStamp> {
-        let try_one_pc = self.try_one_pc();
+        let mut try_one_pc = self.try_one_pc();
 
         let mut lock = Lock::new(
             self.lock_type.unwrap(),
@@ -317,16 +300,22 @@ impl<'a> PrewriteMutation<'a> {
         }
 
         let final_min_commit_ts = if lock.use_async_commit || try_one_pc {
-            async_commit_timestamps(
+            let res = async_commit_timestamps(
                 &self.key,
                 &mut lock,
                 self.txn_props.start_ts,
                 self.txn_props.for_update_ts(),
                 self.txn_props.max_commit_ts(),
                 txn,
-            )?
+            );
+            if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
+                try_one_pc = false;
+                lock.use_async_commit = false;
+                lock.secondaries = Vec::new();
+            }
+            res
         } else {
-            TimeStamp::zero()
+            Ok(TimeStamp::zero())
         };
 
         if try_one_pc {
@@ -335,7 +324,7 @@ impl<'a> PrewriteMutation<'a> {
             txn.put_lock(self.key, &lock);
         }
 
-        Ok(final_min_commit_ts)
+        final_min_commit_ts
     }
 
     fn write_conflict_error(&self, write: &Write, commit_ts: TimeStamp) -> Result<()> {
@@ -347,10 +336,6 @@ impl<'a> PrewriteMutation<'a> {
             primary: self.txn_props.primary.to_vec(),
         }
         .into())
-    }
-
-    fn has_secondary_keys(&self) -> bool {
-        self.secondary_keys.is_some()
     }
 
     fn skip_constraint_check(&self) -> bool {
@@ -389,19 +374,24 @@ fn async_commit_timestamps<S: Snapshot>(
         let max_ts = txn.concurrency_manager.max_ts();
         fail_point!("before-set-lock-in-memory");
         let min_commit_ts = cmp::max(cmp::max(max_ts, start_ts), for_update_ts).next();
-        lock.min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
+        let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
         let max_commit_ts = max_commit_ts;
-        if !max_commit_ts.is_zero() && lock.min_commit_ts > max_commit_ts {
+        if !max_commit_ts.is_zero() && min_commit_ts > max_commit_ts {
+            warn!("commit_ts is too large, fallback to normal 2PC";
+                "start_ts" => start_ts,
+                "min_commit_ts" => min_commit_ts,
+                "max_commit_ts" => max_commit_ts);
             return Err(ErrorInner::CommitTsTooLarge {
                 start_ts,
-                min_commit_ts: lock.min_commit_ts,
+                min_commit_ts,
                 max_commit_ts,
             });
         }
 
+        lock.min_commit_ts = min_commit_ts;
         *l = Some(lock.clone());
-        Ok(lock.min_commit_ts)
+        Ok(min_commit_ts)
     })?;
 
     txn.guards.push(key_guard);
@@ -450,7 +440,9 @@ fn amend_pessimistic_lock<S: Snapshot>(key: &Key, txn: &mut MvccTxn<S>) -> Resul
 pub mod tests {
     use super::*;
     #[cfg(test)]
-    use crate::storage::txn::tests::must_acquire_pessimistic_lock;
+    use crate::storage::txn::{
+        commands::prewrite::fallback_1pc_locks, tests::must_acquire_pessimistic_lock,
+    };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
@@ -555,8 +547,8 @@ pub mod tests {
         .unwrap();
 
         cm.update_max_ts(60.into());
-        // calculated commit_ts = 61 > 50, ok
-        prewrite(
+        // calculated commit_ts = 61 > 50, err
+        let err = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
@@ -564,6 +556,78 @@ pub mod tests {
             false,
         )
         .unwrap_err();
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::CommitTsTooLarge { .. })
+        ));
+
+        let modifies = txn.into_modifies();
+        assert_eq!(modifies.len(), 2); // the mutation that meets CommitTsTooLarge still exists
+        write(&engine, &Default::default(), modifies);
+        assert!(must_locked(&engine, b"k1", 10).use_async_commit);
+        // The written lock should not have use_async_commit flag.
+        assert!(!must_locked(&engine, b"k2", 10).use_async_commit);
+    }
+
+    #[test]
+    fn test_async_commit_prewrite_min_commit_ts() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        // min_commit_ts must be > max_ts
+        let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
+        let min_ts = prewrite(
+            &mut txn,
+            &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            &Some(vec![b"k2".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 42.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be > start_ts
+        let mut txn = MvccTxn::new(snapshot, 44.into(), false, cm);
+        let min_ts = prewrite(
+            &mut txn,
+            &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
+            Mutation::Put((Key::from_raw(b"k3"), b"v1".to_vec())),
+            &Some(vec![b"k4".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 44.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be > for_update_ts
+        let mut props = optimistic_async_props(b"k5", 44.into(), 50.into(), 2, false);
+        props.kind = TransactionKind::Pessimistic(45.into());
+        let min_ts = prewrite(
+            &mut txn,
+            &props,
+            Mutation::Put((Key::from_raw(b"k5"), b"v1".to_vec())),
+            &Some(vec![b"k6".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts > 45.into());
+        assert!(min_ts < 50.into());
+
+        // min_commit_ts must be >= txn min_commit_ts
+        let mut props = optimistic_async_props(b"k7", 44.into(), 50.into(), 2, false);
+        props.min_commit_ts = 46.into();
+        let min_ts = prewrite(
+            &mut txn,
+            &props,
+            Mutation::Put((Key::from_raw(b"k7"), b"v1".to_vec())),
+            &Some(vec![b"k8".to_vec()]),
+            false,
+        )
+        .unwrap();
+        assert!(min_ts >= 46.into());
+        assert!(min_ts < 50.into());
     }
 
     #[test]
@@ -585,8 +649,8 @@ pub mod tests {
         .unwrap();
 
         cm.update_max_ts(60.into());
-        // calculated commit_ts = 61 > 50, ok
-        prewrite(
+        // calculated commit_ts = 61 > 50, err
+        let err = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, true),
             Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
@@ -594,30 +658,18 @@ pub mod tests {
             false,
         )
         .unwrap_err();
-    }
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::CommitTsTooLarge { .. })
+        ));
 
-    #[test]
-    fn test_fallback_from_async_commit() {
-        use super::super::tests::*;
-        use crate::storage::mvcc::MvccReader;
-        use kvproto::kvrpcpb::IsolationLevel;
-
-        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put_async_commit(&engine, b"k", b"v", b"k", &Some(vec![vec![1]]), 10, 20);
-        must_prewrite_put(&engine, b"k", b"v", b"k", 10);
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
-        assert!(!lock.use_async_commit);
-        assert!(lock.secondaries.is_empty());
-
-        // deny overwrites with async commit prewrit
-        must_prewrite_put_async_commit(&engine, b"k", b"v", b"k", &Some(vec![vec![1]]), 10, 20);
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
-        assert!(!lock.use_async_commit);
-        assert!(lock.secondaries.is_empty());
+        fallback_1pc_locks(&mut txn);
+        let modifies = txn.into_modifies();
+        assert_eq!(modifies.len(), 2); // the mutation that meets CommitTsTooLarge still exists
+        write(&engine, &Default::default(), modifies);
+        // success 1pc prewrite needs to be transformed to locks
+        assert!(!must_locked(&engine, b"k1", 10).use_async_commit);
+        assert!(!must_locked(&engine, b"k2", 10).use_async_commit);
     }
 
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
@@ -731,51 +783,5 @@ pub mod tests {
             true,
         )
         .unwrap_err();
-    }
-
-    #[test]
-    fn test_fallback_from_async_commit_pessimistic() {
-        use super::super::tests::*;
-        use crate::storage::mvcc::MvccReader;
-        use kvproto::kvrpcpb::IsolationLevel;
-
-        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        must_acquire_pessimistic_lock(&engine, b"k", b"k", 10, 10);
-
-        must_pessimistic_prewrite_put_async_commit(
-            &engine,
-            b"k",
-            b"v",
-            b"k",
-            &Some(vec![vec![1]]),
-            10,
-            10,
-            true,
-            20,
-        );
-        must_pessimistic_prewrite_put(&engine, b"k", b"v", b"k", 10, 20, true);
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
-        assert!(!lock.use_async_commit);
-        assert!(lock.secondaries.is_empty());
-
-        // deny overwrites with async commit prewrit
-        must_pessimistic_prewrite_put_async_commit(
-            &engine,
-            b"k",
-            b"v",
-            b"k",
-            &Some(vec![vec![1]]),
-            10,
-            10,
-            true,
-            20,
-        );
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, false, IsolationLevel::Si);
-        let lock = reader.load_lock(&Key::from_raw(b"k")).unwrap().unwrap();
-        assert!(!lock.use_async_commit);
-        assert!(lock.secondaries.is_empty());
     }
 }

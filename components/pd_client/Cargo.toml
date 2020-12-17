@@ -34,6 +34,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 semver = "0.10"
