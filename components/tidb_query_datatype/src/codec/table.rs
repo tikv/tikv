@@ -559,7 +559,7 @@ mod tests {
             Datum::U64(1),
             Datum::Bytes(b"123".to_vec()),
             Datum::I64(-1),
-            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"12:34:56.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), "12:34:56.666", 2).unwrap()),
         ];
 
         let mut duration_col = ColumnInfo::default();
@@ -631,7 +631,7 @@ mod tests {
             2 => Datum::Bytes(b"abc".to_vec()),
             3 => Datum::Dec(10.into()),
             5 => Datum::Json(r#"{"name": "John"}"#.parse().unwrap()),
-            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),b"23:23:23.666",2 ).unwrap())
+            6 => Datum::Dur(Duration::parse(&mut EvalContext::default(),"23:23:23.666",2 ).unwrap())
         ];
 
         let mut ctx = EvalContext::default();
@@ -706,7 +706,7 @@ mod tests {
             Datum::I64(100),
             Datum::Bytes(b"abc".to_vec()),
             Datum::Dec(10.into()),
-            Datum::Dur(Duration::parse(&mut EvalContext::default(), b"23:23:23.666", 2).unwrap()),
+            Datum::Dur(Duration::parse(&mut EvalContext::default(), "23:23:23.666", 2).unwrap()),
         ];
 
         let mut ctx = EvalContext::default();
