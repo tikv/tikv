@@ -291,7 +291,7 @@ impl WriteCompactionFilter {
         };
 
         if filter.is_bottommost_level {
-            // MVCC-delete marks can only be handled at the bottommost level to firbid deleted
+            // MVCC-delete marks can only be handled at the bottommost level to forbid deleted
             // RocksDB key/value pairs get exposed incorrectly. For example:
             //   L0: |key_130_MVCC_DEL, key_110_MVCC_PUT(tombstone)|
             //   L6: |key_110_MVCC_PUT|
