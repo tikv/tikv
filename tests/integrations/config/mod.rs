@@ -660,7 +660,10 @@ fn test_serde_custom_tikv_config() {
             previous_master_key: MasterKeyConfig::Plaintext,
         },
     };
-    value.backup = BackupConfig { num_threads: 456 };
+    value.backup = BackupConfig {
+        num_threads: 456,
+        batch_size: 7,
+    };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,

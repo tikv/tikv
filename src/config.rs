@@ -2132,12 +2132,16 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
     pub num_threads: usize,
+    pub batch_size: usize,
 }
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("backup.num_threads cannot be 0".into());
+        }
+        if self.batch_size == 0 {
+            return Err("backup.batch_size cannot be 0".into());
         }
         Ok(())
     }
@@ -2149,6 +2153,7 @@ impl Default for BackupConfig {
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            batch_size: 8,
         }
     }
 }

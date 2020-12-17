@@ -582,6 +582,7 @@ type = "plaintext"
 
 [backup]
 num-threads = 456
+batch-size = 7
 
 [import]
 num-threads = 123
