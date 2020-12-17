@@ -84,8 +84,17 @@ impl TestSuite {
                 *id,
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
+<<<<<<< HEAD
                 engines.kv.clone(),
                 BackupConfig { num_threads: 4 },
+=======
+                engines.kv.as_inner().clone(),
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                },
+                concurrency_manager.clone(),
+>>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
             );
             let mut worker = Worker::new(format!("backup-{}", id));
             worker.start(backup_endpoint).unwrap();
