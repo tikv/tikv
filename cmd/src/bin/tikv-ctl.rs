@@ -104,7 +104,7 @@ fn new_debug_executor(
             if !cfg.raft_engine.enable {
                 let mut raft_db_opts = cfg.raftdb.build_opt();
                 raft_db_opts.set_env(env);
-                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
                 let raft_db = engine_rocks::raw_util::new_engine_opt(
                     &raft_path,
                     raft_db_opts,
