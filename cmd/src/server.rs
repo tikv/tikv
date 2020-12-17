@@ -439,7 +439,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engine.clone(),
             self.router.clone(),
             self.config.gc.clone(),
-            self.pd_client.cluster_version(),
+            self.pd_client.feature_gate().clone(),
         );
         gc_worker
             .start()
@@ -634,7 +634,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             raft_store,
             self.pd_client.clone(),
             self.state.clone(),
-            Some(self.background_worker.clone()),
+            self.background_worker.clone(),
         );
 
         node.start(
@@ -894,8 +894,7 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts =
-            config_raftdb.build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,

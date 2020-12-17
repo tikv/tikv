@@ -2,12 +2,14 @@
 
 use std::{cell::Cell, ffi::CString};
 
-use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
+use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
-    SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
-    SstPartitionerResult,
+    CfName, SstPartitioner, SstPartitionerContext, SstPartitionerFactory, SstPartitionerRequest,
+    SstPartitionerResult, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE,
 };
 use keys::data_end_key;
+
+use super::metrics::*;
 
 const COMPACTION_GUARD_MAX_POS_SKIP: u32 = 10;
 
@@ -15,29 +17,38 @@ lazy_static! {
     static ref COMPACTION_GUARD: CString = CString::new(b"CompactionGuard".to_vec()).unwrap();
 }
 
-pub struct CompactionGuardGeneratorFactory {
-    accessor: RegionInfoAccessor,
+pub struct CompactionGuardGeneratorFactory<P: RegionInfoProvider> {
+    cf_name: CfNames,
+    provider: P,
     min_output_file_size: u64,
-    max_output_file_size: u64,
 }
 
-impl CompactionGuardGeneratorFactory {
-    pub fn new(
-        accessor: RegionInfoAccessor,
-        min_output_file_size: u64,
-        max_output_file_size: u64,
-    ) -> Self {
-        CompactionGuardGeneratorFactory {
-            accessor,
+impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
+    pub fn new(cf: CfName, provider: P, min_output_file_size: u64) -> Result<Self> {
+        let cf_name = match cf {
+            CF_DEFAULT => CfNames::default,
+            CF_LOCK => CfNames::lock,
+            CF_WRITE => CfNames::write,
+            CF_RAFT => CfNames::raft,
+            CF_VER_DEFAULT => CfNames::ver_default,
+            _ => {
+                return Err(Error::Other(From::from(format!(
+                    "fail to enable compaction guard, unrecognized cf name: {}",
+                    cf
+                ))))
+            }
+        };
+        Ok(CompactionGuardGeneratorFactory {
+            cf_name,
+            provider,
             min_output_file_size,
-            max_output_file_size,
-        }
+        })
     }
 }
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
+impl<P: RegionInfoProvider + Sync> SstPartitionerFactory for CompactionGuardGeneratorFactory<P> {
     type Partitioner = CompactionGuardGenerator;
 
     fn name(&self) -> &CString {
@@ -46,25 +57,33 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
 
     fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
         match self
-            .accessor
+            .provider
             .get_regions_in_range(context.smallest_key, context.largest_key)
         {
             Ok(regions) => {
-                // The regions returned from region_info_accessor should have been sorted,
+                // The regions returned from region_info_provider should have been sorted,
                 // but we sort it again just in case.
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .create
+                    .inc();
                 let mut boundaries = regions
                     .iter()
                     .map(|region| data_end_key(&region.end_key))
                     .collect::<Vec<Vec<u8>>>();
                 boundaries.sort();
                 Some(CompactionGuardGenerator {
+                    cf_name: self.cf_name,
                     boundaries,
                     min_output_file_size: self.min_output_file_size,
-                    max_output_file_size: self.max_output_file_size,
                     pos: Cell::new(0),
                 })
             }
             Err(e) => {
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .create_failure
+                    .inc();
                 warn!("failed to create compaction guard generator"; "err" => ?e);
                 None
             }
@@ -73,10 +92,10 @@ impl SstPartitionerFactory for CompactionGuardGeneratorFactory {
 }
 
 pub struct CompactionGuardGenerator {
+    cf_name: CfNames,
     // The boundary keys are exclusive.
     boundaries: Vec<Vec<u8>>,
     min_output_file_size: u64,
-    max_output_file_size: u64,
     pos: Cell<usize>,
 }
 
@@ -97,12 +116,20 @@ impl SstPartitioner for CompactionGuardGenerator {
             }
         }
         self.pos.set(pos);
-        if (req.current_output_file_size >= self.min_output_file_size)
-            && ((req.current_output_file_size >= self.max_output_file_size)
-                || ((pos < self.boundaries.len())
-                    && (self.boundaries[pos].as_slice() <= req.current_user_key)))
-        {
-            SstPartitionerResult::Required
+        if pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.current_user_key {
+            if req.current_output_file_size >= self.min_output_file_size {
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .partition
+                    .inc();
+                SstPartitionerResult::Required
+            } else {
+                COMPACTION_GUARD_ACTION_COUNTER
+                    .get(self.cf_name)
+                    .skip_partition
+                    .inc();
+                SstPartitionerResult::NotRequired
+            }
         } else {
             SstPartitionerResult::NotRequired
         }
@@ -117,13 +144,26 @@ impl SstPartitioner for CompactionGuardGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use engine_rocks::{
+        raw::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBOptions},
+        raw_util::{new_engine_opt, CFOptions},
+        RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
+    };
+    use engine_traits::{
+        CompactExt, Iterator, MiscExt, SeekKey, SstReader, SyncMutable, CF_DEFAULT,
+    };
+    use keys::DATA_PREFIX_KEY;
+    use kvproto::metapb::Region;
+    use std::{str, sync::Arc};
+    use tempfile::TempDir;
 
     #[test]
     fn test_compaction_guard_should_partition() {
         let guard = CompactionGuardGenerator {
+            cf_name: CfNames::default,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
-            min_output_file_size: 8 << 20,   // 8MB
-            max_output_file_size: 128 << 20, // 128MB
+            min_output_file_size: 8 << 20, // 8MB
             pos: Cell::new(0),
         };
         // Crossing region boundary.
@@ -156,14 +196,6 @@ mod tests {
             SstPartitionerResult::NotRequired
         );
         assert_eq!(guard.pos.get(), 0);
-        // Output file size too large.
-        req = SstPartitionerRequest {
-            prev_user_key: b"bba",
-            current_user_key: b"bbz",
-            current_output_file_size: 256 << 20,
-        };
-        assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
-        assert_eq!(guard.pos.get(), 0);
         // Move position
         req = SstPartitionerRequest {
             prev_user_key: b"cca",
@@ -177,6 +209,7 @@ mod tests {
     #[test]
     fn test_compaction_guard_should_partition_binary_search() {
         let guard = CompactionGuardGenerator {
+            cf_name: CfNames::default,
             boundaries: vec![
                 b"aaa00".to_vec(),
                 b"aaa01".to_vec(),
@@ -195,8 +228,7 @@ mod tests {
                 b"aaa14".to_vec(),
                 b"aaa15".to_vec(),
             ],
-            min_output_file_size: 8 << 20,   // 8MB
-            max_output_file_size: 128 << 20, // 128MB
+            min_output_file_size: 8 << 20, // 8MB
             pos: Cell::new(0),
         };
         // Binary search meet exact match.
@@ -220,5 +252,121 @@ mod tests {
             SstPartitionerResult::NotRequired
         );
         assert_eq!(guard.pos.get(), 13);
+    }
+
+    const MIN_OUTPUT_FILE_SIZE: u64 = 1024;
+    const MAX_OUTPUT_FILE_SIZE: u64 = 4096;
+
+    fn new_test_db(provider: MockRegionInfoProvider) -> (RocksEngine, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
+        cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
+            CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE)
+                .unwrap(),
+        ));
+        cf_opts.set_disable_auto_compactions(true);
+        cf_opts.compression_per_level(&[
+            DBCompressionType::No,
+            DBCompressionType::No,
+            DBCompressionType::No,
+            DBCompressionType::No,
+            DBCompressionType::No,
+            DBCompressionType::No,
+            DBCompressionType::No,
+        ]);
+        // Make block size small to make sure current_output_file_size passed to SstPartitioner
+        // is accurate.
+        let mut block_based_opts = BlockBasedOptions::new();
+        block_based_opts.set_block_size(100);
+        cf_opts.set_block_based_table_factory(&block_based_opts);
+
+        let db = RocksEngine::from_db(Arc::new(
+            new_engine_opt(
+                temp_dir.path().to_str().unwrap(),
+                DBOptions::new(),
+                vec![CFOptions::new(CF_DEFAULT, cf_opts)],
+            )
+            .unwrap(),
+        ));
+        (db, temp_dir)
+    }
+
+    fn collect_keys(path: &str) -> Vec<Vec<u8>> {
+        let mut sst_reader = RocksSstReader::open(path).unwrap().iter();
+        let mut valid = sst_reader.seek(SeekKey::Start).unwrap();
+        let mut ret = vec![];
+        while valid {
+            ret.push(sst_reader.key().to_owned());
+            valid = sst_reader.next().unwrap();
+        }
+        ret
+    }
+
+    #[test]
+    fn test_compaction_guard_with_rocks() {
+        let provider = MockRegionInfoProvider::new(vec![
+            Region {
+                id: 1,
+                start_key: b"a".to_vec(),
+                end_key: b"b".to_vec(),
+                ..Default::default()
+            },
+            Region {
+                id: 2,
+                start_key: b"b".to_vec(),
+                end_key: b"c".to_vec(),
+                ..Default::default()
+            },
+            Region {
+                id: 3,
+                start_key: b"c".to_vec(),
+                end_key: b"d".to_vec(),
+                ..Default::default()
+            },
+        ]);
+        let (db, dir) = new_test_db(provider);
+
+        // The following test assume data key starts with "z".
+        assert_eq!(b"z", DATA_PREFIX_KEY);
+
+        // Create two overlapping SST files then force compaction.
+        // Region "a" will share a SST file with region "b", since region "a" is too small.
+        // Region "c" will be splitted into two SSTs, since its size is larger than
+        // target_file_size_base.
+        let value = vec![b'v'; 1024];
+        db.put(b"za1", b"").unwrap();
+        db.put(b"zb1", &value).unwrap();
+        db.put(b"zc1", &value).unwrap();
+        db.flush(true /*sync*/).unwrap();
+        db.put(b"zb2", &value).unwrap();
+        db.put(b"zc2", &value).unwrap();
+        db.put(b"zc3", &value).unwrap();
+        db.put(b"zc4", &value).unwrap();
+        db.put(b"zc5", &value).unwrap();
+        db.put(b"zc6", &value).unwrap();
+        db.flush(true /*sync*/).unwrap();
+        db.compact_range(
+            CF_DEFAULT, None,  /*start_key*/
+            None,  /*end_key*/
+            false, /*exclusive_manual*/
+            1,     /*max_subcompactions*/
+        )
+        .unwrap();
+
+        let files = dir.path().read_dir().unwrap();
+        let mut sst_files = files
+            .map(|entry| entry.unwrap().path().to_str().unwrap().to_owned())
+            .filter(|entry| entry.ends_with(".sst"))
+            .collect::<Vec<String>>();
+        sst_files.sort();
+        assert_eq!(3, sst_files.len());
+        assert_eq!(collect_keys(&sst_files[0]), [b"za1", b"zb1", b"zb2"]);
+        assert_eq!(
+            collect_keys(&sst_files[1]),
+            [b"zc1", b"zc2", b"zc3", b"zc4", b"zc5"]
+        );
+        assert_eq!(collect_keys(&sst_files[2]), [b"zc6"]);
     }
 }
