@@ -556,6 +556,29 @@ impl Delegate {
         old_value_cache: &mut OldValueCache,
         is_one_pc: bool,
     ) -> Result<()> {
+        let txn_extra_op = self.txn_extra_op;
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+            if txn_extra_op == TxnExtraOp::ReadOldValue {
+                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                let start = Instant::now();
+
+                let mut statistics = Statistics::default();
+                row.old_value =
+                    old_value_cb.borrow_mut()(key, read_old_ts, old_value_cache, &mut statistics)
+                        .unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(start.elapsed().as_secs_f64());
+                for (cf, cf_details) in statistics.details().iter() {
+                    for (tag, count) in cf_details.iter() {
+                        CDC_OLD_VALUE_SCAN_DETAILS
+                            .with_label_values(&[*cf, *tag])
+                            .inc_by(*count as i64);
+                    }
+                }
+            }
+        };
+
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             // CDC cares about put requests only.
@@ -582,12 +605,10 @@ impl Delegate {
 
                     if is_one_pc {
                         set_event_row_type(&mut row, EventLogType::Committed);
-                        let commit_ts = row.commit_ts;
+                        let commit_ts = TimeStamp::from(row.commit_ts);
+                        read_old_value(&mut row, commit_ts.prev());
                         if let Some(resolver) = &self.resolver {
-                            assert!(
-                                TimeStamp::from(commit_ts)
-                                    > resolver.resolved_ts().unwrap_or_default()
-                            );
+                            assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
                         }
                     } else {
                         // 1PC has nothing to do with the resolver
@@ -638,30 +659,8 @@ impl Delegate {
                         continue;
                     }
 
-                    if self.txn_extra_op == TxnExtraOp::ReadOldValue {
-                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                        let start = Instant::now();
-
-                        let mut statistics = Statistics::default();
-                        row.old_value = old_value_cb.borrow_mut()(
-                            key,
-                            std::cmp::max(for_update_ts, row.start_ts.into()),
-                            old_value_cache,
-                            &mut statistics,
-                        )
-                        .unwrap_or_default();
-                        CDC_OLD_VALUE_DURATION_HISTOGRAM
-                            .with_label_values(&["all"])
-                            .observe(start.elapsed().as_secs_f64());
-                        for (cf, cf_details) in statistics.details().iter() {
-                            for (tag, count) in cf_details.iter() {
-                                CDC_OLD_VALUE_SCAN_DETAILS
-                                    .with_label_values(&[*cf, *tag])
-                                    .inc_by(*count as i64);
-                            }
-                        }
-                    }
-
+                    let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
+                    read_old_value(&mut row, read_old_ts);
                     let occupied = rows.entry(row.key.clone()).or_default();
                     if !occupied.value.is_empty() {
                         assert!(row.value.is_empty());

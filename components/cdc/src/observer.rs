@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
+    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
@@ -18,7 +18,7 @@ use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, MutationType, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::metrics::*;
@@ -258,23 +258,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .map(|v| v.deref().to_vec())
     }
 
-    fn check_lock(&mut self, key: &Key, statistics: &mut Statistics) -> bool {
-        statistics.lock.get += 1;
-        let mut opts = ReadOptions::new();
-        opts.set_fill_cache(false);
-        let key_slice = key.as_encoded();
-        let user_key = Key::from_encoded_slice(Key::truncate_ts_for(key_slice).unwrap());
-
-        match self.snapshot.get_cf_opt(opts, CF_LOCK, &user_key).unwrap() {
-            Some(v) => {
-                let lock = Lock::parse(v.deref()).unwrap();
-                std::cmp::max(lock.ts, lock.for_update_ts)
-                    == Key::decode_ts_from(key_slice).unwrap()
-            }
-            None => false,
-        }
-    }
-
     // return Some(vec![]) if value is empty.
     // return None if key not exist.
     fn near_seek_old_value(
@@ -287,17 +270,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
-            if write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
-                // Key was committed, move cursor to the next key to seek for old value.
-                if !write_cursor.next(&mut statistics.write) {
-                    // Do not has any next key, return empty value.
-                    return Ok(Some(Vec::default()));
-                }
-            } else if !self.check_lock(key, statistics) {
-                // Key was not committed, check if the lock is corresponding to the key.
-                return Ok(None);
-            }
-
             let mut old_value = Some(Vec::default());
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
@@ -321,8 +293,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                 break;
             }
             Ok(old_value)
-        } else if self.check_lock(key, statistics) {
-            Ok(Some(Vec::default()))
         } else {
             Ok(None)
         }

@@ -1066,3 +1066,63 @@ fn test_cdc_1pc() {
 
     suite.stop();
 }
+
+#[test]
+fn test_old_value_1pc() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    sleep_ms(1000);
+
+    // Insert value
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 15.into());
+
+    // Prewrite with 1PC
+    let start_ts = 20;
+    let mut prewrite_req = PrewriteRequest::default();
+    let region_id = 1;
+    prewrite_req.set_context(suite.get_context(region_id));
+    let mut m2 = Mutation::default();
+    m2.set_op(Op::Put);
+    m2.key = k1.clone();
+    m2.value = b"v2".to_vec();
+    prewrite_req.mut_mutations().push(m2);
+    prewrite_req.primary_lock = k1;
+    prewrite_req.start_version = start_ts;
+    prewrite_req.lock_ttl = 1000;
+    prewrite_req.set_try_one_pc(true);
+    let prewrite_resp = suite
+        .get_tikv_client(region_id)
+        .kv_prewrite(&prewrite_req)
+        .unwrap();
+    assert!(prewrite_resp.get_one_pc_commit_ts() > 0);
+
+    'outer: loop {
+        let events = receive_event(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Committed
+                            && row.get_start_ts() == start_ts
+                        {
+                            assert_eq!(row.get_old_value(), b"v1");
+                            break 'outer;
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+    }
+
+    suite.stop();
+}
