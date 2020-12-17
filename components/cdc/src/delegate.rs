@@ -22,17 +22,16 @@ use kvproto::cdcpb::{
     EventEntries, EventLogType, EventRow, EventRowOpType, Event_oneof_event,
 };
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, WriteBatchFlag};
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
-use protobuf::ProtobufEnum;
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
+use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
@@ -434,8 +433,9 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
-                    let is_one_pc =
-                        (request.get_header().get_flags() & WriteBatchFlag::OnePc.value()) > 0;
+                    let flags =
+                        WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
                     self.sink_data(
                         index,
                         request.requests.into(),

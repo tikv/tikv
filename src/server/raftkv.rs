@@ -8,6 +8,7 @@ use std::{
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
+use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
@@ -16,13 +17,12 @@ use engine_traits::{
     IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
     TablePropertiesExt,
 };
-use kvproto::kvrpcpb::{Context, WriteBatchFlag};
+use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
 use kvproto::{errorpb, metapb};
-use protobuf::ProtobufEnum;
 use raft::eraftpb::{self, MessageType};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
@@ -274,7 +274,7 @@ where
         let len = reqs.len();
         let mut header = self.new_request_header(ctx);
         if txn_extra.one_pc {
-            header.set_flags(WriteBatchFlag::OnePc.value());
+            header.set_flags(WriteBatchFlags::ONE_PC.bits());
         }
 
         let mut cmd = RaftCmdRequest::default();
@@ -735,6 +735,16 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
+    }
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
     }
 }
 
