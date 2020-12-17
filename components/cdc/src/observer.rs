@@ -270,14 +270,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
-            if write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
-                // Key was committed, move cursor to the next key to seek for old value.
-                if !write_cursor.next(&mut statistics.write) {
-                    // Do not has any next key, return empty value.
-                    return Ok(None);
-                }
-            }
-
             let mut old_value = None;
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
@@ -408,7 +400,7 @@ mod tests {
         must_get_eq(2, None);
         must_get_eq(1, None);
         must_commit(&engine, k, 1, 1);
-        must_get_eq(1, None);
+        must_get_eq(1, Some(b"v1".to_vec()));
 
         must_prewrite_put(&engine, k, b"v2", k, 2);
         must_get_eq(2, Some(b"v1".to_vec()));
