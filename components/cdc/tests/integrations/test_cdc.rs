@@ -990,20 +990,6 @@ fn test_cdc_1pc() {
         }
     });
 
-    // Sleep a while to make sure the stream is registered.
-    sleep_ms(1000);
-    // There must be a delegate.
-    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
-    scheduler
-        .schedule(Task::Validate(
-            1,
-            Box::new(|delegate| {
-                let d = delegate.unwrap();
-                assert_eq!(d.downstreams.len(), 1);
-            }),
-        ))
-        .unwrap();
-
     let (k1, v1) = (b"k1", b"v1");
     let (k2, v2) = (b"k2", &[0u8; 512]);
 
@@ -1074,7 +1060,6 @@ fn test_old_value_1pc() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    sleep_ms(1000);
 
     // Insert value
     let mut m1 = Mutation::default();
