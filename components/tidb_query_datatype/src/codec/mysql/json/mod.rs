@@ -205,6 +205,7 @@ impl<'a> JsonRef<'a> {
     }
 
     // Return whether the value is zero.
+    // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
     pub(crate) fn is_zero(&self) -> bool {
         match self.get_type() {
             JsonType::Object => false,
