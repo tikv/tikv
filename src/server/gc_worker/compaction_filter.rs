@@ -710,7 +710,7 @@ fn check_need_gc(
         }
     }
 
-    needs_gc >= (context.file_numbers().len() + 1) >> 1 || check_props(&sum_props)
+    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props)
 }
 
 #[cfg(test)]
