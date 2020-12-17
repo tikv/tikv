@@ -247,7 +247,7 @@ force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
-enable-compaction-guard = true
+enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
@@ -307,7 +307,7 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
-enable-compaction-guard = true
+enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
