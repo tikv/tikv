@@ -397,6 +397,8 @@ where
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
             _ => {
+                debug!("update local read delegate"; "region_id" => region_id);
+                self.metrics.rejected_by_cache_miss += 1;
                 let meta = self.store_meta.lock().unwrap();
                 match meta.readers.get(&region_id).cloned().map(Arc::new) {
                     Some(reader) => {
@@ -837,6 +839,7 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_no_region, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
+        assert!(reader.delegates.get(&1).is_none());
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -855,6 +858,7 @@ mod tests {
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -863,7 +867,6 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
         assert_eq!(reader.metrics.rejected_by_appiled_term, 1);
-        assert!(reader.delegates.get(&1).is_none());
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -877,7 +880,7 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
-        let region = region1;
+        let region = region1.clone();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -932,13 +935,11 @@ mod tests {
             })),
         );
         assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         must_redirect(&mut reader, &rx, cmd_read_quorum);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
         // Term mismatch.
         let mut cmd_term = cmd.clone();
@@ -953,7 +954,6 @@ mod tests {
             })),
         );
         assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 6);
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -962,7 +962,6 @@ mod tests {
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
         assert_eq!(reader.metrics.rejected_by_epoch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 7);
 
         // Expire lease manually, and it can not be renewed.
         let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
@@ -973,7 +972,6 @@ mod tests {
             reader.metrics.rejected_by_lease_expire,
             previous_lease_rejection + 1
         );
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 8);
 
         // Channel full.
         reader.propose_raft_command(None, cmd.clone(), Callback::None);
@@ -992,7 +990,7 @@ mod tests {
 
         // Reject by term mismatch in lease.
         let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
-        let mut cmd9 = cmd;
+        let mut cmd9 = cmd.clone();
         cmd9.mut_header().set_term(term6 + 3);
         {
             let mut meta = store_meta.lock().unwrap();
@@ -1022,5 +1020,87 @@ mod tests {
             reader.metrics.rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
+
+        // Stale local ReadDelegate
+        cmd.mut_header().mut_region_epoch().set_version(4);
+        region1.mut_region_epoch().set_version(4);
+        let pg = Progress::region(region1.clone());
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(pg);
+        }
+        let task =
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+        must_not_redirect(&mut reader, &rx, task);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
+    }
+
+    #[test]
+    fn test_read_delegate_cache_update() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", store_id, store_meta.clone());
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: Arc::new(region.clone()),
+                peer_id: 1,
+                term: 1,
+                applied_index_term: 1,
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                invalid: Arc::new(AtomicBool::new(false)),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                track_ver: TrackVer::new(),
+            };
+            meta.readers.insert(1, read_delegate);
+        }
+
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(&*d.region, &region);
+        assert_eq!(d.term, 1);
+        assert_eq!(d.applied_index_term, 1);
+        assert!(d.leader_lease.is_none());
+        drop(d);
+
+        {
+            region.mut_region_epoch().set_version(10);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::region(region.clone()));
+        }
+        assert_eq!(&*reader.get_delegate(1).unwrap().region, &region);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(Progress::term(2));
+        }
+        assert_eq!(reader.get_delegate(1).unwrap().term, 2);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::applied_index_term(2));
+        }
+        assert_eq!(reader.get_delegate(1).unwrap().applied_index_term, 2);
+
+        {
+            let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
+            let remote = lease.maybe_new_remote_lease(3).unwrap();
+            let pg = Progress::leader_lease(remote);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(pg);
+        }
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(d.leader_lease.clone().unwrap().term(), 3);
     }
 }
