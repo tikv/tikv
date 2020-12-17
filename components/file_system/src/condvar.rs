@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::sync::Condvar as StdCondvar;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
-use tokio::sync::Semaphore as AsyncSemaphore;
+use tokio::sync::Semaphore as TokioSemaphore;
 
 struct DoublyLinkedNode<T> {
     prev: Cell<Option<NonNull<T>>>,
@@ -15,7 +15,7 @@ struct DoublyLinkedNode<T> {
 
 enum CondvarNode {
     Sync(StdCondvar, DoublyLinkedNode<CondvarNode>),
-    Async(AsyncSemaphore, DoublyLinkedNode<CondvarNode>),
+    Async(TokioSemaphore, DoublyLinkedNode<CondvarNode>),
 }
 
 impl<T> DoublyLinkedNode<T> {
@@ -33,7 +33,7 @@ impl CondvarNode {
     }
 
     pub fn new_async() -> CondvarNode {
-        CondvarNode::Async(AsyncSemaphore::new(0), DoublyLinkedNode::new())
+        CondvarNode::Async(TokioSemaphore::new(0), DoublyLinkedNode::new())
     }
 
     pub fn notify(&self) {
@@ -72,6 +72,9 @@ impl CondvarNode {
     }
 }
 
+/// Un-prioritized conditional variable. Supports both synchronously or
+/// asynchronously waiting on the same instance.
+/// TODO: maintains multiple linked list for each priority.
 #[derive(Debug)]
 pub struct Condvar {
     head: Cell<Option<NonNull<CondvarNode>>>,
@@ -112,16 +115,22 @@ impl Condvar {
                 prev.as_ref().set_next(next);
             }
         } else {
-            assert!(self.head.get().is_none() || self.head.get().unwrap().as_ptr() == raw_node);
-            self.head.set(next);
+            // head could be nulled by notify_all()
+            if self.head.get().is_some() {
+                assert!(self.head.get().unwrap().as_ptr() == raw_node);
+                self.head.set(next);
+            }
         }
         if let Some(next) = next {
             unsafe {
                 next.as_ref().set_prev(prev);
             }
         } else {
-            assert!(self.tail.get().is_none() || self.tail.get().unwrap().as_ptr() == raw_node);
-            self.tail.set(prev);
+            // tail could be nulled by notify_all()
+            if self.tail.get().is_some() {
+                assert!(self.tail.get().unwrap().as_ptr() == raw_node);
+                self.tail.set(prev);
+            }
         }
     }
 
@@ -144,14 +153,14 @@ impl Condvar {
         }
     }
 
-    /// Asynchronously waits on this condition variable for a notification,
+    /// Synchronously waits on this condition variable for a notification,
     /// timing out after a specified duration.
     pub fn wait_timeout<'a, T>(
         &self,
         guard: MutexGuard<'a, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
-        // mutable to indulge NonNull
+        // mutable just to indulge NonNull
         let mut node = CondvarNode::new_sync();
         self.enqueue(&mut node);
         // alternative: std::thread::park_timeout suffers from spurious wake
@@ -210,6 +219,7 @@ mod tests {
         let long_timeout_millis = 1000 * 100;
         let short_timeout_millis = 1;
         let total_waits = 50;
+
         let mu = Arc::new(Mutex::new(()));
         let condv = Arc::new(Condvar::new());
         let mut ts = vec![];

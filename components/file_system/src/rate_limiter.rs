@@ -9,14 +9,14 @@ use time::Timespec;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum IOPriority {
-    Limited,
-    NotLimited,
+    Low,
+    High,
 }
 
 fn get_priority(io_type: IOType) -> IOPriority {
     match io_type {
-        IOType::Flush | IOType::Compaction => IOPriority::Limited,
-        _ => IOPriority::NotLimited,
+        IOType::Flush | IOType::Compaction => IOPriority::Low,
+        _ => IOPriority::High,
     }
 }
 
@@ -35,6 +35,7 @@ fn calculate_bytes_per_refill(bytes_per_sec: usize, refill_period: Duration) -> 
 }
 
 impl PerTypeIORateLimiter {
+    /// Create a new rate limiter. Rate limiting is disabled when `bytes_per_sec` is zero.
     pub fn new(bytes_per_sec: usize, refill_period: Duration) -> PerTypeIORateLimiter {
         PerTypeIORateLimiter {
             bytes_per_refill: AtomicUsize::new(calculate_bytes_per_refill(
@@ -68,7 +69,6 @@ impl PerTypeIORateLimiter {
         None
     }
 
-    // must hold lock
     #[inline]
     fn refill_and_request(&self, bytes: usize) -> usize {
         let token = std::cmp::min(self.bytes_per_refill.load(Ordering::Relaxed), bytes);
@@ -82,7 +82,7 @@ impl PerTypeIORateLimiter {
         if cached_bytes_per_refill == 0 {
             return bytes;
         }
-        if priority == IOPriority::NotLimited {
+        if priority == IOPriority::High {
             self.consumed.fetch_add(bytes, Ordering::Relaxed);
             // Not limited requester don't do refill themselves, therefore the first
             // limited IO in long period will take penalty for a mandotory refill.
@@ -93,7 +93,7 @@ impl PerTypeIORateLimiter {
                 break bytes;
             }
             let mut last_refill_time = self.last_refill_time.lock().unwrap();
-            // double check
+            // double check if bytes have been refilled by others
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
@@ -110,7 +110,7 @@ impl PerTypeIORateLimiter {
                         .wait_timeout(last_refill_time, self.refill_period - since_last_refill);
                     let now = time_util::monotonic_raw_now();
                     if timed_out && *last_refill_time == cached_last_refill_time {
-                        // timeout, try do the refill myself
+                        // timeout, do the refill myself
                         *last_refill_time = now;
                         break self.refill_and_request(bytes);
                     }
@@ -124,7 +124,7 @@ impl PerTypeIORateLimiter {
         if cached_bytes_per_refill == 0 {
             return bytes;
         }
-        if priority == IOPriority::NotLimited {
+        if priority == IOPriority::High {
             self.consumed.fetch_add(bytes, Ordering::Relaxed);
             return bytes;
         }
@@ -169,7 +169,6 @@ impl Default for PerTypeIORateLimiter {
     }
 }
 
-/// No-op limiter
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
@@ -278,22 +277,22 @@ mod tests {
         let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
 
         let limiter = PerTypeIORateLimiter::new(2 * refills_in_one_sec, refill_period);
-        assert_eq!(limiter.request(1, IOPriority::Limited), 1);
-        assert_eq!(limiter.request(10, IOPriority::Limited), 1);
-        assert_eq!(limiter.request(10, IOPriority::Limited), 2);
+        assert_eq!(limiter.request(1, IOPriority::Low), 1);
+        assert_eq!(limiter.request(10, IOPriority::Low), 1);
+        assert_eq!(limiter.request(10, IOPriority::Low), 2);
         limiter.set_bytes_per_sec(10 * refills_in_one_sec);
-        assert_eq!(limiter.request(10, IOPriority::Limited), 10 - 2);
+        assert_eq!(limiter.request(10, IOPriority::Low), 10 - 2);
         limiter.set_bytes_per_sec(100 * refills_in_one_sec);
 
         let limiter = Arc::new(limiter);
         let mut ts = vec![];
-        assert_eq!(limiter.request(1000, IOPriority::Limited), 100 - 2 - 10);
-        assert_eq!(limiter.request(1000, IOPriority::Limited), 100);
+        assert_eq!(limiter.request(1000, IOPriority::Low), 100 - 2 - 10);
+        assert_eq!(limiter.request(1000, IOPriority::Low), 100);
         let begin = time_util::monotonic_now();
         for _ in 0..50 {
             let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
-                assert_eq!(limiter.request(1, IOPriority::Limited), 1);
+                assert_eq!(limiter.request(1, IOPriority::Low), 1);
             });
             ts.push(t);
         }
@@ -302,7 +301,7 @@ mod tests {
         }
         let end = time_util::monotonic_now();
         assert!(time_util::checked_sub(end, begin) > refill_period);
-        assert_eq!(limiter.request(1000, IOPriority::Limited), 50);
+        assert_eq!(limiter.request(1000, IOPriority::Low), 50);
     }
 
     #[bench]
