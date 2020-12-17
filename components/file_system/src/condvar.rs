@@ -8,60 +8,66 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::Semaphore as AsyncSemaphore;
 
+struct DoublyLinkedNode<T> {
+    prev: Cell<Option<NonNull<T>>>,
+    next: Cell<Option<NonNull<T>>>,
+}
+
 enum CondvarNode {
-    Sync(
-        StdCondvar,
-        Cell<Option<NonNull<CondvarNode>>>,
-        Cell<Option<NonNull<CondvarNode>>>,
-    ),
-    Async(
-        AsyncSemaphore,
-        Cell<Option<NonNull<CondvarNode>>>,
-        Cell<Option<NonNull<CondvarNode>>>,
-    ),
+    Sync(StdCondvar, DoublyLinkedNode<CondvarNode>),
+    Async(AsyncSemaphore, DoublyLinkedNode<CondvarNode>),
+}
+
+impl<T> DoublyLinkedNode<T> {
+    fn new() -> DoublyLinkedNode<T> {
+        DoublyLinkedNode {
+            prev: Cell::new(None),
+            next: Cell::new(None),
+        }
+    }
 }
 
 impl CondvarNode {
     pub fn new_sync() -> CondvarNode {
-        CondvarNode::Sync(StdCondvar::new(), Cell::new(None), Cell::new(None))
+        CondvarNode::Sync(StdCondvar::new(), DoublyLinkedNode::new())
     }
 
     pub fn new_async() -> CondvarNode {
-        CondvarNode::Async(AsyncSemaphore::new(0), Cell::new(None), Cell::new(None))
+        CondvarNode::Async(AsyncSemaphore::new(0), DoublyLinkedNode::new())
     }
 
     pub fn notify(&self) {
         match *self {
-            CondvarNode::Sync(ref condv, _, _) => condv.notify_one(),
-            CondvarNode::Async(ref sem, _, _) => sem.add_permits(1),
+            CondvarNode::Sync(ref condv, _) => condv.notify_one(),
+            CondvarNode::Async(ref sem, _) => sem.add_permits(1),
         }
     }
 
     pub fn get_prev(&self) -> Option<NonNull<CondvarNode>> {
         match *self {
-            CondvarNode::Sync(_, ref ptr, _) => ptr.get(),
-            CondvarNode::Async(_, ref ptr, _) => ptr.get(),
+            CondvarNode::Sync(_, ref node) => node.prev.get(),
+            CondvarNode::Async(_, ref node) => node.prev.get(),
         }
     }
 
     pub fn get_next(&self) -> Option<NonNull<CondvarNode>> {
         match *self {
-            CondvarNode::Sync(_, _, ref ptr) => ptr.get(),
-            CondvarNode::Async(_, _, ref ptr) => ptr.get(),
+            CondvarNode::Sync(_, ref node) => node.next.get(),
+            CondvarNode::Async(_, ref node) => node.next.get(),
         }
     }
 
     pub fn set_prev(&self, prev: Option<NonNull<CondvarNode>>) {
         match *self {
-            CondvarNode::Sync(_, ref ptr, _) => ptr.set(prev),
-            CondvarNode::Async(_, ref ptr, _) => ptr.set(prev),
+            CondvarNode::Sync(_, ref node) => node.prev.set(prev),
+            CondvarNode::Async(_, ref node) => node.prev.set(prev),
         }
     }
 
     pub fn set_next(&self, next: Option<NonNull<CondvarNode>>) {
         match *self {
-            CondvarNode::Sync(_, _, ref ptr) => ptr.set(next),
-            CondvarNode::Async(_, _, ref ptr) => ptr.set(next),
+            CondvarNode::Sync(_, ref node) => node.next.set(next),
+            CondvarNode::Async(_, ref node) => node.next.set(next),
         }
     }
 }
@@ -150,7 +156,7 @@ impl Condvar {
         self.enqueue(&mut node);
         // alternative: std::thread::park_timeout suffers from spurious wake
         let (guard, res) = match node {
-            CondvarNode::Sync(ref condv, _, _) => condv.wait_timeout(guard, timeout).unwrap(),
+            CondvarNode::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
             _ => unreachable!(),
         };
         if res.timed_out() {
@@ -173,7 +179,7 @@ impl Condvar {
         std::mem::drop(guard);
         let timed_out = {
             let f = match node {
-                CondvarNode::Async(ref sem, _, _) => sem.acquire().fuse(),
+                CondvarNode::Async(ref sem, _) => sem.acquire().fuse(),
                 _ => unreachable!(),
             };
             pin_mut!(f);
@@ -203,6 +209,7 @@ mod tests {
     fn test_condvar() {
         let long_timeout_millis = 1000 * 100;
         let short_timeout_millis = 1;
+        let total_waits = 50;
         let mu = Arc::new(Mutex::new(()));
         let condv = Arc::new(Condvar::new());
         let mut ts = vec![];
@@ -210,7 +217,7 @@ mod tests {
         let exit_ticket = Arc::new(AtomicUsize::new(0));
 
         let begin = time_util::monotonic_now();
-        for i in 0..50 {
+        for i in 0..total_waits {
             let (mu, condv, enter, exit) = (
                 mu.clone(),
                 condv.clone(),
@@ -223,13 +230,21 @@ mod tests {
             let t = std::thread::spawn(move || {
                 let guard = mu.lock().unwrap();
                 assert_eq!(enter.fetch_add(1, Ordering::Relaxed), i);
-                if i % 2 == 0 {
+                if i % 3 == 0 {
                     let (_, timed_out) = condv.wait_timeout(
                         guard,
-                        Duration::from_millis(short_timeout_millis * (i / 2) as u64),
+                        Duration::from_millis(short_timeout_millis * (i / 3) as u64),
                     );
                     assert_eq!(timed_out, true);
-                    assert_eq!(exit.fetch_add(1, Ordering::Relaxed), i / 2);
+                    assert_eq!(exit.fetch_add(1, Ordering::Relaxed), i / 3);
+                } else if i % 3 == 1 {
+                    let mut rt = tokio::runtime::Runtime::new().unwrap();
+                    let (_, timed_out) = rt.block_on(condv.async_wait_timeout(
+                        &mu,
+                        guard,
+                        Duration::from_millis(long_timeout_millis),
+                    ));
+                    assert_eq!(timed_out, false);
                 } else {
                     let (_, timed_out) =
                         condv.wait_timeout(guard, Duration::from_millis(long_timeout_millis));
@@ -238,8 +253,8 @@ mod tests {
             });
             ts.push(t);
         }
-        while exit_ticket.load(Ordering::Relaxed) != 25
-            || enter_ticket.load(Ordering::Relaxed) != 50
+        while exit_ticket.load(Ordering::Relaxed) != (total_waits + 2) / 3
+            || enter_ticket.load(Ordering::Relaxed) != total_waits
         {
             std::thread::yield_now();
         }
@@ -251,7 +266,7 @@ mod tests {
             t.join().unwrap();
         }
         let end = time_util::monotonic_now();
-        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(100));
+        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(1));
     }
 
     #[bench]
