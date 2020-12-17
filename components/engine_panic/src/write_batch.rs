@@ -9,15 +9,7 @@ impl WriteBatchExt for PanicEngine {
 
     const WRITE_BATCH_MAX_KEYS: usize = 1;
 
-    fn write_opt(&self, wb: &Self::WriteBatch, opts: &WriteOptions) -> Result<()> {
-        panic!()
-    }
-
     fn support_write_batch_vec(&self) -> bool {
-        panic!()
-    }
-
-    fn write_vec_opt(&self, wb: &Self::WriteBatchVec, opts: &WriteOptions) -> Result<()> {
         panic!()
     }
 
@@ -36,7 +28,7 @@ impl WriteBatch<PanicEngine> for PanicWriteBatch {
         panic!()
     }
 
-    fn write_to_engine(&self, _: &PanicEngine, _: &WriteOptions) -> Result<()> {
+    fn write_opt(&self, _: &WriteOptions) -> Result<()> {
         panic!()
     }
 }
