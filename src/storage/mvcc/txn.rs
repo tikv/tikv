@@ -1,7 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
-use crate::storage::mvcc::{reader::MvccReader, Result};
+use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite};
+use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -24,14 +25,13 @@ pub struct GcInfo {
 pub(crate) fn make_rollback(
     start_ts: TimeStamp,
     protected: bool,
-    overlapped_write: Option<Write>,
+    overlapped_write: Option<OverlappedWrite>,
 ) -> Option<Write> {
     match overlapped_write {
-        Some(write) => {
+        Some(OverlappedWrite { write, gc_fence }) => {
             assert!(start_ts > write.start_ts);
             if protected {
-                // TODO: Set the GC fence ts to the next version's commit_ts.
-                Some(write.set_overlapped_rollback(true, Some(0.into())))
+                Some(write.set_overlapped_rollback(true, Some(gc_fence)))
             } else {
                 // No need to update the original write.
                 None
@@ -65,12 +65,17 @@ impl MissingLockAction {
         }
     }
 
-    pub fn construct_write(&self, ts: TimeStamp, overlapped_write: Option<Write>) -> Option<Write> {
-        match self {
-            MissingLockAction::Rollback => make_rollback(ts, false, overlapped_write),
-            MissingLockAction::ProtectedRollback => make_rollback(ts, true, overlapped_write),
+    pub fn construct_write(
+        &self,
+        ts: TimeStamp,
+        overlapped_write: Option<OverlappedWrite>,
+    ) -> Option<Write> {
+        let protected = match self {
+            MissingLockAction::Rollback => false,
+            MissingLockAction::ProtectedRollback => true,
             _ => unreachable!(),
-        }
+        };
+        make_rollback(ts, protected, overlapped_write)
     }
 }
 
@@ -271,7 +276,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
-        overlapped_write: Option<Write>,
+        overlapped_write: Option<OverlappedWrite>,
     ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
@@ -463,6 +468,7 @@ pub(crate) fn make_txn_error(
 mod tests {
     use super::*;
 
+    use crate::storage::kv::RocksEngine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;
@@ -1756,6 +1762,92 @@ mod tests {
         let l = must_locked(&engine, k, 70);
         assert_eq!(l.min_commit_ts, 75.into());
         assert_eq!(l.rollback_ts, vec![75.into()]);
+    }
+
+    #[test]
+    fn test_gc_fence() {
+        let rollback = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
+            must_cleanup(engine, k, start_ts, 0);
+        };
+        let check_status = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
+            check_txn_status::tests::must_success(
+                engine,
+                k,
+                start_ts,
+                0,
+                0,
+                true,
+                false,
+                false,
+                |_| true,
+            );
+        };
+        let check_secondary = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
+            check_secondary_locks::tests::must_success(
+                engine,
+                k,
+                start_ts,
+                SecondaryLocksStatus::RolledBack,
+            );
+        };
+
+        for &rollback in &[rollback, check_status, check_secondary] {
+            let engine = TestEngineBuilder::new().build().unwrap();
+
+            // Get gc fence without any newer versions.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 101);
+            must_commit(&engine, b"k1", 101, 102);
+            rollback(&engine, b"k1", 102);
+            must_get_overlapped_rollback(&engine, b"k1", 102, 101, WriteType::Put, Some(0));
+
+            // Get gc fence with a newer put.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 103);
+            must_commit(&engine, b"k1", 103, 104);
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 105);
+            must_commit(&engine, b"k1", 105, 106);
+            rollback(&engine, b"k1", 104);
+            must_get_overlapped_rollback(&engine, b"k1", 104, 103, WriteType::Put, Some(106));
+
+            // Get gc fence with a newer delete.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 107);
+            must_commit(&engine, b"k1", 107, 108);
+            must_prewrite_delete(&engine, b"k1", b"k1", 109);
+            must_commit(&engine, b"k1", 109, 110);
+            rollback(&engine, b"k1", 108);
+            must_get_overlapped_rollback(&engine, b"k1", 108, 107, WriteType::Put, Some(110));
+
+            // Get gc fence with a newer rollback and lock.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 111);
+            must_commit(&engine, b"k1", 111, 112);
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 113);
+            must_rollback(&engine, b"k1", 113);
+            must_prewrite_lock(&engine, b"k1", b"k1", 115);
+            must_commit(&engine, b"k1", 115, 116);
+            rollback(&engine, b"k1", 112);
+            must_get_overlapped_rollback(&engine, b"k1", 112, 111, WriteType::Put, Some(0));
+
+            // Get gc fence with a newer put after some rollbacks and locks.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 121);
+            must_commit(&engine, b"k1", 121, 122);
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 123);
+            must_rollback(&engine, b"k1", 123);
+            must_prewrite_lock(&engine, b"k1", b"k1", 125);
+            must_commit(&engine, b"k1", 125, 126);
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 127);
+            must_commit(&engine, b"k1", 127, 128);
+            rollback(&engine, b"k1", 122);
+            must_get_overlapped_rollback(&engine, b"k1", 122, 121, WriteType::Put, Some(128));
+
+            // A key's gc fence won't be another MVCC key.
+            must_prewrite_put(&engine, b"k1", b"v1", b"k1", 131);
+            must_commit(&engine, b"k1", 131, 132);
+            must_prewrite_put(&engine, b"k0", b"v1", b"k0", 133);
+            must_commit(&engine, b"k0", 133, 134);
+            must_prewrite_put(&engine, b"k2", b"v1", b"k2", 133);
+            must_commit(&engine, b"k2", 133, 134);
+            rollback(&engine, b"k1", 132);
+            must_get_overlapped_rollback(&engine, b"k1", 132, 131, WriteType::Put, Some(0));
+        }
     }
 
     #[test]
