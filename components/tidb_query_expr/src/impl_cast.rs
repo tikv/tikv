@@ -5398,7 +5398,7 @@ mod tests {
                 false,
                 false,
             ),
-            (-10000235959, 0, Ok(None), false, true),
+            (-10000235959, 0, Ok(None), true, false),
         ];
 
         for (input, fsp, expected, overflow, truncated) in cs {
