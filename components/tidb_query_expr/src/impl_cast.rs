@@ -1330,7 +1330,6 @@ mod tests {
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
-    use tidb_query_datatype::codec::Error;
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -5286,12 +5285,14 @@ mod tests {
             isize,
             tidb_query_datatype::codec::Result<Option<Duration>>,
             bool,
+            bool,
         )> = vec![
-            // (input, fsp, expect, overflow)
+            // (input, fsp, expect, overflow, truncated)
             (
                 101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
             (
@@ -5299,11 +5300,13 @@ mod tests {
                 5,
                 Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
                 false,
+                false,
             ),
             (
                 8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
+                false,
                 false,
             ),
             (
@@ -5311,11 +5314,13 @@ mod tests {
                 6,
                 Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
                 false,
+                false,
             ),
             (
                 -101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
             (
@@ -5323,17 +5328,20 @@ mod tests {
                 5,
                 Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
                 false,
+                false,
             ),
             (
                 -8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 false,
+                false,
             ),
             (
                 -8385959,
                 6,
                 Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
+                false,
                 false,
             ),
             // overflow as warning
@@ -5342,21 +5350,26 @@ mod tests {
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
                 true,
+                false,
             ),
             (
                 -8385960,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 true,
+                false,
             ),
             // will truncated
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
+            (8376049, 0, Ok(None), false, true),
+            (8375960, 0, Ok(None), false, true),
+            (8376049, 0, Ok(None), false, true),
+            (2002073, 0, Ok(None), false, true),
+            (2007320, 0, Ok(None), false, true),
             (
                 10000000000,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                false,
                 false,
             ),
             (
@@ -5364,19 +5377,22 @@ mod tests {
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
                 false,
+                false,
             ),
             (
                 -10000235959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
                 false,
+                false,
             ),
         ];
 
-        for (input, fsp, expected, overflow) in cs {
+        for (input, fsp, expected, overflow, truncated) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
+                    truncate_as_warning: true,
                     ..CtxConfig::default()
                 })
                 .push_param(input)
@@ -5410,6 +5426,13 @@ mod tests {
             if overflow {
                 assert_eq!(ctx.warnings.warning_cnt, 1);
                 assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+            }
+            if truncated {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
             }
         }
     }
