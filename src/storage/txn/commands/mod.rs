@@ -86,8 +86,31 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
 }
 
+/// A `Command` with its return type, reified as the generic parameter `T`.
+///
+/// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are converted to
+/// this type via a series of transformations. That process is described below using
+/// `CommitRequest` as an example:
+/// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs, where it
+/// needs to be transformed to a `TypedCommand` before being passed to the
+/// `storage.sched_txn_command` method.
+/// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its generic
+/// parameter indicates that the result type for this instance of `TypedCommand` is
+/// going to be `TxnStatus` - one of the variants of the `StorageCallback` enum.
+/// 3. In the above `from` method, the details of the commit request are captured by
+/// creating an instance of the struct `storage::txn::commands::commit::Command`
+/// via its `new` method.
+/// 4. This struct is wrapped in a variant of the enum `storage::txn::commands::Command`.
+/// This enum exists to facilitate generic operations over different commands.
+/// 5. Finally, the `Command` enum variant for `Commit` is converted to the `TypedCommand`
+/// using the `From<Command>` impl for `TypedCommand`.
+///
+/// For other requests, see the corresponding `future_` method, the `From` trait
+/// implementation and so on.
 pub struct TypedCommand<T> {
     pub cmd: Command,
+
+    /// Track the type of the command's return value.
     _pd: PhantomData<T>,
 }
 
@@ -246,6 +269,7 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_current_ts().into(),
             req.get_rollback_if_not_exist(),
             req.get_force_sync_commit(),
+            req.get_resolving_pessimistic_lock(),
             req.take_context(),
         )
     }
@@ -339,13 +363,13 @@ pub(super) struct ReleasedLocks {
 ///
 /// Note that this doesn't affect latch releasing. The latch and the memory lock (if any) are always
 /// released after applying, regardless of when the response is sent.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResponsePolicy {
     /// Return the response to the client when the command has finished applying.
     OnApplied,
     /// Return the response after finishing Raft committing.
     OnCommitted,
-    /// Return the response after finishing raft porposing.
+    /// Return the response after finishing raft proposing.
     OnProposed,
 }
 
@@ -600,10 +624,12 @@ impl Debug for Command {
     }
 }
 
+/// Commands that do not need to modify the database during execution will implement this trait.
 pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
+/// Commands that need to modify the database during execution will implement this trait.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }

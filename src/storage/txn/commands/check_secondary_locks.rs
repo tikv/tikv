@@ -333,6 +333,6 @@ pub mod tests {
             SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
+        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock, Some(0));
     }
 }
