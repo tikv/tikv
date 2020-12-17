@@ -939,6 +939,9 @@ fn cast_int_as_duration(
                 if err.is_overflow() {
                     ctx.handle_overflow_err(err)?;
                     Ok(None)
+                } else if err.is_truncated() {
+                    ctx.handle_truncate_err(err)?;
+                    Ok(None)
                 } else {
                     Err(err.into())
                 }
@@ -1366,7 +1369,6 @@ mod tests {
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
-    use tidb_query_datatype::codec::Error;
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -2194,7 +2196,15 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![-11111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            100_000_000,
+            100_000_101_000_000,
+            73,
+        ];
 
         for case in should_fail {
             let actual = RpnFnScalarEvaluator::new()
@@ -5365,88 +5375,105 @@ mod tests {
 
         let mut ctx = EvalContext::default();
 
-        // This case copy from Duration.rs::tests::test_from_i64
-        let cs: Vec<(
+        struct TestCase(
             i64,
             isize,
             tidb_query_datatype::codec::Result<Option<Duration>>,
             bool,
-        )> = vec![
-            // (input, fsp, expect, overflow)
-            (
+            bool,
+        );
+        // This case copy from Duration.rs::tests::test_from_i64
+        let cs: Vec<TestCase> = vec![
+            // (input, fsp, expect, overflow, truncated)
+            TestCase(
                 101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "10:10:10", 0).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 101010,
                 5,
                 Ok(Some(Duration::parse(&mut ctx, "10:10:10", 5).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "838:59:59", 0).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 8385959,
                 6,
                 Ok(Some(Duration::parse(&mut ctx, "838:59:59", 6).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 -101010,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 0).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 -101010,
                 5,
                 Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 5).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 -8385959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 0).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 -8385959,
                 6,
                 Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 6).unwrap())),
                 false,
+                false,
             ),
             // overflow as warning
-            (8385960, 0, Ok(None), true),
-            (-8385960, 0, Ok(None), true),
+            TestCase(8385960, 0, Ok(None), true, false),
+            TestCase(-8385960, 0, Ok(None), true, false),
             // will truncated
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (
+            TestCase(8376049, 0, Ok(None), false, true),
+            TestCase(8375960, 0, Ok(None), false, true),
+            TestCase(-8376049, 0, Ok(None), false, true),
+            TestCase(2002073, 0, Ok(None), false, true),
+            TestCase(2007320, 0, Ok(None), false, true),
+            TestCase(-2002073, 0, Ok(None), false, true),
+            TestCase(-2007320, 0, Ok(None), false, true),
+            TestCase(
                 10000000000,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "0:0:0", 0).unwrap())),
                 false,
+                false,
             ),
-            (
+            TestCase(
                 10000235959,
                 0,
                 Ok(Some(Duration::parse(&mut ctx, "23:59:59", 0).unwrap())),
                 false,
+                false,
             ),
-            (-10000235959, 0, Ok(None), false),
+            TestCase(-10000235959, 0, Ok(None), true, false),
         ];
 
-        for (input, fsp, expected, overflow) in cs {
+        for TestCase(input, fsp, expected, overflow, truncated) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
+                    truncate_as_warning: true,
                     ..CtxConfig::default()
                 })
                 .push_param(input)
@@ -5480,6 +5507,13 @@ mod tests {
             if overflow {
                 assert_eq!(ctx.warnings.warning_cnt, 1);
                 assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+            }
+            if truncated {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
             }
         }
     }
