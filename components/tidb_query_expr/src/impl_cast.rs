@@ -1085,7 +1085,7 @@ fn cast_year_as_time(
     year: &Int,
 ) -> Result<Option<Time>> {
     let year = *year;
-    if !(year == 0 || year >= MIN_YEAR.into() && year <= MAX_YEAR.into()) {
+    if year != 0 && (year < MIN_YEAR.into() || year > MAX_YEAR.into()) {
         ctx.handle_truncate_err(Error::truncated_wrong_val("YEAR", year))?;
         return Ok(None);
     }
@@ -2228,7 +2228,14 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let null_cases = vec![None, Some(10086), Some(i64::MAX), Some(i64::MIN)];
+        let null_cases = vec![
+            None,
+            Some(10086),
+            Some(1900),
+            Some(2156),
+            Some(i64::MAX),
+            Some(i64::MIN),
+        ];
 
         for input in null_cases {
             let actual = RpnFnScalarEvaluator::new()
