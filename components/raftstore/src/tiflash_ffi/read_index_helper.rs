@@ -61,8 +61,14 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
 
         let mut read_index_res = Vec::with_capacity(req_vec.len());
         for (cb, region_id) in router_cb_vec {
-            let mut res = block_on(cb).unwrap();
             let mut resp = ReadIndexResponse::default();
+            let mut res = match block_on(cb) {
+                Ok(r) => r,
+                Err(_) => {
+                    resp.set_region_error(Default::default());
+                    return vec![(resp, region_id)];
+                }
+            };
             let mut success = false;
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());

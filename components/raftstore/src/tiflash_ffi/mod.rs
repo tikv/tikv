@@ -90,16 +90,22 @@ pub extern "C" fn ffi_batch_read_index(
     view: CppStrVecView,
 ) -> *const u8 {
     assert_ne!(proxy_ptr, std::ptr::null());
+    if view.len != 0 {
+        assert_ne!(view.view, std::ptr::null());
+    }
     unsafe {
         let mut req_vec = Vec::with_capacity(view.len as usize);
         for i in 0..view.len as usize {
             let mut req = kvrpcpb::ReadIndexRequest::default();
             let p = &(*view.view.offset(i as isize));
+            assert_ne!(p.data, std::ptr::null());
+            assert_ne!(p.len, 0);
             req.merge_from_bytes(p.to_slice()).unwrap();
             req_vec.push(req);
         }
         let resp = (*proxy_ptr).read_index_client.batch_read_index(req_vec);
         let res = get_tiflash_server_helper().gen_batch_read_index_res(resp.len() as u64);
+        assert_ne!(res, std::ptr::null());
         for (r, region_id) in &resp {
             let r = ProtoMsgBaseBuff::new(r);
             get_tiflash_server_helper().insert_batch_read_index_resp(
