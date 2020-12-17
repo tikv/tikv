@@ -18,7 +18,7 @@ use engine_rocks::{
     RocksWriteBatch,
 };
 use engine_traits::{Iterator, MiscExt, Mutable, MvccProperties, SeekKey, WriteBatch, CF_WRITE};
-use pd_client::ClusterVersion;
+use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
@@ -180,7 +180,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         };
 
         let db = Arc::clone(&gc_context.db);
-        drop(gc_context_option);
 
         debug!(
             "creating compaction filter"; "feature_enable" => enable,
@@ -192,6 +191,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             debug!("skip gc in compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
+        drop(gc_context_option);
 
         if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
