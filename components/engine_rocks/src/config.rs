@@ -195,7 +195,7 @@ pub mod compression_type_serde {
                     "disable" => DBCompressionType::Disable,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&format!("invalid compression type")),
+                            Unexpected::Other(&"invalid compression type".to_string()),
                             &self,
                         ));
                     }
