@@ -17,11 +17,12 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
+use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
@@ -31,7 +32,6 @@ use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -1080,7 +1080,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].kv.write(&kv_wb).unwrap();
+        kv_wb.write().unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
@@ -1101,7 +1101,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].raft.write(&raft_wb).unwrap();
+        raft_wb.write().unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

@@ -48,6 +48,7 @@ tempfile = "3.0"
 test_util = { path = "../test_util" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 encryption = { path = "../encryption" }

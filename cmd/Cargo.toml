@@ -91,6 +91,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tikv = { path = "../", default-features = false }
 tikv_alloc = { path = "../components/tikv_alloc" }
 tikv_util = { path = "../components/tikv_util" }
+collections = { path = "../components/collections" }
 toml = "0.5"
 txn_types = { path = "../components/txn_types" }
 vlog = "0.1.4"

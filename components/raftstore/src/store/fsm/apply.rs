@@ -16,6 +16,7 @@ use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
@@ -37,7 +38,6 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
-use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
@@ -458,11 +458,9 @@ where
         if !self.kv_wb_mut().is_empty() {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb()
-                .write_to_engine(&self.engine, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
+            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+                panic!("failed to write to engine: {:?}", e);
+            });
             report_perf_context!(
                 self.perf_context_statistics,
                 APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC

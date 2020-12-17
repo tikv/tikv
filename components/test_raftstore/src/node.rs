@@ -12,6 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use super::*;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -30,7 +31,6 @@ use tikv::config::{ConfigController, Module, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker};
@@ -201,7 +201,7 @@ impl Simulator for NodeCluster {
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             Arc::default(),
-            Some(bg_worker.clone()),
+            bg_worker.clone(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0

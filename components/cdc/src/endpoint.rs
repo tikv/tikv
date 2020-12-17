@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
@@ -30,7 +31,6 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
-use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
@@ -102,7 +102,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-    Box<dyn FnMut(Key, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
+    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub struct OldValueCache {
     pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
@@ -1261,6 +1261,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use collections::HashSet;
     use engine_traits::DATA_CFS;
     #[cfg(feature = "prost-codec")]
     use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -1276,7 +1277,6 @@ mod tests {
     use tikv::storage::kv::Engine;
     use tikv::storage::txn::tests::{must_acquire_pessimistic_lock, must_prewrite_put};
     use tikv::storage::TestEngineBuilder;
-    use tikv_util::collections::HashSet;
     use tikv_util::config::ReadableDuration;
     use tikv_util::mpsc::batch;
     use tikv_util::worker::{dummy_scheduler, LazyWorker, ReceiverWrapper};

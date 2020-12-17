@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use tikv_util::buffer_vec::BufferVec;
@@ -30,9 +31,9 @@ impl Enum {
     }
 }
 
-impl ToString for Enum {
-    fn to_string(&self) -> String {
-        self.as_ref().to_string()
+impl Display for Enum {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
     }
 }
 
@@ -100,16 +101,16 @@ impl<'a> EnumRef<'a> {
     }
 }
 
-impl<'a> ToString for EnumRef<'a> {
-    fn to_string(&self) -> String {
+impl<'a> Display for EnumRef<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.value == 0 {
-            return String::new();
+            return Ok(());
         }
 
         let buf = &self.data[self.value - 1];
 
         // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf).to_string()
+        write!(f, "{}", String::from_utf8_lossy(buf))
     }
 }
 

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
+use collections::HashMap;
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::EvalContext;
@@ -14,7 +15,6 @@ use tikv::storage::{
     txn::FixtureStore,
     SnapshotStore,
 };
-use tikv_util::collections::HashMap;
 use txn_types::{Key, Mutation, TimeStamp};
 
 pub struct Insert<'a, E: Engine> {

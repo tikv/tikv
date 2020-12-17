@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use engine_rocks::raw::{
@@ -24,7 +25,6 @@ use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
-use tikv_util::collections::HashSet;
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -296,7 +296,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
@@ -357,7 +357,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },

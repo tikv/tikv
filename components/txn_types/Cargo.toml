@@ -19,3 +19,4 @@ slog = "2.3"
 quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }

@@ -26,3 +26,4 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 pd_client = { path = "../pd_client" }
 security = { path = "../security" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }

@@ -28,4 +28,5 @@ pd_client = { path = "../pd_client" }
 test_raftstore = { path = "../test_raftstore" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 txn_types = { path = "../txn_types" }
