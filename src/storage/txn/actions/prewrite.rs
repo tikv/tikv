@@ -799,14 +799,20 @@ pub mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
 
+        // PUT,           Read
+        //  `------^
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
         must_commit(&engine, b"k1", 10, 30);
         force_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40);
 
+        // PUT,           Read
+        //  * (GC fence ts = 0)
         must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
         must_commit(&engine, b"k2", 11, 30);
         force_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0);
 
+        // PUT, LOCK,   LOCK, Read
+        //  `---------^
         must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
         must_commit(&engine, b"k3", 12, 30);
         must_prewrite_lock(&engine, b"k3", b"k3", 37);
@@ -815,6 +821,8 @@ pub mod tests {
         must_commit(&engine, b"k3", 42, 43);
         force_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40);
 
+        // PUT, LOCK,   LOCK, Read
+        //  *
         must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
         must_commit(&engine, b"k4", 13, 30);
         must_prewrite_lock(&engine, b"k4", b"k4", 37);
@@ -823,6 +831,8 @@ pub mod tests {
         must_commit(&engine, b"k4", 42, 43);
         force_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0);
 
+        // PUT,   PUT,    READ
+        //  `-----^ `------^
         must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
         must_commit(&engine, b"k5", 14, 20);
         must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
@@ -830,12 +840,25 @@ pub mod tests {
         force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
         force_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40);
 
+        // PUT,   PUT,    READ
+        //  `-----^ *
         must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
         must_commit(&engine, b"k6", 15, 20);
         must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
         must_commit(&engine, b"k6", 22, 30);
         force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30);
         force_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0);
+
+        // PUT,  LOCK,    READ
+        //  `----------^
+        // Note that this case is special because usually the `LOCK` is the first write already got
+        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
+        // from the `LOCK` record.
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 30);
+        must_prewrite_lock(&engine, b"k7", b"k7", 37);
+        must_commit(&engine, b"k7", 37, 38);
+        force_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40);
 
         // 1. Check GC fence when doing constraint check with the older version.
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -858,6 +881,7 @@ pub mod tests {
             (b"k4", false),
             (b"k5", true),
             (b"k6", false),
+            (b"k7", true),
         ];
 
         for (key, success) in cases {
@@ -910,6 +934,7 @@ pub mod tests {
             (b"k4", Some((b"v4", 13))),
             (b"k5", None),
             (b"k6", Some((b"v6x", 22))),
+            (b"k7", None),
         ]
         .into_iter()
         .map(|(k, v)| {
