@@ -2381,6 +2381,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         }
                         debug!("check leader failed";
                             "leader_info" => ?leader_info,
+                            "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
                         );
