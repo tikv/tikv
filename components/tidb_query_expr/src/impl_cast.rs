@@ -936,6 +936,9 @@ fn cast_int_as_duration(
                 if err.is_overflow() {
                     ctx.handle_overflow_err(err)?;
                     Ok(None)
+                } else if err.is_truncated() {
+                    ctx.handle_truncate_err(err)?;
+                    Ok(None)
                 } else {
                     Err(err.into())
                 }
@@ -988,6 +991,7 @@ fn cast_bytes_like_as_duration(
     extra: &RpnFnCallExtra,
     val: &[u8],
 ) -> Result<Option<Duration>> {
+    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
     let result = Duration::parse(ctx, val, extra.ret_field_type.get_decimal() as i8);
     match result {
         Ok(dur) => Ok(Some(dur)),
@@ -1344,7 +1348,6 @@ mod tests {
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
     };
-    use tidb_query_datatype::codec::Error;
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -2172,7 +2175,15 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![-11111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            100_000_000,
+            100_000_101_000_000,
+            73,
+        ];
 
         for case in should_fail {
             let actual = RpnFnScalarEvaluator::new()
@@ -2293,7 +2304,7 @@ mod tests {
         for case in cases {
             let mut ctx = EvalContext::default();
 
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP).unwrap();
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
             let now = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .return_field_type(
@@ -2387,20 +2398,14 @@ mod tests {
         let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
+            (Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175105,
             ),
+            (Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(), 175105),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
-                175105,
-            ),
-            (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105,
             ),
         ];
@@ -3249,19 +3254,19 @@ mod tests {
         let cs = vec![
             // (input, expect)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 -175104.78,
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 175105.0,
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 -175105.0,
             ),
         ];
@@ -3882,22 +3887,22 @@ mod tests {
         let mut ctx = EvalContext::default();
         let cs = vec![
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 "17:51:04.78".to_string().into_bytes(),
                 "17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 "-17:51:04.78".to_string().into_bytes(),
                 "-17:51:04.78".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 "17:51:05".to_string().into_bytes(),
                 "17:51:05".to_string(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 "-17:51:05".to_string().into_bytes(),
                 "-17:51:05".to_string(),
             ),
@@ -5141,25 +5146,25 @@ mod tests {
         let cs: Vec<(Duration, bool, bool, Decimal)> = vec![
             // (input, in_union, is_res_unsigned, base_result)
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 2).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 2).unwrap(),
                 false,
                 false,
                 Decimal::from_f64(-175104.78).unwrap(),
             ),
             (
-                Duration::parse(&mut ctx, b"17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(175105),
             ),
             (
-                Duration::parse(&mut ctx, b"-17:51:04.78", 0).unwrap(),
+                Duration::parse(&mut ctx, "-17:51:04.78", 0).unwrap(),
                 false,
                 false,
                 Decimal::from(-175105),
@@ -5305,88 +5310,105 @@ mod tests {
 
         let mut ctx = EvalContext::default();
 
-        // This case copy from Duration.rs::tests::test_from_i64
-        let cs: Vec<(
+        struct TestCase(
             i64,
             isize,
             tidb_query_datatype::codec::Result<Option<Duration>>,
             bool,
-        )> = vec![
-            // (input, fsp, expect, overflow)
-            (
+            bool,
+        );
+        // This case copy from Duration.rs::tests::test_from_i64
+        let cs: Vec<TestCase> = vec![
+            // (input, fsp, expect, overflow, truncated)
+            TestCase(
                 101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "10:10:10", 5).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "838:59:59", 6).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -101010,
                 5,
-                Ok(Some(Duration::parse(&mut ctx, b"-10:10:10", 5).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-10:10:10", 5).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 -8385959,
                 6,
-                Ok(Some(Duration::parse(&mut ctx, b"-838:59:59", 6).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "-838:59:59", 6).unwrap())),
+                false,
                 false,
             ),
             // overflow as warning
-            (8385960, 0, Ok(None), true),
-            (-8385960, 0, Ok(None), true),
+            TestCase(8385960, 0, Ok(None), true, false),
+            TestCase(-8385960, 0, Ok(None), true, false),
             // will truncated
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            (
+            TestCase(8376049, 0, Ok(None), false, true),
+            TestCase(8375960, 0, Ok(None), false, true),
+            TestCase(-8376049, 0, Ok(None), false, true),
+            TestCase(2002073, 0, Ok(None), false, true),
+            TestCase(2007320, 0, Ok(None), false, true),
+            TestCase(-2002073, 0, Ok(None), false, true),
+            TestCase(-2007320, 0, Ok(None), false, true),
+            TestCase(
                 10000000000,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"0:0:0", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "0:0:0", 0).unwrap())),
+                false,
                 false,
             ),
-            (
+            TestCase(
                 10000235959,
                 0,
-                Ok(Some(Duration::parse(&mut ctx, b"23:59:59", 0).unwrap())),
+                Ok(Some(Duration::parse(&mut ctx, "23:59:59", 0).unwrap())),
+                false,
                 false,
             ),
-            (-10000235959, 0, Ok(None), false),
+            TestCase(-10000235959, 0, Ok(None), true, false),
         ];
 
-        for (input, fsp, expected, overflow) in cs {
+        for TestCase(input, fsp, expected, overflow, truncated) in cs {
             let (result, ctx) = RpnFnScalarEvaluator::new()
                 .context(CtxConfig {
                     overflow_as_warning: true,
+                    truncate_as_warning: true,
                     ..CtxConfig::default()
                 })
                 .push_param(input)
@@ -5420,6 +5442,13 @@ mod tests {
             if overflow {
                 assert_eq!(ctx.warnings.warning_cnt, 1);
                 assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+            }
+            if truncated {
+                assert_eq!(ctx.warnings.warning_cnt, 1);
+                assert_eq!(
+                    ctx.warnings.warnings[0].get_code(),
+                    ERR_TRUNCATE_WRONG_VALUE
+                );
             }
         }
     }
@@ -5455,7 +5484,7 @@ mod tests {
                 let result = func_cast(&mut ctx, &extra, Some(val.clone()));
 
                 let val_str = func_to_cast_str(val.clone());
-                let base_expect = Duration::parse(&mut ctx, val_str.as_bytes(), fsp);
+                let base_expect = Duration::parse(&mut ctx, &val_str, fsp);
 
                 // make log
                 let result_str = result.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -5651,8 +5680,7 @@ mod tests {
             let extra = make_extra(&rft);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
-            let expect_time =
-                Duration::parse(&mut ctx, expect.as_bytes(), expect_fsp as i8).unwrap();
+            let expect_time = Duration::parse(&mut ctx, expect, expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, Some(&input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
@@ -5686,8 +5714,8 @@ mod tests {
             let extra = make_extra(&rft);
 
             let mut ctx = EvalContext::default();
-            let dur = Duration::parse(&mut ctx, input.as_bytes(), input_fsp).unwrap();
-            let expect = Duration::parse(&mut ctx, expect.as_bytes(), output_fsp).unwrap();
+            let dur = Duration::parse(&mut ctx, input, input_fsp).unwrap();
+            let expect = Duration::parse(&mut ctx, expect, output_fsp).unwrap();
             let r = cast_duration_as_duration(&extra, Some(&dur));
 
             let result_str = r.as_ref().map(|x| x.map(|x| x.to_string()));
@@ -6017,7 +6045,7 @@ mod tests {
                 Json::from_string("00:00:00.000000".to_string()).unwrap(),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap(),
+                Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
                 Json::from_string("10:10:10.000000".to_string()).unwrap(),
             ),
         ];

@@ -564,6 +564,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
         ScalarFuncSig::Rpad => rpad_fn_meta(),
+        ScalarFuncSig::AddStringAndDuration => add_string_and_duration_fn_meta(),
+        ScalarFuncSig::SubStringAndDuration => sub_string_and_duration_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
         ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
         ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
@@ -623,6 +625,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
         ScalarFuncSig::LastDay => last_day_fn_meta(),
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
+        ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         _ => return Err(other_err!(

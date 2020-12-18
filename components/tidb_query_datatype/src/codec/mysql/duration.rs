@@ -10,7 +10,7 @@ use tipb::FieldType;
 use super::{check_fsp, Decimal, DEFAULT_FSP};
 use crate::codec::convert::ConvertTo;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP};
+use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -196,14 +196,20 @@ mod parser {
         Ok((rest, frac * TEN_POW[NANO_WIDTH.saturating_sub(len)]))
     }
 
-    pub fn parse(ctx: &mut EvalContext, input: &str, fsp: u8) -> Option<Duration> {
+    pub fn parse(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: u8,
+        fallback_to_daytime: bool,
+    ) -> Option<Duration> {
+        let input = input.trim();
         if input.is_empty() {
             return Some(Duration::zero());
         }
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
-        day_hhmmss(rest)
+        let duration = day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
                 Some((rest, [day.checked_mul(24)?.checked_add(hh)?, mm, ss]))
@@ -221,27 +227,23 @@ mod parser {
                 Some(Duration::new_from_parts(
                     neg, hhmmss[0], hhmmss[1], hhmmss[2], frac, fsp as i8,
                 ))
-            })
-            .or_else(|| {
-                hhmmss_datetime(ctx, rest, fsp)
-                    .ok()
-                    .map(|(_, duration)| Ok(duration))
-            })
-            .and_then(|result| {
-                result
-                    .or_else(|err| {
-                        if err.is_overflow() {
-                            ctx.handle_overflow_err(Error::truncated_wrong_val("TIME", input))?;
-                            let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
-                            Ok(Duration { nanos, fsp })
-                        } else {
-                            Err(err)
-                        }
-                    })
-                    .ok()
-            })
+            });
+
+        match duration {
+            Some(Ok(duration)) => Some(duration),
+            Some(Err(err)) if err.is_overflow() => {
+                ctx.handle_overflow_err(err).map_or(None, |_| {
+                    let nanos = if neg { -MAX_NANOS } else { MAX_NANOS };
+                    Some(Duration { nanos, fsp })
+                })
+            }
+            None if fallback_to_daytime => {
+                hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
+            }
+            _ => None,
+        }
     }
-} /* parser */
+}
 
 #[inline]
 fn checked_round(nanos: i64, fsp: u8) -> Result<i64> {
@@ -302,9 +304,19 @@ impl Duration {
     }
 
     #[inline]
-    pub fn maximize_fsp(mut self) -> Self {
-        self.fsp = MAX_FSP as u8;
-        self
+    pub fn minimize_fsp(self) -> Self {
+        Duration {
+            fsp: MIN_FSP as u8,
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn maximize_fsp(self) -> Self {
+        Duration {
+            fsp: MAX_FSP as u8,
+            ..self
+        }
     }
 
     #[inline]
@@ -416,10 +428,17 @@ impl Duration {
     /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(ctx: &mut EvalContext, input: &[u8], fsp: i8) -> Result<Duration> {
-        let input = std::str::from_utf8(input)?.trim();
+    pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        parser::parse(ctx, input, fsp).ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+        parser::parse(ctx, input, fsp, true)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
+    }
+
+    /// Parses the input exactly as duration and will not fallback to datetime.
+    pub fn parse_exactly(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
+        parser::parse(ctx, input, fsp, false)
+            .ok_or_else(|| Error::truncated_wrong_val("TIME", input))
     }
 
     /// Rounds fractional seconds precision with new FSP and returns a new one.
@@ -509,7 +528,7 @@ impl Duration {
 
         if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
             return Err(Error::Eval(
-                format!("invalid time format: '{}'", n),
+                format!("Truncated incorrect time value: '{}'", n),
                 ERR_TRUNCATE_WRONG_VALUE,
             ));
         }
@@ -659,7 +678,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let res = dur.hours();
             assert_eq!(exp, res);
         }
@@ -674,7 +693,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let res = dur.minutes();
             assert_eq!(exp, res);
         }
@@ -690,7 +709,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let res = dur.secs();
             assert_eq!(exp, res);
         }
@@ -710,7 +729,7 @@ mod tests {
         ];
 
         for (input, fsp, exp) in cases {
-            let dur = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let dur = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let res = dur.subsec_micros();
             assert_eq!(exp, res);
         }
@@ -718,9 +737,9 @@ mod tests {
 
     #[test]
     fn test_parse_overflow_as_warning() {
-        let cases: Vec<(&'static [u8], i8, &'static str)> = vec![
-            (b"-1062600704", 0, "-838:59:59"),
-            (b"1062600704", 0, "838:59:59"),
+        let cases: Vec<(&str, i8, &'static str)> = vec![
+            ("-1062600704", 0, "-838:59:59"),
+            ("1062600704", 0, "838:59:59"),
             // FIXME: some error information lost while converting `Result` to `Option`
             // (b"4294967295 0:59:59", 0, "838:59:59"),
         ];
@@ -734,141 +753,106 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_datetime() {
-        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
-            (b"2010-02-12", 0, None),
-            (b"2010-02-12t12:23:34", 0, None),
-            (b"2010-02-12T12:23:34", 0, Some("12:23:34")),
-            (b"2010-02-12 12:23:34", 0, Some("12:23:34")),
-            (b"2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
-            (b"10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
-        ];
-
-        for (input, fsp, expected) in cases {
-            let actual = Duration::parse(&mut EvalContext::default(), input, fsp).ok();
-            assert_eq!(
-                actual.map(|d| d.to_string()),
-                expected.map(|s| s.to_string()),
-                "failed case: {}",
-                std::str::from_utf8(input).unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse() {
-        let cases: Vec<(&'static [u8], i8, Option<&'static str>)> = vec![
-            (b"10:11:12", 0, Some("10:11:12")),
-            (b"101112", 0, Some("10:11:12")),
-            (b"10:11", 0, Some("10:11:00")),
-            (b"101112.123456", 0, Some("10:11:12")),
-            (b"1112", 0, Some("00:11:12")),
-            (b"12", 0, Some("00:00:12")),
-            (b"1 12", 0, Some("36:00:00")),
-            (b"1 10:11:12", 0, Some("34:11:12")),
-            (b"1 10:11:12.123456", 0, Some("34:11:12")),
-            (b"1 10:11:12.123456", 4, Some("34:11:12.1235")),
-            (b"1 10:11:12.12", 4, Some("34:11:12.1200")),
-            (b"1 10:11:12.1234565", 6, Some("34:11:12.123457")),
-            (b"1 10:11:12.9999995", 6, Some("34:11:13.000000")),
-            (b"1 10:11:12.123456", 7, None),
-            (b"10:11:12.123456", 0, Some("10:11:12")),
-            (b"1 10:11", 0, Some("34:11:00")),
-            (b"1 10", 0, Some("34:00:00")),
-            (b"24 10", 0, Some("586:00:00")),
-            (b"-24 10", 0, Some("-586:00:00")),
-            (b"0 10", 0, Some("10:00:00")),
-            (b"-10:10:10", 0, Some("-10:10:10")),
-            (b"-838:59:59", 0, Some("-838:59:59")),
-            (b"838:59:59", 0, Some("838:59:59")),
-            (b"839:00:00", 0, None),
-            (b"-839:00:00", 0, None),
-            (b"23:60:59", 0, None),
-            (b"54:59:59", 0, Some("54:59:59")),
-            (b"2011-11-11 00:00:01", 0, Some("00:00:01")),
-            (b"20111111000001", 0, Some("00:00:01")),
-            (b"201112110102", 0, Some("11:01:02")),
-            (b"2011-11-11", 0, None),
-            (b"--23", 0, None),
-            (b"232 10", 0, None),
-            (b"-232 10", 0, None),
-            (b"00:00:00.1", 0, Some("00:00:00")),
-            (b"00:00:00.1", 1, Some("00:00:00.1")),
-            (b"00:00:00.777777", 2, Some("00:00:00.78")),
-            (b"00:00:00.777777", 6, Some("00:00:00.777777")),
-            (b"00:00:00.001", 3, Some("00:00:00.001")),
+    fn test_parse_duration() {
+        let cases: Vec<(&str, i8, Option<&'static str>)> = vec![
+            ("10:11:12", 0, Some("10:11:12")),
+            ("101112", 0, Some("10:11:12")),
+            ("10:11", 0, Some("10:11:00")),
+            ("101112.123456", 0, Some("10:11:12")),
+            ("1112", 0, Some("00:11:12")),
+            ("12", 0, Some("00:00:12")),
+            ("1 12", 0, Some("36:00:00")),
+            ("1 10:11:12", 0, Some("34:11:12")),
+            ("1 10:11:12.123456", 0, Some("34:11:12")),
+            ("1 10:11:12.123456", 4, Some("34:11:12.1235")),
+            ("1 10:11:12.12", 4, Some("34:11:12.1200")),
+            ("1 10:11:12.1234565", 6, Some("34:11:12.123457")),
+            ("1 10:11:12.9999995", 6, Some("34:11:13.000000")),
+            ("1 10:11:12.123456", 7, None),
+            ("10:11:12.123456", 0, Some("10:11:12")),
+            ("1 10:11", 0, Some("34:11:00")),
+            ("1 10", 0, Some("34:00:00")),
+            ("24 10", 0, Some("586:00:00")),
+            ("-24 10", 0, Some("-586:00:00")),
+            ("0 10", 0, Some("10:00:00")),
+            ("-10:10:10", 0, Some("-10:10:10")),
+            ("-838:59:59", 0, Some("-838:59:59")),
+            ("838:59:59", 0, Some("838:59:59")),
+            ("839:00:00", 0, None),
+            ("-839:00:00", 0, None),
+            ("23:60:59", 0, None),
+            ("54:59:59", 0, Some("54:59:59")),
+            ("2011-11-11 00:00:01", 0, Some("00:00:01")),
+            ("20111111000001", 0, Some("00:00:01")),
+            ("201112110102", 0, Some("11:01:02")),
+            ("2011-11-11", 0, None),
+            ("--23", 0, None),
+            ("232 10", 0, None),
+            ("-232 10", 0, None),
+            ("00:00:00.1", 0, Some("00:00:00")),
+            ("00:00:00.1", 1, Some("00:00:00.1")),
+            ("00:00:00.777777", 2, Some("00:00:00.78")),
+            ("00:00:00.777777", 6, Some("00:00:00.777777")),
+            ("00:00:00.001", 3, Some("00:00:00.001")),
             // NOTE: The following case is easy to fail.
-            (b"- 1 ", 0, Some("-00:00:01")),
-            (b"1:2:3", 0, Some("01:02:03")),
-            (b"1 1:2:3", 0, Some("25:02:03")),
-            (b"-1 1:2:3.123", 3, Some("-25:02:03.123")),
-            (b"-.123", 3, None),
-            (b"12345", 0, Some("01:23:45")),
-            (b"-123", 0, Some("-00:01:23")),
-            (b"-23", 0, Some("-00:00:23")),
-            (b"- 1 1", 0, Some("-25:00:00")),
-            (b"-1 1", 0, Some("-25:00:00")),
-            (b" - 1:2:3 .123 ", 3, Some("-01:02:03.123")),
-            (b" - 1 :2 :3 .123 ", 3, Some("-01:02:03.123")),
-            (b" - 1 : 2 :3 .123 ", 3, Some("-01:02:03.123")),
-            (b" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
-            (b" - 1 .123 ", 3, Some("-00:00:01.123")),
-            (b"-", 0, None),
-            (b"- .1", 0, None),
-            (b"", 0, Some("00:00:00")),
-            (b"", 7, None),
-            (b"1.1", 1, Some("00:00:01.1")),
-            (b"-1.1", 1, Some("-00:00:01.1")),
-            (b"- 1.1", 1, Some("-00:00:01.1")),
-            (b"- 1 .1", 1, Some("-00:00:01.1")),
-            (b"18446744073709551615:59:59", 0, None),
-            (b"4294967295 0:59:59", 0, None),
-            (b"4294967295 232:59:59", 0, None),
-            (b"-4294967295 232:59:59", 0, None),
-            (b"1::2:3", 0, None),
-            (b"1.23 3", 0, None),
-            (b"1:62:3", 0, None),
-            (b"1:02:63", 0, None),
-            (b"-231342080", 0, None),
+            ("- 1 ", 0, Some("-00:00:01")),
+            ("1:2:3", 0, Some("01:02:03")),
+            ("1 1:2:3", 0, Some("25:02:03")),
+            ("-1 1:2:3.123", 3, Some("-25:02:03.123")),
+            ("-.123", 3, None),
+            ("12345", 0, Some("01:23:45")),
+            ("-123", 0, Some("-00:01:23")),
+            ("-23", 0, Some("-00:00:23")),
+            ("- 1 1", 0, Some("-25:00:00")),
+            ("-1 1", 0, Some("-25:00:00")),
+            (" - 1:2:3 .123 ", 3, Some("-01:02:03.123")),
+            (" - 1 :2 :3 .123 ", 3, Some("-01:02:03.123")),
+            (" - 1 : 2 :3 .123 ", 3, Some("-01:02:03.123")),
+            (" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
+            (" - 1 .123 ", 3, Some("-00:00:01.123")),
+            ("-", 0, None),
+            ("- .1", 0, None),
+            ("", 0, Some("00:00:00")),
+            ("", 7, None),
+            ("1.1", 1, Some("00:00:01.1")),
+            ("-1.1", 1, Some("-00:00:01.1")),
+            ("- 1.1", 1, Some("-00:00:01.1")),
+            ("- 1 .1", 1, Some("-00:00:01.1")),
+            ("18446744073709551615:59:59", 0, None),
+            ("4294967295 0:59:59", 0, None),
+            ("4294967295 232:59:59", 0, None),
+            ("-4294967295 232:59:59", 0, None),
+            ("1::2:3", 0, None),
+            ("1.23 3", 0, None),
+            ("1:62:3", 0, None),
+            ("1:02:63", 0, None),
+            ("-231342080", 0, None),
+            // test fallback to datetime
+            ("2010-02-12", 0, None),
+            ("2010-02-12t12:23:34", 0, None),
+            ("2010-02-12T12:23:34", 0, Some("12:23:34")),
+            ("2010-02-12 12:23:34", 0, Some("12:23:34")),
+            ("2010-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
+            ("10-02-12 12:23:34.12345", 6, Some("12:23:34.123450")),
         ];
 
         for (input, fsp, expect) in cases {
             let got = Duration::parse(&mut EvalContext::default(), input, fsp);
-
-            if let Some(expect) = expect {
-                assert_eq!(
-                    expect,
-                    &format!(
-                        "{}",
-                        got.unwrap_or_else(|_| panic!(std::str::from_utf8(input)
-                            .unwrap()
-                            .to_string()))
-                    )
-                );
-            } else {
-                assert!(
-                    got.is_err(),
-                    format!(
-                        "{} should not be passed, got {:?}",
-                        std::str::from_utf8(input).unwrap(),
-                        got
-                    )
-                );
-            }
+            assert_eq!(got.ok().map(|d| d.to_string()), expect.map(str::to_string));
         }
     }
 
     #[test]
     fn test_to_numeric_string() {
-        let cases: Vec<(&[u8], i8, &str)> = vec![
-            (b"11:30:45.123456", 4, "113045.1235"),
-            (b"11:30:45.123456", 6, "113045.123456"),
-            (b"11:30:45.123456", 0, "113045"),
-            (b"11:30:45.999999", 0, "113046"),
-            (b"08:40:59.575601", 0, "084100"),
-            (b"23:59:59.575601", 0, "240000"),
-            (b"00:00:00", 0, "000000"),
-            (b"00:00:00", 6, "000000.000000"),
+        let cases: Vec<(&str, i8, &str)> = vec![
+            ("11:30:45.123456", 4, "113045.1235"),
+            ("11:30:45.123456", 6, "113045.123456"),
+            ("11:30:45.123456", 0, "113045"),
+            ("11:30:45.999999", 0, "113046"),
+            ("08:40:59.575601", 0, "084100"),
+            ("23:59:59.575601", 0, "240000"),
+            ("00:00:00", 0, "000000"),
+            ("00:00:00", 6, "000000.000000"),
         ];
         for (s, fsp, expect) in cases {
             let du = Duration::parse(&mut EvalContext::default(), s, fsp).unwrap();
@@ -898,7 +882,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (input, fsp, exp) in cases {
-            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let dec: Decimal = t.convert(&mut ctx).unwrap();
             let res = format!("{}", dec);
             assert_eq!(exp, res);
@@ -963,7 +947,7 @@ mod tests {
             ("-1 11:59:59.9999", 2, "-36:00:00.00"),
         ];
         for (input, fsp, exp) in cases {
-            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), MAX_FSP)
+            let t = Duration::parse(&mut EvalContext::default(), input, MAX_FSP)
                 .unwrap()
                 .round_frac(fsp)
                 .unwrap();
@@ -985,7 +969,7 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let t = Duration::parse(&mut EvalContext::default(), input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(&mut EvalContext::default(), input, fsp).unwrap();
             let mut buf = vec![];
             buf.write_duration_to_chunk(t).unwrap();
             let got = buf
@@ -1010,24 +994,24 @@ mod tests {
             ("11:30:45.123456", "1 12:30:00", "2 00:00:45.123456"),
         ];
         for (lhs, rhs, exp) in cases.clone() {
-            let lhs = Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), 6).unwrap();
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6).unwrap();
+            let lhs = Duration::parse(&mut EvalContext::default(), lhs, 6).unwrap();
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6).unwrap();
             let res = lhs.checked_add(rhs).unwrap();
-            let exp = Duration::parse(&mut EvalContext::default(), exp.as_bytes(), 6).unwrap();
+            let exp = Duration::parse(&mut EvalContext::default(), exp, 6).unwrap();
             assert_eq!(res, exp);
         }
         for (exp, rhs, lhs) in cases {
-            let lhs = Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), 6).unwrap();
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6).unwrap();
+            let lhs = Duration::parse(&mut EvalContext::default(), lhs, 6).unwrap();
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6).unwrap();
             let res = lhs.checked_sub(rhs).unwrap();
-            let exp = Duration::parse(&mut EvalContext::default(), exp.as_bytes(), 6).unwrap();
+            let exp = Duration::parse(&mut EvalContext::default(), exp, 6).unwrap();
             assert_eq!(res, exp);
         }
 
-        let lhs = Duration::parse(&mut EvalContext::default(), b"00:00:01", 6).unwrap();
+        let lhs = Duration::parse(&mut EvalContext::default(), "00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_add(rhs), None);
-        let lhs = Duration::parse(&mut EvalContext::default(), b"-00:00:01", 6).unwrap();
+        let lhs = Duration::parse(&mut EvalContext::default(), "-00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos(MAX_TIME_IN_SECS * NANOS_PER_SEC, 6).unwrap();
         assert_eq!(lhs.checked_sub(rhs), None);
     }
@@ -1040,55 +1024,55 @@ mod tests {
             (
                 8385959,
                 UNSPECIFIED_FSP as i8,
-                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 101010,
                 0,
-                Ok(Duration::parse(&mut EvalContext::default(), b"10:10:10", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 101010,
                 5,
-                Ok(Duration::parse(&mut EvalContext::default(), b"10:10:10", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 8385959,
                 0,
-                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 8385959,
                 6,
-                Ok(Duration::parse(&mut EvalContext::default(), b"838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "838:59:59", 6).unwrap()),
                 false,
             ),
             (
                 -101010,
                 0,
-                Ok(Duration::parse(&mut EvalContext::default(), b"-10:10:10", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "-10:10:10", 0).unwrap()),
                 false,
             ),
             (
                 -101010,
                 5,
-                Ok(Duration::parse(&mut EvalContext::default(), b"-10:10:10", 5).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "-10:10:10", 5).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 0,
-                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 0).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 0).unwrap()),
                 false,
             ),
             (
                 -8385959,
                 6,
-                Ok(Duration::parse(&mut EvalContext::default(), b"-838:59:59", 6).unwrap()),
+                Ok(Duration::parse(&mut EvalContext::default(), "-838:59:59", 6).unwrap()),
                 false,
             ),
             // will overflow
@@ -1205,9 +1189,8 @@ mod benches {
         b.iter(|| {
             let cases = test::black_box(&cases);
             for &(s, fsp) in cases {
-                let _ = test::black_box(
-                    Duration::parse(&mut EvalContext::default(), s.as_bytes(), fsp).unwrap(),
-                );
+                let _ =
+                    test::black_box(Duration::parse(&mut EvalContext::default(), s, fsp).unwrap());
             }
         })
     }
@@ -1228,8 +1211,7 @@ mod benches {
 
     #[bench]
     fn bench_to_decimal(b: &mut test::Bencher) {
-        let duration =
-            Duration::parse(&mut EvalContext::default(), b"-12:34:56.123456", 6).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), "-12:34:56.123456", 6).unwrap();
         b.iter(|| {
             let duration = test::black_box(duration);
             let dec: Result<Decimal> = duration.convert(&mut EvalContext::default());
@@ -1240,7 +1222,7 @@ mod benches {
     #[bench]
     fn bench_round_frac(b: &mut test::Bencher) {
         let (duration, fsp) = (
-            Duration::parse(&mut EvalContext::default(), b"12:34:56.789", 3).unwrap(),
+            Duration::parse(&mut EvalContext::default(), "12:34:56.789", 3).unwrap(),
             2,
         );
         b.iter(|| {
@@ -1262,7 +1244,7 @@ mod benches {
             ("1 23:12.1234567", 6),
         ]
         .into_iter()
-        .map(|(s, fsp)| Duration::parse(&mut EvalContext::default(), s.as_bytes(), fsp).unwrap())
+        .map(|(s, fsp)| Duration::parse(&mut EvalContext::default(), s, fsp).unwrap())
         .collect();
         b.iter(|| {
             let cases = test::black_box(&cases);
@@ -1291,8 +1273,8 @@ mod benches {
         .into_iter()
         .map(|(lhs, rhs)| {
             (
-                Duration::parse(&mut EvalContext::default(), lhs.as_bytes(), MAX_FSP).unwrap(),
-                Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(&mut EvalContext::default(), lhs, MAX_FSP).unwrap(),
+                Duration::parse(&mut EvalContext::default(), rhs, MAX_FSP).unwrap(),
             )
         })
         .collect();
