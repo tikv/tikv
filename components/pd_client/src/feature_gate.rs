@@ -16,7 +16,7 @@ pub struct FeatureGate {
 }
 
 impl FeatureGate {
-    pub fn set_version(&self, version: &str) -> std::result::Result<bool, SemVerError> {
+    pub fn set_version(&self, version: &str) -> Result<bool, SemVerError> {
         let new = Version::parse(version)?;
         let val = ver_to_val(new.major, new.minor, new.patch);
         let mut cur = self.version.load(Ordering::Relaxed);
@@ -37,6 +37,19 @@ impl FeatureGate {
     pub fn can_enable(&self, feature: Feature) -> bool {
         self.version.load(Ordering::Relaxed) >= feature.ver
     }
+
+    /// Reset the version in feature gate to the specified value.
+    ///
+    /// # Safety
+    ///
+    /// Correctness in FeatureGate depends on monotonic increasing of version number,
+    /// should use `set_version` instead.
+    pub unsafe fn reset_version(&self, version: &str) -> Result<(), SemVerError> {
+        let new = Version::parse(version)?;
+        let val = ver_to_val(new.major, new.minor, new.patch);
+        self.version.store(val, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -45,7 +58,7 @@ pub struct Feature {
 }
 
 impl Feature {
-    pub const fn acquire(major: u64, minor: u64, patch: u64) -> Feature {
+    pub const fn require(major: u64, minor: u64, patch: u64) -> Feature {
         Feature {
             ver: ver_to_val(major, minor, patch),
         }

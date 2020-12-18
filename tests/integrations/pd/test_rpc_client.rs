@@ -466,9 +466,9 @@ fn test_cluster_version() {
     let server = MockServer::<Service>::new(3);
     let eps = server.bind_addrs();
 
-    let feature_a = Feature::acquire(0, 0, 1);
-    let feature_b = Feature::acquire(5, 0, 0);
-    let feature_c = Feature::acquire(5, 0, 1);
+    let feature_a = Feature::require(0, 0, 1);
+    let feature_b = Feature::require(5, 0, 0);
+    let feature_c = Feature::require(5, 0, 1);
 
     let client = new_client(eps, None);
     let feature_gate = client.feature_gate();
