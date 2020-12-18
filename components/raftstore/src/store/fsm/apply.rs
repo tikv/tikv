@@ -401,7 +401,7 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply).unwrap(),
+            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,

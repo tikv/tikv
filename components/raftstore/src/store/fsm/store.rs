@@ -1094,7 +1094,7 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context: self.engines.kv.get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore).unwrap(),
+            perf_context: self.engines.kv.get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
         };
