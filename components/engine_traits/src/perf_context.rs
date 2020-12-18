@@ -24,9 +24,19 @@ pub enum PerfLevel {
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
-    fn get_perf_context(&self) -> Option<Self::PerfContext>;
+    fn get_perf_context(&self, kind: PerfContextKind) -> Option<Self::PerfContext>;
     fn get_perf_level(&self) -> PerfLevel;
     fn set_perf_level(&self, level: PerfLevel);
+}
+
+/// The raftstore subsystem the PerfContext is being created for.
+///
+/// This is a leaky abstraction that supports the encapsulation of metrics
+/// reporting by the two raftstore subsystems that use `report_metrics`.
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub enum PerfContextKind {
+    RaftstoreApply,
+    RaftstoreStore,
 }
 
 pub trait PerfContext {

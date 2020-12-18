@@ -3,12 +3,12 @@
 use crate::engine::RocksEngine;
 use crate::raw::PerfContext as RawPerfContext;
 use crate::raw_util;
-use engine_traits::{PerfContext, PerfContextExt, PerfLevel};
+use engine_traits::{PerfContext, PerfContextExt, PerfLevel, PerfContextKind};
 
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
-    fn get_perf_context(&self) -> Option<Self::PerfContext> {
+    fn get_perf_context(&self, kind: PerfContextKind) -> Option<Self::PerfContext> {
         Some(RocksPerfContext(RawPerfContext::get()))
     }
 

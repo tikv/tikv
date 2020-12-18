@@ -19,7 +19,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
-use engine_traits::PerfLevel;
+use engine_traits::{PerfLevel, PerfContextKind};
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -401,7 +401,7 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,

@@ -12,7 +12,7 @@ use std::{mem, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
-use engine_traits::PerfLevel;
+use engine_traits::{PerfLevel, PerfContextKind};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
@@ -1100,7 +1100,7 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
         };
