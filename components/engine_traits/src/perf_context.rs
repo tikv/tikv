@@ -39,7 +39,7 @@ pub enum PerfContextKind {
     RaftstoreStore,
 }
 
-pub trait PerfContext {
+pub trait PerfContext: Send {
     fn start_observe(&mut self);
     fn report_metrics(&mut self);
 
