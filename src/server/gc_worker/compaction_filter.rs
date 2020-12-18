@@ -32,7 +32,7 @@ const NEAR_SEEK_LIMIT: usize = 8;
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
 // of GC are distributed to other replicas by Raft.
-const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::acquire(5, 0, 0);
+const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
 // not available when construcing `WriteCompactionFilterFactory`.
