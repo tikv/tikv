@@ -142,7 +142,7 @@ impl TestSuite {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let cm = ConcurrencyManager::new(1.into());
+            let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
                 &CdcConfig::default(),
