@@ -270,6 +270,12 @@ pub trait FieldTypeAccessor {
     fn is_unsigned(&self) -> bool {
         self.flag().contains(FieldTypeFlag::UNSIGNED)
     }
+
+    /// Whether the flag contains `FieldTypeFlag::IS_BOOLEAN`
+    #[inline]
+    fn is_bool(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::IS_BOOLEAN)
+    }
 }
 
 impl FieldTypeAccessor for FieldType {
