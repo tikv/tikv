@@ -4,6 +4,7 @@ use super::metrics::*;
 use super::{IOStats, IOType};
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,36 +13,79 @@ use std::sync::Mutex;
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
 
+const MAX_THREAD_IDX: usize = 128;
+
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
-static IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
-// For simplicity, just open large enough array. TODO: make it to be Vec
-static mut IO_TYPE_ARRAY: [CachePadded<IOType>; 100] = [CachePadded::new(IOType::Other); 100];
+static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX] =
+    [CachePadded::new(IOType::Other); MAX_THREAD_IDX];
+
+lazy_static! {
+    static ref IDX_ALLOCATOR: IdxAllocator = IdxAllocator::new();
+}
 
 thread_local! {
-    static IDX: usize = unsafe {
-        let idx = IDX_COUNTER.fetch_add(1, Ordering::SeqCst);
-        if idx == 100 {
-            panic!("exceed maximum thread count");
-        }
+    static IDX: IdxWrapper = unsafe {
+        let idx = IDX_ALLOCATOR.allocate();
         if let Some((_, _, t)) = BPF_TABLE.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
-            let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx);
+            let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
             t.set(&mut tid.to_ne_bytes(), std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<*const IOType>())).unwrap();
         }
         idx
     }
 }
 
+struct IdxWrapper(usize);
+
+impl Drop for IdxWrapper {
+    fn drop(&mut self) {
+        unsafe { *IO_TYPE_ARRAY[self.0] = IOType::Other };
+        IDX_ALLOCATOR.free(self.0);
+    }
+}
+
+struct IdxAllocator {
+    counter: AtomicUsize,
+    free_list: Mutex<VecDeque<usize>>,
+}
+
+impl IdxAllocator {
+    fn new() -> Self {
+        IdxAllocator {
+            counter: AtomicUsize::new(0),
+            free_list: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn allocate(&self) -> IdxWrapper {
+        let idx = self.counter.fetch_add(1, Ordering::SeqCst);
+        // TODO: add thread count metrics
+        IdxWrapper(if idx >= MAX_THREAD_IDX {
+            self.free_list
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("no thread idx available")
+        } else {
+            idx
+        })
+    }
+
+    fn free(&self, idx: usize) {
+        self.free_list.lock().unwrap().push_back(idx);
+    }
+}
+
 pub fn set_io_type(new_io_type: IOType) {
     unsafe {
         IDX.with(|idx| {
-            *IO_TYPE_ARRAY[*idx] = new_io_type;
+            *IO_TYPE_ARRAY[idx.0] = new_io_type;
         })
     };
 }
 
 pub fn get_io_type() -> IOType {
-    unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[*idx]) }
+    unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
 unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
@@ -207,6 +251,7 @@ pub fn flush_io_metrics() {
 
 #[cfg(test)]
 mod tests {
+    use crate::iosnoop::imp::MAX_THREAD_IDX;
     use crate::iosnoop::metrics::*;
     use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
     use std::{fs::OpenOptions, io::Read, io::Write, os::unix::fs::OpenOptionsExt};
@@ -264,5 +309,16 @@ mod tests {
         assert_ne!(IO_LATENCY_MICROS_VEC.other.read.get_sample_count(), 0);
         assert_ne!(IO_BYTES_VEC.compaction.write.get(), 0);
         assert_ne!(IO_BYTES_VEC.other.read.get(), 0);
+    }
+
+    #[test]
+    fn test_thread_idx_recycle() {
+        for _ in 1..=MAX_THREAD_IDX * 2 {
+            std::thread::spawn(|| {
+                set_io_type(IOType::Other);
+            })
+            .join()
+            .unwrap();
+        }
     }
 }
