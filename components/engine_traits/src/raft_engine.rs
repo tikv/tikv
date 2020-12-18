@@ -44,17 +44,10 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
         batch: &mut Self::LogBatch,
     ) -> Result<()>;
 
-    /// Append some log entries and retrun written bytes.
+    /// Append some log entries and return written bytes.
     ///
     /// Note: `RaftLocalState` won't be updated in this call.
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
-
-    /// Append some log entries and retrun written bytes.
-    ///
-    /// Note: `RaftLocalState` won't be updated in this call.
-    fn append_slice(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
-        self.append(raft_group_id, entries.to_vec())
-    }
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
@@ -88,11 +81,6 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
 pub trait RaftLogBatch: Send {
     /// Note: `RaftLocalState` won't be updated in this call.
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()>;
-
-    /// Note: `RaftLocalState` won't be updated in this call.
-    fn append_slice(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
-        self.append(raft_group_id, entries.to_vec())
-    }
 
     /// Remove Raft logs in [`from`, `to`) which will be overwritten later.
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64);

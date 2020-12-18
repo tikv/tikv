@@ -13,7 +13,7 @@ use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatchExt,
+    WriteBatch, WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -212,9 +212,9 @@ impl TestEngineBuilder {
                 CF_DEFAULT => {
                     CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
                 }
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
@@ -267,7 +267,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
             return Err(box_err!("{}", msg));
         }
     }
-    kv_engine.write(&wb)?;
+    wb.write()?;
     Ok(())
 }
 

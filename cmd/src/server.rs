@@ -439,7 +439,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engine.clone(),
             self.router.clone(),
             self.config.gc.clone(),
-            self.pd_client.cluster_version(),
+            self.pd_client.feature_gate().clone(),
         );
         gc_worker
             .start()
@@ -447,6 +447,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
             .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
+
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Gc,
+            Box::new(gc_worker.get_config_manager()),
+        );
 
         gc_worker
     }
@@ -459,10 +465,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         >,
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Gc,
-            Box::new(gc_worker.get_config_manager()),
-        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -632,7 +634,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             raft_store,
             self.pd_client.clone(),
             self.state.clone(),
-            Some(self.background_worker.clone()),
+            self.background_worker.clone(),
         );
 
         node.start(
@@ -685,6 +687,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -890,8 +894,7 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts =
-            config_raftdb.build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,

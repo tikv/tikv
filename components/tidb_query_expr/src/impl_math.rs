@@ -42,7 +42,7 @@ pub fn pi() -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn crc32(arg: BytesRef) -> Result<Option<Int>> {
-    Ok(Some(i64::from(tikv_util::file::calc_crc32_bytes(&arg))))
+    Ok(Some(i64::from(file_system::calc_crc32_bytes(&arg))))
 }
 
 #[inline]
@@ -1671,6 +1671,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_truncate_real() {
         let test_cases = vec![
             (-1.23, 0, false, -1.0),

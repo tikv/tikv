@@ -10,6 +10,7 @@ pub struct CmSketch {
     width: usize,
     count: u32,
     table: Vec<Vec<u32>>,
+    top_n: Vec<(Vec<u8>, u64)>,
 }
 
 impl CmSketch {
@@ -22,6 +23,7 @@ impl CmSketch {
                 width: w,
                 count: 0,
                 table: vec![vec![0; w]; d],
+                top_n: vec![],
             })
         }
     }
@@ -44,13 +46,42 @@ impl CmSketch {
         }
     }
 
+    pub fn sub(&mut self, bytes: &[u8], cnt: u32) {
+        self.count -= cnt;
+        let (h1, h2) = CmSketch::hash(bytes);
+        for (i, row) in self.table.iter_mut().enumerate() {
+            let j = (h1.wrapping_add(h2.wrapping_mul(i as u64)) % self.width as u64) as usize;
+            row[j] = row[j].saturating_sub(cnt);
+        }
+    }
+
+    pub fn push_to_top_n(&mut self, b: Vec<u8>, cnt: u64) {
+        self.top_n.push((b, cnt))
+    }
+
     pub fn into_proto(self) -> tipb::CmSketch {
         let mut proto = tipb::CmSketch::default();
-        let mut rows = vec![tipb::CmSketchRow::default(); self.depth];
-        for (i, row) in self.table.iter().enumerate() {
-            rows[i].set_counters(row.to_vec());
-        }
-        proto.set_rows(rows.into());
+        let rows = self
+            .table
+            .into_iter()
+            .map(|row| {
+                let mut pb_row = tipb::CmSketchRow::default();
+                pb_row.set_counters(row);
+                pb_row
+            })
+            .collect();
+        proto.set_rows(rows);
+        let top_n_data = self
+            .top_n
+            .into_iter()
+            .map(|(item, cnt)| {
+                let mut pb_top_n_item = tipb::CmSketchTopN::default();
+                pb_top_n_item.set_data(item);
+                pb_top_n_item.set_count(cnt);
+                pb_top_n_item
+            })
+            .collect();
+        proto.set_top_n(top_n_data);
         proto
     }
 }
@@ -67,10 +98,10 @@ mod tests {
     use rand::SeedableRng;
     use zipf::ZipfDistribution;
 
+    use collections::HashMap;
     use tidb_query_datatype::codec::datum;
     use tidb_query_datatype::codec::datum::Datum;
     use tidb_query_datatype::expr::EvalContext;
-    use tikv_util::collections::HashMap;
 
     impl CmSketch {
         fn query(&self, bytes: &[u8]) -> u32 {

@@ -30,6 +30,8 @@ const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
+pub const MIN_YEAR: u32 = 1901;
+pub const MAX_YEAR: u32 = 2155;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -1064,6 +1066,16 @@ impl Time {
     }
 
     #[inline]
+    pub fn maximize_fsp(&mut self) {
+        self.set_fsp(super::MAX_FSP as u8);
+    }
+
+    #[inline]
+    pub fn minimize_fsp(&mut self) {
+        self.set_fsp(super::MIN_FSP as u8);
+    }
+
+    #[inline]
     pub fn get_time_type(self) -> TimeType {
         let ft = self.get_fsp_tt();
 
@@ -1185,6 +1197,28 @@ impl Time {
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
+    }
+
+    pub fn from_year(
+        ctx: &mut EvalContext,
+        year: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month: 0,
+                day: 0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                micro: 0,
+                fsp,
+                time_type,
+            },
+        )
     }
 
     pub fn round_frac(mut self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
@@ -2440,7 +2474,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2553,7 +2587,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2561,7 +2595,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2578,14 +2612,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2602,7 +2636,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2610,11 +2644,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())
@@ -2735,6 +2769,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_convert_to_f64() {
         let cases = vec![
             ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),

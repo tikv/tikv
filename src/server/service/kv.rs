@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_kv_pairs_and_statistics, extract_region_error,
+        extract_region_error, map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -37,7 +37,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage};
+use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
 use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
@@ -994,29 +994,56 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
 
     fn dispatch_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: DispatchTaskRequest,
-        _: UnarySink<DispatchTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn cancel_mpp_task(
         &mut self,
-        _: RpcContext<'_>,
-        _: CancelTaskRequest,
-        _: UnarySink<CancelTaskResponse>,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
     ) {
         unimplemented!()
     }
 
     fn establish_mpp_connection(
         &mut self,
-        _: RpcContext<'_>,
-        _: EstablishMppConnectionRequest,
-        _: ServerStreamingSink<MppDataPacket>,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
+    }
+
+    fn check_leader(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        let ts = request.get_ts();
+        let leaders = request.take_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::CheckLeader { leaders, cb })?;
+            let regions = resp.await?;
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("cdc call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
@@ -1185,8 +1212,9 @@ fn future_get<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
-                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
-                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1221,7 +1249,19 @@ fn future_scan<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            match v {
+                Ok(kv_res) => {
+                    resp.set_pairs(map_kv_pairs(kv_res).into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }
@@ -1240,10 +1280,23 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
-            statistics.write_scan_detail(resp.mut_scan_detail_v2());
-            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
-            resp.set_pairs(val.into());
+            match v {
+                Ok((kv_res, statistics, perf_statistics_delta)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }
@@ -1679,6 +1732,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     let primary = lock.primary.clone();
                     resp.set_lock_info(lock.into_lock_info(primary));
                 }
+                TxnStatus::PessimisticRollBack => resp.set_action(Action::TtlExpirePessimisticRollback),
+                TxnStatus::LockNotExistDoNothing => resp.set_action(Action::LockNotExistDoNothing),
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }

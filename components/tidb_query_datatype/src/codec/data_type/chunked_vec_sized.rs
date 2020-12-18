@@ -22,9 +22,21 @@ pub struct ChunkedVecSized<T: Sized> {
 }
 
 impl<T: Sized + Clone> ChunkedVecSized<T> {
+    #[inline]
+    fn get(&self, idx: usize) -> Option<&T> {
+        assert!(idx < self.data.len());
+        if self.bitmap.get(idx) {
+            Some(&self.data[idx])
+        } else {
+            None
+        }
+    }
+}
+
+impl<T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
     impl_chunked_vec_common! { T }
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
             bitmap: BitVec::with_capacity(capacity),
@@ -33,62 +45,41 @@ impl<T: Sized + Clone> ChunkedVecSized<T> {
     }
 
     #[inline]
-    pub fn push_data(&mut self, value: T) {
+    fn push_data(&mut self, value: T) {
         self.bitmap.push(true);
         self.data.push(value);
     }
 
     #[inline]
-    pub fn push_null(&mut self) {
+    fn push_null(&mut self) {
         self.bitmap.push(false);
         self.data.push(unsafe { std::mem::zeroed() });
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.data.len()
     }
 
-    pub fn truncate(&mut self, len: usize) {
+    fn truncate(&mut self, len: usize) {
         self.data.truncate(len);
         self.bitmap.truncate(len);
     }
 
-    pub fn capacity(&self) -> usize {
+    fn capacity(&self) -> usize {
         self.data.capacity()
     }
 
-    pub fn append(&mut self, other: &mut Self) {
+    fn append(&mut self, other: &mut Self) {
         self.data.append(&mut other.data);
         self.bitmap.append(&mut other.bitmap);
     }
 
-    #[inline]
-    pub fn get(&self, idx: usize) -> Option<&T> {
-        assert!(idx < self.data.len());
-        if self.bitmap.get(idx) {
-            Some(&self.data[idx])
-        } else {
-            None
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<Option<T>> {
+    fn to_vec(&self) -> Vec<Option<T>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
             x.push(self.get(i).cloned());
         }
         x
-    }
-}
-
-impl<T: Clone> ChunkedVec<T> for ChunkedVecSized<T> {
-    fn chunked_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(capacity)
-    }
-
-    #[inline]
-    fn chunked_push(&mut self, value: Option<T>) {
-        self.push(value)
     }
 }
 
@@ -161,10 +152,10 @@ mod tests {
         );
         let mut ctx = EvalContext::default();
         let test_duration: &[Option<Duration>] = &[
-            Duration::parse(&mut ctx, b"17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 2).ok(),
-            Duration::parse(&mut ctx, b"17:51:04.78", 0).ok(),
-            Duration::parse(&mut ctx, b"-17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 2).ok(),
+            Duration::parse(&mut ctx, "17:51:04.78", 0).ok(),
+            Duration::parse(&mut ctx, "-17:51:04.78", 0).ok(),
             None,
         ];
         assert_eq!(

@@ -2,6 +2,7 @@ use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, MvccTxn, Result as MvccResult,
 };
+use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteType};
 
@@ -119,7 +120,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Check data constraint when acquiring pessimistic lock.
-        txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+        check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
 
         if need_value {
             val = match write.write_type {
@@ -557,7 +558,7 @@ pub mod tests {
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
-        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, Some(0));
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {

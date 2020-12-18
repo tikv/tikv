@@ -259,32 +259,26 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                 }
                 LazyBatchColumn::Decoded(dest_vector_value) => {
                     match_template::match_template! {
-                        TT = [Int, Real, Duration, Decimal, DateTime],
+                        TT = [
+                            Int,
+                            Real,
+                            Duration,
+                            Decimal,
+                            DateTime,
+                            Bytes => BytesRef,
+                            Json => JsonRef,
+                            Enum => EnumRef,
+                            Set => SetRef,
+                        ],
                         match dest_vector_value {
                             VectorValue::TT(dest_column) => {
                                 for item in &sorted_items {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &ChunkedVecSized<TT> = TT::borrow_vector_value(src);
+                                    let src_ref = TT::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
                                     dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
                                 }
                             },
-                            VectorValue::Json(dest_column) => {
-                                for item in &sorted_items {
-                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &ChunkedVecJson = JsonRef::borrow_vector_value(src);
-                                    // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
-                                }
-                            },
-                            VectorValue::Bytes(dest_column) => {
-                                for item in &sorted_items {
-                                    let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
-                                    let src_ref: &ChunkedVecBytes = BytesRef::borrow_vector_value(src);
-                                    // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
-                                }
-                            }
                         }
                     }
                 }

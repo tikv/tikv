@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+
 use tikv_util::buffer_vec::BufferVec;
 
 /// `Set` stores set.
@@ -39,24 +41,9 @@ impl Set {
     }
 }
 
-impl ToString for Set {
-    fn to_string(&self) -> String {
-        let mut buf: Vec<u8> = Vec::new();
-        if self.value > 0 {
-            for idx in 0..self.data.len() {
-                if !self.as_ref().is_set(idx) {
-                    continue;
-                }
-
-                if !buf.is_empty() {
-                    buf.push(b',');
-                }
-                buf.extend_from_slice(&self.data[idx]);
-            }
-        }
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        String::from_utf8_lossy(buf.as_slice()).to_string()
+impl Display for Set {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
     }
 }
 
@@ -100,11 +87,41 @@ impl<'a> SetRef<'a> {
     pub fn new(data: &'a BufferVec, value: u64) -> Self {
         Self { data, value }
     }
+    pub fn to_owned(self) -> Set {
+        Set {
+            data: Arc::new(self.data.clone()),
+            value: self.value,
+        }
+    }
     pub fn is_set(&self, idx: usize) -> bool {
         self.value & (1 << idx) != 0
     }
     pub fn is_empty(&self) -> bool {
         self.value == 0
+    }
+    pub fn value(&self) -> u64 {
+        self.value
+    }
+}
+
+impl<'a> Display for SetRef<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut buf: Vec<u8> = Vec::new();
+        if self.value > 0 {
+            for idx in 0..self.data.len() {
+                if !self.is_set(idx) {
+                    continue;
+                }
+
+                if !buf.is_empty() {
+                    buf.push(b',');
+                }
+                buf.extend_from_slice(&self.data[idx]);
+            }
+        }
+
+        // TODO: Check the requirements and intentions of to_string usage.
+        write!(f, "{}", String::from_utf8_lossy(buf.as_slice()))
     }
 }
 
@@ -152,14 +169,14 @@ mod tests {
                 value,
             };
 
-            assert_eq!(s.to_string(), expect.to_string())
+            assert_eq!(s.as_ref().to_string(), expect.to_string())
         }
     }
 
     #[test]
     fn test_is_set() {
         let mut buf = BufferVec::new();
-        for v in vec!["a", "b", "c"] {
+        for v in &["a", "b", "c"] {
             buf.push(v)
         }
 
@@ -176,7 +193,7 @@ mod tests {
     #[test]
     fn test_is_empty() {
         let mut buf = BufferVec::new();
-        for v in vec!["a", "b", "c"] {
+        for v in &["a", "b", "c"] {
             buf.push(v)
         }
 
@@ -188,7 +205,7 @@ mod tests {
         assert!(!s.as_ref().is_empty());
 
         let s = Set {
-            data: s.data.clone(),
+            data: s.data,
             value: 0b000,
         };
 

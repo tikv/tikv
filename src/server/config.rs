@@ -5,7 +5,7 @@ use std::{cmp, i32, isize};
 use super::Result;
 use grpcio::CompressionAlgorithms;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
@@ -101,6 +101,8 @@ pub struct Config {
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
     pub background_thread_count: usize,
+    // If handle time is larger than the threshold, it will print slow log in end point.
+    pub end_point_slow_log_threshold: ReadableDuration,
 
     // Test only.
     #[doc(hidden)]
@@ -129,9 +131,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
-        let mut background_thread_count = (cpu_num.round() as usize + 7) / 8;
-        background_thread_count = std::cmp::max(1, background_thread_count);
-        background_thread_count = std::cmp::min(4, background_thread_count);
+        let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -176,6 +176,7 @@ impl Default for Config {
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
+            end_point_slow_log_threshold: ReadableDuration::secs(1),
         }
     }
 }

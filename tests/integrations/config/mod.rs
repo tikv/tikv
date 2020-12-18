@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use slog::Level;
 
 use batch_system::Config as BatchSystemConfig;
+use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
 use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use engine_rocks::raw::{
@@ -24,7 +25,6 @@ use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
-use tikv_util::collections::HashSet;
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -95,6 +95,7 @@ fn test_serde_custom_tikv_config() {
         enable_request_batch: false,
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
+        end_point_slow_log_threshold: ReadableDuration::secs(1),
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -195,7 +196,6 @@ fn test_serde_custom_tikv_config() {
         future_poll_size: 2,
         hibernate_regions: false,
         hibernate_timeout: ReadableDuration::hours(1),
-        early_apply: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
@@ -297,7 +297,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
@@ -358,7 +358,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
@@ -651,16 +651,20 @@ fn test_serde_custom_tikv_config() {
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),
+            enable_file_dictionary_log: false,
+            file_dictionary_rewrite_threshold: 123456,
             master_key: MasterKeyConfig::File {
                 config: FileConfig {
                     path: "/master/key/path".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
-            file_rewrite_threshold: 1000000,
         },
     };
-    value.backup = BackupConfig { num_threads: 456 };
+    value.backup = BackupConfig {
+        num_threads: 456,
+        batch_size: 7,
+    };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,
@@ -682,6 +686,7 @@ fn test_serde_custom_tikv_config() {
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
         old_value_cache_size: 512,
+        hibernate_regions_compatible: false,
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -701,13 +706,13 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
     let rhs_str = format!("{:?}", rhs);
 
     fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
-        let mut it = l
+        let it = l
             .enumerate()
             .take_while(|(_, (l, r))| l == r)
             .filter(|(_, (l, _))| *l == b' ');
         let mut last = None;
         let mut second = None;
-        while let Some(a) = it.next() {
+        for a in it {
             second = last;
             last = Some(a);
         }
