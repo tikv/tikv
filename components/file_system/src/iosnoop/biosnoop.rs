@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::metrics::*;
-use super::{IOStats, IOType};
+use super::IOStats;
+use crate::IOType;
 
-use std::collections::HashMap;
+use collections::HashMap;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::ptr;
@@ -90,7 +91,7 @@ pub fn get_io_type() -> IOType {
 
 unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
     if let Some((_, t, _)) = BPF_TABLE.as_mut() {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
         for e in t.iter() {
             let typ = ptr::read(e.key.as_ptr() as *const IOType);
             let stats = ptr::read(e.value.as_ptr() as *const IOStats);
