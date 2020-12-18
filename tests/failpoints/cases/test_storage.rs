@@ -8,6 +8,7 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
+use collections::HashMap;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use test_raftstore::{must_get_equal, must_get_none, new_peer, new_server_cluster};
@@ -15,7 +16,7 @@ use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContex
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
-use tikv_util::{collections::HashMap, HandyRwLock};
+use tikv_util::HandyRwLock;
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
 
@@ -210,6 +211,33 @@ fn test_pipelined_pessimistic_lock() {
     let rockskv_write_modifies_fp = "rockskv_write_modifies";
     let scheduler_async_write_finish_fp = "scheduler_async_write_finish";
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
+
+    {
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .set_pipelined_pessimistic_lock(false)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        // If storage fails to write the lock to engine, client should
+        // receive the error when pipelined locking is disabled.
+        fail::cfg(rockskv_write_modifies_fp, "return()").unwrap();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"key"), false)],
+                    10,
+                    10,
+                    true,
+                ),
+                Box::new(move |res| {
+                    res.unwrap_err();
+                    tx.send(()).unwrap();
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        fail::remove(rockskv_write_modifies_fp);
+    }
 
     let storage = TestStorageBuilder::new(DummyLockManager {})
         .set_pipelined_pessimistic_lock(true)
@@ -934,5 +962,5 @@ fn test_async_apply_prewrite_1pc() {
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
     test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value1", 10, false);
-    test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value2", 20, true);
+    test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
 }

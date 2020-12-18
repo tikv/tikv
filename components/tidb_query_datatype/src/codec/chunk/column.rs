@@ -116,6 +116,8 @@ impl Column {
                     col.append_json_datum(&raw_datums[row_index])?
                 }
             }
+            EvalType::Enum => unimplemented!(),
+            EvalType::Set => unimplemented!(),
         }
 
         Ok(col)
@@ -237,6 +239,8 @@ impl Column {
                     }
                 }
             }
+            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Set(_) => unimplemented!(),
         }
         Ok(col)
     }
@@ -444,7 +448,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Int vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -487,7 +491,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Int vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -530,7 +534,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Real vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -563,7 +567,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Real vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -618,7 +622,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Bytes vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -672,7 +676,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for DateTime vector.",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -721,7 +725,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Duration vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -764,7 +768,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Decimal vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -807,7 +811,7 @@ impl Column {
                 return Err(Error::InvalidDataType(format!(
                     "Unsupported datum flag {} for Json vector",
                     flag
-                )))
+                )));
             }
         }
         Ok(())
@@ -992,7 +996,7 @@ mod tests {
     #[test]
     fn test_column_duration() {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Duration.into()];
-        let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), "10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
         test_colum_datum(fields, data);
     }

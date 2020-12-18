@@ -162,8 +162,6 @@ pub struct Config {
     #[config(hidden)]
     pub hibernate_regions: bool,
     pub hibernate_timeout: ReadableDuration,
-    #[config(hidden)]
-    pub early_apply: bool,
     #[doc(hidden)]
     #[config(hidden)]
     pub dev_assert: bool,
@@ -251,7 +249,6 @@ impl Default for Config {
             future_poll_size: 1,
             hibernate_regions: true,
             hibernate_timeout: ReadableDuration::minutes(10),
-            early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -581,6 +578,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_regions"])
+            .set((self.hibernate_regions as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_timeout"])
+            .set(self.hibernate_timeout.0.as_secs_f64());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

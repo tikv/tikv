@@ -386,6 +386,19 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
     (cb, rx)
 }
 
+pub fn make_cb_ext(
+    cmd: &RaftCmdRequest,
+    proposed: Option<ExtCallback>,
+    committed: Option<ExtCallback>,
+) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
+    let (cb, receiver) = make_cb(cmd);
+    if let Callback::Write { cb, .. } = cb {
+        (Callback::write_ext(cb, proposed, committed), receiver)
+    } else {
+        (cb, receiver)
+    }
+}
+
 // Issue a read request on the specified peer.
 pub fn read_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
@@ -589,7 +602,7 @@ pub fn create_test_engine(
     let mut raft_db_opt = cfg.raftdb.build_opt();
     raft_db_opt.set_env(env);
 
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache, None);
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );

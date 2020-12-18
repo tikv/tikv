@@ -73,9 +73,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{
-    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
-};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -279,28 +277,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // here.
                 let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
 
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: vec![point_key_range(key.clone())],
-                    }
-                } else {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        iter::once(&key),
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
-
+                let snap_ctx = prepare_snap_ctx(
+                    &ctx,
+                    iter::once(&key),
+                    start_ts,
+                    &bypass_locks,
+                    &concurrency_manager,
+                )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -385,29 +368,20 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
                         let region_id = ctx.get_region_id();
 
-                        let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                            SnapContext {
-                                pb_ctx: &ctx,
-                                read_id: read_id.clone(),
-                                start_ts,
-                                key_ranges: vec![point_key_range(key.clone())],
+                        let snap_ctx = match prepare_snap_ctx(
+                            &ctx,
+                            iter::once(&key),
+                            start_ts,
+                            &bypass_locks,
+                            &concurrency_manager,
+                        ) {
+                            Ok(mut snap_ctx) => {
+                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx
                             }
-                        } else {
-                            // Update max_ts and check the in-memory lock table before getting the snapshot
-                            if let Err(e) = async_commit_check_keys(
-                                &concurrency_manager,
-                                iter::once(&key),
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                &bypass_locks,
-                            ) {
+                            Err(e) => {
                                 req_snaps.push(Err(e));
                                 continue;
-                            }
-                            SnapContext {
-                                pb_ctx: &ctx,
-                                read_id: read_id.clone(),
-                                ..Default::default()
                             }
                         };
 
@@ -515,28 +489,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts,
-                        key_ranges: keys.iter().cloned().map(point_key_range).collect(),
-                    }
-                } else {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    async_commit_check_keys(
-                        &concurrency_manager,
-                        &keys,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        &bypass_locks,
-                    )?;
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
-                };
-
+                let snap_ctx =
+                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -643,6 +597,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
+                // Update max_ts and check the in-memory lock table before getting the snapshot
+                concurrency_manager.update_max_ts(start_ts);
+                if ctx.get_isolation_level() == IsolationLevel::Si {
+                    concurrency_manager
+                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                &bypass_locks,
+                            )
+                        })
+                        .map_err(mvcc::Error::from)?;
+                }
+
                 let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
                     let mut key_range = KeyRange::default();
                     key_range.set_start_key(start_key.as_encoded().to_vec());
@@ -656,20 +625,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         key_ranges: vec![key_range],
                     }
                 } else {
-                    // Update max_ts and check the in-memory lock table before getting the snapshot
-                    concurrency_manager.update_max_ts(start_ts);
-                    if ctx.get_isolation_level() == IsolationLevel::Si {
-                        concurrency_manager
-                            .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    &key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            })
-                            .map_err(mvcc::Error::from)?;
-                    }
                     SnapContext {
                         pb_ctx: &ctx,
                         ..Default::default()
@@ -1487,49 +1442,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .await?
         }
     }
-
-    /// Update max_ts with the start_ts and check the given range for locks
-    /// which blocks the reading.
-    pub fn check_memory_locks_in_ranges(
-        &self,
-        mut ctx: Context,
-        start_ts: TimeStamp,
-        ranges: Vec<KeyRange>,
-    ) -> impl Future<Output = Result<Option<LockInfo>>> {
-        let concurrency_manager = self.concurrency_manager.clone();
-        self.read_pool
-            .spawn_handle(
-                async move {
-                    concurrency_manager.update_max_ts(start_ts);
-                    let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
-                    for range in &ranges {
-                        let start_key = Key::from_raw_maybe_unbounded(range.get_start_key());
-                        let end_key = Key::from_raw_maybe_unbounded(range.get_end_key());
-                        let res = concurrency_manager.read_range_check(
-                            start_key.as_ref(),
-                            end_key.as_ref(),
-                            |key, lock| {
-                                Lock::check_ts_conflict(
-                                    Cow::Borrowed(lock),
-                                    key,
-                                    start_ts,
-                                    &bypass_locks,
-                                )
-                            },
-                        );
-                        if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) =
-                            res
-                        {
-                            return Some(lock);
-                        }
-                    }
-                    None
-                },
-                CommandPri::Normal,
-                thread_rng().next_u64(),
-            )
-            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
-    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -1540,25 +1452,39 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-fn async_commit_check_keys<'a>(
+fn prepare_snap_ctx<'a>(
+    pb_ctx: &'a Context,
+    keys: impl IntoIterator<Item = &'a Key> + Clone,
+    start_ts: TimeStamp,
+    bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
-    keys: impl IntoIterator<Item = &'a Key>,
-    ts: TimeStamp,
-    isolation_level: IsolationLevel,
-    bypass_locks: &TsSet,
-) -> Result<()> {
-    concurrency_manager.update_max_ts(ts);
+) -> Result<SnapContext<'a>> {
+    // Update max_ts and check the in-memory lock table before getting the snapshot
+    concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
+    let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
-        for key in keys {
+        for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, ts, bypass_locks)
+                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
                 })
                 .map_err(mvcc::Error::from)?;
         }
     }
-    Ok(())
+
+    let mut snap_ctx = SnapContext {
+        pb_ctx,
+        start_ts,
+        ..Default::default()
+    };
+    if need_check_locks_in_replica_read(pb_ctx) {
+        snap_ctx.key_ranges = keys
+            .into_iter()
+            .map(|k| point_key_range(k.clone()))
+            .collect();
+    }
+    Ok(snap_ctx)
 }
 
 pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
@@ -1787,10 +1713,16 @@ pub mod test_util {
 
 #[cfg(test)]
 mod tests {
-    use super::{test_util::*, *};
+    use super::{
+        mvcc::tests::{must_unlocked, must_written},
+        test_util::*,
+        *,
+    };
 
     use crate::config::TitanDBConfig;
+    use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
+    use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
@@ -1798,6 +1730,7 @@ mod tests {
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
+    use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
@@ -1811,9 +1744,46 @@ mod tests {
         },
         time::Duration,
     };
-    use tikv_util::collections::HashMap;
     use tikv_util::config::ReadableSize;
-    use txn_types::Mutation;
+    use txn_types::{Mutation, WriteType};
+
+    #[test]
+    fn test_prewrite_blocks_read() {
+        use kvproto::kvrpcpb::ExtraOp;
+        let storage = TestStorageBuilder::new(DummyLockManager {})
+            .build()
+            .unwrap();
+
+        // We have to do the prewrite manually so that the mem locks don't get released.
+        let snapshot = storage.engine.snapshot(Default::default()).unwrap();
+        let mutations = vec![Mutation::Put((Key::from_raw(b"x"), b"z".to_vec()))];
+        let mut cmd = commands::Prewrite::with_defaults(mutations, vec![1, 2, 3], 10.into());
+        if let Command::Prewrite(p) = &mut cmd.cmd {
+            p.secondary_keys = Some(vec![]);
+        }
+        let wr = cmd
+            .cmd
+            .process_write(
+                snapshot,
+                commands::WriteContext {
+                    lock_mgr: &DummyLockManager {},
+                    concurrency_manager: storage.concurrency_manager.clone(),
+                    extra_op: ExtraOp::Noop,
+                    statistics: &mut Statistics::default(),
+                    async_apply_prewrite: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(wr.lock_guards.len(), 1);
+
+        let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
+        assert!(matches!(
+            result,
+            Err(Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
+                ..
+            }))))
+        ));
+    }
 
     #[test]
     fn test_get_put() {
@@ -2284,9 +2254,9 @@ mod tests {
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
                 CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
+                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
         }
@@ -4520,7 +4490,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -4579,7 +4549,7 @@ mod tests {
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
-                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                        box mvcc::ErrorInner::TxnNotFound { .. },
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -4613,6 +4583,8 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     false,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -4637,6 +4609,8 @@ mod tests {
                     ts(9, 1),
                     ts(9, 1),
                     true,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -4691,6 +4665,8 @@ mod tests {
                     0.into(),
                     0.into(),
                     true,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -4734,6 +4710,8 @@ mod tests {
                     ts(12, 0),
                     ts(15, 0),
                     true,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -4763,6 +4741,8 @@ mod tests {
                     ts(126, 0),
                     ts(127, 0),
                     true,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -5529,6 +5509,8 @@ mod tests {
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(150, 0),
                     false,
+                    false,
+                    false,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -5562,6 +5544,8 @@ mod tests {
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),
+                    false,
+                    false,
                     false,
                     Context::default(),
                 ),
@@ -5726,5 +5710,309 @@ mod tests {
             .unwrap();
         let res = rx.recv().unwrap().unwrap();
         assert_eq!(res.min_commit_ts, 1001.into());
+    }
+
+    // This is one of the series of tests to test overlapped timestamps.
+    // Overlapped ts means there is a rollback record and a commit record with the same ts.
+    // In this test we check that if rollback happens before commit, then they should not have overlapped ts,
+    // which is an expected property.
+    #[test]
+    fn test_overlapped_ts_rollback_before_prewrite() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager {},
+        )
+        .build()
+        .unwrap();
+
+        let (k1, v1) = (b"key1", b"v1");
+        let (k2, v2) = (b"key2", b"v2");
+        let key1 = Key::from_raw(k1);
+        let key2 = Key::from_raw(k2);
+        let value1 = v1.to_vec();
+        let value2 = v2.to_vec();
+
+        let (tx, rx) = channel();
+
+        // T1 acquires lock on k1, start_ts = 1, for_update_ts = 3
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(key1.clone(), false)],
+                    k1.to_vec(),
+                    1.into(),
+                    0,
+                    true,
+                    3.into(),
+                    None,
+                    false,
+                    0.into(),
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T2 acquires lock on k2, start_ts = 10, for_update_ts = 15
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(key2.clone(), false)],
+                    k2.to_vec(),
+                    10.into(),
+                    0,
+                    true,
+                    15.into(),
+                    None,
+                    false,
+                    0.into(),
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T2 pessimistically prewrites, start_ts = 10, lock ttl = 0
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(Mutation::Put((key2.clone(), value2.clone())), true)],
+                    k2.to_vec(),
+                    10.into(),
+                    0,
+                    15.into(),
+                    1,
+                    0.into(),
+                    100.into(),
+                    None,
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T3 checks T2, which rolls back key2 and pushes max_ts to 10
+        // use a large timestamp to make the lock expire so key2 will be rolled back.
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    key2.clone(),
+                    10.into(),
+                    ((1 << 18) + 8).into(),
+                    ((1 << 18) + 8).into(),
+                    true,
+                    false,
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        must_unlocked(&engine, k2);
+        must_written(&engine, k2, 10, 10, WriteType::Rollback);
+
+        // T1 prewrites, start_ts = 1, for_update_ts = 3
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![
+                        (Mutation::Put((key1.clone(), value1)), true),
+                        (Mutation::Put((key2.clone(), value2)), false),
+                    ],
+                    k1.to_vec(),
+                    1.into(),
+                    0,
+                    3.into(),
+                    2,
+                    0.into(),
+                    (1 << 19).into(),
+                    Some(vec![k2.to_vec()]),
+                    false,
+                    Default::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // T1.commit_ts must be pushed to be larger than T2.start_ts (if we resolve T1)
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(vec![key1, key2], 1.into(), Default::default()),
+                Box::new(move |res| {
+                    let pr = res.unwrap();
+                    match pr {
+                        SecondaryLocksStatus::Locked(l) => {
+                            let min_commit_ts = l
+                                .iter()
+                                .map(|lock_info| lock_info.min_commit_ts)
+                                .max()
+                                .unwrap();
+                            tx.send(min_commit_ts as i32).unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }),
+            )
+            .unwrap();
+        assert!(rx.recv().unwrap() > 10);
+    }
+    // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
+    // ie. call the callback at expected stage when writing to the engine
+    #[test]
+    fn test_scheduler_response_policy() {
+        struct Case<T: 'static + StorageCallbackType + Send> {
+            expected_writes: Vec<ExpectedWrite>,
+
+            command: TypedCommand<T>,
+            pipelined_pessimistic_lock: bool,
+        }
+
+        impl<T: 'static + StorageCallbackType + Send> Case<T> {
+            fn run(self) {
+                let mut builder =
+                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
+                for expected_write in self.expected_writes {
+                    builder = builder.add_expected_write(expected_write)
+                }
+                let engine = builder.build();
+                let mut builder =
+                    TestStorageBuilder::from_engine_and_lock_mgr(engine, DummyLockManager {});
+                builder.config.enable_async_apply_prewrite = true;
+                if self.pipelined_pessimistic_lock {
+                    builder
+                        .pipelined_pessimistic_lock
+                        .store(true, Ordering::Relaxed);
+                }
+                let storage = builder.build().unwrap();
+                let (tx, rx) = channel();
+                storage
+                    .sched_txn_command(
+                        self.command,
+                        Box::new(move |res| {
+                            tx.send(res).unwrap();
+                        }),
+                    )
+                    .unwrap();
+                rx.recv().unwrap().unwrap();
+            }
+        }
+
+        let keys = [b"k1", b"k2"];
+        let values = [b"v1", b"v2"];
+        let mutations = vec![
+            Mutation::Put((Key::from_raw(keys[0]), keys[0].to_vec())),
+            Mutation::Put((Key::from_raw(keys[1]), values[1].to_vec())),
+        ];
+
+        let on_applied_case = Case {
+            // this case's command return ResponsePolicy::OnApplied
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+                ExpectedWrite::new()
+                    .expect_no_committed_cb()
+                    .expect_no_proposed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations.clone(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                None,
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_commited_case = Case {
+            // this case's command return ResponsePolicy::OnCommitted
+            // tested by `test_response_stage` in command::prewrite
+            expected_writes: vec![
+                ExpectedWrite::new().expect_committed_cb(),
+                ExpectedWrite::new().expect_committed_cb(),
+            ],
+
+            command: Prewrite::new(
+                mutations,
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                1,
+                TimeStamp::default(),
+                TimeStamp::default(),
+                Some(vec![]),
+                false,
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+        let on_proposed_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // untested, but all AcquirePessimisticLock should return ResponsePolicy::OnProposed now
+            // and the scheduler expected to take OnProposed serious when
+            // enable pipelined pessimistic lock
+            expected_writes: vec![
+                ExpectedWrite::new().expect_proposed_cb(),
+                ExpectedWrite::new().expect_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: true,
+        };
+        let on_proposed_fallback_case = Case {
+            // this case's command return ResponsePolicy::OnProposed
+            // but when pipelined pessimistic lock is off,
+            // the scheduler should fallback to use OnApplied
+            expected_writes: vec![
+                ExpectedWrite::new().expect_no_proposed_cb(),
+                ExpectedWrite::new().expect_no_proposed_cb(),
+            ],
+
+            command: AcquirePessimisticLock::new(
+                keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
+                keys[0].to_vec(),
+                TimeStamp::new(10),
+                0,
+                false,
+                TimeStamp::new(11),
+                None,
+                false,
+                TimeStamp::new(12),
+                Context::default(),
+            ),
+            pipelined_pessimistic_lock: false,
+        };
+
+        on_applied_case.run();
+        on_commited_case.run();
+        on_proposed_case.run();
+        on_proposed_fallback_case.run();
     }
 }

@@ -23,6 +23,7 @@ prost-codec = [
 ]
 
 [dependencies]
+engine_rocks = { path = "../engine_rocks" }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 protobuf = "2"
@@ -31,6 +32,7 @@ tidb_query_datatype = { path = "../tidb_query_datatype" }
 tidb_query_common = { path = "../tidb_query_common" }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 txn_types = { path = "../txn_types" }
 concurrency_manager = { path = "../concurrency_manager" }

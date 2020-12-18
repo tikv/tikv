@@ -70,6 +70,8 @@ pub trait AggrFunctionState:
     + AggrFunctionStateUpdatePartial<&'static DateTime>
     + AggrFunctionStateUpdatePartial<&'static Duration>
     + AggrFunctionStateUpdatePartial<JsonRef<'static>>
+    + AggrFunctionStateUpdatePartial<EnumRef<'static>>
+    + AggrFunctionStateUpdatePartial<SetRef<'static>>
 {
     // TODO: A better implementation is to specialize different push result targets. However
     // current aggregation executor cannot utilize it.
