@@ -63,6 +63,7 @@ pub use crate::mvcc_properties::*;
 pub mod perf_context;
 pub use crate::perf_context::*;
 mod perf_context_impl;
+mod perf_context_metrics;
 
 mod engine_iterator;
 pub use crate::engine_iterator::*;
