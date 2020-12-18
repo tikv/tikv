@@ -1,29 +1,31 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{PerfContextExt, PerfLevel, PerfContext, PerfContextKind};
+use engine_traits::{PerfLevel, PerfContextKind};
 use crate::perf_context_metrics::{STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC};
+use rocksdb::PerfContext as RawPerfContext;
+use rocksdb::set_perf_level;
+use crate::raw_util;
 
 #[macro_export]
 macro_rules! report_perf_context {
-    ($e: expr, $ctx: expr, $metric: ident) => {
+    ($ctx: expr, $metric: ident) => {
         if $ctx.perf_level != PerfLevel::Disable {
-            if let Some(perf_context) = $e.get_perf_context($ctx.perf_level, $ctx.kind) {
-                let pre_and_post_process = perf_context.write_pre_and_post_process_time();
-                let write_thread_wait = perf_context.write_thread_wait_nanos();
-                observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
-                observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
-                observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
-                observe_perf_context_type!($ctx, $metric, pre_and_post_process);
-                observe_perf_context_type!($ctx, $metric, write_thread_wait);
-                observe_perf_context_type!(
-                    $ctx,
-                    perf_context,
-                    $metric,
-                    write_scheduling_flushes_compactions_time
-                );
-                observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
-                observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
-            }
+            let perf_context = RawPerfContext::get();
+            let pre_and_post_process = perf_context.write_pre_and_post_process_time();
+            let write_thread_wait = perf_context.write_thread_wait_nanos();
+            observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_memtable_time);
+            observe_perf_context_type!($ctx, perf_context, $metric, db_mutex_lock_nanos);
+            observe_perf_context_type!($ctx, $metric, pre_and_post_process);
+            observe_perf_context_type!($ctx, $metric, write_thread_wait);
+            observe_perf_context_type!(
+                $ctx,
+                perf_context,
+                $metric,
+                write_scheduling_flushes_compactions_time
+            );
+            observe_perf_context_type!($ctx, perf_context, $metric, db_condition_wait_nanos);
+            observe_perf_context_type!($ctx, perf_context, $metric, write_delay_time);
         }
     };
 }
@@ -71,14 +73,13 @@ impl PerfContextStatistics {
         }
     }
 
-    pub fn start(&mut self, engine: &impl PerfContextExt) {
+    pub fn start(&mut self) {
         if self.perf_level == PerfLevel::Disable {
             return;
         }
-        if let Some(mut ctx) = engine.get_perf_context(self.perf_level, self.kind) {
-            ctx.reset();
-        }
-        engine.set_perf_level(self.perf_level);
+        let mut ctx = RawPerfContext::get();
+        ctx.reset();
+        set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
         self.write_wal_time = 0;
         self.pre_and_post_process = 0;
         self.db_mutex_lock_nanos = 0;
@@ -89,18 +90,16 @@ impl PerfContextStatistics {
         self.write_delay_time = 0;
     }
 
-    pub fn report(&mut self, engine: &impl PerfContextExt) {
+    pub fn report(&mut self) {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
                 report_perf_context!(
-                    engine,
                     self,
                     APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
                 );
             }
             PerfContextKind::RaftstoreStore => {
                 report_perf_context!(
-                    engine,
                     self,
                     STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
                 );

@@ -12,7 +12,6 @@ impl PerfContextExt for RocksEngine {
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Option<Self::PerfContext> {
         Some(RocksPerfContext {
             stats: PerfContextStatistics::new(level, kind),
-            engine: self.clone(),
         })
     }
 
@@ -27,16 +26,15 @@ impl PerfContextExt for RocksEngine {
 
 pub struct RocksPerfContext {
     stats: PerfContextStatistics,
-    engine: RocksEngine,
 }
 
 impl PerfContext for RocksPerfContext {
     fn start_observe(&mut self) {
-        self.stats.start(&self.engine)
+        self.stats.start()
     }
 
     fn report_metrics(&mut self) {
-        self.stats.report(&self.engine)
+        self.stats.report()
     }
 
     fn reset(&mut self) {
