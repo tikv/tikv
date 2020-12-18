@@ -163,7 +163,10 @@ impl SecurityManager {
                     Ok(()) => CheckResult::Continue,
                     Err(reason) => CheckResult::Abort(RpcStatus::new(
                         RpcStatusCode::UNAUTHENTICATED,
-                        Some(format!("Failed to check common name, reason: {}", reason)),
+                        Some(format!(
+                            "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
+                            reason, cert_allowed_cn
+                        )),
                     )),
                 });
             }
