@@ -25,8 +25,6 @@ pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Option<Self::PerfContext>;
-    fn get_perf_level(&self) -> PerfLevel;
-    fn set_perf_level(&self, level: PerfLevel);
 }
 
 /// The raftstore subsystem the PerfContext is being created for.
@@ -42,14 +40,4 @@ pub enum PerfContextKind {
 pub trait PerfContext: Send {
     fn start_observe(&mut self);
     fn report_metrics(&mut self);
-
-    fn reset(&mut self);
-    fn write_wal_time(&self) -> u64;
-    fn write_memtable_time(&self) -> u64;
-    fn write_delay_time(&self) -> u64;
-    fn write_pre_and_post_process_time(&self) -> u64;
-    fn db_mutex_lock_nanos(&self) -> u64;
-    fn write_thread_wait_nanos(&self) -> u64;
-    fn write_scheduling_flushes_compactions_time(&self) -> u64;
-    fn db_condition_wait_nanos(&self) -> u64;
 }
