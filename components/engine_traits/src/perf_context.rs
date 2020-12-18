@@ -40,8 +40,8 @@ pub enum PerfContextKind {
 }
 
 pub trait PerfContext {
-    fn start_observe(&self);
-    fn report_metrics(&self);
+    fn start_observe(&mut self);
+    fn report_metrics(&mut self);
 
     fn reset(&mut self);
     fn write_wal_time(&self) -> u64;

@@ -24,11 +24,11 @@ impl PerfContextExt for RocksEngine {
 pub struct RocksPerfContext(RawPerfContext);
 
 impl PerfContext for RocksPerfContext {
-    fn start_observe(&self) {
+    fn start_observe(&mut self) {
         panic!()
     }
 
-    fn report_metrics(&self) {
+    fn report_metrics(&mut self) {
         panic!()
     }
 
