@@ -668,7 +668,7 @@ fn test_serde_custom_tikv_config() {
         import_mode_timeout: ReadableDuration::secs(1453),
     };
     value.panic_when_unexpected_key_or_data = true;
-    value.io_snoop = false;
+    value.enable_io_snoop = false;
     value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,

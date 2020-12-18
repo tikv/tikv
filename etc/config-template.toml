@@ -35,6 +35,10 @@
 ## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
 # log-rotation-size = "300MB"
 
+## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
+## It won't take effect when compiling without BCC_IOSNOOP=1. 
+# enable-io-snoop = true
+
 # Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.

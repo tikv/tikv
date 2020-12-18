@@ -101,7 +101,7 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
-            let enable_io_snoop = config.io_snoop;
+            let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
             if enable_io_snoop {
                 tikv.init_io_snooper();
