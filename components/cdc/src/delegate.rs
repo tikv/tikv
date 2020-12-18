@@ -611,8 +611,6 @@ impl Delegate {
                             assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
                         }
                     } else {
-                        // 1PC has nothing to do with the resolver
-
                         // In order to advance resolved ts,
                         // we must untrack inflight txns if they are committed.
                         let commit_ts = if row.commit_ts == 0 {
