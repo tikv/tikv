@@ -437,9 +437,9 @@ macro_rules! build_cf_opt {
         // To set for bottommost level sst compression. The first 3 parameters refer to the
         // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
         cf_opts.set_bottommost_level_compression_options(
-            -14, /* window_bits */
+            -14,   /* window_bits */
             32767, /* level */
-            0, /* strategy */
+            0,     /* strategy */
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
         );
