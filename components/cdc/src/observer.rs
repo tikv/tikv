@@ -246,8 +246,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .unwrap()
     }
 
-    // return Some(vec![]) if value is empty.
-    // return None if key not exist.
     fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
         statistics.data.get += 1;
         let mut opts = ReadOptions::new();
@@ -258,8 +256,11 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .map(|v| v.deref().to_vec())
     }
 
-    // return Some(vec![]) if value is empty.
-    // return None if key not exist.
+    /// Gets the latest value to the key with an older or equal version.
+    ///
+    /// The key passed in should be a key with a timestamp. This function will returns
+    /// the latest value of the entry if the user key is the same to the given key and
+    /// the timestamp is older than or equal to the timestamp in the given key.
     fn near_seek_old_value(
         &mut self,
         key: &Key,
