@@ -911,6 +911,11 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
+    // deprecated. use rate_limiter_auto_tuned.
+    #[config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub auto_tuned: Option<bool>,
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -937,12 +942,6 @@ pub struct DbConfig {
     pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
-
-    // deprecated. use rate_limiter_auto_tuned.
-    #[config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    pub auto_tuned: Option<bool>,
 }
 
 impl Default for DbConfig {
