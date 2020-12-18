@@ -13,7 +13,7 @@ use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerCredentialsBuilder,
+    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
 
@@ -158,17 +158,10 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
-                let cert_allowed_cn = self.cfg.cert_allowed_cn.clone();
-                sb = sb.add_checker(move |ctx| match check_common_name(&cert_allowed_cn, ctx) {
-                    Ok(()) => CheckResult::Continue,
-                    Err(reason) => CheckResult::Abort(RpcStatus::new(
-                        RpcStatusCode::UNAUTHENTICATED,
-                        Some(format!(
-                            "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
-                            reason, cert_allowed_cn
-                        )),
-                    )),
-                });
+                let cn_checker = CNChecker {
+                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
+                };
+                sb = sb.add_checker(cn_checker);
             }
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
@@ -181,6 +174,30 @@ impl SecurityManager {
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
+    }
+}
+
+#[derive(Clone)]
+struct CNChecker {
+    allowed_cn: Arc<HashSet<String>>,
+}
+
+impl ServerChecker for CNChecker {
+    fn check(&mut self, ctx: &RpcContext) -> CheckResult {
+        match check_common_name(&self.allowed_cn, ctx) {
+            Ok(()) => CheckResult::Continue,
+            Err(reason) => CheckResult::Abort(RpcStatus::new(
+                RpcStatusCode::UNAUTHENTICATED,
+                Some(format!(
+                    "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
+                    reason, self.allowed_cn
+                )),
+            )),
+        }
+    }
+
+    fn box_clone(&self) -> Box<dyn ServerChecker> {
+        Box::new(self.clone())
     }
 }
 
