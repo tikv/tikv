@@ -9,10 +9,10 @@ use crate::perf_context_impl::PerfContextStatistics;
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
-    fn get_perf_context(&self, kind: PerfContextKind) -> Option<Self::PerfContext> {
+    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Option<Self::PerfContext> {
         Some(RocksPerfContext {
             raw: RawPerfContext::get(),
-            stats: PerfContextStatistics::new(self.get_perf_level(), kind),
+            stats: PerfContextStatistics::new(level, kind),
             engine: self.clone(),
         })
     }

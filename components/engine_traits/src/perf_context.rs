@@ -24,7 +24,7 @@ pub enum PerfLevel {
 pub trait PerfContextExt {
     type PerfContext: PerfContext;
 
-    fn get_perf_context(&self, kind: PerfContextKind) -> Option<Self::PerfContext>;
+    fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Option<Self::PerfContext>;
     fn get_perf_level(&self) -> PerfLevel;
     fn set_perf_level(&self, level: PerfLevel);
 }

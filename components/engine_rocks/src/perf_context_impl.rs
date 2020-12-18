@@ -7,7 +7,7 @@ use crate::perf_context_metrics::{STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, APPL
 macro_rules! report_perf_context {
     ($e: expr, $ctx: expr, $metric: ident) => {
         if $ctx.perf_level != PerfLevel::Disable {
-            if let Some(perf_context) = $e.get_perf_context($ctx.kind) {
+            if let Some(perf_context) = $e.get_perf_context($ctx.perf_level, $ctx.kind) {
                 let pre_and_post_process = perf_context.write_pre_and_post_process_time();
                 let write_thread_wait = perf_context.write_thread_wait_nanos();
                 observe_perf_context_type!($ctx, perf_context, $metric, write_wal_time);
@@ -75,7 +75,7 @@ impl PerfContextStatistics {
         if self.perf_level == PerfLevel::Disable {
             return;
         }
-        if let Some(mut ctx) = engine.get_perf_context(self.kind) {
+        if let Some(mut ctx) = engine.get_perf_context(self.perf_level, self.kind) {
             ctx.reset();
         }
         engine.set_perf_level(self.perf_level);
