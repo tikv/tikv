@@ -4,9 +4,9 @@ use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::collections::HashMap;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::TableScan;
@@ -198,8 +198,8 @@ impl TableScanExecutorImpl {
                     // but will output a log anyway.
                     warn!(
                         "Ignored duplicated row datum in table scan";
-                        "key" => hex::encode_upper(&key),
-                        "value" => hex::encode_upper(&value),
+                        "key" => log_wrappers::Value::key(&key),
+                        "value" => log_wrappers::Value::value(&value),
                         "dup_column_id" => column_id,
                     );
                 }

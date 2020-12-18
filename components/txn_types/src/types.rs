@@ -1,12 +1,12 @@
 use super::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
+use collections::HashMap;
 use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::collections::HashMap;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -342,6 +342,9 @@ pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
     pub old_values: OldValues,
+    // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
+    // in the raft command request.
+    pub one_pc: bool,
 }
 
 impl TxnExtra {

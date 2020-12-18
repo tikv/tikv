@@ -4,9 +4,10 @@ use std::cell::RefCell;
 use std::ops::{Bound, Deref};
 use std::sync::{Arc, RwLock};
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_KEY_PREFIX_LEN,
+    IterOptions, KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
@@ -15,10 +16,9 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
-use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, Lock, MutationType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, MutationType, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::metrics::*;
@@ -127,6 +127,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             let mut reader = OldValueReader::new(snapshot);
             let get_old_value = move |key,
+                                      query_ts,
                                       old_value_cache: &mut OldValueCache,
                                       statistics: &mut Statistics| {
                 old_value_cache.access_count += 1;
@@ -158,6 +159,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 // Cannot get old value from cache, seek for it in engine.
                 old_value_cache.miss_count += 1;
                 let start = Instant::now();
+                let key = key.truncate_ts().unwrap().append_ts(query_ts);
                 let value = reader
                     .near_seek_old_value(&key, statistics)
                     .unwrap_or_default();
@@ -244,8 +246,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .unwrap()
     }
 
-    // return Some(vec![]) if value is empty.
-    // return None if key not exist.
     fn get_value_default(&mut self, key: &Key, statistics: &mut Statistics) -> Option<Value> {
         statistics.data.get += 1;
         let mut opts = ReadOptions::new();
@@ -256,24 +256,11 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             .map(|v| v.deref().to_vec())
     }
 
-    fn check_lock(&mut self, key: &Key, statistics: &mut Statistics) -> bool {
-        statistics.lock.get += 1;
-        let mut opts = ReadOptions::new();
-        opts.set_fill_cache(false);
-        let key_slice = key.as_encoded();
-        let user_key = Key::from_encoded_slice(Key::truncate_ts_for(key_slice).unwrap());
-
-        match self.snapshot.get_cf_opt(opts, CF_LOCK, &user_key).unwrap() {
-            Some(v) => {
-                let lock = Lock::parse(v.deref()).unwrap();
-                lock.ts == Key::decode_ts_from(key_slice).unwrap()
-            }
-            None => false,
-        }
-    }
-
-    // return Some(vec![]) if value is empty.
-    // return None if key not exist.
+    /// Gets the latest value to the key with an older or equal version.
+    ///
+    /// The key passed in should be a key with a timestamp. This function will returns
+    /// the latest value of the entry if the user key is the same to the given key and
+    /// the timestamp is older than or equal to the timestamp in the given key.
     fn near_seek_old_value(
         &mut self,
         key: &Key,
@@ -284,18 +271,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
         {
-            if write_cursor.key(&mut statistics.write) == key.as_encoded().as_slice() {
-                // Key was committed, move cursor to the next key to seek for old value.
-                if !write_cursor.next(&mut statistics.write) {
-                    // Do not has any next key, return empty value.
-                    return Ok(Some(Vec::default()));
-                }
-            } else if !self.check_lock(key, statistics) {
-                return Ok(None);
-            }
-
-            // Key was not committed, check if the lock is corresponding to the key.
-            let mut old_value = Some(Vec::default());
+            let mut old_value = None;
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
                 old_value = match write.write_type {
@@ -306,10 +282,10 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                             self.get_value_default(&key, statistics)
                         }
                     },
-                    WriteType::Delete => Some(Vec::default()),
+                    WriteType::Delete => None,
                     WriteType::Rollback | WriteType::Lock => {
                         if !write_cursor.next(&mut statistics.write) {
-                            Some(Vec::default())
+                            None
                         } else {
                             continue;
                         }
@@ -318,8 +294,6 @@ impl<S: EngineSnapshot> OldValueReader<S> {
                 break;
             }
             Ok(old_value)
-        } else if self.check_lock(key, statistics) {
-            Ok(Some(Vec::default()))
         } else {
             Ok(None)
         }
@@ -334,9 +308,7 @@ mod tests {
     use kvproto::raft_cmdpb::*;
     use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
-    use tikv::storage::txn::tests::{
-        must_commit, must_prewrite_delete, must_prewrite_put, must_rollback,
-    };
+    use tikv::storage::txn::tests::*;
 
     #[test]
     fn test_register_and_deregister() {
@@ -427,9 +399,9 @@ mod tests {
 
         must_prewrite_put(&engine, k, b"v1", k, 1);
         must_get_eq(2, None);
-        must_get_eq(1, Some(vec![]));
+        must_get_eq(1, None);
         must_commit(&engine, k, 1, 1);
-        must_get_eq(1, Some(vec![]));
+        must_get_eq(1, Some(b"v1".to_vec()));
 
         must_prewrite_put(&engine, k, b"v2", k, 2);
         must_get_eq(2, Some(b"v1".to_vec()));
@@ -444,10 +416,19 @@ mod tests {
         must_commit(&engine, k, 4, 4);
 
         must_prewrite_put(&engine, k, vec![b'v'; 5120].as_slice(), k, 5);
-        must_get_eq(5, Some(vec![]));
+        must_get_eq(5, None);
         must_commit(&engine, k, 5, 5);
 
         must_prewrite_delete(&engine, k, k, 6);
         must_get_eq(6, Some(vec![b'v'; 5120]));
+        must_rollback(&engine, k, 6);
+
+        must_prewrite_put(&engine, k, b"v4", k, 7);
+        must_commit(&engine, k, 7, 9);
+
+        must_acquire_pessimistic_lock(&engine, k, k, 8, 10);
+        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, true);
+        must_get_eq(10, Some(b"v4".to_vec()));
+        must_commit(&engine, k, 8, 11);
     }
 }

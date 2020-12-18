@@ -36,6 +36,14 @@ impl DBOptions for PanicDBOptions {
         panic!()
     }
 
+    fn get_rate_limiter_auto_tuned(&self) -> Option<bool> {
+        panic!()
+    }
+
+    fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
+        panic!()
+    }
+
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
         panic!()
     }

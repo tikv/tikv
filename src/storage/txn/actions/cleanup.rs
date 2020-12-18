@@ -41,6 +41,7 @@ pub fn cleanup<S: Snapshot>(
             key,
             l,
             MissingLockAction::rollback_protect(protect_rollback),
+            false,
         )? {
             TxnStatus::Committed { commit_ts } => {
                 MVCC_CONFLICT_COUNTER.rollback_committed.inc();

@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use collections::HashMap;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::*;
-use tikv_util::{collections::HashMap, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 // In theory, raft can propose conf change as long as there is no pending one. Replicas
 // don't apply logs synchronously, so it's possible the old leader is removed before the new
@@ -108,6 +109,15 @@ fn test_observer_send_error() {
 
 #[test]
 fn test_notify_observer_after_apply() {
+    fn retry_until(mut f: impl FnMut() -> bool) {
+        for _ in 0..100 {
+            sleep_ms(10);
+            if f() {
+                break;
+            }
+        }
+    }
+
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
     cluster.pd_client.disable_default_operator();
     let post_apply_query_fp = "notify_lock_observer_query";
@@ -119,7 +129,7 @@ fn test_notify_observer_after_apply() {
     fail::cfg(post_apply_query_fp, "pause").unwrap();
     let key = b"k";
     let (client_clone, ctx_clone) = (client.clone(), ctx.clone());
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         must_kv_prewrite(
             &client_clone,
             ctx_clone,
@@ -130,8 +140,7 @@ fn test_notify_observer_after_apply() {
     });
     // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocskdb.
     let mut locks = vec![];
-    for _ in 1..100 {
-        sleep_ms(10);
+    retry_until(|| {
         assert!(must_check_lock_observer(&client, max_ts, true).is_empty());
         locks.extend(must_physical_scan_lock(
             &client,
@@ -140,13 +149,13 @@ fn test_notify_observer_after_apply() {
             b"",
             100,
         ));
-        if !locks.is_empty() {
-            break;
-        }
-    }
+        !locks.is_empty()
+    });
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].get_key(), key);
+    assert!(must_check_lock_observer(&client, max_ts, true).is_empty());
     fail::remove(post_apply_query_fp);
+    handle.join().unwrap();
     assert_eq!(must_check_lock_observer(&client, max_ts, true).len(), 1);
 
     // Add a new store.
@@ -161,10 +170,9 @@ fn test_notify_observer_after_apply() {
     cluster
         .pd_client
         .must_add_peer(ctx.get_region_id(), new_peer(store_id, store_id));
-    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocskdb.
+    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocksdb.
     let mut locks = vec![];
-    for _ in 1..100 {
-        sleep_ms(10);
+    retry_until(|| {
         assert!(must_check_lock_observer(&replica_client, max_ts, true).is_empty());
         locks.extend(must_physical_scan_lock(
             &replica_client,
@@ -173,13 +181,13 @@ fn test_notify_observer_after_apply() {
             b"",
             100,
         ));
-        if !locks.is_empty() {
-            break;
-        }
-    }
+        !locks.is_empty()
+    });
     assert_eq!(locks.len(), 1);
     assert_eq!(locks[0].get_key(), key);
+    assert!(must_check_lock_observer(&replica_client, max_ts, true).is_empty());
     fail::remove(apply_plain_kvs_fp);
+    retry_until(|| !must_check_lock_observer(&replica_client, max_ts, true).is_empty());
     assert_eq!(
         must_check_lock_observer(&replica_client, max_ts, true).len(),
         1
