@@ -10,28 +10,16 @@ use tidb_query_codegen::rpn_fn;
 use tidb_query_datatype::*;
 use tipb::{Expr, FieldType};
 
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
+use crate::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::types::RpnExpressionBuilder;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
-=======
-use crate::types::RpnExpressionBuilder;
-use crate::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::convert::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use tidb_query_datatype::codec::mysql::time::{MAX_YEAR, MIN_YEAR};
-use tidb_query_datatype::codec::mysql::{binary_literal, Time};
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::EvalContext;
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
 
 fn get_cast_fn_rpn_meta(
     is_from_constant: bool,
@@ -73,16 +61,10 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Int) => cast_any_as_any_fn_meta::<DateTime, Int>(),
         (EvalType::Duration, EvalType::Int) => cast_any_as_any_fn_meta::<Duration, Int>(),
         (EvalType::Json, EvalType::Int) => {
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
-            if !to_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Json, Int>()
-            } else {
-=======
             if to_field_type.is_unsigned() {
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
                 cast_json_as_uint_fn_meta()
             } else {
-                cast_json_as_any_fn_meta::<Int>()
+                cast_any_as_any_fn_meta::<Json, Int>()
             }
         }
 
@@ -127,15 +109,7 @@ fn get_cast_fn_rpn_meta(
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
-            if !from_field_type.is_unsigned() {
-                cast_any_as_string_fn_meta::<Int>()
-            } else {
-=======
-            if from_field_type.tp() == FieldTypeTp::Year {
-                cast_year_as_string_fn_meta()
-            } else if from_field_type.is_unsigned() {
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
+            if from_field_type.is_unsigned() {
                 cast_uint_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Int>()
@@ -166,16 +140,10 @@ fn get_cast_fn_rpn_meta(
         }
         (EvalType::Real, EvalType::Decimal) => cast_real_as_decimal_fn_meta(),
         (EvalType::Bytes, EvalType::Decimal) => {
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
-            if !to_field_type.is_unsigned() {
-                cast_any_as_decimal_fn_meta::<Bytes>()
-            } else {
-=======
             if to_field_type.is_unsigned() {
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
                 cast_string_as_unsigned_decimal_fn_meta()
             } else {
-                cast_bytes_as_decimal_fn_meta()
+                cast_any_as_decimal_fn_meta::<Bytes>()
             }
         }
         (EvalType::Decimal, EvalType::Decimal) => {
@@ -215,16 +183,10 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Int, EvalType::Json) => {
             if from_field_type.is_bool() {
                 cast_bool_as_json_fn_meta()
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
-            } else if !from_field_type.is_unsigned() {
-                cast_any_as_any_fn_meta::<Int, Json>()
-            } else {
-=======
             } else if from_field_type.is_unsigned() {
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
                 cast_uint_as_json_fn_meta()
             } else {
-                cast_any_as_json_fn_meta::<Int>()
+                cast_any_as_any_fn_meta::<Int, Json>()
             }
         }
         (EvalType::Real, EvalType::Json) => cast_any_as_any_fn_meta::<Real, Json>(),
@@ -1020,18 +982,22 @@ fn cast_int_as_time(
 fn cast_year_as_time(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    year: &Int,
+    year: &Option<Int>,
 ) -> Result<Option<Time>> {
-    let year = *year;
-    if year != 0 && (year < MIN_YEAR.into() || year > MAX_YEAR.into()) {
-        ctx.handle_truncate_err(Error::truncated_wrong_val("YEAR", year))?;
-        return Ok(None);
-    }
-    let time_type = extra.ret_field_type.tp().try_into()?;
-    let fsp = extra.ret_field_type.decimal() as i8;
-    let time = Time::from_year(ctx, year as u32, fsp, time_type)?;
+    if let Some(year) = year {
+        let year = *year;
+        if year != 0 && (year < MIN_YEAR.into() || year > MAX_YEAR.into()) {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("YEAR", year))?;
+            return Ok(None);
+        }
+        let time_type = extra.ret_field_type.tp().try_into()?;
+        let fsp = extra.ret_field_type.decimal() as i8;
+        let time = Time::from_year(ctx, year as u32, fsp, time_type)?;
 
-    Ok(Some(time))
+        Ok(Some(time))
+    } else {
+        Ok(None)
+    }
 }
 
 // NOTE: in MySQL, casting `Real` to `Time` should cast `Real` to `Int` first,
@@ -2046,8 +2012,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_cast.rs
-=======
     fn test_cast_year_as_time() {
         let normal_cases = vec![
             ("2020-00-00 00:00:00", 2020),
@@ -2093,7 +2057,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::excessive_precision)]
->>>>>>> 5b599e223... copr: Add cast_year_as_time (#9287):components/tidb_query_expr/src/impl_cast.rs
     fn test_cast_real_time() {
         let cases = vec![
             ("2019-09-16 10:11:12", 190916101112.111, 0),
