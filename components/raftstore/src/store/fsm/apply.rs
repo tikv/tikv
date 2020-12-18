@@ -19,7 +19,7 @@ use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, 
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
-use engine_traits::{PerfContextKind};
+use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -3437,9 +3437,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx
-            .perf_context
-            .start_observe();
+        self.apply_ctx.perf_context.start_observe();
     }
 
     /// There is no control fsm in apply poller.

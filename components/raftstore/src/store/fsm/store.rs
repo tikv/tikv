@@ -12,7 +12,7 @@ use std::{mem, u64};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
-use engine_traits::{PerfContextKind};
+use engine_traits::PerfContextKind;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
@@ -57,7 +57,7 @@ use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg};
+use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
@@ -751,9 +751,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.has_ready = false;
         self.timer = TiInstant::now_coarse();
         // update config
-        self.poll_ctx
-            .perf_context
-            .start_observe();
+        self.poll_ctx.perf_context.start_observe();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -1094,7 +1092,10 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context: self.engines.kv.get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
+            perf_context: self
+                .engines
+                .kv
+                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
         };

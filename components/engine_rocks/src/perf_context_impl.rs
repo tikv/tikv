@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{PerfLevel, PerfContextKind};
-use crate::perf_context_metrics::{STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC};
-use rocksdb::PerfContext as RawPerfContext;
-use rocksdb::set_perf_level;
+use crate::perf_context_metrics::{
+    APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC,
+};
 use crate::raw_util;
+use engine_traits::{PerfContextKind, PerfLevel};
+use rocksdb::set_perf_level;
+use rocksdb::PerfContext as RawPerfContext;
 
 #[macro_export]
 macro_rules! report_perf_context {
@@ -93,18 +95,11 @@ impl PerfContextStatistics {
     pub fn report(&mut self) {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
-                report_perf_context!(
-                    self,
-                    APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-                );
+                report_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
             }
             PerfContextKind::RaftstoreStore => {
-                report_perf_context!(
-                    self,
-                    STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-                );
+                report_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
             }
         }
     }
 }
-
