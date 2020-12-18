@@ -4,12 +4,17 @@ use crate::engine::RocksEngine;
 use crate::raw::PerfContext as RawPerfContext;
 use crate::raw_util;
 use engine_traits::{PerfContext, PerfContextExt, PerfLevel, PerfContextKind};
+use crate::perf_context_impl::PerfContextStatistics;
 
 impl PerfContextExt for RocksEngine {
     type PerfContext = RocksPerfContext;
 
     fn get_perf_context(&self, kind: PerfContextKind) -> Option<Self::PerfContext> {
-        Some(RocksPerfContext(RawPerfContext::get()))
+        Some(RocksPerfContext {
+            raw: RawPerfContext::get(),
+            stats: PerfContextStatistics::new(self.get_perf_level(), kind),
+            engine: self.clone(),
+        })
     }
 
     fn get_perf_level(&self) -> PerfLevel {
@@ -21,50 +26,54 @@ impl PerfContextExt for RocksEngine {
     }
 }
 
-pub struct RocksPerfContext(RawPerfContext);
+pub struct RocksPerfContext {
+    raw: RawPerfContext,
+    stats: PerfContextStatistics,
+    engine: RocksEngine,
+}
 
 impl PerfContext for RocksPerfContext {
     fn start_observe(&mut self) {
-        panic!()
+        self.stats.start(&self.engine)
     }
 
     fn report_metrics(&mut self) {
-        panic!()
+        self.stats.report(&self.engine)
     }
 
     fn reset(&mut self) {
-        self.0.reset()
+        self.raw.reset()
     }
 
     fn write_wal_time(&self) -> u64 {
-        self.0.write_wal_time()
+        self.raw.write_wal_time()
     }
 
     fn write_memtable_time(&self) -> u64 {
-        self.0.write_memtable_time()
+        self.raw.write_memtable_time()
     }
 
     fn write_delay_time(&self) -> u64 {
-        self.0.write_delay_time()
+        self.raw.write_delay_time()
     }
 
     fn write_pre_and_post_process_time(&self) -> u64 {
-        self.0.write_pre_and_post_process_time()
+        self.raw.write_pre_and_post_process_time()
     }
 
     fn db_mutex_lock_nanos(&self) -> u64 {
-        self.0.db_mutex_lock_nanos()
+        self.raw.db_mutex_lock_nanos()
     }
 
     fn write_thread_wait_nanos(&self) -> u64 {
-        self.0.write_thread_wait_nanos()
+        self.raw.write_thread_wait_nanos()
     }
 
     fn write_scheduling_flushes_compactions_time(&self) -> u64 {
-        self.0.write_scheduling_flushes_compactions_time()
+        self.raw.write_scheduling_flushes_compactions_time()
     }
 
     fn db_condition_wait_nanos(&self) -> u64 {
-        self.0.db_condition_wait_nanos()
+        self.raw.db_condition_wait_nanos()
     }
 }
