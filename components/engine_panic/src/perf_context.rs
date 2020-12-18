@@ -22,6 +22,14 @@ impl PerfContextExt for PanicEngine {
 pub struct PanicPerfContext;
 
 impl PerfContext for PanicPerfContext {
+    fn start_observe(&self) {
+        panic!()
+    }
+
+    fn report_metrics(&self) {
+        panic!()
+    }
+
     fn reset(&mut self) {
         panic!()
     }

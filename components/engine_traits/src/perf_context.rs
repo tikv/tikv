@@ -30,6 +30,9 @@ pub trait PerfContextExt {
 }
 
 pub trait PerfContext {
+    fn start_observe(&self);
+    fn report_metrics(&self);
+
     fn reset(&mut self);
     fn write_wal_time(&self) -> u64;
     fn write_memtable_time(&self) -> u64;
