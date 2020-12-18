@@ -297,7 +297,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
@@ -358,7 +358,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
-            enable_compaction_guard: true,
+            enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
         },
@@ -663,6 +663,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.backup = BackupConfig {
         num_threads: 456,
+        batch_size: 7,
         region_max_size: ReadableSize::mb(789),
     };
     value.import = ImportConfig {

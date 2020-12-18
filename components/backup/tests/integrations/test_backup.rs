@@ -93,6 +93,7 @@ impl TestSuite {
                 engines.kv.as_inner().clone(),
                 BackupConfig {
                     num_threads: 4,
+                    batch_size: 8,
                     region_max_size: ReadableSize::mb(144),
                 },
                 concurrency_manager.clone(),

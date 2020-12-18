@@ -104,14 +104,14 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18c4fde11fd6a6f244541acc8df7dda88f346363e70f52f8ea4dd66e299c815c"
+checksum = "c832f4cc51a4c7420c8e84ed9571e760f551531478fa1f72fcda2f768bd10271"
 dependencies = [
  "futures-core",
  "futures-io",
  "futures-timer",
- "pin-project-lite",
+ "pin-project-lite 0.2.0",
 ]
 
 [[package]]
@@ -2046,7 +2046,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "cc",
  "cmake",
@@ -2055,7 +2055,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2075,7 +2075,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2813,6 +2813,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237844750cfbb86f67afe27eee600dfbbcb6188d734139b534cbfbf4f96792ae"
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
+
+[[package]]
 name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3430,7 +3436,7 @@ dependencies = [
  "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "serde",
  "serde_urlencoded",
  "tokio",
@@ -3490,7 +3496,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#59af34d77c189a9fd594fc5322045230cb410bf9"
+source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4498,7 +4504,6 @@ dependencies = [
  "rand",
  "rand_xorshift",
  "security",
- "semver 0.10.0",
  "serde_json",
  "slog",
  "slog-global",
@@ -4778,7 +4783,6 @@ dependencies = [
  "regex",
  "rev_lines",
  "security",
- "semver 0.10.0",
  "serde",
  "serde_derive",
  "serde_ignored",
@@ -5012,7 +5016,7 @@ dependencies = [
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "signal-hook-registry",
  "slab",
  "tokio-macros",
@@ -5082,7 +5086,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "tokio",
 ]
 
