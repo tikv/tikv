@@ -13,8 +13,9 @@ pub enum PerfLevel {
 
 /// Extensions for measuring engine performance.
 ///
-/// This is very rocks-specific and is optional for other engines.
-/// Eventually it will need to be rethought to make sense for other engines.
+/// A PerfContext is created with a specific measurement level,
+/// and a 'kind' which represents wich tikv subsystem measurements are being
+/// collected for.
 ///
 /// In rocks, `PerfContext` uses global state, and does not require
 /// access through an engine. Thus perf data is not per-engine.
@@ -37,7 +38,14 @@ pub enum PerfContextKind {
     RaftstoreStore,
 }
 
+/// Reports metrics to prometheus
+///
+/// For alternate engines, it is reasonable to make `start_observe`
+/// and `report_metrics` no-ops.
 pub trait PerfContext: Send {
+    /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
+
+    /// Reports the current collected metrics to prometheus
     fn report_metrics(&mut self);
 }
