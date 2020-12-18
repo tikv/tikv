@@ -1125,7 +1125,7 @@ where
             "handle raft message";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
-            "message_type" => ?msg.get_message().get_msg_type(),
+            "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );

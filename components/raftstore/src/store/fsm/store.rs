@@ -1520,7 +1520,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             "to_peer_id" => msg.get_to_peer().get_id(),
             "store_id" => self.fsm.store.id,
             "region_id" => region_id,
-            "msg_type" => ?msg.get_message().get_msg_type(),
+            "msg_type" => %util::MsgType(&msg),
         );
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
