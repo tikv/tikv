@@ -720,9 +720,9 @@ pub struct TestPdClient {
 
 impl TestPdClient {
     pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
-        let gate = FeatureGate::default();
-        // Ease testing, most cases don't test about upgrading.
-        gate.set_version("999.0.0").unwrap();
+        let feature_gate = FeatureGate::default();
+        // For easy testing, most cases don't test upgrading.
+        feature_gate.set_version("999.0.0").unwrap();
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
@@ -730,7 +730,7 @@ impl TestPdClient {
             is_incompatible,
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
-            feature_gate: gate,
+            feature_gate,
         }
     }
 
@@ -1214,8 +1214,8 @@ impl TestPdClient {
         }
     }
 
-    pub fn set_cluster_version(&self, version: &str) {
-        self.feature_gate.set_version(version).unwrap();
+    pub fn reset_version(&self, version: &str) {
+        unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
 }
 
