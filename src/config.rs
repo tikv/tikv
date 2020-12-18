@@ -937,6 +937,12 @@ pub struct DbConfig {
     pub ver_defaultcf: VersionCfConfig,
     #[config(skip)]
     pub titan: TitanDBConfig,
+
+    // deprecated. use rate_limiter_auto_tuned.
+    #[config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub auto_tuned: Option<bool>,
 }
 
 impl Default for DbConfig {
@@ -967,6 +973,7 @@ impl Default for DbConfig {
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
+            auto_tuned: None, // deprecated
             rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
@@ -2509,6 +2516,13 @@ impl TiKvConfig {
                 "deprecated configuration, {} is no longer used and ignored.",
                 "raft_store.clean_stale_peer_delay",
             );
+        }
+        if self.rocksdb.auto_tuned.is_some() {
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored, please use {}.",
+                "rocksdb.auto_tuned", "rocksdb.rate_limiter_auto_tuned",
+            );
+            self.rocksdb.auto_tuned = None;
         }
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families
