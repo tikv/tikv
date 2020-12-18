@@ -11,7 +11,6 @@ impl PerfContextExt for RocksEngine {
 
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Option<Self::PerfContext> {
         Some(RocksPerfContext {
-            raw: RawPerfContext::get(),
             stats: PerfContextStatistics::new(level, kind),
             engine: self.clone(),
         })
@@ -27,7 +26,6 @@ impl PerfContextExt for RocksEngine {
 }
 
 pub struct RocksPerfContext {
-    raw: RawPerfContext,
     stats: PerfContextStatistics,
     engine: RocksEngine,
 }
@@ -42,38 +40,38 @@ impl PerfContext for RocksPerfContext {
     }
 
     fn reset(&mut self) {
-        self.raw.reset()
+        RawPerfContext::get().reset()
     }
 
     fn write_wal_time(&self) -> u64 {
-        self.raw.write_wal_time()
+        RawPerfContext::get().write_wal_time()
     }
 
     fn write_memtable_time(&self) -> u64 {
-        self.raw.write_memtable_time()
+        RawPerfContext::get().write_memtable_time()
     }
 
     fn write_delay_time(&self) -> u64 {
-        self.raw.write_delay_time()
+        RawPerfContext::get().write_delay_time()
     }
 
     fn write_pre_and_post_process_time(&self) -> u64 {
-        self.raw.write_pre_and_post_process_time()
+        RawPerfContext::get().write_pre_and_post_process_time()
     }
 
     fn db_mutex_lock_nanos(&self) -> u64 {
-        self.raw.db_mutex_lock_nanos()
+        RawPerfContext::get().db_mutex_lock_nanos()
     }
 
     fn write_thread_wait_nanos(&self) -> u64 {
-        self.raw.write_thread_wait_nanos()
+        RawPerfContext::get().write_thread_wait_nanos()
     }
 
     fn write_scheduling_flushes_compactions_time(&self) -> u64 {
-        self.raw.write_scheduling_flushes_compactions_time()
+        RawPerfContext::get().write_scheduling_flushes_compactions_time()
     }
 
     fn db_condition_wait_nanos(&self) -> u64 {
-        self.raw.db_condition_wait_nanos()
+        RawPerfContext::get().db_condition_wait_nanos()
     }
 }
