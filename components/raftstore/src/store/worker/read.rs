@@ -1025,13 +1025,12 @@ mod tests {
         // Stale local ReadDelegate
         cmd.mut_header().mut_region_epoch().set_version(4);
         region1.mut_region_epoch().set_version(4);
-        let pg = Progress::region(region1.clone());
+        let pg = Progress::region(region1);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
-        let task =
-            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
     }
