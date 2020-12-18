@@ -14,7 +14,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_kv_pairs_and_statistics, extract_region_error,
+        extract_region_error, map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -32,13 +32,13 @@ use grpcio::{
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
+use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::{Callback, CasualMessage};
+use raftstore::store::{Callback, CasualMessage, StoreMsg};
 use raftstore::{DiscardReason, Error as RaftStoreError};
-use security::{check_common_name, SecurityManager};
 use tikv_util::future::{paired_future_callback, poll_future_notify};
 use tikv_util::mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;
@@ -65,8 +65,6 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     grpc_thread_load: Arc<ThreadLoad>,
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
-
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl<
@@ -85,7 +83,6 @@ impl<
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
-            security_mgr: self.security_mgr.clone(),
         }
     }
 }
@@ -101,7 +98,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         grpc_thread_load: Arc<ThreadLoad>,
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
-        security_mgr: Arc<SecurityManager>,
     ) -> Self {
         Service {
             gc_worker,
@@ -112,7 +108,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             grpc_thread_load,
             readpool_normal_thread_load,
             enable_req_batch,
-            security_mgr,
         }
     }
 }
@@ -120,9 +115,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-                return;
-            }
             let begin_instant = Instant::now_coarse();
 
             let resp = $future_name(&self.storage, req);
@@ -286,9 +278,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
@@ -317,9 +306,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: RegisterLockObserverRequest,
         sink: UnarySink<RegisterLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -360,9 +346,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: CheckLockObserverRequest,
         sink: UnarySink<CheckLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -407,9 +390,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: RemoveLockObserverRequest,
         sink: UnarySink<RemoveLockObserverResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -448,9 +428,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: PhysicalScanLockRequest,
         sink: UnarySink<PhysicalScanLockResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
@@ -496,9 +473,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
@@ -548,9 +522,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: Request,
         mut sink: ServerStreamingSink<Response>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let mut stream = self
@@ -589,9 +560,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<RaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let ch = self.ch.clone();
         ctx.spawn(async move {
             let res = stream.map_err(Error::from).try_for_each(move |msg| {
@@ -620,9 +588,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchRaftMessage>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         info!("batch_raft RPC is called, new gRPC stream established");
         let ch = self.ch.clone();
         ctx.spawn(async move {
@@ -658,9 +623,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
@@ -679,9 +641,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -764,12 +723,9 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: ReadIndexRequest,
+        req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -777,6 +733,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let mut header = RaftRequestHeader::default();
         let mut inner_req = RaftRequest::default();
         inner_req.set_cmd_type(CmdType::ReadIndex);
+        inner_req.mut_read_index().set_start_ts(req.get_start_ts());
+        for r in req.get_ranges() {
+            let mut range = kvproto::kvrpcpb::KeyRange::default();
+            range.set_start_key(Key::from_raw(r.get_start_key()).into_encoded());
+            range.set_end_key(Key::from_raw(r.get_end_key()).into_encoded());
+            inner_req.mut_read_index().mut_key_ranges().push(range);
+        }
         header.set_region_id(req.get_context().get_region_id());
         header.set_peer(req.get_context().get_peer().clone());
         header.set_region_epoch(req.get_context().get_region_epoch().clone());
@@ -807,19 +770,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             return;
         }
 
-        let check_memory_locks_fut = self.storage.check_memory_locks_in_ranges(
-            req.take_context(),
-            req.get_start_ts().into(),
-            req.take_ranges().into(),
-        );
-
         let task = async move {
             let mut res = f.await?;
             let mut resp = ReadIndexResponse::default();
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());
             } else {
-                let raft_resps = res.response.get_responses();
+                let mut raft_resps = res.response.take_responses();
                 if raft_resps.len() != 1 {
                     error!(
                         "invalid read index response";
@@ -831,23 +788,11 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                         raft_resps
                     ));
                 } else {
-                    // Update max_read_ts and check memory locks after read index command finishes.
-                    // It reduces the chance of encountering locks if we check it as late as possibile.
-                    match check_memory_locks_fut.await {
-                        Ok(Some(lock)) => {
-                            resp.set_locked(lock);
-                        }
-                        Ok(None) => {
-                            let read_index = raft_resps[0].get_read_index().get_read_index();
-                            resp.set_read_index(read_index);
-                        }
-                        res => {
-                            if let Some(err) = extract_region_error(&res) {
-                                resp.set_region_error(err);
-                            } else {
-                                warn!("unknown error: {:?}", res);
-                            }
-                        }
+                    let mut read_index_resp = raft_resps[0].take_read_index();
+                    if read_index_resp.has_locked() {
+                        resp.set_locked(read_index_resp.take_locked());
+                    } else {
+                        resp.set_read_index(read_index_resp.get_read_index());
                     }
                 }
             }
@@ -875,9 +820,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchCommandsRequest>,
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
@@ -1000,6 +942,60 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         _sink: ServerStreamingSink<BatchResponse>,
     ) {
         unimplemented!()
+    }
+
+    fn dispatch_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: DispatchTaskRequest,
+        _sink: UnarySink<DispatchTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn cancel_mpp_task(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: CancelTaskRequest,
+        _sink: UnarySink<CancelTaskResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn establish_mpp_connection(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: EstablishMppConnectionRequest,
+        _sink: ServerStreamingSink<MppDataPacket>,
+    ) {
+        unimplemented!()
+    }
+
+    fn check_leader(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut request: CheckLeaderRequest,
+        sink: UnarySink<CheckLeaderResponse>,
+    ) {
+        let ts = request.get_ts();
+        let leaders = request.take_regions().into();
+        let (cb, resp) = paired_future_callback();
+        let ch = self.ch.clone();
+        let task = async move {
+            ch.send_store_msg(StoreMsg::CheckLeader { leaders, cb })?;
+            let regions = resp.await?;
+            let mut resp = CheckLeaderResponse::default();
+            resp.set_ts(ts);
+            resp.set_regions(regions);
+            sink.success(resp).await?;
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            warn!("cdc call CheckLeader failed"; "err" => ?e);
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
@@ -1168,8 +1164,9 @@ fn future_get<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok((val, statistics, perf_statistics_delta)) => {
-                    statistics.write_scan_detail(resp.mut_scan_detail_v2());
-                    perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1204,7 +1201,19 @@ fn future_scan<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_pairs(extract_kv_pairs(v).into());
+            match v {
+                Ok(kv_res) => {
+                    resp.set_pairs(map_kv_pairs(kv_res).into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }
@@ -1223,10 +1232,23 @@ fn future_batch_get<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            let (val, statistics, perf_statistics_delta) = extract_kv_pairs_and_statistics(v);
-            statistics.write_scan_detail(resp.mut_scan_detail_v2());
-            perf_statistics_delta.write_scan_detail(resp.mut_scan_detail_v2());
-            resp.set_pairs(val.into());
+            match v {
+                Ok((kv_res, statistics, perf_statistics_delta)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    let scan_detail_v2 = resp.mut_exec_details_v2().mut_scan_detail_v2();
+                    statistics.write_scan_detail(scan_detail_v2);
+                    perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
+                    // Set key_error in the first kv_pair for backward compatibility.
+                    let mut pair = KvPair::default();
+                    pair.set_error(key_error);
+                    resp.mut_pairs().push(pair);
+                }
+            }
         }
         Ok(resp)
     }
@@ -1662,6 +1684,8 @@ txn_command_future!(future_check_txn_status, CheckTxnStatusRequest, CheckTxnStat
                     let primary = lock.primary.clone();
                     resp.set_lock_info(lock.into_lock_info(primary));
                 }
+                TxnStatus::PessimisticRollBack => resp.set_action(Action::TtlExpirePessimisticRollback),
+                TxnStatus::LockNotExistDoNothing => resp.set_action(Action::LockNotExistDoNothing),
             },
             Err(e) => resp.set_error(extract_key_error(&e)),
         }

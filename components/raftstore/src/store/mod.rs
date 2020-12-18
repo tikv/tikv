@@ -11,6 +11,7 @@ pub mod util;
 
 mod bootstrap;
 mod compaction_guard;
+mod hibernate_state;
 mod local_metrics;
 mod metrics;
 mod peer;
@@ -40,6 +41,7 @@ pub use self::peer_storage::{
     PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
+pub use self::read_queue::ReadIndexContext;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
 pub use self::snap::{

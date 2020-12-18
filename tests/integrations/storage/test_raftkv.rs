@@ -4,16 +4,18 @@ use std::sync::Arc;
 use std::thread;
 use std::time;
 
-use kvproto::kvrpcpb::Context;
+use futures::executor::block_on;
+use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
-use txn_types::Key;
+use txn_types::{Key, Lock, LockType};
 
 #[test]
 fn test_raftkv() {
@@ -207,6 +209,71 @@ fn test_read_on_replica() {
     // sleep to ensure the follower has received a heartbeat from the leader
     thread::sleep(time::Duration::from_millis(300));
     assert_has(follower_snap_ctx, &follower_storage, k4, v4);
+}
+
+#[test]
+fn test_read_on_replica_check_memory_locks() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.hibernate_regions = false;
+    cluster.run();
+
+    let raw_key = b"key";
+    let encoded_key = Key::from_raw(raw_key);
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(raw_key), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader.get_id());
+
+    let lock = Lock::new(
+        LockType::Put,
+        raw_key.to_vec(),
+        10.into(),
+        20000,
+        None,
+        10.into(),
+        1,
+        20.into(),
+    );
+    let guard = block_on(leader_cm.lock_key(&encoded_key));
+    guard.with_lock(|l| *l = Some(lock.clone()));
+
+    // read on follower
+    let mut follower_peer = None;
+    let mut follower_id = 0;
+    let peers = region.get_peers();
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_id = p.get_id();
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+
+    assert!(follower_peer.is_some());
+    let mut follower_ctx = Context::default();
+    follower_ctx.set_region_id(region.get_id());
+    follower_ctx.set_region_epoch(region.get_region_epoch().clone());
+    follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
+    follower_ctx.set_replica_read(true);
+    let mut range = KeyRange::default();
+    range.set_start_key(encoded_key.as_encoded().to_vec());
+    let follower_snap_ctx = SnapContext {
+        pb_ctx: &follower_ctx,
+        start_ts: 100.into(),
+        key_ranges: vec![range],
+        ..Default::default()
+    };
+    let follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    match follower_storage.snapshot(follower_snap_ctx) {
+        Err(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))))) => {
+            assert_eq!(lock_info, lock.into_lock_info(raw_key.to_vec()))
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
 }
 
 #[test]

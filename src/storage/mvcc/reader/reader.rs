@@ -19,13 +19,22 @@ pub enum TxnCommitRecord {
     /// `start_ts`. That kind of record will be returned via the `overlapped_write` field.
     /// In this case, if the current transaction is to be rolled back, the `overlapped_write` must not
     /// be overwritten.
-    None { overlapped_write: Option<Write> },
+    None {
+        overlapped_write: Option<OverlappedWrite>,
+    },
     /// Found the transaction's write record.
     SingleRecord { commit_ts: TimeStamp, write: Write },
     /// The transaction's status is found in another transaction's record's `overlapped_rollback`
     /// field. This may happen when the current transaction's `start_ts` is the same as the
     /// `commit_ts` of another transaction on this key.
     OverlappedRollback { commit_ts: TimeStamp },
+}
+
+#[derive(Clone, Debug)]
+pub struct OverlappedWrite {
+    pub write: Write,
+    /// GC fence for `overlapped_write`. PTAL at `txn_types::Write::gc_fence`.
+    pub gc_fence: TimeStamp,
 }
 
 impl TxnCommitRecord {
@@ -58,7 +67,7 @@ impl TxnCommitRecord {
         }
     }
 
-    pub fn unwrap_none(self) -> Option<Write> {
+    pub fn unwrap_none(self) -> Option<OverlappedWrite> {
         match self {
             Self::None { overlapped_write } => overlapped_write,
             _ => panic!("txn record found but not expected: {:?}", self),
@@ -260,6 +269,7 @@ impl<S: Snapshot> MvccReader<S> {
         //
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
         let mut seek_ts = TimeStamp::max();
+        let mut gc_fence = TimeStamp::from(0);
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
                 return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
@@ -269,8 +279,11 @@ impl<S: Snapshot> MvccReader<S> {
                     return Ok(TxnCommitRecord::OverlappedRollback { commit_ts });
                 }
                 return Ok(TxnCommitRecord::None {
-                    overlapped_write: Some(write),
+                    overlapped_write: Some(OverlappedWrite { write, gc_fence }),
                 });
+            }
+            if write.write_type == WriteType::Put || write.write_type == WriteType::Delete {
+                gc_fence = commit_ts;
             }
             if commit_ts < start_ts {
                 break;
@@ -430,7 +443,7 @@ impl<S: Snapshot> MvccReader<S> {
 
 // Returns true if it needs gc.
 // This is for optimization purpose, does not mean to be accurate.
-pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: MvccProperties) -> bool {
+pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccProperties) -> bool {
     // Always GC.
     if ratio_threshold < 1.0 {
         return true;
@@ -465,7 +478,8 @@ mod tests {
     use crate::storage::mvcc::{MvccReader, MvccTxn};
 
     use crate::storage::txn::{
-        acquire_pessimistic_lock, cleanup, commit, pessimistic_prewrite, prewrite,
+        acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
+        TransactionProperties,
     };
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
@@ -473,7 +487,7 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -532,6 +546,28 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
+        fn txn_props(
+            start_ts: TimeStamp,
+            primary: &[u8],
+            pessimistic: bool,
+        ) -> TransactionProperties {
+            let kind = if pessimistic {
+                TransactionKind::Pessimistic(TimeStamp::default())
+            } else {
+                TransactionKind::Optimistic(false)
+            };
+
+            TransactionProperties {
+                start_ts,
+                kind,
+                commit_kind: CommitKind::TwoPc,
+                primary,
+                txn_size: 0,
+                lock_ttl: 0,
+                min_commit_ts: TimeStamp::default(),
+            }
+        }
+
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap =
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
@@ -541,14 +577,9 @@ mod tests {
 
             prewrite(
                 &mut txn,
+                &Self::txn_props(start_ts, pk, false),
                 m,
-                pk,
                 &None,
-                false,
-                0,
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
                 false,
             )
             .unwrap();
@@ -567,18 +598,12 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(snap, start_ts, true, cm);
 
-            pessimistic_prewrite(
+            prewrite(
                 &mut txn,
+                &Self::txn_props(start_ts, pk, true),
                 m,
-                pk,
                 &None,
                 true,
-                0,
-                TimeStamp::default(),
-                0,
-                TimeStamp::default(),
-                TimeStamp::default(),
-                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -655,7 +680,7 @@ mod tests {
                     self.region.clone(),
                 );
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
-                txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
+                gc(&mut txn, Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;
@@ -686,7 +711,7 @@ mod tests {
                     }
                 }
             }
-            db.c().write(&wb).unwrap();
+            wb.write().unwrap();
         }
 
         fn flush(&mut self) {
@@ -747,7 +772,7 @@ mod tests {
             .c()
             .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
         if let Some(props) = props.as_ref() {
-            assert_eq!(check_need_gc(safe_point, 1.0, props.clone()), need_gc);
+            assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
         }
         props
     }
@@ -1029,8 +1054,8 @@ mod tests {
             .unwrap()
             .unwrap_none()
             .unwrap();
-        assert_eq!(overlapped_write.start_ts, 45.into());
-        assert_eq!(overlapped_write.write_type, WriteType::Put);
+        assert_eq!(overlapped_write.write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write.write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())

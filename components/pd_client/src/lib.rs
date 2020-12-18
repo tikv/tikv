@@ -18,6 +18,7 @@ extern crate tikv_alloc;
 extern crate tikv_util;
 
 mod client;
+mod feature_gate;
 pub mod metrics;
 mod util;
 
@@ -26,17 +27,16 @@ pub mod errors;
 pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+pub use self::feature_gate::{Feature, FeatureGate};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
-use semver::{SemVerError, Version};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -137,6 +137,11 @@ pub trait PdClient: Send + Sync {
 
     /// Gets store information if it is not a tombstone store.
     fn get_store(&self, _store_id: u64) -> Result<metapb::Store> {
+        unimplemented!();
+    }
+
+    /// Gets store information if it is not a tombstone store asynchronously
+    fn get_store_async(&self, _store_id: u64) -> PdFuture<metapb::Store> {
         unimplemented!();
     }
 
@@ -253,6 +258,11 @@ pub trait PdClient: Send + Sync {
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         unimplemented!()
     }
+
+    /// Gets the internal `FeatureGate`.
+    fn feature_gate(&self) -> &FeatureGate {
+        todo!()
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
@@ -263,39 +273,5 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct ClusterVersion {
-    version: Arc<RwLock<Option<Version>>>,
-}
-
-impl ClusterVersion {
-    pub fn get(&self) -> Option<Version> {
-        self.version.read().unwrap().clone()
-    }
-
-    fn set(&self, version: &str) -> std::result::Result<bool, SemVerError> {
-        let new = Version::parse(version)?;
-        let mut holder = self.version.write().unwrap();
-        match &mut *holder {
-            Some(ref mut old) if *old < new => {
-                *old = new;
-                Ok(true)
-            }
-            None => {
-                *holder = Some(new);
-                Ok(true)
-            }
-            Some(_) => Ok(false),
-        }
-    }
-
-    /// Initialize a `ClusterVersion` as given `version`. Only should be used for tests.
-    pub fn new(version: Version) -> Self {
-        ClusterVersion {
-            version: Arc::new(RwLock::new(Some(version))),
-        }
     }
 }

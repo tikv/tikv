@@ -21,12 +21,12 @@ use kvproto::replication_modepb::{
 };
 use raft::eraftpb::ConfChangeType;
 
+use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
-use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
@@ -715,10 +715,14 @@ pub struct TestPdClient {
     is_incompatible: bool,
     tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
+    feature_gate: FeatureGate,
 }
 
 impl TestPdClient {
     pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
+        let feature_gate = FeatureGate::default();
+        // For easy testing, most cases don't test upgrading.
+        feature_gate.set_version("999.0.0").unwrap();
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
@@ -726,6 +730,7 @@ impl TestPdClient {
             is_incompatible,
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
+            feature_gate,
         }
     }
 
@@ -1208,6 +1213,10 @@ impl TestPdClient {
             );
         }
     }
+
+    pub fn reset_version(&self, version: &str) {
+        unsafe { self.feature_gate.reset_version(version).unwrap() }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1253,6 +1262,16 @@ impl PdClient for TestPdClient {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         self.check_bootstrap()?;
         self.cluster.rl().get_store(store_id)
+    }
+
+    fn get_store_async(&self, store_id: u64) -> PdFuture<metapb::Store> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::pin(err(e));
+        }
+        match self.cluster.rl().get_store(store_id) {
+            Ok(store) => Box::pin(ok(store)),
+            Err(e) => Box::pin(err(e)),
+        }
     }
 
     fn get_region(&self, key: &[u8]) -> Result<metapb::Region> {
@@ -1495,7 +1514,16 @@ impl PdClient for TestPdClient {
     }
 
     fn get_tso(&self) -> PdFuture<TimeStamp> {
-        fail_point!("test_raftstore_get_tso");
+        fail_point!("test_raftstore_get_tso", |t| {
+            let duration = Duration::from_millis(t.map_or(1000, |t| t.parse().unwrap()));
+            Box::pin(async move {
+                let _ = GLOBAL_TIMER_HANDLE
+                    .delay(Instant::now() + duration)
+                    .compat()
+                    .await;
+                Err(box_err!("get tso fail"))
+            })
+        });
         if self.trigger_tso_failure.swap(false, Ordering::SeqCst) {
             return Box::pin(err(pd_client::errors::Error::Grpc(
                 grpcio::Error::RpcFailure(grpcio::RpcStatus::new(
@@ -1506,5 +1534,9 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::pin(ok(TimeStamp::new(tso)))
+    }
+
+    fn feature_gate(&self) -> &FeatureGate {
+        &self.feature_gate
     }
 }

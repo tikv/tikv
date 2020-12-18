@@ -173,6 +173,15 @@
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
+## The working thread count of the background pool, which include the endpoint of and br, split-check,
+## region thread and other thread of delay-insensitive tasks.
+## The default value is 2 if the number of CPU cores is less than 16, otherwise 3.
+# background-thread-count = 2
+
+## If handle time is larger than the threshold, it will print slow log in endpoint.
+## The default value is 1s.
+# end-point-slow-log-threshold = "1s"
+
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
@@ -459,13 +468,12 @@
 ##    1 : ReadOnly
 ##    2 : WriteOnly
 ##    3 : AllIo
-## 4. auto_tuned enables dynamic adjustment of rate limit within the range
+## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = true
-
+# rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
 # enable-pipelined-write = true
@@ -537,6 +545,12 @@
 ## mode to "no:no:no:lz4:lz4:zstd:zstd". In a word, it aims at making full use of the existing
 ## resources of the system and improving TiKV performance in terms of the current resources.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
+
+## Set zstd compression for the bottommost level.
+## This config overrides compression-per-level. It use zstd for bottommost level to ensure
+## consistent compression ratio, regardless of overall data size. If explicitly setting compression type
+## for the bottommost level is not desired, "disable" should be used.
+# bottommost-level-compression = "zstd"
 
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
@@ -641,6 +655,22 @@
 ## while using `Raw` mode.
 # optimize-filters-for-hits = true
 
+## Enable compaction guard, which is an optimization to split SST files at TiKV region boundaries.
+## The optimization can help reduce compaction IO, and allow us to use larger SST file size
+## (thus less SST files overall) while making sure we can still efficiently cleanup stale data on
+## region migration.
+## This config is available to default CF and write CF.
+# enable-compaction-guard = true
+
+## The lower bound of SST file size when compaction guard is enabled. The config prevent SST files
+## being too small when compaction guard is enabled.
+# compaction-guard-min-output-file-size = "8M"
+
+## The upper bound of SST file size when compaction guard is enabled. The config prevent SST files
+## being too large when compaction guard is enabled. This config overrides target-file-size-base
+## for the same CF.
+# compaction-guard-max-output-file-size = "128M"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -719,6 +749,9 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
+# enable-compaction-guard = true
+# compaction-guard-min-output-file-size = "8M"
+# compaction-guard-max-output-file-size = "128M"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -737,6 +770,7 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
+# enable-compaction-guard = false
 
 [raftdb]
 # max-background-jobs = 4
@@ -786,6 +820,7 @@
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
+# enable-compaction-guard = false
 
 [raft-engine]
 ## Enable raft-engine will ignore all settings about `raftdb`.
@@ -819,6 +854,13 @@
 
 ## Specifies how often TiKV rotates data encryption key.
 # data-key-rotation-period = "7d"
+
+## Enable an optimization to reduce IO and mutex contention for encryption metadata management.
+## Once the option is turned on (which is the default after 4.0.9), the data format is not
+## compatible with TiKV <= 4.0.8. In order to downgrade to TiKV <= 4.0.8, one can turn off this
+## option and restart TiKV, after which TiKV will convert the data format to be compatible with
+## previous versions.
+# enable-file-dictionary-log = true
 
 ## Specifies master key if encryption is enabled. There are three types of master key:
 ##

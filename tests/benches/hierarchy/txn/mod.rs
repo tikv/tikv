@@ -9,7 +9,9 @@ use tikv::storage::mvcc::{self, MvccTxn};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
-use tikv::storage::txn::{cleanup, commit, prewrite};
+use tikv::storage::txn::{
+    cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+};
 
 fn setup_prewrite<E, F>(
     engine: &E,
@@ -29,16 +31,20 @@ where
 
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
+        let txn_props = TransactionProperties {
+            start_ts: TimeStamp::default(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: &k.clone(),
+            txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
+        };
         prewrite(
             &mut txn,
+            &txn_props,
             Mutation::Put((Key::from_raw(&k), v.clone())),
-            &k.clone(),
             &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
             false,
         )
         .unwrap();
@@ -67,19 +73,16 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let mut txn = mvcc::MvccTxn::new(snapshot, 1.into(), true, cm.clone());
-                prewrite(
-                    &mut txn,
-                    mutation,
-                    &primary,
-                    &None,
-                    false,
-                    0,
-                    0,
-                    TimeStamp::default(),
-                    TimeStamp::default(),
-                    false,
-                )
-                .unwrap();
+                let txn_props = TransactionProperties {
+                    start_ts: TimeStamp::default(),
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: &primary,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                };
+                prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }

@@ -4,13 +4,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::GlobalReplicationState;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -140,17 +140,13 @@ impl PdStoreAddrResolver {
 /// Creates a new `PdStoreAddrResolver`.
 pub fn new_resolver<T, RR: 'static>(
     pd_client: Arc<T>,
+    worker: &Worker,
     router: RR,
-) -> Result<(
-    Worker<Task>,
-    PdStoreAddrResolver,
-    Arc<Mutex<GlobalReplicationState>>,
-)>
+) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
     RR: RaftStoreRouter<RocksEngine>,
 {
-    let mut worker = Worker::new("addr-resolver");
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
         pd_client,
@@ -158,9 +154,9 @@ where
         state: state.clone(),
         router,
     };
-    box_try!(worker.start(runner));
-    let resolver = PdStoreAddrResolver::new(worker.scheduler());
-    Ok((worker, resolver, state))
+    let scheduler = worker.start("addr-resolver", runner);
+    let resolver = PdStoreAddrResolver::new(scheduler);
+    (resolver, state)
 }
 
 impl StoreAddrResolver for PdStoreAddrResolver {
@@ -181,10 +177,10 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use collections::HashMap;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use raftstore::router::RaftStoreBlackHole;
-    use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

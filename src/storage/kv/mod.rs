@@ -6,6 +6,7 @@
 
 mod btree_engine;
 mod cursor;
+mod mock_engine;
 mod perf_context;
 mod rocksdb_engine;
 mod stats;
@@ -25,11 +26,13 @@ use txn_types::{Key, TimeStamp, TxnExtra, Value};
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor::{Cursor, CursorBuilder};
+pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+use crate::storage::mvcc;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
@@ -56,7 +59,7 @@ impl CbContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
@@ -294,6 +297,11 @@ quick_error! {
         EmptyRequest {
             display("an empty request")
         }
+        Mvcc(err: mvcc::Error) {
+            from()
+            cause(err)
+            display("{}", err)
+        }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -314,6 +322,7 @@ impl ErrorInner {
             ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
+            ErrorInner::Mvcc(ref e) => Some(ErrorInner::Mvcc(e.maybe_clone()?)),
             ErrorInner::Other(_) => None,
         }
     }
@@ -364,6 +373,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
             ErrorInner::Request(e) => e.error_code(),
+            ErrorInner::Mvcc(e) => e.error_code(),
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,

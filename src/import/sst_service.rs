@@ -21,7 +21,6 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
-use security::{check_common_name, SecurityManager};
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
@@ -48,7 +47,6 @@ where
     importer: Arc<SSTImporter>,
     switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
@@ -61,7 +59,6 @@ where
         router: Router,
         engine: E,
         importer: Arc<SSTImporter>,
-        security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<E, Router> {
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -79,7 +76,6 @@ where
             importer,
             switcher,
             limiter: Limiter::new(INFINITY),
-            security_mgr,
         }
     }
 }
@@ -95,9 +91,6 @@ where
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "switch_mode";
         let timer = Instant::now_coarse();
 
@@ -126,13 +119,10 @@ where
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
@@ -173,13 +163,10 @@ where
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "download";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
@@ -234,9 +221,6 @@ where
         mut req: IngestRequest,
         sink: UnarySink<IngestResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "ingest";
         let timer = Instant::now_coarse();
 
@@ -291,6 +275,7 @@ where
                     let mut resp = IngestResponse::default();
                     let mut header = res.response.take_header();
                     if header.has_error() {
+                        pb_error_inc(label, header.get_error());
                         resp.set_error(header.take_error());
                     }
                     Ok(resp)
@@ -304,13 +289,10 @@ where
 
     fn compact(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         req: CompactRequest,
         sink: UnarySink<CompactResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = self.engine.clone();
@@ -375,9 +357,6 @@ where
         req: SetDownloadSpeedLimitRequest,
         sink: UnarySink<SetDownloadSpeedLimitResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
@@ -398,13 +377,10 @@ where
 
     fn write(
         &mut self,
-        ctx: RpcContext<'_>,
+        _ctx: RpcContext<'_>,
         stream: RequestStream<WriteRequest>,
         sink: ClientStreamingSink<WriteResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let label = "write";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
@@ -456,4 +432,29 @@ where
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
+}
+
+// add error statistics from pb error response
+fn pb_error_inc(type_: &str, e: &errorpb::Error) {
+    let label = if e.has_not_leader() {
+        "not_leader"
+    } else if e.has_store_not_match() {
+        "store_not_match"
+    } else if e.has_region_not_found() {
+        "region_not_found"
+    } else if e.has_key_not_in_region() {
+        "key_not_in_range"
+    } else if e.has_epoch_not_match() {
+        "epoch_not_match"
+    } else if e.has_server_is_busy() {
+        "server_is_busy"
+    } else if e.has_stale_command() {
+        "stale_command"
+    } else if e.has_raft_entry_too_large() {
+        "raft_entry_too_large"
+    } else {
+        "unknown"
+    };
+
+    IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
 }

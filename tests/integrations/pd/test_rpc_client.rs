@@ -11,10 +11,9 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use tokio::runtime::Builder;
 
-use pd_client::{validate_endpoints, Error as PdError, PdClient, RegionStat, RpcClient};
+use pd_client::{validate_endpoints, Error as PdError, Feature, PdClient, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
-use semver::Version;
 use tikv_util::config::ReadableDuration;
 use txn_types::TimeStamp;
 
@@ -31,7 +30,7 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
+        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
@@ -467,9 +466,13 @@ fn test_cluster_version() {
     let server = MockServer::<Service>::new(3);
     let eps = server.bind_addrs();
 
+    let feature_a = Feature::require(0, 0, 1);
+    let feature_b = Feature::require(5, 0, 0);
+    let feature_c = Feature::require(5, 0, 1);
+
     let client = new_client(eps, None);
-    let cluster_version = client.cluster_version();
-    assert!(cluster_version.get().is_none());
+    let feature_gate = client.feature_gate();
+    assert!(!feature_gate.can_enable(feature_a));
 
     let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
@@ -483,32 +486,33 @@ fn test_cluster_version() {
 
     // Empty version string will be treated as invalid.
     emit_heartbeat();
-    assert!(cluster_version.get().is_none());
+    assert!(!feature_gate.can_enable(feature_a));
 
     // Explicitly invalid version string.
     set_cluster_version("invalid-version");
     emit_heartbeat();
-    assert!(cluster_version.get().is_none());
-
-    let v_500 = Version::parse("5.0.0").unwrap();
-    let v_501 = Version::parse("5.0.1").unwrap();
+    assert!(!feature_gate.can_enable(feature_a));
 
     // Correct version string.
     set_cluster_version("5.0.0");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_a));
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // Version can't go backwards.
     set_cluster_version("4.99");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // After reconnect the version should be still accessable.
     client.reconnect().unwrap();
-    assert_eq!(cluster_version.get().unwrap(), v_500,);
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
 
     // Version can go forwards.
     set_cluster_version("5.0.1");
     emit_heartbeat();
-    assert_eq!(cluster_version.get().unwrap(), v_501);
+    assert!(feature_gate.can_enable(feature_c));
 }

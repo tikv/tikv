@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
-use tikv_util::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimeStamp(u64);

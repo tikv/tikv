@@ -51,7 +51,7 @@ pub enum FieldTypeTp {
 
 impl FieldTypeTp {
     fn from_i32(i: i32) -> Option<FieldTypeTp> {
-        if (FieldTypeTp::Unspecified as i32 >= 0 && i <= FieldTypeTp::Bit as i32)
+        if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
             || (i >= FieldTypeTp::JSON as i32 && i <= FieldTypeTp::Geometry as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
@@ -100,6 +100,8 @@ impl From<FieldTypeTp> for ColumnInfo {
 ///
 /// Legacy Utf8Bin collator (was the default) does not pad. For compatibility,
 /// all new collation with padding behavior is negative.
+///
+/// Please refer to [mysql/charset.go](https://github.com/pingcap/parser/blob/master/mysql/charset.go).
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(i32)]
 pub enum Collation {
@@ -108,6 +110,7 @@ pub enum Collation {
     Utf8Mb4BinNoPadding = 46,
     Utf8Mb4GeneralCi = -45,
     Utf8Mb4UnicodeCi = -224,
+    Latin1Bin = -47,
 }
 
 impl Collation {
@@ -119,8 +122,9 @@ impl Collation {
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
-            -46 | -83 | -65 | -47 => Ok(Collation::Utf8Mb4Bin),
-            -63 | 63 => Ok(Collation::Binary),
+            -46 | -83 | -65 => Ok(Collation::Utf8Mb4Bin),
+            -47 => Ok(Collation::Latin1Bin),
+            -63 | 63 | 47 => Ok(Collation::Binary),
             -224 | -182 => Ok(Collation::Utf8Mb4UnicodeCi),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
@@ -270,6 +274,12 @@ pub trait FieldTypeAccessor {
     fn is_unsigned(&self) -> bool {
         self.flag().contains(FieldTypeFlag::UNSIGNED)
     }
+
+    /// Whether the flag contains `FieldTypeFlag::IS_BOOLEAN`
+    #[inline]
+    fn is_bool(&self) -> bool {
+        self.flag().contains(FieldTypeFlag::IS_BOOLEAN)
+    }
 }
 
 impl FieldTypeAccessor for FieldType {
@@ -383,5 +393,108 @@ impl FieldTypeAccessor for ColumnInfo {
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::i32;
+
+    fn field_types() -> Vec<FieldTypeTp> {
+        vec![
+            FieldTypeTp::Unspecified,
+            FieldTypeTp::Tiny,
+            FieldTypeTp::Short,
+            FieldTypeTp::Long,
+            FieldTypeTp::Float,
+            FieldTypeTp::Double,
+            FieldTypeTp::Null,
+            FieldTypeTp::Timestamp,
+            FieldTypeTp::LongLong,
+            FieldTypeTp::Int24,
+            FieldTypeTp::Date,
+            FieldTypeTp::Duration,
+            FieldTypeTp::DateTime,
+            FieldTypeTp::Year,
+            FieldTypeTp::NewDate,
+            FieldTypeTp::VarChar,
+            FieldTypeTp::Bit,
+            FieldTypeTp::JSON,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Enum,
+            FieldTypeTp::Set,
+            FieldTypeTp::TinyBlob,
+            FieldTypeTp::MediumBlob,
+            FieldTypeTp::LongBlob,
+            FieldTypeTp::Blob,
+            FieldTypeTp::VarString,
+            FieldTypeTp::String,
+            FieldTypeTp::Geometry,
+        ]
+    }
+
+    #[test]
+    fn test_field_type_from_i32() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_i32(ft as i32), Some(ft));
+        }
+
+        let fail_cases = vec![-1, -42, i32::MIN, i32::MAX, 17, 42, 0xf4, 0x100];
+
+        for fail_case in fail_cases {
+            assert_eq!(FieldTypeTp::from_i32(fail_case), None);
+        }
+    }
+
+    #[test]
+    fn test_field_type_from_u8() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_u8(ft as i32 as u8), Some(ft));
+        }
+
+        for fail_case in 17u8..=0xf4u8 {
+            assert_eq!(FieldTypeTp::from_u8(fail_case), None);
+        }
+    }
+
+    #[test]
+    fn test_field_type_to_u8() {
+        for ft in field_types() {
+            assert_eq!(FieldTypeTp::from_u8(ft.to_u8().unwrap()), Some(ft));
+        }
+    }
+
+    #[test]
+    fn test_collate_from_i32() {
+        let cases = vec![
+            (33, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-33, Some(Collation::Utf8Mb4GeneralCi)),
+            (45, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-45, Some(Collation::Utf8Mb4GeneralCi)),
+            (46, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-46, Some(Collation::Utf8Mb4Bin)),
+            (63, Some(Collation::Binary)),
+            (-63, Some(Collation::Binary)),
+            (83, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-83, Some(Collation::Utf8Mb4Bin)),
+            (255, Some(Collation::Utf8Mb4BinNoPadding)),
+            (-255, None),
+            (i32::MAX, Some(Collation::Utf8Mb4BinNoPadding)),
+            (i32::MIN, None),
+        ];
+
+        for (collate, expected) in cases {
+            let mut ft = tipb::FieldType::default();
+            ft.set_collate(collate);
+
+            let coll = ft.as_accessor().collation();
+
+            if let Some(c) = expected {
+                assert_eq!(coll.unwrap(), c);
+            } else {
+                assert!(coll.is_err());
+            }
+        }
     }
 }

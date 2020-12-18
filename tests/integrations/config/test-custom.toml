@@ -62,6 +62,8 @@ stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
 enable-request-batch = false
+background-thread-count = 999
+end-point-slow-log-threshold = "1s"
 
 [server.labels]
 a = "b"
@@ -92,7 +94,6 @@ endpoints = [
 job = "tikv_1"
 
 [raftstore]
-sync-log = false
 prevote = false
 raftdb-path = "/var"
 capacity = 123
@@ -152,8 +153,6 @@ store-pool-size = 3
 store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
-hibernate-timeout = "1h"
-early-apply = false
 dev-assert = true
 perf-level = 5
 
@@ -165,6 +164,7 @@ region-split-size = "12MB"
 region-max-keys = 100000
 region-split-keys = 100000
 consistency-check-method = "raw"
+perf-level = 5
 
 [rocksdb]
 wal-recovery-mode = 1
@@ -187,7 +187,7 @@ info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
-auto-tuned = false
+rate-limiter-auto-tuned = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
@@ -225,6 +225,9 @@ compression-per-level = [
     "zstd",
     "lz4",
 ]
+bottommost-level-compression = "disable"
+bottommost-zstd-compression-dict-size = 1024
+bottommost-zstd-compression-sample-size = 1024
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -246,7 +249,7 @@ force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
-enable-compaction-guard = true
+enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
@@ -306,7 +309,7 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = true
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
-enable-compaction-guard = true
+enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
 
@@ -570,6 +573,8 @@ cert-allowed-cn = [
 [security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
+enable-file-dictionary-log = false
+file-dictionary-rewrite-threshold = 123456
 
 [security.encryption.master-key]
 type = "file"
@@ -580,6 +585,7 @@ type = "plaintext"
 
 [backup]
 num-threads = 456
+batch-size = 7
 
 [import]
 num-threads = 123
@@ -602,3 +608,4 @@ pipelined = false
 [cdc]
 min-ts-interval = "4s"
 old-value-cache-size = 512
+hibernate-regions-compatible = false

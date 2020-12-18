@@ -19,13 +19,16 @@ use engine_traits::{Engines, ALL_CFS};
 use tempfile::TempDir;
 use test_raftstore::TestPdClient;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{dummy_scheduler, FutureWorker, Worker};
 
 #[derive(Clone)]
 struct MockTransport;
 impl Transport for MockTransport {
     fn send(&mut self, _: RaftMessage) -> Result<()> {
         unimplemented!()
+    }
+    fn need_flush(&self) -> bool {
+        false
     }
     fn flush(&mut self) {
         unimplemented!()
@@ -93,6 +96,7 @@ fn start_raftstore(
         Box::new(RaftstoreConfigManager(cfg_track.clone())),
     );
     let pd_worker = FutureWorker::new("store-config");
+    let (split_check_scheduler, _) = dummy_scheduler();
 
     system
         .spawn(
@@ -107,6 +111,7 @@ fn start_raftstore(
             store_meta,
             host,
             importer,
+            split_check_scheduler,
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),

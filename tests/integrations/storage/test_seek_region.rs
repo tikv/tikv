@@ -1,12 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use collections::HashMap;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv_util::collections::HashMap;
+use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
@@ -116,13 +118,14 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 fn test_region_collection_seek_region() {
     let mut cluster = new_node_cluster(0, 3);
 
+    let share_worker = Arc::new(Mutex::new(Worker::new("test")));
     let (tx, rx) = channel();
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host);
-            p.start();
+            let worker = share_worker.lock().unwrap();
+            let p = RegionInfoAccessor::new(host, &*worker);
             tx.send((id, p)).unwrap()
         }));
 
