@@ -154,7 +154,7 @@ impl<'a> JsonRef<'a> {
         match self.type_code {
             JsonType::I64 => self.get_i64() == 0,
             JsonType::U64 => self.get_u64() == 0,
-            JsonType::Float => self.get_double().is_zero(),
+            JsonType::Double => self.get_double().is_zero(),
             _ => false,
         }
     }

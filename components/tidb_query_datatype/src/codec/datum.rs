@@ -374,7 +374,7 @@ impl Datum {
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
-            Datum::Json(j) => Some(j.as_ref().is_zero()),
+            Datum::Json(j) => Some(!j.as_ref().is_zero()),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -1790,6 +1790,7 @@ mod tests {
             (Datum::F64(0.5), Some(true)),
             (Datum::F64(-0.5), Some(true)),
             (Datum::F64(-0.4), Some(false)),
+            (Datum::Json(Json::from_i64(0).unwrap()), Some(false)),
             (Datum::Null, None),
             (b"".as_ref().into(), Some(false)),
             (b"0.5".as_ref().into(), Some(true)),
