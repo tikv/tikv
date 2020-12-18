@@ -359,3 +359,54 @@ fn test_inconsistent_configuration() {
     cluster.reset_leader_of_region(1);
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(3, 3)));
 }
+
+/// Negotiating hibernation is implemented after 5.0.0, for older version binaries,
+/// negotiating can cause connection reset due to new enum type. The test ensures
+/// negotiation won't happen until cluster is upgraded.
+#[test]
+fn test_hibernate_feature_gate() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.pd_client.reset_version("4.0.0");
+    configure_for_hibernate(&mut cluster);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Wait for hibernation check.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+
+    // Ensure leader won't sleep if cluster version is small.
+    let awakened = Arc::new(AtomicBool::new(false));
+    let filter = Arc::new(AtomicBool::new(true));
+    let a = awakened.clone();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Send)
+            .set_msg_callback(Arc::new(move |_| {
+                a.store(true, Ordering::SeqCst);
+            }))
+            .when(filter.clone()),
+    ));
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    assert!(awakened.load(Ordering::SeqCst));
+
+    // Simulating all binaries are upgraded to 5.0.0.
+    cluster.pd_client.reset_version("5.0.0");
+    filter.store(false, Ordering::SeqCst);
+    // Wait till leader peer goes to sleep.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 3
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    awakened.store(false, Ordering::SeqCst);
+    filter.store(true, Ordering::SeqCst);
+    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 2);
+    // Leader can go to sleep as version requirement is met.
+    assert!(!awakened.load(Ordering::SeqCst));
+}
