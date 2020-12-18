@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{PerfContextExt, PerfLevel, PerfContext, PerfContextKind};
+use crate::perf_context_metrics::{STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC};
 
 #[macro_export]
 macro_rules! report_perf_context {
@@ -88,7 +89,23 @@ impl PerfContextStatistics {
         self.write_delay_time = 0;
     }
 
-    pub fn report(&self, engine: &impl PerfContextExt) {
+    pub fn report(&mut self, engine: &impl PerfContextExt) {
+        match self.kind {
+            PerfContextKind::RaftstoreApply => {
+                report_perf_context!(
+                    engine,
+                    self,
+                    APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+                );
+            }
+            PerfContextKind::RaftstoreStore => {
+                report_perf_context!(
+                    engine,
+                    self,
+                    STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+                );
+            }
+        }
     }
 }
 
