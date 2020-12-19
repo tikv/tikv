@@ -11,6 +11,7 @@ pub mod util;
 
 mod bootstrap;
 mod compaction_guard;
+mod hibernate_state;
 mod local_metrics;
 mod metrics;
 mod peer;

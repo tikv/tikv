@@ -468,13 +468,12 @@
 ##    1 : ReadOnly
 ##    2 : WriteOnly
 ##    3 : AllIo
-## 4. auto_tuned enables dynamic adjustment of rate limit within the range
+## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = true
-
+# rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
 # enable-pipelined-write = true
@@ -546,6 +545,12 @@
 ## mode to "no:no:no:lz4:lz4:zstd:zstd". In a word, it aims at making full use of the existing
 ## resources of the system and improving TiKV performance in terms of the current resources.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
+
+## Set zstd compression for the bottommost level.
+## This config overrides compression-per-level. It use zstd for bottommost level to ensure
+## consistent compression ratio, regardless of overall data size. If explicitly setting compression type
+## for the bottommost level is not desired, "disable" should be used.
+# bottommost-level-compression = "zstd"
 
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
