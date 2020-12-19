@@ -155,7 +155,7 @@ where
         {
             Err(e) => {
                 if err_result.is_ok() {
-                    err_result = Err(e);
+                    err_result = Err(e.into());
                 }
                 false
             }

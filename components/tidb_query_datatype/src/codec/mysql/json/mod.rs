@@ -203,6 +203,20 @@ impl<'a> JsonRef<'a> {
     pub(crate) fn get_str(&self) -> Result<&'a str> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
+
+    // Return whether the value is zero.
+    // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
+    pub(crate) fn is_zero(&self) -> bool {
+        match self.get_type() {
+            JsonType::Object => false,
+            JsonType::Array => false,
+            JsonType::Literal => false,
+            JsonType::I64 => self.get_i64() == 0,
+            JsonType::U64 => self.get_u64() == 0,
+            JsonType::Double => self.get_double() == 0f64,
+            JsonType::String => false,
+        }
+    }
 }
 
 /// Json implements type json used in tikv by Binary Json.
@@ -468,10 +482,7 @@ impl ConvertTo<Json> for Duration {
 
 impl crate::codec::data_type::AsMySQLBool for Json {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
         Ok(false)
     }
