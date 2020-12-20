@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use super::metrics::*;
@@ -586,6 +586,27 @@ impl RegionInfoProvider for RegionInfoAccessor {
                     )
                 })
             })
+    }
+}
+
+// Use in tests only.
+pub struct MockRegionInfoProvider(Mutex<Vec<Region>>);
+
+impl MockRegionInfoProvider {
+    pub fn new(regions: Vec<Region>) -> Self {
+        MockRegionInfoProvider(Mutex::new(regions))
+    }
+}
+
+impl Clone for MockRegionInfoProvider {
+    fn clone(&self) -> Self {
+        MockRegionInfoProvider::new(self.0.lock().unwrap().clone())
+    }
+}
+
+impl RegionInfoProvider for MockRegionInfoProvider {
+    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+        Ok(self.0.lock().unwrap().clone())
     }
 }
 

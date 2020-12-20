@@ -30,8 +30,8 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
+use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
@@ -433,11 +433,15 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
+                    let flags =
+                        WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
                     self.sink_data(
                         index,
                         request.requests.into(),
                         old_value_cb.clone(),
                         old_value_cache,
+                        is_one_pc,
                     )?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
@@ -550,8 +554,32 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_cache: &mut OldValueCache,
+        is_one_pc: bool,
     ) -> Result<()> {
-        let mut rows = HashMap::default();
+        let txn_extra_op = self.txn_extra_op;
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+            if txn_extra_op == TxnExtraOp::ReadOldValue {
+                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                let start = Instant::now();
+
+                let mut statistics = Statistics::default();
+                row.old_value =
+                    old_value_cb.borrow_mut()(key, read_old_ts, old_value_cache, &mut statistics)
+                        .unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(start.elapsed().as_secs_f64());
+                for (cf, cf_details) in statistics.details().iter() {
+                    for (tag, count) in cf_details.iter() {
+                        CDC_OLD_VALUE_SCAN_DETAILS
+                            .with_label_values(&[*cf, *tag])
+                            .inc_by(*count as i64);
+                    }
+                }
+            }
+        };
+
+        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -575,34 +603,50 @@ impl Delegate {
                         continue;
                     }
 
-                    // In order to advance resolved ts,
-                    // we must untrack inflight txns if they are committed.
-                    let commit_ts = if row.commit_ts == 0 {
-                        None
+                    if is_one_pc {
+                        set_event_row_type(&mut row, EventLogType::Committed);
+                        let commit_ts = TimeStamp::from(row.commit_ts);
+                        read_old_value(&mut row, commit_ts.prev());
+                        if let Some(resolver) = &self.resolver {
+                            assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
+                        }
                     } else {
-                        Some(row.commit_ts)
-                    };
-                    match self.resolver {
-                        Some(ref mut resolver) => resolver.untrack_lock(
-                            row.start_ts.into(),
-                            commit_ts.map(Into::into),
-                            row.key.clone(),
-                        ),
-                        None => {
-                            assert!(self.pending.is_some(), "region resolver not ready");
-                            let pending = self.pending.as_mut().unwrap();
-                            pending.locks.push(PendingLock::Untrack {
-                                key: row.key.clone(),
-                                start_ts: row.start_ts.into(),
-                                commit_ts: commit_ts.map(Into::into),
-                            });
-                            pending.pending_bytes += row.key.len();
-                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                        // In order to advance resolved ts,
+                        // we must untrack inflight txns if they are committed.
+                        let commit_ts = if row.commit_ts == 0 {
+                            None
+                        } else {
+                            Some(row.commit_ts)
+                        };
+                        match self.resolver {
+                            Some(ref mut resolver) => resolver.untrack_lock(
+                                row.start_ts.into(),
+                                commit_ts.map(Into::into),
+                                row.key.clone(),
+                            ),
+                            None => {
+                                assert!(self.pending.is_some(), "region resolver not ready");
+                                let pending = self.pending.as_mut().unwrap();
+                                pending.locks.push(PendingLock::Untrack {
+                                    key: row.key.clone(),
+                                    start_ts: row.start_ts.into(),
+                                    commit_ts: commit_ts.map(Into::into),
+                                });
+                                pending.pending_bytes += row.key.len();
+                                CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                            }
                         }
                     }
 
-                    let r = rows.insert(row.key.clone(), row);
-                    assert!(r.is_none());
+                    match rows.get_mut(&row.key) {
+                        Some(row_with_value) => {
+                            row.value = mem::take(&mut row_with_value.value);
+                            *row_with_value = row;
+                        }
+                        None => {
+                            rows.insert(row.key.clone(), row);
+                        }
+                    }
                 }
                 "lock" => {
                     let mut row = EventRow::default();
@@ -613,30 +657,8 @@ impl Delegate {
                         continue;
                     }
 
-                    if self.txn_extra_op == TxnExtraOp::ReadOldValue {
-                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                        let start = Instant::now();
-
-                        let mut statistics = Statistics::default();
-                        row.old_value = old_value_cb.borrow_mut()(
-                            key,
-                            std::cmp::max(for_update_ts, row.start_ts.into()),
-                            old_value_cache,
-                            &mut statistics,
-                        )
-                        .unwrap_or_default();
-                        CDC_OLD_VALUE_DURATION_HISTOGRAM
-                            .with_label_values(&["all"])
-                            .observe(start.elapsed().as_secs_f64());
-                        for (cf, cf_details) in statistics.details().iter() {
-                            for (tag, count) in cf_details.iter() {
-                                CDC_OLD_VALUE_SCAN_DETAILS
-                                    .with_label_values(&[*cf, *tag])
-                                    .inc_by(*count as i64);
-                            }
-                        }
-                    }
-
+                    let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
+                    read_old_value(&mut row, read_old_ts);
                     let occupied = rows.entry(row.key.clone()).or_default();
                     if !occupied.value.is_empty() {
                         assert!(row.value.is_empty());

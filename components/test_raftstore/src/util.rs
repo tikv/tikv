@@ -602,7 +602,7 @@ pub fn create_test_engine(
     let mut raft_db_opt = cfg.raftdb.build_opt();
     raft_db_opt.set_env(env);
 
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache, None);
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );

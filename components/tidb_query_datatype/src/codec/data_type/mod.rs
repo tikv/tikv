@@ -35,9 +35,9 @@ pub use self::vector::{VectorValue, VectorValueExt};
 
 use crate::EvalType;
 
+use super::Result;
 use crate::codec::convert::ConvertTo;
 use crate::expr::EvalContext;
-use tidb_query_common::error::Result;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
@@ -95,8 +95,7 @@ where
 
 impl<'a> AsMySQLBool for JsonRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
-        // TODO: This logic is not correct. See pingcap/tidb#9593
-        Ok(false)
+        Ok(!self.is_zero())
     }
 }
 
