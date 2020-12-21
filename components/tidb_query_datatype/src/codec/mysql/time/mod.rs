@@ -30,6 +30,8 @@ const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
+pub const MIN_YEAR: u32 = 1901;
+pub const MAX_YEAR: u32 = 2155;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -1197,6 +1199,28 @@ impl Time {
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
     }
 
+    pub fn from_year(
+        ctx: &mut EvalContext,
+        year: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month: 0,
+                day: 0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                micro: 0,
+                fsp,
+                time_type,
+            },
+        )
+    }
+
     pub fn round_frac(mut self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
         let time_type = self.get_time_type();
         if time_type == TimeType::Date || self.is_zero() {
@@ -1783,10 +1807,7 @@ impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }
