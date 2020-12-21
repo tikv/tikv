@@ -443,7 +443,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.engine.clone(),
             self.router.clone(),
             self.config.gc.clone(),
-            self.pd_client.cluster_version(),
+            self.pd_client.feature_gate().clone(),
         );
         gc_worker
             .start()
@@ -718,7 +718,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -734,7 +733,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -749,7 +747,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -762,9 +759,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Lock manager.
         if servers
             .server
-            .register_service(create_deadlock(
-                servers.lock_mgr.deadlock_service(self.security_mgr.clone()),
-            ))
+            .register_service(create_deadlock(servers.lock_mgr.deadlock_service()))
             .is_some()
         {
             fatal!("failed to register deadlock service");
@@ -784,7 +779,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
+        let backup_service = backup::Service::new(backup_scheduler);
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -807,8 +802,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         backup_worker.start_with_timer(backup_endpoint);
 
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
+        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
         if servers
             .server
             .register_service(create_change_data(cdc_service))
@@ -906,8 +900,7 @@ impl TiKVServer<RocksEngine> {
         let config_raftdb = &self.config.raftdb;
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
-        let raft_db_cf_opts =
-            config_raftdb.build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let raft_db_cf_opts = config_raftdb.build_cf_opts(&block_cache);
         let raft_engine = engine_rocks::raw_util::new_engine_opt(
             raft_db_path.to_str().unwrap(),
             raft_db_opts,
