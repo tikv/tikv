@@ -66,7 +66,6 @@ allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
 raft-reject-transfer-leader-duration = "0s"
-hibernate-timeout = "0s"
 dev-assert = true
 
 [coprocessor]
