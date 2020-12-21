@@ -104,8 +104,8 @@ impl Display for GcTask {
                 ..
             } => f
                 .debug_struct("GC")
-                .field("start_key", &hex::encode_upper(&start_key))
-                .field("end_key", &hex::encode_upper(&end_key))
+                .field("start_key", &log_wrappers::Value::key(&start_key))
+                .field("end_key", &log_wrappers::Value::key(&end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::UnsafeDestroyRange {
@@ -283,8 +283,8 @@ where
         self.stats.add(reader.get_statistics());
         debug!(
             "gc has finished";
-            "start_key" => hex::encode_upper(start_key),
-            "end_key" => hex::encode_upper(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
             "safe_point" => safe_point
         );
         Ok(())
@@ -459,8 +459,8 @@ where
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    log_wrappers::Value::key(&start_key),
+                    log_wrappers::Value::key(&end_key),
                     safe_point
                 );
             }

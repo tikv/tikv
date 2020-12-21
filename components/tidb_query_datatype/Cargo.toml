@@ -47,3 +47,4 @@ static_assertions = { version = "1.0", features = ["nightly"] }
 tidb_query_common = { path = "../tidb_query_common" }
 tikv_alloc = { path = "../tikv_alloc" }
 bstr = "0.2.8"
+log_wrappers = { path = "../log_wrappers" }
