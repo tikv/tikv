@@ -12,7 +12,7 @@ make_static_metric! {
         flush,
         compaction,
         replication,
-        loadbalance,
+        load_balance,
         import,
         export,
     }

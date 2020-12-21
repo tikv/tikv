@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{IOStats, IOType};
+use super::IOStats;
+use crate::IOType;
 use std::cell::Cell;
 
 pub struct IOContext;

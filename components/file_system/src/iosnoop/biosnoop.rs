@@ -17,13 +17,17 @@ use crossbeam_utils::CachePadded;
 const MAX_THREAD_IDX: usize = 128;
 
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
+// This array records the io type for every thread. The address of this array
+// will be passed into BPF, so BPF code can get io type for specific thread
+// without a extra syscall.
+// It should be a thread local variable, but the address of thread local is not
+// reliable. So define a global array and let each thread writes on a specific
+// element. Thus there is no contention for the element and use padding to avoid
+// false sharing.
 static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX] =
     [CachePadded::new(IOType::Other); MAX_THREAD_IDX];
 
-lazy_static! {
-    static ref IDX_ALLOCATOR: IdxAllocator = IdxAllocator::new();
-}
-
+// The index of the element of IO_TYPE_ARRAY for this thread to access.
 thread_local! {
     static IDX: IdxWrapper = unsafe {
         let idx = IDX_ALLOCATOR.allocate();
@@ -43,6 +47,10 @@ impl Drop for IdxWrapper {
         unsafe { *IO_TYPE_ARRAY[self.0] = IOType::Other };
         IDX_ALLOCATOR.free(self.0);
     }
+}
+
+lazy_static! {
+    static ref IDX_ALLOCATOR: IdxAllocator = IdxAllocator::new();
 }
 
 struct IdxAllocator {
@@ -130,7 +138,6 @@ impl IOContext {
         HashMap::default()
     }
 
-    #[allow(dead_code)]
     pub fn delta_and_refresh(&mut self) -> HashMap<IOType, IOStats> {
         if self.io_stats_map.is_some() {
             if let Some(map) = unsafe { get_io_stats() } {
@@ -243,7 +250,7 @@ pub fn flush_io_metrics() {
             flush_io_latency_and_bytes!(bpf, delta, flush, IOType::Flush);
             flush_io_latency_and_bytes!(bpf, delta, compaction, IOType::Compaction);
             flush_io_latency_and_bytes!(bpf, delta, replication, IOType::Replication);
-            flush_io_latency_and_bytes!(bpf, delta, loadbalance, IOType::LoadBalance);
+            flush_io_latency_and_bytes!(bpf, delta, load_balance, IOType::LoadBalance);
             flush_io_latency_and_bytes!(bpf, delta, import, IOType::Import);
             flush_io_latency_and_bytes!(bpf, delta, export, IOType::Export);
         }
