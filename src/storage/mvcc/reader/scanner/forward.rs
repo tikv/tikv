@@ -963,11 +963,11 @@ pub mod test_util {
 
         // PUT, LOCK,     Read
         // `-----------^
-        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
-        must_commit(&engine, b"k9", 18, 20);
-        must_prewrite_lock(&engine, b"k9", b"k9", 25);
-        must_commit(&engine, b"k9", 25, 26);
-        force_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27);
+        must_prewrite_put(engine, b"k9", b"v9", b"k9", 18);
+        must_commit(engine, b"k9", 18, 20);
+        must_prewrite_lock(engine, b"k9", b"k9", 25);
+        must_commit(engine, b"k9", 25, 26);
+        force_cleanup_with_gc_fence(engine, b"k9", 20, 0, 27);
 
         // Returns the read ts to be checked and the expected result.
         (
