@@ -13,11 +13,6 @@ struct DoublyLinkedNode<T> {
     next: Cell<Option<NonNull<T>>>,
 }
 
-enum CondvarNode {
-    Sync(StdCondvar, DoublyLinkedNode<CondvarNode>),
-    Async(TokioSemaphore, DoublyLinkedNode<CondvarNode>),
-}
-
 impl<T> DoublyLinkedNode<T> {
     fn new() -> DoublyLinkedNode<T> {
         DoublyLinkedNode {
@@ -25,6 +20,11 @@ impl<T> DoublyLinkedNode<T> {
             next: Cell::new(None),
         }
     }
+}
+
+enum CondvarNode {
+    Sync(StdCondvar, DoublyLinkedNode<CondvarNode>),
+    Async(TokioSemaphore, DoublyLinkedNode<CondvarNode>),
 }
 
 impl CondvarNode {

@@ -204,15 +204,25 @@ impl IORateLimiter {
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
         let bytes = self.total_limiters[IOType::Other as usize].request(bytes, prio);
-        let bytes = self.total_limiters[io_type as usize].request(bytes, prio);
+        if io_type != IOType::Other {
+            let bytes = self.total_limiters[io_type as usize].request(bytes, prio);
+        }
         match io_op {
             IOOp::Write => {
                 let bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
-                self.write_limiters[io_type as usize].request(bytes, prio)
+                if io_type != IOType::Other {
+                    self.write_limiters[io_type as usize].request(bytes, prio)
+                } else {
+                    bytes
+                }
             }
             IOOp::Read => {
                 let bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
-                self.read_limiters[io_type as usize].request(bytes, prio)
+                if io_type != IOType::Other {
+                    self.read_limiters[io_type as usize].request(bytes, prio)
+                } else {
+                    bytes
+                }
             }
         }
     }
@@ -226,25 +236,35 @@ impl IORateLimiter {
         let bytes = self.total_limiters[IOType::Other as usize]
             .async_request(bytes, prio)
             .await;
-        let bytes = self.total_limiters[io_type as usize]
-            .async_request(bytes, prio)
-            .await;
+        if io_type != IOType::Other {
+            let bytes = self.total_limiters[io_type as usize]
+                .async_request(bytes, prio)
+                .await;
+        }
         match io_op {
             IOOp::Write => {
                 let bytes = self.write_limiters[IOType::Other as usize]
                     .async_request(bytes, prio)
                     .await;
-                self.write_limiters[io_type as usize]
-                    .async_request(bytes, prio)
-                    .await
+                if io_type != IOType::Other {
+                    self.write_limiters[io_type as usize]
+                        .async_request(bytes, prio)
+                        .await
+                } else {
+                    bytes
+                }
             }
             IOOp::Read => {
                 let bytes = self.read_limiters[IOType::Other as usize]
                     .async_request(bytes, prio)
                     .await;
-                self.read_limiters[io_type as usize]
-                    .async_request(bytes, prio)
-                    .await
+                if io_type != IOType::Other {
+                    self.read_limiters[io_type as usize]
+                        .async_request(bytes, prio)
+                        .await
+                } else {
+                    bytes
+                }
             }
         }
     }
@@ -269,6 +289,7 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use test::Bencher;
 
     #[test]
@@ -315,11 +336,15 @@ mod tests {
     #[bench]
     fn bench_noop_limiter(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
         let mut ts = vec![];
         for _ in 0..3 {
             let limiter = get_io_rate_limiter().unwrap();
+            let stop = stop.clone();
             let t = std::thread::spawn(move || {
-                limiter.request(IOType::Write, IOOp::Write, 10);
+                while !stop.load(Ordering::Relaxed) {
+                    limiter.request(IOType::Write, IOOp::Write, 10);
+                }
             });
             ts.push(t);
         }
@@ -327,16 +352,24 @@ mod tests {
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
+        stop.store(true, Ordering::Relaxed);
+        for t in ts {
+            t.join().unwrap();
+        }
     }
 
     #[bench]
     fn bench_not_limited(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(10000));
+        let stop = Arc::new(AtomicBool::new(false));
         let mut ts = vec![];
         for _ in 0..3 {
+            let stop = stop.clone();
             let limiter = get_io_rate_limiter().unwrap();
             let t = std::thread::spawn(move || {
-                limiter.request(IOType::Write, IOOp::Write, 10);
+                while !stop.load(Ordering::Relaxed) {
+                    limiter.request(IOType::Write, IOOp::Write, 10);
+                }
             });
             ts.push(t);
         }
@@ -344,16 +377,24 @@ mod tests {
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
+        stop.store(true, Ordering::Relaxed);
+        for t in ts {
+            t.join().unwrap();
+        }
     }
 
     #[bench]
     fn bench_limited_fast(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(usize::max_value()));
+        let stop = Arc::new(AtomicBool::new(false));
         let mut ts = vec![];
         for _ in 0..3 {
+            let stop = stop.clone();
             let limiter = get_io_rate_limiter().unwrap();
             let t = std::thread::spawn(move || {
-                limiter.request(IOType::Compaction, IOOp::Write, 1);
+                while !stop.load(Ordering::Relaxed) {
+                    limiter.request(IOType::Compaction, IOOp::Write, 1);
+                }
             });
             ts.push(t);
         }
@@ -361,5 +402,9 @@ mod tests {
         b.iter(|| {
             limiter.request(IOType::Compaction, IOOp::Write, 1);
         });
+        stop.store(true, Ordering::Relaxed);
+        for t in ts {
+            t.join().unwrap();
+        }
     }
 }
