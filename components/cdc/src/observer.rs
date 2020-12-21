@@ -449,18 +449,26 @@ mod tests {
             );
         };
 
+        // PUT,      Read
+        //  `--------------^
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
         must_commit(&engine, b"k1", 10, 20);
         force_cleanup_with_gc_fence(&engine, b"k1", 20, 0, 50);
 
+        // PUT,      Read
+        //  `---------^
         must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
         must_commit(&engine, b"k2", 11, 20);
         force_cleanup_with_gc_fence(&engine, b"k2", 20, 0, 40);
 
+        // PUT,      Read
+        //  `-----^
         must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
         must_commit(&engine, b"k3", 12, 20);
         force_cleanup_with_gc_fence(&engine, b"k3", 20, 0, 30);
 
+        // PUT,   PUT,       Read
+        //  `-----^ `----^
         must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
         must_commit(&engine, b"k4", 13, 14);
         must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
@@ -468,6 +476,8 @@ mod tests {
         force_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20);
         force_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30);
 
+        // PUT,   DEL,       Read
+        //  `-----^ `----^
         must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
         must_commit(&engine, b"k5", 13, 14);
         must_prewrite_delete(&engine, b"k5", b"v5", 15);
@@ -475,6 +485,8 @@ mod tests {
         force_cleanup_with_gc_fence(&engine, b"k5", 14, 0, 20);
         force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
 
+        // PUT, LOCK, LOCK,   Read
+        //  `------------------------^
         must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
         must_commit(&engine, b"k6", 16, 20);
         must_prewrite_lock(&engine, b"k6", b"k6", 25);
@@ -483,6 +495,8 @@ mod tests {
         must_commit(&engine, b"k6", 28, 29);
         force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 50);
 
+        // PUT, LOCK,   LOCK,   Read
+        //  `---------^
         must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
         must_commit(&engine, b"k7", 16, 20);
         must_prewrite_lock(&engine, b"k7", b"k7", 25);
@@ -491,6 +505,8 @@ mod tests {
         must_commit(&engine, b"k7", 28, 29);
         force_cleanup_with_gc_fence(&engine, b"k7", 20, 0, 27);
 
+        // PUT,  Read
+        //  * (GC fence ts is 0)
         must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
         must_commit(&engine, b"k8", 17, 30);
         force_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0);
