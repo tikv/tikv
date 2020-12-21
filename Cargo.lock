@@ -4689,6 +4689,7 @@ dependencies = [
  "file_system",
  "flate2",
  "hex 0.4.2",
+ "log_wrappers",
  "match_template",
  "num",
  "num-traits",
