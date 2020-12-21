@@ -150,39 +150,8 @@ impl BackupRange {
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
-<<<<<<< HEAD
-        let snapshot = match engine.snapshot(&ctx) {
-=======
-
-        // Update max_ts and check the in-memory lock table before getting the snapshot
-        concurrency_manager.update_max_ts(backup_ts);
-        concurrency_manager
-            .read_range_check(
-                self.start_key.as_ref(),
-                self.end_key.as_ref(),
-                |key, lock| {
-                    Lock::check_ts_conflict(
-                        Cow::Borrowed(lock),
-                        &key,
-                        backup_ts,
-                        &Default::default(),
-                    )
-                },
-            )
-            .map_err(MvccError::from)
-            .map_err(TxnError::from)?;
-
-        // Currently backup always happens on the leader, so we don't need
-        // to set key ranges and start ts to check.
-        assert!(!ctx.get_replica_read());
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-
         let start_snapshot = Instant::now();
-        let snapshot = match engine.snapshot(snap_ctx) {
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
+        let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup snapshot failed");
@@ -613,34 +582,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let engine = self.engine.clone();
         let db = self.db.clone();
         let store_id = self.store_id;
-<<<<<<< HEAD
-        // TODO: make it async.
-        self.pool.borrow_mut().spawn(move || loop {
-            let (branges, is_raw_kv, cf) = {
-                // Release lock as soon as possible.
-                // It is critical to speed up backup, otherwise workers are
-                // blocked by each other.
-                let mut progress = prs.lock().unwrap();
-                (
-                    progress.forward(WORKER_TAKE_RANGE),
-                    progress.is_raw_kv,
-                    progress.cf,
-                )
-            };
-            if branges.is_empty() {
-                return;
-            }
-=======
-        let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
+
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
-            tikv_alloc::add_thread_memory_accessor();
-            defer!({
-                tikv_alloc::remove_thread_memory_accessor();
-            });
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
-
             // Check if we can open external storage.
             let backend = match create_storage(&request.backend) {
                 Ok(backend) => backend,
@@ -660,60 +605,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                 storage: backend,
             };
 
-<<<<<<< HEAD
-            for brange in branges {
-                if request.cancel.load(Ordering::SeqCst) {
-                    warn!("backup task has canceled"; "range" => ?brange);
-                    return;
-                }
-                // TODO: make file_name unique and short
-                let key = brange.start_key.clone().and_then(|k| {
-                    // use start_key sha256 instead of start_key to avoid file name too long os error
-                    let input = if is_raw_kv {
-                        k.into_encoded()
-                    } else {
-                        k.into_raw().unwrap()
-                    };
-                    tikv_util::file::sha256(&input).ok().map(|b| hex::encode(b))
-                });
-                let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_sst_compression_type(request.compression_type);
-                let (res, start_key, end_key) = if is_raw_kv {
-                    (
-                        brange.backup_raw_kv_to_file(
-                            &engine,
-                            db.clone(),
-                            &storage,
-                            name,
-                            cf,
-                            ct,
-                            request.compression_level,
-                        ),
-                        brange
-                            .start_key
-                            .map_or_else(|| vec![], |k| k.into_encoded()),
-                        brange.end_key.map_or_else(|| vec![], |k| k.into_encoded()),
-                    )
-                } else {
-                    (
-                        brange.backup_to_file(
-                            &engine,
-                            db.clone(),
-                            &storage,
-                            name,
-                            backup_ts,
-                            start_ts,
-                            ct,
-                            request.compression_level,
-                        ),
-                        brange
-                            .start_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
-                        brange
-                            .end_key
-                            .map_or_else(|| vec![], |k| k.into_raw().unwrap()),
-                    )
-=======
             loop {
                 let (batch, is_raw_kv, cf) = {
                     // Release lock as soon as possible.
@@ -725,7 +616,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return;
                     }
                     (batch, progress.is_raw_kv, progress.cf)
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
                 };
 
                 for brange in batch {
@@ -741,7 +631,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         } else {
                             k.into_raw().unwrap()
                         };
-                        file_system::sha256(&input).ok().map(hex::encode)
+                        tikv_util::file::sha256(&input).ok().map(hex::encode)
                     });
                     let name = backup_file_name(store_id, &brange.region, key);
                     let ct = to_sst_compression_type(request.compression_type);
@@ -766,7 +656,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                                 &engine,
                                 db.clone(),
                                 &storage,
-                                concurrency_manager.clone(),
                                 name,
                                 backup_ts,
                                 start_ts,
@@ -1044,15 +933,10 @@ pub mod tests {
                 rocks,
                 MockRegionInfoProvider::new(),
                 db,
-<<<<<<< HEAD
-                BackupConfig { num_threads: 4 },
-=======
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
                 },
-                concurrency_manager,
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
             ),
         )
     }

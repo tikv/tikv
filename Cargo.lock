@@ -5164,13 +5164,8 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
-<<<<<<< HEAD
- "pin-project-lite",
- "tokio 0.2.13",
-=======
  "pin-project-lite 0.1.4",
- "tokio",
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
+ "tokio 0.2.13",
 ]
 
 [[package]]

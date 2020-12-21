@@ -263,7 +263,6 @@ impl SSTImporter {
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
 
-<<<<<<< HEAD
         let range_start = keys::rewrite::rewrite_prefix_of_start_bound(
             new_prefix,
             old_prefix,
@@ -281,26 +280,8 @@ impl SSTImporter {
             Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
         })?;
 
-        // read and first and last keys from the SST, determine if we could
-=======
-        let range_start =
-            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
-                .map_err(|_| {
-                    Error::WrongKeyPrefix(
-                        "SST start range",
-                        range_start.to_vec(),
-                        new_prefix.to_vec(),
-                    )
-                })?;
-        let range_end =
-            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
-                .map_err(|_| {
-                    Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
-                })?;
-
         let start_rename_rewrite = Instant::now();
-        // read the first and last keys from the SST, determine if we could
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
+        // read and first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter();
         let direct_retval = (|| -> Result<Option<_>> {

@@ -25808,11 +25808,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
             "y": 32
-=======
-            "y": 58
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4464,
           "legend": {
@@ -25902,11 +25898,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
             "y": 32
-=======
-            "y": 58
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4554,
           "legend": {
@@ -25994,11 +25986,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
             "y": 40
-=======
-            "y": 66
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4555,
           "legend": {
@@ -26088,11 +26076,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
             "y": 40
-=======
-            "y": 66
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4556,
           "legend": {
@@ -26180,11 +26164,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-<<<<<<< HEAD
             "y": 48
-=======
-            "y": 74
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4557,
           "legend": {
@@ -26279,11 +26259,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-<<<<<<< HEAD
             "y": 48
-=======
-            "y": 74
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
           },
           "id": 4559,
           "legend": {
@@ -26511,9 +26487,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-<<<<<<< HEAD
   "version": 25
-=======
-  "version": 24
->>>>>>> 8232a6766... backup, sst_importer: enhance metrics (#9226)
 }
