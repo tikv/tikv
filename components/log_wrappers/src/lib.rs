@@ -7,6 +7,9 @@ extern crate slog;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+pub mod hex;
+pub use crate::hex::*;
+
 use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
 use std::{
     fmt,
@@ -114,10 +117,7 @@ impl<'a> slog::Value for Value<'a> {
         if REDACT_INFO_LOG.load(Ordering::Relaxed) {
             serializer.emit_arguments(key, &format_args!("?"))
         } else {
-            serializer.emit_arguments(
-                key,
-                &format_args!("{}", tikv_util::hex_encode_upper(self.0)),
-            )
+            serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
         }
     }
 }
@@ -129,7 +129,7 @@ impl<'a> fmt::Display for Value<'a> {
             // Print placeholder instead of the value itself.
             write!(f, "?")
         } else {
-            write!(f, "{}", tikv_util::hex_encode_upper(self.0))
+            write!(f, "{}", crate::hex_encode_upper(self.0))
         }
     }
 }

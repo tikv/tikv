@@ -2147,11 +2147,11 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
+ "hex 0.4.2",
  "protobuf",
  "slog",
  "slog-term",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
@@ -4885,11 +4885,11 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "minitrace",
  "num_cpus",
  "openssl",
