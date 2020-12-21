@@ -663,7 +663,7 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    if ratio_threshold < 1.0 || context.is_bottommost_level() {
+    if ratio_threshold < 1.0 {
         // According to our tests, `split_ts` on keys and `parse_write` on values
         // won't utilize much CPU.
         return true;
@@ -672,6 +672,9 @@ fn check_need_gc(
     let check_props = |props: &MvccProperties| {
         if props.min_ts > safe_point {
             return false;
+        }
+        if context.is_bottommost_level() {
+            return true;
         }
         if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
