@@ -327,7 +327,8 @@ impl SSTImporter {
                     .save
                     .to_str()
                     .ok_or_else(|| Error::InvalidSSTPath(path.save.clone()))?;
-                key_manager.rename_file(temp_str, save_str)?;
+                key_manager.link_file(temp_str, save_str)?;
+                key_manager.delete_file(temp_str)?;
             }
             let duration = start.elapsed();
             IMPORTER_DOWNLOAD_DURATION
@@ -545,7 +546,8 @@ impl<E: KvEngine> SSTWriter<E> {
                 .save
                 .to_str()
                 .ok_or_else(|| Error::InvalidSSTPath(import_path.save.clone()))?;
-            key_manager.rename_file(temp_str, save_str)?;
+            key_manager.link_file(temp_str, save_str)?;
+            key_manager.delete_file(temp_str)?;
         }
         // sync the directory after rename
         import_path.save.pop();
@@ -779,10 +781,11 @@ impl ImportFile {
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
-            manager.rename_file(
+            manager.link_file(
                 self.path.temp.to_str().unwrap(),
                 self.path.save.to_str().unwrap(),
             )?;
+            manager.delete_file(self.path.temp.to_str().unwrap())?;
         }
         Ok(())
     }
