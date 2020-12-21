@@ -943,7 +943,7 @@ fn cast_int_as_duration(
                     ctx.handle_truncate_err(err)?;
                     Ok(None)
                 } else {
-                    Err(err.into())
+                    Ok(ctx.handle_invalid_time_error(err).map(|_| None)?)
                 }
             })
         }
