@@ -128,6 +128,10 @@ impl<S: Snapshot> ProposalQueue<S> {
         self.queue.push_back(p);
     }
 
+    fn back(&self) -> Option<&Proposal<S>> {
+        self.queue.back()
+    }
+
     fn gc(&mut self) {
         if self.queue.capacity() > SHRINK_CACHE_CAPACITY && self.queue.len() < SHRINK_CACHE_CAPACITY
         {
@@ -2528,10 +2532,6 @@ where
             return false;
         }
 
-        // Should we call pre_propose here?
-        let last_pending_read_count = self.raft_group.raft.pending_read_count();
-        let last_ready_read_count = self.raft_group.raft.ready_read_count();
-
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         self.bcast_wake_up_time = None;
@@ -2542,20 +2542,12 @@ where
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(
-                id,
-                request.as_ref(),
-                None,
-            ));
-
-        let pending_read_count = self.raft_group.raft.pending_read_count();
-        let ready_read_count = self.raft_group.raft.ready_read_count();
-
-        if pending_read_count == last_pending_read_count
-            && ready_read_count == last_ready_read_count
-            && self.is_leader()
-        {
+        let dropped = self.propose_read_index(ReadIndexContext::fields_to_bytes(
+            id,
+            request.as_ref(),
+            None,
+        ));
+        if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
             return false;
@@ -2592,6 +2584,72 @@ where
         }
 
         true
+    }
+
+    pub fn try_renew_leader_lease<T>(
+        &mut self,
+        poll_ctx: &mut PollContext<EK, ER, T>,
+        ts: Timespec,
+    ) {
+        if !self.is_leader() {
+            return;
+        }
+        if let Err(e) = self.pre_read_index() {
+            debug!(
+                "prevents unsafe read index";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "err" => ?e,
+            );
+            poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
+            return;
+        }
+
+        let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
+        let future_ts = match self.leader_lease.need_renew(ts) {
+            Some(ts) => ts,
+            // Lease already updated
+            None => return,
+        };
+        // There are pending reads will renew lease
+        if self
+            .pending_reads
+            .back_mut()
+            .map(|r| r.renew_lease_time + max_lease > future_ts)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        // There are pending writes will renew lease
+        if self
+            .proposals
+            .back()
+            .map(|w| w.renew_lease_time.map(|l| l + max_lease > future_ts))
+            .flatten()
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let id = Uuid::new_v4();
+        let dropped = self.propose_read_index(ReadIndexContext::fields_to_bytes(id, None, None));
+        if !dropped {
+            let read_proposal = ReadIndexRequest::noop(id, monotonic_raw_now());
+            self.pending_reads.push_back(read_proposal, true);
+        }
+    }
+
+    // Propose a read index request, return whether the request was dropped silently
+    pub fn propose_read_index(&mut self, rctx: Vec<u8>) -> bool {
+        let last_pending_read_count = self.raft_group.raft.pending_read_count();
+        let last_ready_read_count = self.raft_group.raft.ready_read_count();
+
+        self.raft_group.read_index(rctx);
+
+        let pending_read_count = self.raft_group.raft.pending_read_count();
+        let ready_read_count = self.raft_group.raft.ready_read_count();
+
+        pending_read_count == last_pending_read_count && ready_read_count == last_ready_read_count
     }
 
     /// Returns (minimal matched, minimal committed_index)

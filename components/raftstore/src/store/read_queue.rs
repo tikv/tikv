@@ -63,6 +63,19 @@ where
             in_contexts: false,
         }
     }
+
+    pub fn noop(id: Uuid, renew_lease_time: Timespec) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        ReadIndexRequest {
+            id,
+            cmds: MustConsumeVec::new("noop"),
+            renew_lease_time,
+            read_index: None,
+            addition_request: None,
+            locked: None,
+            in_contexts: false,
+        }
+    }
 }
 
 impl<S> Drop for ReadIndexRequest<S>

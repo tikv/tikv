@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::option::Option;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
@@ -418,6 +418,7 @@ pub struct Lease {
     max_lease: Duration,
 
     max_drift: Duration,
+    advance_renew_lease: Duration,
     last_update: Timespec,
     remote: Option<RemoteLease>,
 }
@@ -439,6 +440,7 @@ impl Lease {
             max_lease,
 
             max_drift: max_lease / 3,
+            advance_renew_lease: max_lease / 4,
             last_update: Timespec::new(0, 0),
             remote: None,
         }
@@ -529,12 +531,31 @@ impl Lease {
         };
         let remote = RemoteLease {
             expired_time: Arc::new(AtomicU64::new(expired_time)),
+            renewing: Arc::new(AtomicBool::new(false)),
             term,
+            advance_renew_lease: self.advance_renew_lease,
         };
         // Clone the remote.
         let remote_clone = remote.clone();
         self.remote = Some(remote);
         Some(remote_clone)
+    }
+
+    /// Check if the lease will be expired in near future, if so return a
+    /// future timestamp in which the lease will be expired, if not `None`
+    /// will return
+    pub fn need_renew(&self, ts: Timespec) -> Option<Timespec> {
+        let future_ts = ts + self.advance_renew_lease;
+        match self.bound {
+            Some(Either::Right(bound)) => {
+                if future_ts < bound {
+                    None
+                } else {
+                    Some(future_ts)
+                }
+            }
+            None | Some(Either::Left(_)) => Some(future_ts),
+        }
     }
 }
 
@@ -555,6 +576,8 @@ impl fmt::Debug for Lease {
 #[derive(Clone)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
+    renewing: Arc<AtomicBool>,
+    advance_renew_lease: Duration,
     term: u64,
 }
 
@@ -571,6 +594,14 @@ impl RemoteLease {
     fn renew(&self, bound: Timespec) {
         self.expired_time
             .store(timespec_to_u64(bound), AtomicOrdering::Release);
+        self.renewing.store(false, AtomicOrdering::Release);
+    }
+
+    pub fn need_renew(&self, ts: Timespec) -> bool {
+        self.inspect(Some(ts + self.advance_renew_lease)) == LeaseState::Expired
+            && !self
+                .renewing
+                .compare_and_swap(false, true, AtomicOrdering::Release)
     }
 
     fn expire(&self) {

@@ -19,8 +19,8 @@ use time::Timespec;
 use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
-    cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
-    RequestInspector, RequestPolicy,
+    cmd_resp, Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
+    ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
 };
 use crate::Result;
 
@@ -193,6 +193,33 @@ impl ReadDelegate {
         }
     }
 
+    // If the remote lease will be expired in near future send message
+    // to `raftstroe` renew it
+    fn maybe_renew_lease_advance<EK: KvEngine>(
+        &self,
+        router: &dyn CasualRouter<EK>,
+        ts: Timespec,
+        _metrics: &mut ReadMetrics,
+    ) {
+        if !self
+            .leader_lease
+            .as_ref()
+            .map(|lease| lease.need_renew(ts))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        // TODO: add metric
+        let region_id = self.region.get_id();
+        if let Err(e) = router.send(region_id, CasualMessage::RenewLease(ts)) {
+            debug!(
+                "failed to send renew lease message";
+                "region" => region_id,
+                "error" => ?e
+            )
+        }
+    }
+
     fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
@@ -256,7 +283,7 @@ impl Progress {
 
 pub struct LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
     store_id: Cell<Option<u64>>,
@@ -273,7 +300,7 @@ where
 
 impl<C, E> ReadExecutor<E> for LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
     fn get_engine(&self) -> &E {
@@ -300,7 +327,7 @@ where
 
 impl<C, E> LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot>,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
@@ -321,7 +348,7 @@ where
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        match self.router.send(cmd) {
+        match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
                 self.metrics.rejected_by_channel_full += 1;
@@ -452,6 +479,12 @@ where
                         }
                         response.txn_extra_op = delegate.txn_extra_op.load();
                         cb.invoke_read(response);
+
+                        delegate.maybe_renew_lease_advance(
+                            &self.router,
+                            snapshot_ts,
+                            &mut self.metrics,
+                        );
                         self.delegates.insert(region_id, Some(delegate));
                         return;
                     }
@@ -519,7 +552,7 @@ where
 
 impl<C, E> Clone for LocalReader<C, E>
 where
-    C: ProposalRouter<E::Snapshot> + Clone,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
 {
     fn clone(&self) -> Self {
@@ -700,6 +733,46 @@ mod tests {
 
     use super::*;
 
+    struct MockRouter {
+        p_router: SyncSender<RaftCommand<KvTestSnapshot>>,
+        c_router: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+    }
+
+    impl MockRouter {
+        #[allow(clippy::type_complexity)]
+        fn new() -> (
+            MockRouter,
+            Receiver<RaftCommand<KvTestSnapshot>>,
+            Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        ) {
+            let (p_ch, p_rx) = sync_channel(1);
+            let (c_ch, c_rx) = sync_channel(1);
+            (
+                MockRouter {
+                    p_router: p_ch,
+                    c_router: c_ch,
+                },
+                p_rx,
+                c_rx,
+            )
+        }
+    }
+
+    impl ProposalRouter<KvTestSnapshot> for MockRouter {
+        fn send(
+            &self,
+            cmd: RaftCommand<KvTestSnapshot>,
+        ) -> std::result::Result<(), crossbeam::TrySendError<RaftCommand<KvTestSnapshot>>> {
+            ProposalRouter::send(&self.p_router, cmd)
+        }
+    }
+
+    impl CasualRouter<KvTestEngine> for MockRouter {
+        fn send(&self, region_id: u64, msg: CasualMessage<KvTestEngine>) -> Result<()> {
+            CasualRouter::send(&self.c_router, region_id, msg)
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     fn new_reader(
         path: &str,
@@ -707,13 +780,13 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        LocalReader<MockRouter, KvTestEngine>,
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
             .unwrap();
-        let (ch, rx) = sync_channel(1);
+        let (ch, rx, _) = MockRouter::new();
         let mut reader = LocalReader::new(db, store_meta, ch);
         reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
@@ -732,7 +805,7 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        reader: &mut LocalReader<MockRouter, KvTestEngine>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
@@ -752,7 +825,7 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<SyncSender<RaftCommand<KvTestSnapshot>>, KvTestEngine>,
+        reader: &mut LocalReader<MockRouter, KvTestEngine>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {

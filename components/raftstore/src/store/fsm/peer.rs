@@ -623,6 +623,9 @@ where
                     self.fsm.peer.send_wake_up_message(&mut self.ctx, &leader);
                 }
             }
+            CasualMessage::RenewLease(ts) => {
+                self.fsm.peer.try_renew_leader_lease(&mut self.ctx, ts)
+            }
         }
     }
 

@@ -14,6 +14,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::ReplicationStatus;
 use raft::SnapshotStatus;
 use std::borrow::Cow;
+use time::Timespec;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
@@ -340,6 +341,9 @@ pub enum CasualMessage<EK: KvEngine> {
         region: metapb::Region,
         leader: metapb::Peer,
     },
+
+    // Try renew leader lease
+    RenewLease(Timespec),
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -392,6 +396,7 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::ForceCompactRaftLogs => write!(fmt, "ForceCompactRaftLogs"),
             CasualMessage::AccessPeer(_) => write!(fmt, "AccessPeer"),
             CasualMessage::QueryRegionLeaderResp { .. } => write!(fmt, "QueryRegionLeaderResp"),
+            CasualMessage::RenewLease(_) => write!(fmt, "RenewLease"),
         }
     }
 }
