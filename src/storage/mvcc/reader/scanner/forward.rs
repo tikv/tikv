@@ -770,7 +770,7 @@ pub mod test_util {
     use super::*;
     use crate::storage::mvcc::Write;
     use crate::storage::txn::tests::{
-        force_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
+        must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
         must_prewrite_put,
     };
     use crate::storage::Engine;
@@ -897,22 +897,22 @@ pub mod test_util {
         //  `-------------^
         must_prewrite_put(engine, b"k1", b"v1", b"k1", 10);
         must_commit(engine, b"k1", 10, 20);
-        force_cleanup_with_gc_fence(engine, b"k1", 20, 0, 50);
         // Put a record to be pointed by GC fence 50.
         must_prewrite_put(engine, b"k1", b"v1x", b"k1", 49);
         must_commit(engine, b"k1", 49, 50);
+        must_cleanup_with_gc_fence(engine, b"k1", 20, 0, 50, false);
 
         // PUT,      Read
         //  `---------^
         must_prewrite_put(engine, b"k2", b"v2", b"k2", 11);
         must_commit(engine, b"k2", 11, 20);
-        force_cleanup_with_gc_fence(engine, b"k2", 20, 0, 40);
+        must_cleanup_with_gc_fence(engine, b"k2", 20, 0, 40, true);
 
         // PUT,      Read
         //  `-----^
         must_prewrite_put(engine, b"k3", b"v3", b"k3", 12);
         must_commit(engine, b"k3", 12, 20);
-        force_cleanup_with_gc_fence(engine, b"k3", 20, 0, 30);
+        must_cleanup_with_gc_fence(engine, b"k3", 20, 0, 30, true);
 
         // PUT,   PUT,       Read
         //  `-----^ `----^
@@ -920,8 +920,8 @@ pub mod test_util {
         must_commit(engine, b"k4", 13, 14);
         must_prewrite_put(engine, b"k4", b"v4x", b"k4", 15);
         must_commit(engine, b"k4", 15, 20);
-        force_cleanup_with_gc_fence(engine, b"k4", 14, 0, 20);
-        force_cleanup_with_gc_fence(engine, b"k4", 20, 0, 30);
+        must_cleanup_with_gc_fence(engine, b"k4", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(engine, b"k4", 20, 0, 30, true);
 
         // PUT,   DEL,       Read
         //  `-----^ `----^
@@ -929,8 +929,8 @@ pub mod test_util {
         must_commit(engine, b"k5", 13, 14);
         must_prewrite_delete(engine, b"k5", b"v5", 15);
         must_commit(engine, b"k5", 15, 20);
-        force_cleanup_with_gc_fence(engine, b"k5", 14, 0, 20);
-        force_cleanup_with_gc_fence(engine, b"k5", 20, 0, 30);
+        must_cleanup_with_gc_fence(engine, b"k5", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(engine, b"k5", 20, 0, 30, true);
 
         // PUT, LOCK, LOCK,   Read,  PUT
         //  `-------------------------^
@@ -940,10 +940,10 @@ pub mod test_util {
         must_commit(engine, b"k6", 25, 26);
         must_prewrite_lock(engine, b"k6", b"k6", 28);
         must_commit(engine, b"k6", 28, 29);
-        force_cleanup_with_gc_fence(engine, b"k6", 20, 0, 50);
         // Put a record to be pointed by GC fence 50.
         must_prewrite_put(engine, b"k6", b"v6x", b"k6", 49);
         must_commit(engine, b"k6", 49, 50);
+        must_cleanup_with_gc_fence(engine, b"k6", 20, 0, 50, false);
 
         // PUT, LOCK,   LOCK,   Read
         //  `---------^
@@ -951,15 +951,15 @@ pub mod test_util {
         must_commit(engine, b"k7", 16, 20);
         must_prewrite_lock(engine, b"k7", b"k7", 25);
         must_commit(engine, b"k7", 25, 26);
+        must_cleanup_with_gc_fence(engine, b"k7", 20, 0, 27, true);
         must_prewrite_lock(engine, b"k7", b"k7", 28);
         must_commit(engine, b"k7", 28, 29);
-        force_cleanup_with_gc_fence(engine, b"k7", 20, 0, 27);
 
         // PUT,  Read
         //  * (GC fence ts is 0)
         must_prewrite_put(engine, b"k8", b"v8", b"k8", 17);
         must_commit(engine, b"k8", 17, 30);
-        force_cleanup_with_gc_fence(engine, b"k8", 30, 0, 0);
+        must_cleanup_with_gc_fence(engine, b"k8", 30, 0, 0, true);
 
         // PUT, LOCK,     Read
         // `-----------^
@@ -967,7 +967,7 @@ pub mod test_util {
         must_commit(engine, b"k9", 18, 20);
         must_prewrite_lock(engine, b"k9", b"k9", 25);
         must_commit(engine, b"k9", 25, 26);
-        force_cleanup_with_gc_fence(engine, b"k9", 20, 0, 27);
+        must_cleanup_with_gc_fence(engine, b"k9", 20, 0, 27, true);
 
         // Returns the read ts to be checked and the expected result.
         (

@@ -689,13 +689,13 @@ pub mod tests {
         //  `------^
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
         must_commit(&engine, b"k1", 10, 30);
-        force_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40);
+        must_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40, true);
 
         // PUT,           Read
         //  * (GC fence ts = 0)
         must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
         must_commit(&engine, b"k2", 11, 30);
-        force_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0);
+        must_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0, true);
 
         // PUT, LOCK,   LOCK, Read
         //  `---------^
@@ -703,9 +703,9 @@ pub mod tests {
         must_commit(&engine, b"k3", 12, 30);
         must_prewrite_lock(&engine, b"k3", b"k3", 37);
         must_commit(&engine, b"k3", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40, true);
         must_prewrite_lock(&engine, b"k3", b"k3", 42);
         must_commit(&engine, b"k3", 42, 43);
-        force_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40);
 
         // PUT, LOCK,   LOCK, Read
         //  *
@@ -715,7 +715,7 @@ pub mod tests {
         must_commit(&engine, b"k4", 37, 38);
         must_prewrite_lock(&engine, b"k4", b"k4", 42);
         must_commit(&engine, b"k4", 42, 43);
-        force_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0);
+        must_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0, true);
 
         // PUT,   PUT,    READ
         //  `-----^ `------^
@@ -723,8 +723,8 @@ pub mod tests {
         must_commit(&engine, b"k5", 14, 20);
         must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
         must_commit(&engine, b"k5", 21, 30);
-        force_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30);
-        force_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40, true);
 
         // PUT,   PUT,    READ
         //  `-----^ *
@@ -732,8 +732,8 @@ pub mod tests {
         must_commit(&engine, b"k6", 15, 20);
         must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
         must_commit(&engine, b"k6", 22, 30);
-        force_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30);
-        force_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0, true);
 
         // PUT,  LOCK,    READ
         //  `----------^
@@ -744,7 +744,7 @@ pub mod tests {
         must_commit(&engine, b"k7", 16, 30);
         must_prewrite_lock(&engine, b"k7", b"k7", 37);
         must_commit(&engine, b"k7", 37, 38);
-        force_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40);
+        must_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40, true);
 
         let cases = vec![
             (b"k1" as &[u8], None),

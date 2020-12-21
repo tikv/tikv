@@ -447,6 +447,25 @@ pub mod tests {
         write.to_owned()
     }
 
+    pub fn must_have_write<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        commit_ts: impl Into<TimeStamp>,
+    ) -> Write {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let k = Key::from_raw(key).append_ts(commit_ts.into());
+        let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
+        let write = WriteRef::parse(&v).unwrap();
+        write.to_owned()
+    }
+
+    pub fn must_not_have_write<E: Engine>(engine: &E, key: &[u8], commit_ts: impl Into<TimeStamp>) {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let k = Key::from_raw(key).append_ts(commit_ts.into());
+        let v = snapshot.get_cf(CF_WRITE, &k).unwrap();
+        assert!(v.is_none());
+    }
+
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);

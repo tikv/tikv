@@ -60,14 +60,15 @@ pub fn cleanup<S: Snapshot>(
 
 pub mod tests {
     use super::*;
-    use crate::storage::kv::Modify;
-    use crate::storage::mvcc::{Error as MvccError, MvccTxn, WriteRef, WriteType};
+    use crate::storage::mvcc::tests::{must_have_write, must_not_have_write, write};
+    use crate::storage::mvcc::{Error as MvccError, MvccTxn, WriteType};
+    use crate::storage::txn::tests::{must_commit, must_prewrite_put};
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
+    use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
 
-    use crate::storage::mvcc::tests::write;
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::{
@@ -75,10 +76,7 @@ pub mod tests {
             must_written,
         },
         txn::commands::txn_heart_beat,
-        txn::tests::{
-            must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
-            must_prewrite_put,
-        },
+        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
         TestEngineBuilder,
     };
 
@@ -113,53 +111,56 @@ pub mod tests {
     // Temporary test helper before implementing GC fence writing. After it's implemented, this
     // should be replaced by writing a newer version, run cleanup, and then delete the newer write
     // record.
-    pub fn force_cleanup_with_gc_fence<E: Engine>(
+    pub fn must_cleanup_with_gc_fence<E: Engine>(
         engine: &E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         gc_fence: impl Into<TimeStamp>,
+        without_target_write: bool,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let gc_fence = gc_fence.into();
+        let start_ts = start_ts.into();
         let current_ts = current_ts.into();
+
+        if !gc_fence.is_zero() && without_target_write {
+            // Put a dummy record and remove it after doing cleanup.
+            must_not_have_write(engine, key, gc_fence);
+            must_prewrite_put(engine, key, b"dummy_value", key, gc_fence.prev());
+            must_commit(engine, key, gc_fence.prev(), gc_fence);
+        }
+
         let cm = ConcurrencyManager::new(current_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true, cm);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
         cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap();
 
-        // Hack: Force write the specified gc_fence field.
-        let mut modifies = txn.into_modifies();
-        assert_eq!(modifies.len(), 1);
-        let (cf, modify_key, value) = match modifies.remove(0) {
-            Modify::Put(c, k, v) => (c, k, v),
-            _ => panic!("the modify is not a put"),
-        };
-        let mut write_record = WriteRef::parse(&value).unwrap();
+        write(engine, &ctx, txn.into_modifies());
 
-        assert_ne!(
-            write_record.write_type,
-            WriteType::Rollback,
-            "overlapped rollback not triggered"
-        );
+        let w = must_have_write(engine, key, start_ts);
+        assert_ne!(w.start_ts, start_ts, "no overlapping write record");
         assert!(
-            write_record.has_overlapped_rollback,
-            "overlapped rollback not triggered"
+            w.write_type != WriteType::Rollback && w.write_type != WriteType::Lock,
+            "unexpected write type {:?}",
+            w.write_type
         );
 
-        write_record.gc_fence = Some(gc_fence.into());
-        let hacked_value = write_record.to_bytes();
-        modifies.push(Modify::Put(cf, modify_key, hacked_value));
-
-        write(engine, &ctx, modifies);
+        if !gc_fence.is_zero() && without_target_write {
+            engine
+                .delete_cf(&ctx, CF_WRITE, Key::from_raw(key).append_ts(gc_fence))
+                .unwrap();
+            must_not_have_write(engine, key, gc_fence);
+        }
     }
 
     #[test]
-    fn test_force_cleanup_with_gc_fence() {
+    fn test_must_cleanup_with_gc_fence() {
         // Tests the test util
         let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&engine, b"k", b"v", b"k", 10);
         must_commit(&engine, b"k", 10, 20);
-        force_cleanup_with_gc_fence(&engine, b"k", 20, 0, 30);
+        must_cleanup_with_gc_fence(&engine, b"k", 20, 0, 30, true);
         let w = must_written(&engine, b"k", 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         assert_eq!(w.gc_fence.unwrap(), 30.into());
