@@ -19,7 +19,7 @@ const MAX_THREAD_IDX: usize = 128;
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
 // This array records the io type for every thread. The address of this array
 // will be passed into BPF, so BPF code can get io type for specific thread
-// without a extra syscall.
+// without an extra syscall.
 // It should be a thread local variable, but the address of thread local is not
 // reliable. So define a global array and let each thread writes on a specific
 // element. Thus there is no contention for the element and use padding to avoid

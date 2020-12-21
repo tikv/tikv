@@ -5,7 +5,7 @@ slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
-io-snoop = false
+enable-io-snoop = false
 
 [readpool.unified]
 min-thread-count = 5
