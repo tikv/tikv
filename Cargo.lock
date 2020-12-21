@@ -217,6 +217,11 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+<<<<<<< HEAD
+=======
+ "log_wrappers",
+ "pd_client",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "prometheus",
  "raft",
  "raftstore",
@@ -454,9 +459,9 @@ dependencies = [
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1949,10 +1954,11 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2682,10 +2688,10 @@ dependencies = [
  "futures 0.1.29",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -3114,7 +3120,6 @@ dependencies = [
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3470,7 +3475,12 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
+<<<<<<< HEAD
  "hex 0.4.2",
+=======
+ "collections",
+ "log_wrappers",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "slog",
  "slog-global",
  "tikv_util",
@@ -4362,9 +4372,13 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
+<<<<<<< HEAD
+=======
+ "lazy_static",
+ "log_wrappers",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "pd_client",
  "raft",
  "raftstore",
@@ -4449,10 +4463,14 @@ dependencies = [
  "futures 0.3.7",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.2",
  "hyper",
  "keys",
  "kvproto",
+<<<<<<< HEAD
+=======
+ "log_wrappers",
+ "more-asserts",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "panic_hook",
  "pd_client",
  "profiler",
@@ -4525,7 +4543,54 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "tidb_query"
+=======
+name = "tidb_query_aggr"
+version = "0.0.1"
+dependencies = [
+ "match_template",
+ "panic_hook",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
+ "tipb",
+ "tipb_helper",
+]
+
+[[package]]
+name = "tidb_query_codegen"
+version = "0.0.1"
+dependencies = [
+ "darling",
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "tidb_query_common"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "derive_more",
+ "error_code",
+ "failure",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "prometheus",
+ "prometheus-static-metric",
+ "tikv_util",
+ "time 0.1.42",
+]
+
+[[package]]
+name = "tidb_query_datatype"
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 version = "0.0.1"
 dependencies = [
  "base64 0.12.0",
@@ -4546,6 +4611,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4583,11 +4649,34 @@ dependencies = [
 name = "tidb_query_codegen"
 version = "0.0.1"
 dependencies = [
+<<<<<<< HEAD
  "darling",
  "heck",
  "proc-macro2",
  "quote",
  "syn",
+=======
+ "codec",
+ "collections",
+ "fail",
+ "failure",
+ "kvproto",
+ "log_wrappers",
+ "match_template",
+ "protobuf",
+ "slog",
+ "slog-global",
+ "smallvec",
+ "tidb_query_aggr",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
+ "tipb",
+ "tipb_helper",
+ "yatp",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 ]
 
 [[package]]
@@ -4596,9 +4685,34 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
  "bstr",
+<<<<<<< HEAD
  "error_code",
  "failure",
  "tikv_alloc",
+=======
+ "byteorder",
+ "chrono",
+ "codec",
+ "file_system",
+ "flate2",
+ "hex 0.4.2",
+ "log_wrappers",
+ "match_template",
+ "num",
+ "num-traits",
+ "openssl",
+ "panic_hook",
+ "profiler",
+ "protobuf",
+ "rand",
+ "safemem",
+ "static_assertions",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tikv_util",
+ "time 0.1.42",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "tipb",
 ]
 
@@ -4777,10 +4891,19 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
+<<<<<<< HEAD
  "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
+=======
+ "kvproto",
+ "lazy_static",
+ "libc",
+ "log",
+ "log_wrappers",
+ "minitrace",
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -5208,8 +5331,8 @@ dependencies = [
  "derive-new",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",

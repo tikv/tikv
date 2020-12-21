@@ -84,10 +84,84 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_depth() as usize,
             req.get_cmsketch_width() as usize,
         );
+<<<<<<< HEAD
         while let Some(row) = scanner.next()? {
             let row = row.take_origin()?;
             let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
             hist.append(bytes);
+=======
+
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
+        let mut topn_heap = BinaryHeap::new();
+        // cur_val recording the current value's data and its counts when iterating index's rows.
+        // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
+        // top-n information.
+        let mut cur_val: (u32, Vec<u8>) = (0, Vec::from(""));
+        let top_n_size = req.get_top_n_size() as usize;
+        let stats_version = if req.has_version() {
+            req.get_version()
+        } else {
+            ANALYZE_VERSION_V1
+        };
+        while let Some((key, _)) = scanner.next()? {
+            row_count += 1;
+            if row_count >= BATCH_MAX_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
+            let mut key = &key[..];
+            if is_common_handle {
+                table::check_record_key(key)?;
+                key = &key[table::PREFIX_LEN..];
+            } else {
+                table::check_index_key(key)?;
+                key = &key[table::PREFIX_LEN + table::ID_LEN..];
+            }
+            let mut datums = key;
+            let mut data = Vec::with_capacity(key.len());
+            for i in 0..req.get_num_columns() as usize {
+                if datums.is_empty() {
+                    return Err(box_err!(
+                        "{}th column is missing in datum buffer: {}",
+                        i,
+                        log_wrappers::Value::key(key)
+                    ));
+                }
+                let (column, remaining) = split_datum(datums, false)?;
+                datums = remaining;
+                data.extend_from_slice(column);
+                if let Some(cms) = cms.as_mut() {
+                    cms.insert(&data);
+                }
+            }
+            hist.append(&data);
+            if stats_version == ANALYZE_VERSION_V2 {
+                if cur_val.1 == data {
+                    cur_val.0 += 1;
+                } else {
+                    if cur_val.0 > 0 {
+                        topn_heap.push(Reverse(cur_val));
+                    }
+                    if topn_heap.len() > top_n_size {
+                        topn_heap.pop();
+                    }
+                    cur_val = (1, data);
+                }
+            }
+        }
+
+        if stats_version == ANALYZE_VERSION_V2 {
+            if cur_val.0 > 0 {
+                topn_heap.push(Reverse(cur_val));
+                if topn_heap.len() > top_n_size {
+                    topn_heap.pop();
+                }
+            }
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             if let Some(c) = cms.as_mut() {
                 for end_offset in end_offsets {
                     c.insert(&bytes[..end_offset])

@@ -515,6 +515,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         processed_regions: &mut usize,
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
+<<<<<<< HEAD
         let (ctx, next_key) = self.get_next_gc_context(from_key);
         if ctx.is_none() {
             // No more regions.
@@ -535,6 +536,28 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 "end_key" => next_key.as_ref().map(DisplayValue),
                 "err" => ?e
             );
+=======
+        let (range, next_key) = self.get_next_gc_context(from_key);
+        let (region_id, start, end) = match range {
+            Some((r, s, e)) => (r, s, e),
+            None => return Ok(None),
+        };
+
+        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
+        debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
+
+        if let Err(e) = sync_gc(
+            &self.worker_scheduler,
+            region_id,
+            start,
+            end,
+            self.curr_safe_point(),
+        ) {
+            // Ignore the error and continue, since it's useless to retry this.
+            // TODO: Find a better way to handle errors. Maybe we should retry.
+            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
         }
         *processed_regions += 1;
         AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC

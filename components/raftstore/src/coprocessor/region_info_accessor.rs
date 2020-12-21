@@ -97,6 +97,17 @@ impl Display for RegionInfoQuery {
             RegionInfoQuery::FindRegionById { region_id, .. } => {
                 write!(f, "FindRegionById(region_id: {})", region_id)
             }
+<<<<<<< HEAD
+=======
+            RegionInfoQuery::GetRegionsInRange {
+                start_key, end_key, ..
+            } => write!(
+                f,
+                "GetRegionsInRange(start_key: {}, end_key: {})",
+                &log_wrappers::Value::key(start_key),
+                &log_wrappers::Value::key(end_key)
+            ),
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
     }

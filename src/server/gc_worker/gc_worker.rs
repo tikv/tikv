@@ -107,6 +107,7 @@ impl Display for GcTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             GcTask::Gc {
+<<<<<<< HEAD
                 ctx, safe_point, ..
             } => {
                 let epoch = format!("{:?}", ctx.region_epoch.as_ref());
@@ -116,6 +117,18 @@ impl Display for GcTask {
                     .field("safe_point", safe_point)
                     .finish()
             }
+=======
+                start_key,
+                end_key,
+                safe_point,
+                ..
+            } => f
+                .debug_struct("GC")
+                .field("start_key", &log_wrappers::Value::key(&start_key))
+                .field("end_key", &log_wrappers::Value::key(&end_key))
+                .field("safe_point", safe_point)
+                .finish(),
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
@@ -398,7 +411,12 @@ impl<E: Engine> GcRunner<E> {
 
         debug!(
             "gc has finished";
+<<<<<<< HEAD
             "region_id" => ctx.get_region_id(),
+=======
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             "safe_point" => safe_point
         );
         Ok(())
@@ -585,9 +603,15 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 self.update_statistics_metrics();
                 slow_log!(
                     T timer,
+<<<<<<< HEAD
                     "GC on region {}, epoch {:?}, safe_point {}",
                     ctx.get_region_id(),
                     ctx.get_region_epoch(),
+=======
+                    "GC on range [{}, {}), safe_point {}",
+                    log_wrappers::Value::key(&start_key),
+                    log_wrappers::Value::key(&end_key),
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
                     safe_point
                 );
             }

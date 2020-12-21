@@ -36,7 +36,11 @@ failpoints = ["tikv/failpoints"]
 [dependencies]
 crossbeam = "0.8"
 bitflags = "1.0"
+<<<<<<< HEAD
 hex = "0.4"
+=======
+crossbeam = "0.7"
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 failure = "0.1"
@@ -57,7 +61,12 @@ tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types" }
 fail = "0.3"
 lazy_static = "1.3"
+<<<<<<< HEAD
 prometheus = { version = "0.8", default-features = false, features = ["nightly", "push"] }
+=======
+log_wrappers = { path = "../log_wrappers" }
+prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 protobuf = "2.8"
 prost = "0.6"
 

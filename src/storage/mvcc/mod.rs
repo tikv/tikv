@@ -52,6 +52,7 @@ quick_error! {
             display("txn already committed @{}", commit_ts)
         }
         PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
+<<<<<<< HEAD
             description("pessimistic lock already rollbacked")
             display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
@@ -66,18 +67,31 @@ quick_error! {
         LockTypeNotMatch { start_ts: TimeStamp, key: Vec<u8>, pessimistic: bool } {
             description("lock type not match")
             display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, hex::encode_upper(key), pessimistic)
+=======
+            display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, log_wrappers::Value::key(key))
+        }
+        TxnLockNotFound { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8> } {
+            display("txn lock not found {}-{} key:{}", start_ts, commit_ts, log_wrappers::Value::key(key))
+        }
+        TxnNotFound { start_ts:  TimeStamp, key: Vec<u8> } {
+            display("txn not found {} key: {}", start_ts, log_wrappers::Value::key(key))
+        }
+        LockTypeNotMatch { start_ts: TimeStamp, key: Vec<u8>, pessimistic: bool } {
+            display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, log_wrappers::Value::key(key), pessimistic)
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
         }
         WriteConflict { start_ts: TimeStamp, conflict_start_ts: TimeStamp, conflict_commit_ts: TimeStamp, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
-                    start_ts, conflict_start_ts, conflict_commit_ts, hex::encode_upper(key), hex::encode_upper(primary))
+                    start_ts, conflict_start_ts, conflict_commit_ts, log_wrappers::Value::key(key), log_wrappers::Value::key(primary))
         }
         Deadlock { start_ts: TimeStamp, lock_ts: TimeStamp, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
             description("deadlock")
             display("deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, hex::encode_upper(lock_key), deadlock_key_hash)
+                    start_ts, lock_ts, log_wrappers::Value::key(lock_key), deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
+<<<<<<< HEAD
             description("already exists")
             display("key {} already exists", hex::encode_upper(key))
         }
@@ -88,11 +102,24 @@ quick_error! {
         CommitTsExpired { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8>, min_commit_ts: TimeStamp } {
             description("commit_ts less than lock's min_commit_ts")
             display("try to commit key {} with commit_ts {} but min_commit_ts is {}", hex::encode_upper(key), commit_ts, min_commit_ts)
+=======
+            display("key {} already exists", log_wrappers::Value::key(key))
+        }
+        DefaultNotFound { key: Vec<u8> } {
+            display("default not found: key:{}, maybe read truncated/dropped table data?", log_wrappers::Value::key(key))
+        }
+        CommitTsExpired { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8>, min_commit_ts: TimeStamp } {
+            display("try to commit key {} with commit_ts {} but min_commit_ts is {}", log_wrappers::Value::key(key), commit_ts, min_commit_ts)
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
         }
         KeyVersion { description("bad format key(version)") }
         PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> } {
+<<<<<<< HEAD
             description("pessimistic lock not found when prewrite")
             display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
+=======
+            display("pessimistic lock not found, start_ts:{}, key:{}", start_ts, log_wrappers::Value::key(key))
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
         }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -300,13 +327,13 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
         set_panic_mark();
         panic!(
             "default value not found for key {:?} when {}",
-            hex::encode_upper(&key),
+            &log_wrappers::Value::key(&key),
             hint,
         );
     } else {
         error!(
             "default value not found";
-            "key" => log_wrappers::Value::key(&key),
+            "key" => &log_wrappers::Value::key(&key),
             "hint" => hint,
         );
         Error::from(ErrorInner::DefaultNotFound { key })

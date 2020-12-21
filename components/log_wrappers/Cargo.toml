@@ -5,12 +5,16 @@ edition = "2018"
 publish = false
 
 [dependencies]
+<<<<<<< HEAD
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
+=======
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 protobuf = "2.8"
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc" }
+<<<<<<< HEAD
 
 [features]
 protobuf-codec = [
@@ -19,3 +23,6 @@ protobuf-codec = [
 prost-codec = [
   "kvproto/prost-codec"
 ]
+=======
+hex = "0.4"
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)

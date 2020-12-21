@@ -53,7 +53,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    debug!("last try to get {}", hex::encode_upper(key));
+    debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
@@ -63,7 +63,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     panic!(
         "can't get value {:?} for key {}",
         value.map(escape),
-        hex::encode_upper(key)
+        log_wrappers::hex_encode_upper(key)
     )
 }
 
@@ -457,7 +457,7 @@ pub fn must_read_on_peer<T: Simulator>(
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
             "read key {}, expect value {:?}, got {:?}",
-            hex::encode_upper(key),
+            log_wrappers::hex_encode_upper(key),
             value,
             other
         ),
@@ -476,7 +476,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
             let value = resp.mut_responses()[0].mut_get().take_value();
             panic!(
                 "key {}, expect error but got {}",
-                hex::encode_upper(key),
+                log_wrappers::hex_encode_upper(key),
                 escape(&value)
             );
         }

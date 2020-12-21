@@ -89,12 +89,19 @@ configuration = { path = "../components/configuration" }
 encryption = { path = "../components/encryption" }
 engine = { path = "../components/engine" }
 cdc = { path = "../components/cdc" }
+<<<<<<< HEAD
 futures = "0.1"
 futures-cpupool = "0.1"
 futures03 = { package = "futures", version = "0.3", features = ["executor"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
+=======
+futures = "0.3"
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+log_wrappers = { path = "../components/log_wrappers" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250)
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }

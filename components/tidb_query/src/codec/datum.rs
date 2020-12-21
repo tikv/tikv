@@ -1019,6 +1019,28 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     Ok(buf.split_at(1 + pos))
 }
 
+<<<<<<< HEAD:components/tidb_query/src/codec/datum.rs
+=======
+/// `skip_n_datum_slices` skip `n` datum slices within `buf`
+/// and advances the buffer pointer.
+/// If the datum buffer contains less than `n` slices, an error will be returned.
+pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
+    let origin = *buf;
+    for i in 0..n {
+        if buf.is_empty() {
+            return Err(box_err!(
+                "The {}th slice are missing in the datum buffer: {}",
+                i,
+                log_wrappers::Value::value(origin)
+            ));
+        }
+        let (_, remaining) = split_datum(buf, false)?;
+        *buf = remaining;
+    }
+    Ok(())
+}
+
+>>>>>>> 3b2c5337c... security: add log redaction check (#9250):components/tidb_query_datatype/src/codec/datum.rs
 #[cfg(test)]
 mod tests {
     use super::*;
