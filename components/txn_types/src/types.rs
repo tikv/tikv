@@ -342,6 +342,9 @@ pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
     pub old_values: OldValues,
+    // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
+    // in the raft command request.
+    pub one_pc: bool,
 }
 
 impl TxnExtra {
