@@ -1922,7 +1922,7 @@ impl Display for Decimal {
 
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }

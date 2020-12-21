@@ -528,7 +528,7 @@ impl Duration {
 
         if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
             return Err(Error::Eval(
-                format!("invalid time format: '{}'", n),
+                format!("Truncated incorrect time value: '{}'", n),
                 ERR_TRUNCATE_WRONG_VALUE,
             ));
         }
@@ -651,10 +651,7 @@ impl<T: BufferReader> DurationDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Duration {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }
