@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pd_client::ClusterVersion;
+use pd_client::FeatureGate;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
@@ -15,7 +15,7 @@ use raftstore::store::util::find_peer;
 
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowd, Result};
+use super::{is_compaction_filter_allowed, Result};
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -231,7 +231,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     gc_manager_ctx: GcManagerContext,
 
     cfg_tracker: GcWorkerConfigManager,
-    cluster_version: ClusterVersion,
+    feature_gate: FeatureGate,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
@@ -240,7 +240,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         safe_point: Arc<AtomicU64>,
         worker_scheduler: FutureScheduler<GcTask>,
         cfg_tracker: GcWorkerConfigManager,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     ) -> GcManager<S, R> {
         GcManager {
             cfg,
@@ -249,7 +249,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
             cfg_tracker,
-            cluster_version,
+            feature_gate,
         }
     }
 
@@ -307,7 +307,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.
-            if !is_compaction_filter_allowd(&*self.cfg_tracker.value(), &self.cluster_version) {
+            if !is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
                 set_status_metrics(GcManagerState::Working);
                 self.gc_a_round()?;
                 if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -527,8 +527,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => return Ok(None),
         };
 
-        let hex_start = hex::encode_upper(&start);
-        let hex_end = hex::encode_upper(&end);
+        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(

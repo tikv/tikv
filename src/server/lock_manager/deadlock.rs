@@ -25,7 +25,7 @@ use raftstore::coprocessor::{
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
 use raftstore::store::util::is_region_initialized;
-use security::{check_common_name, SecurityManager};
+use security::SecurityManager;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -844,19 +844,13 @@ where
 pub struct Service {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: Scheduler,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: Scheduler,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(waiter_mgr_scheduler: WaiterMgrScheduler, detector_scheduler: Scheduler) -> Self {
         Self {
             waiter_mgr_scheduler,
             detector_scheduler,
-            security_mgr,
         }
     }
 }
@@ -869,9 +863,6 @@ impl Deadlock for Service {
         _req: WaitForEntriesRequest,
         sink: UnarySink<WaitForEntriesResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
@@ -899,9 +890,6 @@ impl Deadlock for Service {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {

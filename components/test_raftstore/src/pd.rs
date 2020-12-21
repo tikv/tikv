@@ -24,7 +24,7 @@ use raft::eraftpb::ConfChangeType;
 use collections::{HashMap, HashMapEntry, HashSet};
 use fail::fail_point;
 use keys::{self, data_key, enc_end_key, enc_start_key};
-use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
+use pd_client::{Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use raftstore::store::util::{check_key_in_region, find_peer, is_learner};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::time::UnixSecs;
@@ -715,10 +715,14 @@ pub struct TestPdClient {
     is_incompatible: bool,
     tso: AtomicU64,
     trigger_tso_failure: AtomicBool,
+    feature_gate: FeatureGate,
 }
 
 impl TestPdClient {
     pub fn new(cluster_id: u64, is_incompatible: bool) -> TestPdClient {
+        let feature_gate = FeatureGate::default();
+        // For easy testing, most cases don't test upgrading.
+        feature_gate.set_version("999.0.0").unwrap();
         TestPdClient {
             cluster_id,
             cluster: Arc::new(RwLock::new(Cluster::new(cluster_id))),
@@ -726,6 +730,7 @@ impl TestPdClient {
             is_incompatible,
             tso: AtomicU64::new(1),
             trigger_tso_failure: AtomicBool::new(false),
+            feature_gate,
         }
     }
 
@@ -1208,6 +1213,10 @@ impl TestPdClient {
             );
         }
     }
+
+    pub fn reset_version(&self, version: &str) {
+        unsafe { self.feature_gate.reset_version(version).unwrap() }
+    }
 }
 
 impl PdClient for TestPdClient {
@@ -1275,7 +1284,7 @@ impl PdClient for TestPdClient {
 
         Err(box_err!(
             "no region contains key {}",
-            hex::encode_upper(key)
+            log_wrappers::hex_encode_upper(key)
         ))
     }
 
@@ -1525,5 +1534,9 @@ impl PdClient for TestPdClient {
         }
         let tso = self.tso.fetch_add(1, Ordering::SeqCst);
         Box::pin(ok(TimeStamp::new(tso)))
+    }
+
+    fn feature_gate(&self) -> &FeatureGate {
+        &self.feature_gate
     }
 }
