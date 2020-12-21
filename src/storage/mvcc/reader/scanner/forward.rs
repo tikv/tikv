@@ -961,6 +961,14 @@ pub mod test_util {
         must_commit(engine, b"k8", 17, 30);
         force_cleanup_with_gc_fence(engine, b"k8", 30, 0, 0);
 
+        // PUT, LOCK,     Read
+        // `-----------^
+        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
+        must_commit(&engine, b"k9", 18, 20);
+        must_prewrite_lock(&engine, b"k9", b"k9", 25);
+        must_commit(&engine, b"k9", 25, 26);
+        force_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27);
+
         // Returns the read ts to be checked and the expected result.
         (
             40.into(),
@@ -973,6 +981,7 @@ pub mod test_util {
                 (b"k6".to_vec(), Some(b"v6".to_vec())),
                 (b"k7".to_vec(), None),
                 (b"k8".to_vec(), Some(b"v8".to_vec())),
+                (b"k9".to_vec(), None),
             ],
         )
     }

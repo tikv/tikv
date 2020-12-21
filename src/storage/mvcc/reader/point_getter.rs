@@ -978,6 +978,14 @@ mod tests {
         must_commit(&engine, b"k8", 17, 30);
         force_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0);
 
+        // PUT, LOCK,     Read
+        // `-----------^
+        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
+        must_commit(&engine, b"k9", 18, 20);
+        must_prewrite_lock(&engine, b"k9", b"k9", 25);
+        must_commit(&engine, b"k9", 25, 26);
+        force_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27);
+
         let expected_results = vec![
             (b"k1", Some(b"v1")),
             (b"k2", None),
@@ -987,6 +995,7 @@ mod tests {
             (b"k6", Some(b"v6")),
             (b"k7", None),
             (b"k8", Some(b"v8")),
+            (b"k9", None),
         ];
 
         for (k, v) in &expected_results {
