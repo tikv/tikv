@@ -1860,7 +1860,7 @@ fn main() {
         v1!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        v1!("{}", tikv_util::hex_encode_upper(unescape(escaped)));
+        v1!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
