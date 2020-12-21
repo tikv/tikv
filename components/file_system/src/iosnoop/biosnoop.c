@@ -57,7 +57,7 @@ BPF_HISTOGRAM(import_write_latency, int, 25);
 BPF_HISTOGRAM(export_write_latency, int, 25);
 
 // cache PID by req
-int trace_pid_start(struct pt_regs *ctx, struct request *req)
+int trace_req_start(struct pt_regs *ctx, struct request *req)
 {
     // TODO: Using bpf_get_ns_current_pid_tgid of newer kernel to get pid under namespace
     // 
@@ -82,7 +82,6 @@ int trace_pid_start(struct pt_regs *ctx, struct request *req)
     int err = bpf_probe_read(&info.type, sizeof(io_type), (void*)*type_ptr);
     if (err != 0) {
         info.type = Other;
-        bpf_trace_printk("pid %d error %d here\n", pid, err);
     }
     info.start_ts = bpf_ktime_get_ns();
 

@@ -6,7 +6,6 @@ use crate::IOType;
 
 use collections::HashMap;
 use std::collections::VecDeque;
-use std::ffi::CString;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -14,9 +13,29 @@ use std::sync::Mutex;
 use bcc::{table::Table, Kprobe, BPF};
 use crossbeam_utils::CachePadded;
 
-const MAX_THREAD_IDX: usize = 128;
+/// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
+/// The BCC code is in `biosnoop.c` which is compiled and attached kernel on
+/// TiKV bootstrap. The code hooks on the start and completion of blk_account_io
+/// in kernel, so it's easily to get the latency and bytes of IO requests issued
+/// by current PID.
+///
+/// The main usage of iosnoop is to get accurate disk IO of different tasks
+/// separately, like compaction, coprocessor and raftstore, instead of a global
+/// disk throughput. So IO-types should be tagged for different threads by
+/// `set_io_type()`. And BCC code is available to get the IO-type for one thread
+/// by address, then all the IO requests for that thread will be recorded in
+/// corresponding type's map in BCC.
+///
+/// With that information, every time calling `IOContext` it get the stored stats
+/// from corresponding type's map in BCC. Thus it enables TiKV to get the latency and
+/// bytes of read/write request per IO-type.
 
+const MAX_THREAD_IDX: usize = 192;
+
+// Hold the BPF to keep it not dropped.
+// The two tables are `stats_by_type` and `type_by_pid` respectively.
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
+
 // This array records the io type for every thread. The address of this array
 // will be passed into BPF, so BPF code can get io type for specific thread
 // without an extra syscall.
@@ -24,8 +43,10 @@ static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
 // reliable. So define a global array and let each thread writes on a specific
 // element. Thus there is no contention for the element and use padding to avoid
 // false sharing.
-static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX] =
-    [CachePadded::new(IOType::Other); MAX_THREAD_IDX];
+// Leave the last element as reserved, when there is no available index, all
+// other threads will be allocated to that index with IOType::Other always.
+static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
+    [CachePadded::new(IOType::Other); MAX_THREAD_IDX + 1];
 
 // The index of the element of IO_TYPE_ARRAY for this thread to access.
 thread_local! {
@@ -67,28 +88,28 @@ impl IdxAllocator {
     }
 
     fn allocate(&self) -> IdxWrapper {
-        let idx = self.counter.fetch_add(1, Ordering::SeqCst);
-        // TODO: add thread count metrics
-        IdxWrapper(if idx >= MAX_THREAD_IDX {
-            self.free_list
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("no thread idx available")
-        } else {
+        let idx = if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
             idx
-        })
+        } else {
+            self.counter.fetch_add(1, Ordering::SeqCst)
+        };
+        IdxWrapper(std::cmp::min(idx, MAX_THREAD_IDX))
     }
 
     fn free(&self, idx: usize) {
-        self.free_list.lock().unwrap().push_back(idx);
+        if idx != MAX_THREAD_IDX {
+            self.free_list.lock().unwrap().push_back(idx);
+        }
     }
 }
 
 pub fn set_io_type(new_io_type: IOType) {
     unsafe {
         IDX.with(|idx| {
-            *IO_TYPE_ARRAY[idx.0] = new_io_type;
+            // if MAX_THREAD_IDX, keep IOType::Other always
+            if idx.0 != MAX_THREAD_IDX {
+                *IO_TYPE_ARRAY[idx.0] = new_io_type;
+            }
         })
     };
 }
@@ -101,9 +122,9 @@ unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
     if let Some((_, t, _)) = BPF_TABLE.as_mut() {
         let mut map = HashMap::default();
         for e in t.iter() {
-            let typ = ptr::read(e.key.as_ptr() as *const IOType);
+            let io_type = ptr::read(e.key.as_ptr() as *const IOType);
             let stats = ptr::read(e.value.as_ptr() as *const IOStats);
-            map.insert(typ, stats);
+            map.insert(io_type, stats);
         }
         Some(map)
     } else {
@@ -126,8 +147,8 @@ impl IOContext {
     pub fn delta(self) -> HashMap<IOType, IOStats> {
         if let Some(prev_map) = self.io_stats_map {
             if let Some(mut now_map) = unsafe { get_io_stats() } {
-                for (typ, stats) in prev_map {
-                    now_map.entry(typ).and_modify(|e| {
+                for (io_type, stats) in prev_map {
+                    now_map.entry(io_type).and_modify(|e| {
                         e.read -= stats.read;
                         e.write -= stats.write;
                     });
@@ -141,11 +162,11 @@ impl IOContext {
     pub fn delta_and_refresh(&mut self) -> HashMap<IOType, IOStats> {
         if self.io_stats_map.is_some() {
             if let Some(map) = unsafe { get_io_stats() } {
-                for (typ, stats) in &map {
+                for (io_type, stats) in &map {
                     self.io_stats_map
                         .as_mut()
                         .unwrap()
-                        .entry(*typ)
+                        .entry(*io_type)
                         .and_modify(|e| {
                             e.read = stats.read - e.read;
                             e.write = stats.write - e.write;
@@ -161,26 +182,30 @@ impl IOContext {
 }
 
 pub fn init_io_snooper() -> Result<(), String> {
-    let stat = unsafe {
-        let mut stat: libc::stat = std::mem::zeroed();
-        if libc::stat(
-            CString::new("/proc/self/ns/pid").unwrap().as_ptr(),
-            &mut stat,
-        ) != 0
-        {
-            return Err(String::from("Can't get namespace stats"));
-        }
-        stat
-    };
-    let code = include_str!("biosnoop.c")
-        .replace("##TGID##", &nix::unistd::getpid().to_string())
-        .replace("##DEV##", &stat.st_dev.to_string())
-        .replace("##INO##", &stat.st_ino.to_string());
+    let code = include_str!("biosnoop.c").replace("##TGID##", &nix::unistd::getpid().to_string());
+
+    // TODO: When using bpf_get_ns_current_pid_tgid of newer kernel, need
+    // to get the device id and inode number.
+    //
+    // let stat = unsafe {
+    //     let mut stat: libc::stat = std::mem::zeroed();
+    //     if libc::stat(
+    //         CString::new("/proc/self/ns/pid").unwrap().as_ptr(),
+    //         &mut stat,
+    //     ) != 0
+    //     {
+    //         return Err(String::from("Can't get namespace stats"));
+    //     }
+    //     stat
+    // };
+    // let code = code.replace("##DEV##", &stat.st_dev.to_string())
+    //   .replace("##INO##", &stat.st_ino.to_string());
+
     // compile the above BPF code!
     let mut bpf = BPF::new(&code).map_err(|e| e.to_string())?;
     // attach kprobes
     Kprobe::new()
-        .handler("trace_pid_start")
+        .handler("trace_req_start")
         .function("blk_account_io_start")
         .attach(&mut bpf)
         .map_err(|e| e.to_string())?;
@@ -189,7 +214,6 @@ pub fn init_io_snooper() -> Result<(), String> {
         .function("blk_account_io_completion")
         .attach(&mut bpf)
         .map_err(|e| e.to_string())?;
-    // the "events" table is where the "open file" events get sent
     let stats_table = bpf.table("stats_by_type").map_err(|e| e.to_string())?;
     let type_table = bpf.table("type_by_pid").map_err(|e| e.to_string())?;
     unsafe {
@@ -262,6 +286,7 @@ mod tests {
     use crate::iosnoop::imp::MAX_THREAD_IDX;
     use crate::iosnoop::metrics::*;
     use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::{fs::OpenOptions, io::Read, io::Write, os::unix::fs::OpenOptionsExt};
     use tempfile::TempDir;
 
@@ -320,10 +345,59 @@ mod tests {
     }
 
     #[test]
-    fn test_thread_idx_recycle() {
+    fn test_thread_idx_allocation() {
+        // the thread indexes should be recycled.
         for _ in 1..=MAX_THREAD_IDX * 2 {
             std::thread::spawn(|| {
                 set_io_type(IOType::Other);
+            })
+            .join()
+            .unwrap();
+        }
+
+        // use up all available thread index.
+        let pair = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut handles = Vec::new();
+        for _ in 1..=MAX_THREAD_IDX {
+            let pair1 = pair.clone();
+            let h = std::thread::spawn(move || {
+                set_io_type(IOType::Compaction);
+                let (lock, cvar) = &*pair1;
+                let mut stop = lock.lock().unwrap();
+                while !*stop {
+                    stop = cvar.wait(stop).unwrap();
+                }
+                assert_eq!(get_io_type(), IOType::Compaction);
+            });
+            handles.push(h);
+        }
+
+        // the reserved index is used, io type should be IOType::Other
+        for _ in 1..=MAX_THREAD_IDX {
+            std::thread::spawn(|| {
+                set_io_type(IOType::Compaction);
+                assert_eq!(get_io_type(), IOType::Other);
+            })
+            .join()
+            .unwrap();
+        }
+
+        {
+            let (lock, cvar) = &*pair;
+            let mut stop = lock.lock().unwrap();
+            *stop = true;
+            cvar.notify_all();
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // the thread indexes should be available again.
+        for _ in 1..MAX_THREAD_IDX {
+            std::thread::spawn(|| {
+                set_io_type(IOType::Compaction);
+                assert_eq!(get_io_type(), IOType::Compaction);
             })
             .join()
             .unwrap();
