@@ -51,6 +51,7 @@ fail = "0.4"
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
+branch = "tikv-5.0-rc"
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
