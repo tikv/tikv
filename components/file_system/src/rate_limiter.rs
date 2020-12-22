@@ -20,16 +20,17 @@ fn get_priority(io_type: IOType) -> IOPriority {
     }
 }
 
+/// Used to calibrate actual bytes through after last reset.
 #[derive(Debug)]
-struct Calibrator {
+struct BytesCalibrator {
     io_type: IOType,
     io_op: IOOp,
 }
 
-impl Calibrator {
+impl BytesCalibrator {
     #[allow(dead_code)]
     pub fn new(io_type: IOType, io_op: IOOp) -> Self {
-        Calibrator { io_type, io_op }
+        BytesCalibrator { io_type, io_op }
     }
 
     pub fn calibrate(&self) -> usize {
@@ -46,7 +47,7 @@ struct PerTypeIORateLimiter {
     refill_period: Duration,
     last_refill_time: Mutex<Timespec>,
     condv: Condvar,
-    calibrator: Option<Calibrator>,
+    calibrator: Option<BytesCalibrator>,
 }
 
 #[inline]
@@ -78,7 +79,7 @@ impl PerTypeIORateLimiter {
     }
 
     #[allow(dead_code)]
-    pub fn set_calibrator(&mut self, calibrator: Calibrator) {
+    pub fn set_calibrator(&mut self, calibrator: BytesCalibrator) {
         self.calibrator = Some(calibrator);
     }
 
@@ -172,6 +173,13 @@ impl PerTypeIORateLimiter {
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
+            if let Some(calibrator) = &self.calibrator {
+                let calibrated = calibrator.calibrate();
+                self.consumed.store(calibrated, Ordering::Relaxed);
+                if calibrated < cached_bytes_per_refill {
+                    continue;
+                }
+            }
             let now = time_util::monotonic_raw_now();
             if now > *last_refill_time {
                 let since_last_refill = time_util::checked_sub(now, *last_refill_time);
@@ -214,6 +222,7 @@ pub struct IORateLimiter {
 }
 
 impl IORateLimiter {
+    // TODO: pass in rate limiting options
     pub fn new(bytes_per_sec: usize) -> IORateLimiter {
         let limiter = IORateLimiter {
             write_limiters: Default::default(),
@@ -330,7 +339,7 @@ mod tests {
 
     #[test]
     fn test_rate_limit() {
-        let refills_in_one_sec = 1000;
+        let refills_in_one_sec = 100;
         let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
 
         let limiter = PerTypeIORateLimiter::new(2 * refills_in_one_sec, refill_period);
@@ -342,7 +351,7 @@ mod tests {
         limiter.set_bytes_per_sec(100 * refills_in_one_sec);
 
         let limiter = Arc::new(limiter);
-        let mut ts = vec![];
+        let mut threads = vec![];
         assert_eq!(limiter.request(1000, IOPriority::Low), 100 - 2 - 10);
         assert_eq!(limiter.request(1000, IOPriority::Low), 100);
         let begin = time_util::monotonic_now();
@@ -351,14 +360,50 @@ mod tests {
             let t = std::thread::spawn(move || {
                 assert_eq!(limiter.request(1, IOPriority::Low), 1);
             });
-            ts.push(t);
+            threads.push(t);
         }
-        for t in ts {
+        for t in threads {
             t.join().unwrap();
         }
         let end = time_util::monotonic_now();
         assert!(time_util::checked_sub(end, begin) > refill_period);
+        assert!(time_util::checked_sub(end, begin) < refill_period * 2);
         assert_eq!(limiter.request(1000, IOPriority::Low), 50);
+    }
+
+    struct BackgroundContext {
+        threads: Vec<std::thread::JoinHandle<()>>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Drop for BackgroundContext {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            for t in self.threads.drain(..) {
+                t.join().unwrap();
+            }
+        }
+    }
+
+    fn start_background_jobs(
+        job_count: usize,
+        io_type: IOType,
+        io_op: IOOp,
+        request: usize,
+    ) -> BackgroundContext {
+        let mut threads = vec![];
+        let stop = Arc::new(AtomicBool::new(false));
+        for _ in 0..job_count {
+            let stop = stop.clone();
+            let limiter = get_io_rate_limiter().unwrap();
+            let t = std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    limiter.request(io_type, io_op, request);
+                }
+            });
+            threads.push(t);
+        }
+        BackgroundContext { threads, stop }
     }
 
     #[bench]
@@ -372,75 +417,30 @@ mod tests {
     #[bench]
     fn bench_noop_limiter(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut ts = vec![];
-        for _ in 0..3 {
-            let limiter = get_io_rate_limiter().unwrap();
-            let stop = stop.clone();
-            let t = std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    limiter.request(IOType::Write, IOOp::Write, 10);
-                }
-            });
-            ts.push(t);
-        }
+        let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
-        stop.store(true, Ordering::Relaxed);
-        for t in ts {
-            t.join().unwrap();
-        }
     }
 
     #[bench]
     fn bench_not_limited(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(10000));
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut ts = vec![];
-        for _ in 0..3 {
-            let stop = stop.clone();
-            let limiter = get_io_rate_limiter().unwrap();
-            let t = std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    limiter.request(IOType::Write, IOOp::Write, 10);
-                }
-            });
-            ts.push(t);
-        }
+        let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
-        stop.store(true, Ordering::Relaxed);
-        for t in ts {
-            t.join().unwrap();
-        }
     }
 
     #[bench]
     fn bench_limited_fast(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(usize::max_value()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut ts = vec![];
-        for _ in 0..3 {
-            let stop = stop.clone();
-            let limiter = get_io_rate_limiter().unwrap();
-            let t = std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    limiter.request(IOType::Compaction, IOOp::Write, 1);
-                }
-            });
-            ts.push(t);
-        }
+        let _context = start_background_jobs(3, IOType::Compaction, IOOp::Write, 1);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
             limiter.request(IOType::Compaction, IOOp::Write, 1);
         });
-        stop.store(true, Ordering::Relaxed);
-        for t in ts {
-            t.join().unwrap();
-        }
     }
 }

@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum IOOp {
     Read,
     Write,
