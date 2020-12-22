@@ -9645,6 +9645,13 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -9733,6 +9740,13 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -9821,6 +9835,13 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -9933,6 +9954,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -10032,6 +10060,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -10118,7 +10153,22 @@
             "show": false
           },
           "links": [],
-          "reverseYBuckets": false,
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
               "expr": "sum(delta(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le)",
@@ -10276,6 +10326,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -10379,6 +10436,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -10477,6 +10541,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -10575,136 +10646,13 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The count of pending commands per TiKV instance",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 25
-          },
-          "height": "",
-          "id": 193,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "maxPerRow": 2,
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(tikv_scheduler_contex_total{instance=~\"$instance\"}) by (instance)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
-              "metric": "",
-              "refId": "A",
-              "step": 40
-            }
-          ],
-          "thresholds": [
-            {
-              "colorMode": "critical",
-              "fill": true,
-              "line": true,
-              "op": "gt",
-              "value": 300
-            }
-          ],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler pending commands",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "ops",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        }
-      ],
-      "repeat": null,
-      "title": "Scheduler",
-      "type": "row"
-    },
-    {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
-      "id": 2756,
-      "panels": [
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
           "description": "The total number of commands on each stage in commit command",
           "fill": 1,
           "gridPos": {
             "h": 10,
             "w": 24,
             "x": 0,
-            "y": 16
+            "y": 46
           },
           "height": "400",
           "id": 168,
@@ -10816,8 +10764,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 26
+            "x": 12,
+            "y": 46
           },
           "id": 3,
           "legend": {
@@ -10866,34 +10814,38 @@
               "step": 10
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_command_duration_seconds_bucket{instance=~\"$instance\", type=\"$command\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_gcworker_gc_task_duration_vec_bucket{instance=~\"$instance\"}[1m])) by (le, task))",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "95%",
-              "metric": "",
+              "legendFormat": "99%-{{task}}",
+              "metric": "tikv_storage_gc_skipped_counter",
               "refId": "B",
-              "step": 10
+              "step": 4
             },
             {
-              "expr": "sum(rate(tikv_scheduler_command_duration_seconds_sum{instance=~\"$instance\", type=\"$command\"}[1m])) / sum(rate(tikv_scheduler_command_duration_seconds_count{instance=~\"$instance\", type=\"$command\"}[1m])) ",
+              "expr": "histogram_quantile(0.95, sum(rate(tikv_gcworker_gc_task_duration_vec_bucket{instance=~\"$instance\"}[1m])) by (le, task))",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "avg",
-              "metric": "",
-              "refId": "C",
-              "step": 10
+              "legendFormat": "95%-{{task}}",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_gcworker_gc_task_duration_vec_sum{instance=~\"$instance\"}[1m])) by (task) / sum(rate(tikv_gcworker_gc_task_duration_vec_count{instance=~\"$instance\"}[1m])) by (task)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "average-{{task}}",
+              "refId": "D"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler command duration",
+          "title": "GC tasks duration",
           "tooltip": {
-            "msResolution": false,
             "shared": true,
             "sort": 0,
-            "value_type": "cumulative"
+            "value_type": "individual"
           },
           "type": "graph",
           "xaxis": {
@@ -10906,256 +10858,6 @@
           "yaxes": [
             {
               "format": "s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The time which is caused by latch wait in commit command",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 26
-          },
-          "id": 194,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_latch_wait_duration_seconds_bucket{instance=~\"$instance\", type=\"$command\"}[1m])) by (le))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_latch_wait_duration_seconds_bucket{instance=~\"$instance\", type=\"$command\"}[1m])) by (le))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "95%",
-              "metric": "",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_scheduler_latch_wait_duration_seconds_sum{instance=~\"$instance\", type=\"$command\"}[1m])) / sum(rate(tikv_scheduler_latch_wait_duration_seconds_count{instance=~\"$instance\", type=\"$command\"}[1m])) ",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "avg",
-              "metric": "",
-              "refId": "C",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler latch wait duration",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "s",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The count of keys read by a commit command",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 34
-          },
-          "id": 195,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_kv_command_key_read_bucket{instance=~\"$instance\", type=\"$command\"}[1m])) by (le))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "99%",
-              "metric": "kv_command_key",
-              "refId": "A",
-              "step": 10
-            },
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(tikv_scheduler_kv_command_key_read_bucket{instance=~\"$instance\", type=\"$command\"}[1m])) by (le))",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "95%",
-              "metric": "",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "expr": "sum(rate(tikv_scheduler_kv_command_key_read_sum{instance=~\"$instance\", type=\"$command\"}[1m])) / sum(rate(tikv_scheduler_kv_command_key_read_count{instance=~\"$instance\", type=\"$command\"}[1m])) ",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "avg",
-              "metric": "",
-              "refId": "C",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler keys read",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -11191,8 +10893,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 34
+            "x": 0,
+            "y": 53
           },
           "id": 373,
           "legend": {
@@ -11307,115 +11009,8 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The keys scan details of each CF when executing commit command",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 42
-          },
-          "id": 560,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{instance=~\"$instance\", req=\"$command\"}[1m])) by (tag)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler scan details",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The keys scan details of lock CF when executing commit command",
+          "decimals": 2,
+          "description": "The count of TiDB GC worker actions",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -11424,9 +11019,9 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 42
+            "y": 53
           },
-          "id": 675,
+          "id": 966,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -11464,20 +11059,20 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{instance=~\"$instance\", req=\"$command\", cf=\"lock\"}[1m])) by (tag)",
+              "expr": "sum(rate(tidb_tikvclient_gc_worker_actions_total[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{type}}",
               "metric": "",
               "refId": "A",
-              "step": 10
+              "step": 4
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details [lock]",
+          "title": "TiDB GC worker actions",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -11521,8 +11116,219 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 0,
+          "description": "Progress of ResolveLocks, the first phase of GC",
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "id": 2823,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "max(tidb_tikvclient_range_task_stats{type=~\"resolve-locks.*\"}) by (result)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{result}}",
+              "metric": "tikv_storage_command_total",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "ResolveLocks Progress",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 0,
+          "description": "Progress of TiKV's GC",
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 60
+          },
+          "id": 2821,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": false,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "scopedVars": {
+            "command": {
+              "selected": false,
+              "text": "acquire_pessimistic_lock",
+              "value": "acquire_pessimistic_lock"
+            }
+          },
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(tikv_gcworker_autogc_processed_regions{instance=~\"$instance\", type=\"scan\"}) by (instance) / sum(tikv_raftstore_region_count{instance=~\"$instance\", type=\"region\"}) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}",
+              "metric": "tikv_storage_command_total",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "TiKV Auto GC Progress",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "percentunit",
+              "label": null,
+              "logBase": 1,
+              "max": "1.1",
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
-          "description": "The keys scan details of write CF when executing commit command",
+          "description": "keys / second",
           "editable": true,
           "error": false,
           "fill": 1,
@@ -11531,9 +11337,9 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 50
+            "y": 67
           },
-          "id": 829,
+          "id": 2589,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -11553,7 +11359,7 @@
           "lines": true,
           "linewidth": 2,
           "links": [],
-          "nullPointMode": "null",
+          "nullPointMode": "null as zero",
           "percentage": false,
           "pointradius": 5,
           "points": false,
@@ -11571,24 +11377,22 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{instance=~\"$instance\", req=\"$command\", cf=\"write\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum[1m]))",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
+              "legendFormat": "keys/s",
+              "refId": "E"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scheduler scan details [write]",
+          "title": "GC speed",
           "tooltip": {
             "msResolution": false,
             "shared": true,
-            "sort": 0,
+            "sort": 2,
             "value_type": "cumulative"
           },
           "type": "graph",
@@ -11602,117 +11406,10 @@
           "yaxes": [
             {
               "format": "short",
-              "label": null,
+              "label": "",
               "logBase": 1,
               "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The keys scan details of default CF when executing commit command",
-          "editable": true,
-          "error": false,
-          "fill": 1,
-          "grid": {},
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 50
-          },
-          "id": 830,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": false,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "nullPointMode": "null",
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
-          "scopedVars": {
-            "command": {
-              "selected": false,
-              "text": "acquire_pessimistic_lock",
-              "value": "acquire_pessimistic_lock"
-            }
-          },
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "expr": "sum(rate(tikv_scheduler_kv_scan_details{instance=~\"$instance\", req=\"$command\", cf=\"default\"}[1m])) by (tag)",
-              "format": "time_series",
-              "intervalFactor": 2,
-              "legendFormat": "{{tag}}",
-              "metric": "",
-              "refId": "A",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scheduler scan details [default]",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "cumulative"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -11759,8 +11456,8 @@
           "gridPos": {
             "h": 7,
             "w": 12,
-            "x": 0,
-            "y": 19
+            "x": 12,
+            "y": 67
           },
           "id": 26,
           "legend": {
@@ -11860,9 +11557,9 @@
           "description": "The number of versions deleted by GC for each key",
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 19
+            "w": 6,
+            "x": 0,
+            "y": 74
           },
           "heatmap": {},
           "hideZeroBuckets": false,
@@ -13515,9 +13212,9 @@
           "grid": {},
           "gridPos": {
             "h": 7,
-            "w": 12,
-            "x": 12,
-            "y": 27
+            "w": 6,
+            "x": 6,
+            "y": 74
           },
           "id": 43,
           "legend": {
@@ -13592,6 +13289,142 @@
               "max": null,
               "min": null,
               "show": true
+            }
+          ],
+          "valueName": "current"
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 0,
+          "description": "SafePoint used for TiKV's Auto GC",
+          "fill": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 74
+          },
+          "id": 6596,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filtered{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "filtered",
+              "metric": "tikv_storage_command_total",
+              "refId": "A",
+              "step": 4
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_deleted{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "deleted",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "rollback/lock",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_mvcc_delete_skip_older{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "skip-delete-filtered",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_next{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "iter-next",
+              "refId": "E"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_filter_seek{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "iter-seek",
+              "refId": "F"
+            },
+            {
+              "expr": "sum(rate(tikv_gc_compaction_failure{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "failure",
+              "refId": "G"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "GC in Compaction Filter",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
             }
           ],
           "yaxis": {
@@ -21079,6 +20912,13 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "db": {
+              "selected": false,
+              "text": "kv",
+              "value": "kv"
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -26703,22 +26543,22 @@
             {
               "expr": "sum(rate(tikv_import_rpc_duration_count{instance=~\"$instance\", request!=\"switch_mode\"}[30s])) by (instance, request)",
               "format": "time_series",
+              "hide": false,
               "intervalFactor": 1,
               "legendFormat": "{{instance}} - {{request}}",
               "metric": "tikv_grpc_msg_duration_seconds_bucket",
               "refId": "A",
-              "step": 10,
-              "hide": false
+              "step": 10
             },
             {
               "expr": "sum(rate(tikv_import_rpc_duration_count{instance=~\"$instance\", request!=\"switch_mode\"}[30s])) by (request)",
               "format": "time_series",
+              "hide": true,
               "intervalFactor": 1,
               "legendFormat": "total - {{request}}",
               "metric": "tikv_grpc_msg_duration_seconds_bucket",
               "refId": "B",
-              "step": 10,
-              "hide": true
+              "step": 10
             }
           ],
           "thresholds": [],
@@ -28028,5 +27868,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-  "version": 24
+  "version": 3
 }

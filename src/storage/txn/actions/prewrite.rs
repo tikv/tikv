@@ -44,6 +44,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok(ts);
     }
 
+    // Note that the `prev_write` may have invalid GC fence.
     let prev_write = if !mutation.skip_constraint_check() {
         mutation.check_for_newer_version(txn)?
     } else {
@@ -441,11 +442,19 @@ pub mod tests {
     use super::*;
     #[cfg(test)]
     use crate::storage::txn::{
-        commands::prewrite::fallback_1pc_locks, tests::must_acquire_pessimistic_lock,
+        commands::prewrite::fallback_1pc_locks,
+        tests::{
+            must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit,
+            must_prewrite_lock, must_prewrite_put,
+        },
     };
     use crate::storage::{mvcc::tests::*, Engine};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::ExtraOp;
+    #[cfg(test)]
+    use txn_types::OldValue;
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
         TransactionProperties {
@@ -783,5 +792,176 @@ pub mod tests {
             true,
         )
         .unwrap_err();
+    }
+
+    #[test]
+    fn test_prewrite_check_gc_fence() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+
+        // PUT,           Read
+        //  `------^
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 30);
+        must_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40, true);
+
+        // PUT,           Read
+        //  * (GC fence ts = 0)
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 30);
+        must_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0, true);
+
+        // PUT, LOCK,   LOCK, Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 30);
+        must_prewrite_lock(&engine, b"k3", b"k3", 37);
+        must_commit(&engine, b"k3", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40, true);
+        must_prewrite_lock(&engine, b"k3", b"k3", 42);
+        must_commit(&engine, b"k3", 42, 43);
+
+        // PUT, LOCK,   LOCK, Read
+        //  *
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 30);
+        must_prewrite_lock(&engine, b"k4", b"k4", 37);
+        must_commit(&engine, b"k4", 37, 38);
+        must_prewrite_lock(&engine, b"k4", b"k4", 42);
+        must_commit(&engine, b"k4", 42, 43);
+        must_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ `------^
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
+        must_commit(&engine, b"k5", 14, 20);
+        must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
+        must_commit(&engine, b"k5", 21, 30);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ *
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
+        must_commit(&engine, b"k6", 15, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
+        must_commit(&engine, b"k6", 22, 30);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0, true);
+
+        // PUT,  LOCK,    READ
+        //  `----------^
+        // Note that this case is special because usually the `LOCK` is the first write already got
+        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
+        // from the `LOCK` record.
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 30);
+        must_prewrite_lock(&engine, b"k7", b"k7", 37);
+        must_commit(&engine, b"k7", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40, true);
+
+        // 1. Check GC fence when doing constraint check with the older version.
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut txn = MvccTxn::new(snapshot.clone(), 50.into(), false, cm.clone());
+        let txn_props = TransactionProperties {
+            start_ts: 50.into(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: b"k1",
+            txn_size: 6,
+            lock_ttl: 2000,
+            min_commit_ts: 51.into(),
+        };
+
+        let cases = vec![
+            (b"k1", true),
+            (b"k2", false),
+            (b"k3", true),
+            (b"k4", false),
+            (b"k5", true),
+            (b"k6", false),
+            (b"k7", true),
+        ];
+
+        for (key, success) in cases {
+            let res = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::CheckNotExists(Key::from_raw(key)),
+                &None,
+                false,
+            );
+            if success {
+                res.unwrap();
+            } else {
+                res.unwrap_err();
+            }
+
+            let res = prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Insert((Key::from_raw(key), b"value".to_vec())),
+                &None,
+                false,
+            );
+            if success {
+                res.unwrap();
+            } else {
+                res.unwrap_err();
+            }
+        }
+        // Don't actually write the txn so that the test data is not changed.
+        drop(txn);
+
+        // 2. Check GC fence when reading the old value.
+        let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
+        txn.extra_op = ExtraOp::ReadOldValue;
+        let txn_props = TransactionProperties {
+            start_ts: 50.into(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: b"k1",
+            txn_size: 6,
+            lock_ttl: 2000,
+            min_commit_ts: 51.into(),
+        };
+
+        let cases: Vec<_> = vec![
+            (b"k1" as &[u8], None),
+            (b"k2", Some((b"v2" as &[u8], 11))),
+            (b"k3", None),
+            (b"k4", Some((b"v4", 13))),
+            (b"k5", None),
+            (b"k6", Some((b"v6x", 22))),
+            (b"k7", None),
+        ]
+        .into_iter()
+        .map(|(k, v)| {
+            let old_value = v.map(|(value, ts)| OldValue {
+                short_value: Some(value.to_vec()),
+                start_ts: ts.into(),
+            });
+            (Key::from_raw(k), old_value)
+        })
+        .collect();
+
+        for (key, _) in &cases {
+            prewrite(
+                &mut txn,
+                &txn_props,
+                Mutation::Put((key.clone(), b"value".to_vec())),
+                &None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut old_values = txn.take_extra().old_values;
+        for (key, expected_value) in cases {
+            let (old_value, mutation) = old_values.remove(&key.append_ts(50.into())).unwrap();
+            assert_eq!(old_value, expected_value);
+            assert_eq!(mutation, MutationType::Put);
+        }
+        assert!(old_values.is_empty());
     }
 }

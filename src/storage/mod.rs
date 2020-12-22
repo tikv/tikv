@@ -328,7 +328,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
+    /// Get values of a set of keys with separate context from a snapshot, return a list of `Result`s.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_get_command(
