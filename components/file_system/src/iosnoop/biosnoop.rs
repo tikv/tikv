@@ -35,13 +35,16 @@ const MAX_THREAD_IDX: usize = 192;
 // The two tables are `stats_by_type` and `type_by_pid` respectively.
 static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
 
-// This array records the io type for every thread. The address of this array
-// will be passed into BPF, so BPF code can get io type for specific thread
+// This array records the IO-type for every thread. The address of this array
+// will be passed into eBPF, so eBPF code can get IO-type for specific thread
 // without an extra syscall.
 // It should be a thread local variable, but the address of thread local is not
 // reliable. So define a global array and let each thread writes on a specific
-// element. Thus there is no contention for the element and use padding to avoid
-// false sharing.
+// element. And the IO-type is read when blk_account_io_start is called which is
+// fired in the process context. That is to say, it's called in kernel space of
+// user thread rather than kernel thread. So there is no contention between user
+// and kernel. Thus no need to make the elements atomic. Also use padding to
+// avoid false sharing.
 // Leave the last element as reserved, when there is no available index, all
 // other threads will be allocated to that index with IOType::Other always.
 static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
@@ -54,7 +57,13 @@ thread_local! {
         if let Some((_, _, t)) = BPF_TABLE.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
-            t.set(&mut tid.to_ne_bytes(), std::slice::from_raw_parts_mut(ptr as *mut u8, std::mem::size_of::<*const IOType>())).unwrap();
+            t.set(
+                &mut tid.to_ne_bytes(),
+                std::slice::from_raw_parts_mut(
+                    ptr as *mut u8,
+                    std::mem::size_of::<*const IOType>(),
+                ),
+            ).unwrap();
         }
         idx
     }
@@ -85,11 +94,13 @@ impl IdxAllocator {
     }
 
     fn allocate(&self) -> IdxWrapper {
-        IdxWrapper(if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
-            idx
-        } else {
-            MAX_THREAD_IDX
-        })
+        IdxWrapper(
+            if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
+                idx
+            } else {
+                MAX_THREAD_IDX
+            },
+        )
     }
 
     fn free(&self, idx: usize) {
@@ -137,22 +148,6 @@ impl IOContext {
         IOContext {
             io_stats_map: unsafe { get_io_stats() },
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn delta(self) -> HashMap<IOType, IOStats> {
-        if let Some(prev_map) = self.io_stats_map {
-            if let Some(mut now_map) = unsafe { get_io_stats() } {
-                for (io_type, stats) in prev_map {
-                    now_map.entry(io_type).and_modify(|e| {
-                        e.read -= stats.read;
-                        e.write -= stats.write;
-                    });
-                }
-                return now_map;
-            }
-        }
-        HashMap::default()
     }
 
     pub fn delta_and_refresh(&mut self) -> HashMap<IOType, IOStats> {
@@ -327,7 +322,7 @@ mod tests {
         .join()
         .unwrap();
 
-        let delta = ctx.delta();
+        let delta = ctx.delta_and_refresh();
         assert_eq!(delta.get(&IOType::Compaction).unwrap().write, 0);
         assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
         assert_eq!(delta.get(&IOType::Other).unwrap().write, 0);
