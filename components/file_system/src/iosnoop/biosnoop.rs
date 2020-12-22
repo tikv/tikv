@@ -7,7 +7,6 @@ use crate::IOType;
 use collections::HashMap;
 use std::collections::VecDeque;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
@@ -75,25 +74,22 @@ lazy_static! {
 }
 
 struct IdxAllocator {
-    counter: AtomicUsize,
     free_list: Mutex<VecDeque<usize>>,
 }
 
 impl IdxAllocator {
     fn new() -> Self {
         IdxAllocator {
-            counter: AtomicUsize::new(0),
-            free_list: Mutex::new(VecDeque::new()),
+            free_list: Mutex::new((0..MAX_THREAD_IDX).into_iter().collect()),
         }
     }
 
     fn allocate(&self) -> IdxWrapper {
-        let idx = if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
+        IdxWrapper(if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
             idx
         } else {
-            self.counter.fetch_add(1, Ordering::SeqCst)
-        };
-        IdxWrapper(std::cmp::min(idx, MAX_THREAD_IDX))
+            MAX_THREAD_IDX
+        })
     }
 
     fn free(&self, idx: usize) {
