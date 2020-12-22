@@ -120,9 +120,9 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req) {
   struct stats_t zero = {}, *val;
   val = stats_by_type.lookup_or_init(&type, &zero);
   if (rwflag == 1) {
-    (*val).write += req->__data_len;
+    __sync_fetch_and_add(&val->write, req->__data_len);
   } else {
-    (*val).read += req->__data_len;
+    __sync_fetch_and_add(&val->read, req->__data_len);
   }
 
   u64 delta = (bpf_ktime_get_ns() - info->start_ts) / 1000; // microseconds
