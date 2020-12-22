@@ -671,33 +671,18 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     )
                 };
 
-<<<<<<< HEAD
                 let mut response = BackupResponse::default();
                 match res {
                     Err(e) => {
                         error!(?e; "backup region failed";
                             "region" => ?brange.region,
-                            "start_key" => hex::encode_upper(&start_key),
-                            "end_key" => hex::encode_upper(&end_key),
+                            "start_key" => &log_wrappers::Value::key(&start_key),
+                            "end_key" => &log_wrappers::Value::key(&end_key),
                         );
                         response.set_error(e.into());
                     }
                     Ok((mut files, stat)) => {
                         debug!("backup region finish";
-=======
-                    let mut response = BackupResponse::default();
-                    match res {
-                        Err(e) => {
-                            error!(?e; "backup region failed";
-                                "region" => ?brange.region,
-                                "start_key" => &log_wrappers::Value::key(&start_key),
-                                "end_key" => &log_wrappers::Value::key(&end_key),
-                            );
-                            response.set_error(e.into());
-                        }
-                        Ok((mut files, stat)) => {
-                            debug!("backup region finish";
->>>>>>> 3b2c5337c... security: add log redaction check (#9250)
                             "region" => ?brange.region,
                             "start_key" => &log_wrappers::Value::key(&start_key),
                             "end_key" => &log_wrappers::Value::key(&end_key),

@@ -70,13 +70,9 @@ impl std::fmt::Debug for Write {
                 &self
                     .short_value
                     .as_ref()
-<<<<<<< HEAD
-                    .map(|v| hex::encode_upper(v))
-=======
                     .map(|x| &x[..])
                     .map(log_wrappers::Value::value)
                     .map(|x| format!("{:?}", x))
->>>>>>> 3b2c5337c... security: add log redaction check (#9250)
                     .unwrap_or_else(|| "None".to_owned()),
             )
             .finish()

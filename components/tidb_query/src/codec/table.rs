@@ -178,7 +178,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
             "record key expected, but got {}",
-            hex::encode_upper(encoded)
+            &log_wrappers::Value::key(encoded)
         ));
     }
     buf.read_i64()?;
@@ -186,7 +186,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     if buf.read_bytes(RECORD_PREFIX_SEP.len())? != RECORD_PREFIX_SEP {
         return Err(invalid_type!(
             "record key expected, but got {}",
-            hex::encode_upper(encoded)
+            &log_wrappers::Value::key(encoded)
         ));
     }
     buf.read_i64().map_err(Error::from)

@@ -389,10 +389,6 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-<<<<<<< HEAD
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
-=======
                 self.min_key
                     .as_ref()
                     .map(|x| &x[..])
@@ -401,18 +397,12 @@ impl<I: Iterator> Cursor<I> {
                     .as_ref()
                     .map(|x| &x[..])
                     .map(log_wrappers::Value::key),
->>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             );
         } else {
             error!(?e;
                 "failed to iterate";
-<<<<<<< HEAD
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
-=======
                 "min_key" => ?self.min_key.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key),
                 "max_key" => ?self.max_key.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key),
->>>>>>> 3b2c5337c... security: add log redaction check (#9250)
             );
             Err(e)
         }

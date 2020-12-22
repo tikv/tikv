@@ -36,12 +36,8 @@ quick_error! {
             display("unknown error {:?}", err)
         }
         RegionNotFound(key: Vec<u8>) {
-<<<<<<< HEAD
             description("region is not found")
-            display("region is not found for key {}", hex::encode_upper(key))
-=======
             display("region is not found for key {}", &log_wrappers::Value::key(key))
->>>>>>> 3b2c5337c... security: add log redaction check (#9250)
         }
         StoreTombstone(msg: String) {
             description("store is tombstone")

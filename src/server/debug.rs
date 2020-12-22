@@ -1272,8 +1272,10 @@ impl MvccInfoIterator {
                 _ => {
                     let err_msg = format!(
                         "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
-                        hex::encode_upper(&min_prefix),
-                        hex::encode_upper(box_try!(Key::truncate_ts_for(self.default_iter.key())))
+                        &log_wrappers::Value::key(&min_prefix),
+                        &log_wrappers::Value::key(box_try!(Key::truncate_ts_for(
+                            self.default_iter.key()
+                        )))
                     );
                     return Err(box_err!(err_msg));
                 }
