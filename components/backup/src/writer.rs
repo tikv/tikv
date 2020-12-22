@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::f64::INFINITY;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -157,7 +158,7 @@ impl BackupWriter {
             compression_type,
             compression_level,
             store_id: 0,
-            limiter: Limiter::new(4 as f64),
+            limiter: Limiter::new(INFINITY),
             sst_max_size: 0,
             region: Region::default(),
         })
