@@ -198,13 +198,16 @@ impl<S: Snapshot> PointGetter<S> {
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
 
         if let Some(ref lock_value) = lock_value {
-            self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
             if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                 self.met_newer_ts_data = NewerTsCheckState::Met;
             }
-            lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
-                .map_err(Into::into)
+            if let Err(e) = lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks) {
+                self.statistics.lock.processed_keys += 1;
+                Err(e.into())
+            } else {
+                Ok(())
+            }
         } else {
             Ok(())
         }
@@ -259,11 +262,12 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
 
-            self.statistics.write.processed += 1;
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
 
             match write.write_type {
                 WriteType::Put => {
+                    self.statistics.write.processed_keys += 1;
+
                     if self.omit_value {
                         return Ok(Some(vec![]));
                     }
@@ -310,7 +314,7 @@ impl<S: Snapshot> PointGetter<S> {
             .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write_start_ts))?;
 
         if let Some(value) = value {
-            self.statistics.data.processed += 1;
+            self.statistics.data.processed_keys += 1;
             Ok(value)
         } else {
             Err(default_not_found_error(

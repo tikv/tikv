@@ -51,7 +51,7 @@ pub struct Tracker {
     schedule_wait_time: Duration, // Wait time spent on waiting for scheduling
     snapshot_wait_time: Duration, // Wait time spent on waiting for a snapshot
     handler_build_time: Duration, // Time spent on building the handler (not included in total wait time)
-    req_time: Duration,
+    req_lifetime: Duration,
     item_process_time: Duration,
     total_process_time: Duration,
     total_storage_stats: Statistics,
@@ -78,7 +78,7 @@ impl Tracker {
             schedule_wait_time: Duration::default(),
             snapshot_wait_time: Duration::default(),
             handler_build_time: Duration::default(),
-            req_time: Duration::default(),
+            req_lifetime: Duration::default(),
             item_process_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
@@ -139,6 +139,7 @@ impl Tracker {
             self.total_perf_stats += perf_stats.delta();
         }
         self.current_stage = TrackerState::ItemFinished;
+        // TODO: Need to record time between Finish -> Begin Next?
     }
 
     pub fn collect_storage_statistics(&mut self, storage_stats: Statistics) {
@@ -147,6 +148,7 @@ impl Tracker {
 
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
+    /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
     pub fn get_item_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         assert_eq!(self.current_stage, TrackerState::ItemFinished);
         self.exec_details(self.item_process_time)
@@ -198,7 +200,7 @@ impl Tracker {
             self.current_stage == TrackerState::AllItemsBegan
                 || self.current_stage == TrackerState::ItemFinished
         );
-        self.req_time = Instant::now_coarse() - self.request_begin_at;
+        self.req_lifetime = Instant::now_coarse() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
     }
@@ -208,8 +210,10 @@ impl Tracker {
             return;
         }
 
+        let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
+
         // Print slow log if *process* time is long.
-        if self.total_process_time > self.slow_log_threshold {
+        if self.req_lifetime > self.slow_log_threshold {
             let some_table_id = self.req_ctx.first_range.as_ref().map(|range| {
                 tidb_query::codec::table::decode_table_id(range.get_start()).unwrap_or_default()
             });
@@ -217,26 +221,23 @@ impl Tracker {
             info!(#"slow_log", "slow-query";
                 "region_id" => self.req_ctx.context.get_region_id(),
                 "remote_host" => &self.req_ctx.peer,
-                "req_time" => ?self.req_time,
-                "total_process_time" => ?self.total_process_time,
+                "total_lifetime" => ?self.req_lifetime,
                 "wait_time" => ?self.wait_time,
-                "schedule_wait_time" => ?self.schedule_wait_time,
-                "snapshot_wait_time" => ?self.snapshot_wait_time,
+                "wait_time.schedule" => ?self.schedule_wait_time,
+                "wait_time.snapshot" => ?self.snapshot_wait_time,
                 "handler_build_time" => ?self.handler_build_time,
+                "total_process_time" => ?self.total_process_time,
                 "txn_start_ts" => self.req_ctx.txn_start_ts,
                 "table_id" => some_table_id,
                 "tag" => self.req_ctx.tag,
-                "scan_is_desc" => self.req_ctx.is_desc_scan,
-                "scan_iter_ops" => self.total_storage_stats.total_op_count(),
-                "scan_iter_processed" => self.total_storage_stats.total_processed(),
-                "scan_ranges" => self.req_ctx.ranges_len,
-                "scan_first_range" => ?self.req_ctx.first_range,
+                "scan.is_desc" => self.req_ctx.is_desc_scan,
+                "scan.processed" => total_storage_stats.write.processed_keys,
+                "scan.total" => total_storage_stats.write.total_op_count(),
+                "scan.ranges" => self.req_ctx.ranges_len,
+                "scan.range.first" => ?self.req_ctx.first_range,
                 self.total_perf_stats,
             );
         }
-
-        let total_storage_stats =
-            std::mem::replace(&mut self.total_storage_stats, Statistics::default());
 
         TLS_COP_METRICS.with(|m| {
             let mut cop_metrics = m.borrow_mut();
@@ -245,7 +246,7 @@ impl Tracker {
             cop_metrics
                 .local_copr_req_histogram_vec
                 .with_label_values(&[self.req_ctx.tag])
-                .observe(time::duration_to_sec(self.req_time));
+                .observe(time::duration_to_sec(self.req_lifetime));
 
             // wait time
             cop_metrics
@@ -280,8 +281,12 @@ impl Tracker {
             // scan keys
             cop_metrics
                 .local_copr_scan_keys
-                .with_label_values(&[self.req_ctx.tag])
-                .observe(total_storage_stats.total_processed() as f64);
+                .with_label_values(&[self.req_ctx.tag, "total"])
+                .observe(total_storage_stats.write.total_op_count() as f64);
+            cop_metrics
+                .local_copr_scan_keys
+                .with_label_values(&[self.req_ctx.tag, "processed_keys"])
+                .observe(total_storage_stats.write.processed_keys as f64);
 
             // RocksDB perf stats
             cop_metrics
