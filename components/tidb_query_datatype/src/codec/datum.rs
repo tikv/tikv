@@ -15,6 +15,7 @@ use super::mysql::{
 };
 use super::Result;
 use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::data_type::AsMySQLBool;
 use crate::expr::EvalContext;
 use codec::byte::{CompactByteCodec, MemComparableByteCodec};
 use codec::number::{self, NumberCodec};
@@ -374,6 +375,7 @@ impl Datum {
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Json(j) => Some(j.as_ref().as_mysql_bool(ctx)?),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -1135,7 +1137,7 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
             return Err(box_err!(
                 "The {}th slice are missing in the datum buffer: {}",
                 i,
-                hex::encode_upper(origin)
+                log_wrappers::Value::value(origin)
             ));
         }
         let (_, remaining) = split_datum(buf, false)?;
@@ -1812,6 +1814,32 @@ mod tests {
                 Some(false),
             ),
             (Datum::Dec(0u64.into()), Some(false)),
+            // Test Json
+            (Json::from_i64(1).unwrap().into(), Some(true)),
+            (Json::from_i64(0).unwrap().into(), Some(false)),
+            (Json::from_u64(1u64).unwrap().into(), Some(true)),
+            (Json::from_u64(0u64).unwrap().into(), Some(false)),
+            (
+                Json::from_f64(std::f64::consts::PI).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_f64(0.0).unwrap().into(), Some(false)),
+            (
+                Json::from_string("0".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (
+                Json::from_string("aaabbb".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_bool(true).unwrap().into(), Some(true)),
+            (Json::from_bool(false).unwrap().into(), Some(true)),
+            (
+                Json::from_string("".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_array(vec![]).unwrap().into(), Some(true)),
+            (Json::from_kv_pairs(vec![]).unwrap().into(), Some(true)),
         ];
 
         for (d, b) in tests {

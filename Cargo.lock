@@ -212,6 +212,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pd_client",
  "prometheus",
  "raft",
@@ -460,9 +461,9 @@ dependencies = [
  "failure",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1613,9 +1614,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
+checksum = "2dfdbacbc27f875402f878928c7e9dc22ee26d01a56a9faf655f7090e7e25109"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
@@ -1643,9 +1644,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e6ea7ecb083588c8b3446270e95415c14ea856539e41ed3ad0c53614398a13f"
+checksum = "01cf1bf66e791876cfb406952895d87912eab70e858a5474c3608e5297509eba"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -1962,16 +1963,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f3dafca4c7fd5af12fd83b9cf8540b1a32f61c02"
+source = "git+https://github.com/pingcap/kvproto.git#fc36d7869035ffd96810efdb9c1f053c6081a773"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2726,10 +2728,10 @@ dependencies = [
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -3159,7 +3161,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs?branch=master#34829a8152c845ab642a8094a9ad5887dc64c85e"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3210,7 +3212,6 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3453,7 +3454,7 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "collections",
- "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4401,10 +4402,10 @@ dependencies = [
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raftstore",
@@ -4490,10 +4491,10 @@ dependencies = [
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "hyper",
  "keys",
  "kvproto",
+ "log_wrappers",
  "more-asserts",
  "panic_hook",
  "pd_client",
@@ -4603,9 +4604,9 @@ dependencies = [
  "derive_more",
  "error_code",
  "failure",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
  "tikv_util",
@@ -4629,6 +4630,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4657,7 +4659,6 @@ dependencies = [
  "collections",
  "fail",
  "failure",
- "hex 0.4.2",
  "kvproto",
  "log_wrappers",
  "match_template",
@@ -4688,6 +4689,7 @@ dependencies = [
  "file_system",
  "flate2",
  "hex 0.4.2",
+ "log_wrappers",
  "match_template",
  "num",
  "num-traits",
@@ -4884,11 +4886,11 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "minitrace",
  "num_cpus",
  "openssl",
@@ -5136,8 +5138,8 @@ dependencies = [
  "collections",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",
