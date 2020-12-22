@@ -173,6 +173,12 @@ impl IOContext {
 }
 
 pub fn init_io_snooper() -> Result<(), String> {
+    unsafe {
+        if BPF_TABLE.is_some() {
+            return Ok(());
+        }
+    }
+
     let code = include_str!("biosnoop.c").replace("##TGID##", &nix::unistd::getpid().to_string());
 
     // TODO: When using bpf_get_ns_current_pid_tgid of newer kernel, need
@@ -274,12 +280,17 @@ pub fn flush_io_metrics() {
 
 #[cfg(test)]
 mod tests {
-    use crate::iosnoop::imp::MAX_THREAD_IDX;
+    extern crate test;
+
+    use crate::iosnoop::imp::{BPF_TABLE, MAX_THREAD_IDX};
     use crate::iosnoop::metrics::*;
     use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
     use std::sync::{Arc, Condvar, Mutex};
-    use std::{fs::OpenOptions, io::Read, io::Write, os::unix::fs::OpenOptionsExt};
+    use std::{
+        fs::OpenOptions, io::Read, io::Seek, io::SeekFrom, io::Write, os::unix::fs::OpenOptionsExt,
+    };
     use tempfile::TempDir;
+    use test::Bencher;
 
     use libc::O_DIRECT;
     use maligned::A512;
@@ -316,7 +327,7 @@ mod tests {
                 .open(&file_path)
                 .unwrap();
             let mut r = vec![A512::default(); 2];
-            f.read(&mut r.as_bytes_mut()).unwrap();
+            assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
             drop(f);
         })
         .join()
@@ -385,7 +396,7 @@ mod tests {
         }
 
         // the thread indexes should be available again.
-        for _ in 1..MAX_THREAD_IDX {
+        for _ in 1..=MAX_THREAD_IDX {
             std::thread::spawn(|| {
                 set_io_type(IOType::Compaction);
                 assert_eq!(get_io_type(), IOType::Compaction);
@@ -393,5 +404,105 @@ mod tests {
             .join()
             .unwrap();
         }
+    }
+
+    #[bench]
+    fn bench_write_enable_io_snoop(b: &mut Bencher) {
+        init_io_snooper().unwrap();
+        bench_write(b);
+    }
+
+    #[bench]
+    fn bench_write_disable_io_snoop(b: &mut Bencher) {
+        unsafe { BPF_TABLE = None };
+        bench_write(b);
+    }
+
+    #[bench]
+    fn bench_read_enable_io_snoop(b: &mut Bencher) {
+        init_io_snooper().unwrap();
+        bench_read(b);
+    }
+
+    #[bench]
+    fn bench_read_disable_io_snoop(b: &mut Bencher) {
+        unsafe { BPF_TABLE = None };
+        bench_read(b);
+    }
+
+    #[bench]
+    fn bench_flush_io_metrics(b: &mut Bencher) {
+        init_io_snooper().unwrap();
+        set_io_type(IOType::Write);
+
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("bench_flush_io_metrics");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+
+        let mut w = vec![A512::default(); 1];
+        w.as_bytes_mut()[64] = 42;
+        for _ in 1..=100 {
+            f.write(w.as_bytes()).unwrap();
+        }
+        f.sync_all().unwrap();
+
+        b.iter(|| {
+            flush_io_metrics();
+        });
+    }
+
+    fn bench_write(b: &mut Bencher) {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("bench_write_io_snoop");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+
+        let mut w = vec![A512::default(); 1];
+        w.as_bytes_mut()[64] = 42;
+
+        b.iter(|| {
+            set_io_type(IOType::Write);
+            f.write(w.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        });
+    }
+
+    fn bench_read(b: &mut Bencher) {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("bench_read_io_snoop");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+
+        let mut w = vec![A512::default(); 1];
+        w.as_bytes_mut()[64] = 42;
+        f.write(w.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let mut f = OpenOptions::new()
+            .read(true)
+            .custom_flags(O_DIRECT)
+            .open(&file_path)
+            .unwrap();
+        let mut r = vec![A512::default(); 1];
+        b.iter(|| {
+            set_io_type(IOType::Read);
+            f.seek(SeekFrom::Start(0)).unwrap();
+            assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
+        });
     }
 }
