@@ -134,8 +134,7 @@ impl Condvar {
         }
     }
 
-    /// Notifies all waiters in queue as till now. Effectively notify the oldest
-    /// waiter to start a chained wakeup.
+    /// Notifies all waiters in queue as till now.
     pub fn notify_all(&self) {
         let mut ptr = self.head.get();
         loop {
@@ -217,12 +216,12 @@ mod tests {
     #[test]
     fn test_condvar() {
         let long_timeout_millis = 1000 * 100;
-        let short_timeout_millis = 1;
+        let short_timeout_millis = 5;
         let total_waits = 50;
 
         let mu = Arc::new(Mutex::new(()));
         let condv = Arc::new(Condvar::new());
-        let mut ts = vec![];
+        let mut threads = vec![];
         let enter_ticket = Arc::new(AtomicUsize::new(0));
         let exit_ticket = Arc::new(AtomicUsize::new(0));
 
@@ -261,7 +260,7 @@ mod tests {
                     assert_eq!(timed_out, false);
                 }
             });
-            ts.push(t);
+            threads.push(t);
         }
         while exit_ticket.load(Ordering::Relaxed) != (total_waits + 2) / 3
             || enter_ticket.load(Ordering::Relaxed) != total_waits
@@ -272,11 +271,11 @@ mod tests {
             let _guard = mu.lock().unwrap();
             condv.notify_all();
         }
-        for t in ts {
+        for t in threads {
             t.join().unwrap();
         }
         let end = time_util::monotonic_now();
-        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(1));
+        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(short_timeout_millis * 2));
     }
 
     #[bench]
