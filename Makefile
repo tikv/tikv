@@ -278,6 +278,7 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
+	@./scripts/check-redact-log
 	@./scripts/clippy-all
 
 pre-audit:
