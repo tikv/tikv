@@ -1381,7 +1381,12 @@ where
         leader_id: u64,
         term: u64,
     ) {
-        debug!("insert leader info to meta"; "region_id" => self.region_id, "leader_id" => leader_id, "term" => term);
+        debug!(
+            "insert leader info to meta";
+            "region_id" => self.region_id,
+            "leader_id" => leader_id,
+            "term" => term,
+        );
         let mut meta = ctx.store_meta.lock().unwrap();
         meta.leaders.insert(self.region_id, (term, leader_id));
     }
