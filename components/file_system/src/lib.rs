@@ -36,7 +36,7 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IOType {
     Other = 0,
     Read = 1,

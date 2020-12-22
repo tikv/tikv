@@ -21,12 +21,32 @@ fn get_priority(io_type: IOType) -> IOPriority {
 }
 
 #[derive(Debug)]
+struct Calibrator {
+    io_type: IOType,
+    io_op: IOOp,
+}
+
+impl Calibrator {
+    #[allow(dead_code)]
+    pub fn new(io_type: IOType, io_op: IOOp) -> Self {
+        Calibrator { io_type, io_op }
+    }
+
+    pub fn calibrate(&self) -> usize {
+        0
+    }
+
+    pub fn reset(&self) {}
+}
+
+#[derive(Debug)]
 struct PerTypeIORateLimiter {
     bytes_per_refill: AtomicUsize,
     consumed: AtomicUsize,
     refill_period: Duration,
     last_refill_time: Mutex<Timespec>,
     condv: Condvar,
+    calibrator: Option<Calibrator>,
 }
 
 #[inline]
@@ -46,6 +66,7 @@ impl PerTypeIORateLimiter {
             refill_period,
             last_refill_time: Mutex::new(time_util::monotonic_raw_now()),
             condv: Condvar::new(),
+            calibrator: None,
         }
     }
 
@@ -54,6 +75,11 @@ impl PerTypeIORateLimiter {
             calculate_bytes_per_refill(bytes_per_sec, self.refill_period),
             Ordering::Relaxed,
         );
+    }
+
+    #[allow(dead_code)]
+    pub fn set_calibrator(&mut self, calibrator: Calibrator) {
+        self.calibrator = Some(calibrator);
     }
 
     #[inline]
@@ -73,6 +99,9 @@ impl PerTypeIORateLimiter {
     fn refill_and_request(&self, bytes: usize) -> usize {
         let token = std::cmp::min(self.bytes_per_refill.load(Ordering::Relaxed), bytes);
         self.consumed.store(token, Ordering::Relaxed);
+        if let Some(calibrator) = &self.calibrator {
+            calibrator.reset();
+        }
         self.condv.notify_all();
         token
     }
@@ -96,6 +125,13 @@ impl PerTypeIORateLimiter {
             // double check if bytes have been refilled by others
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
+            }
+            if let Some(calibrator) = &self.calibrator {
+                let calibrated = calibrator.calibrate();
+                self.consumed.store(calibrated, Ordering::Relaxed);
+                if calibrated < cached_bytes_per_refill {
+                    continue;
+                }
             }
             let now = time_util::monotonic_raw_now();
             if now > *last_refill_time {
@@ -203,13 +239,13 @@ impl IORateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
-        let bytes = self.total_limiters[IOType::Other as usize].request(bytes, prio);
+        let mut bytes = self.total_limiters[IOType::Other as usize].request(bytes, prio);
         if io_type != IOType::Other {
-            let bytes = self.total_limiters[io_type as usize].request(bytes, prio);
+            bytes = self.total_limiters[io_type as usize].request(bytes, prio);
         }
         match io_op {
             IOOp::Write => {
-                let bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
+                bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
                     self.write_limiters[io_type as usize].request(bytes, prio)
                 } else {
@@ -217,7 +253,7 @@ impl IORateLimiter {
                 }
             }
             IOOp::Read => {
-                let bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
+                bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
                     self.read_limiters[io_type as usize].request(bytes, prio)
                 } else {
@@ -233,17 +269,17 @@ impl IORateLimiter {
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
         let prio = get_priority(io_type);
-        let bytes = self.total_limiters[IOType::Other as usize]
+        let mut bytes = self.total_limiters[IOType::Other as usize]
             .async_request(bytes, prio)
             .await;
         if io_type != IOType::Other {
-            let bytes = self.total_limiters[io_type as usize]
+            bytes = self.total_limiters[io_type as usize]
                 .async_request(bytes, prio)
                 .await;
         }
         match io_op {
             IOOp::Write => {
-                let bytes = self.write_limiters[IOType::Other as usize]
+                bytes = self.write_limiters[IOType::Other as usize]
                     .async_request(bytes, prio)
                     .await;
                 if io_type != IOType::Other {
@@ -255,7 +291,7 @@ impl IORateLimiter {
                 }
             }
             IOOp::Read => {
-                let bytes = self.read_limiters[IOType::Other as usize]
+                bytes = self.read_limiters[IOType::Other as usize]
                     .async_request(bytes, prio)
                     .await;
                 if io_type != IOType::Other {
