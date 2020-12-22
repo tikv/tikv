@@ -479,7 +479,7 @@ mod tests {
             .store_id(1)
             .limiter(Limiter::new(INFINITY))
             .sst_max_size(144 * 1024 * 1024)
-            .region(r.clone());
+            .region(r);
         writer
             .write(
                 vec![
