@@ -230,7 +230,7 @@ impl BackupRange {
                 let res = {
                     entries.as_slice().get(0).map_or_else(
                         || Err(Error::Other(box_err!("get entry error"))),
-                        |x| match x.form_key() {
+                        |x| match x.as_key() {
                             Ok(k) => writer.rebuild(Option::from(Key::from_raw(&k))),
                             Err(e) => {
                                 error!(?e; "backup save file failed");
@@ -359,20 +359,15 @@ impl BackupRange {
         start_ts: TimeStamp,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
-        region_max_size: u64,
+        sst_max_size: u64,
         region: Region,
     ) -> Result<(Vec<File>, Statistics)> {
-        let writer = match BackupWriter::new(
-            db,
-            store_id,
-            &file_name,
-            storage.limiter.clone(),
-            compression_type,
-            compression_level,
-            region_max_size,
-            region,
-        ) {
-            Ok(w) => w,
+        let writer = match BackupWriter::new(db, &file_name, compression_type, compression_level) {
+            Ok(w) => w
+                .store_id(store_id)
+                .limiter(storage.limiter.clone())
+                .sst_max_size(sst_max_size)
+                .region(region),
             Err(e) => {
                 error!(?e; "backup writer failed");
                 return Err(e);
@@ -676,7 +671,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
-        let region_max_size = self.config_manager.0.read().unwrap().region_max_size.0;
+        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
 
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
@@ -762,7 +757,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                                 start_ts,
                                 ct,
                                 request.compression_level,
-                                region_max_size,
+                                sst_max_size,
                                 brange.region.clone(),
                             ),
                             brange
@@ -1044,7 +1039,7 @@ pub mod tests {
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
-                    region_max_size: ReadableSize::mb(144),
+                    sst_max_size: ReadableSize::mb(144),
                 },
                 concurrency_manager,
             ),

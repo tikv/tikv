@@ -119,7 +119,7 @@ pub struct BackupWriter {
     default: Writer,
     write: Writer,
     limiter: Limiter,
-    region_max_size: u64,
+    sst_max_size: u64,
     region: Region,
     db: Arc<DB>,
     compression_type: Option<SstCompressionType>,
@@ -130,13 +130,9 @@ impl BackupWriter {
     /// Create a new BackupWriter.
     pub fn new(
         db: Arc<DB>,
-        store_id: u64,
         name: &str,
-        limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
-        region_max_size: u64,
-        region: Region,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -154,16 +150,16 @@ impl BackupWriter {
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {
-            store_id,
             name,
+            db,
             default: Writer::new(default),
             write: Writer::new(write),
-            limiter,
-            region_max_size,
-            region,
-            db,
             compression_type,
             compression_level,
+            store_id: 0,
+            limiter: Limiter::new(4 as f64),
+            sst_max_size: 0,
+            region: Region::default(),
         })
     }
 
@@ -256,7 +252,7 @@ impl BackupWriter {
             default: Writer::new(default),
             write: Writer::new(write),
             limiter: self.limiter.clone(),
-            region_max_size: self.region_max_size,
+            sst_max_size: self.sst_max_size,
             region: self.region.clone(),
             db: self.db.clone(),
             compression_type: self.compression_type,
@@ -265,11 +261,31 @@ impl BackupWriter {
     }
 
     pub fn need_split_keys(&self) -> bool {
-        self.default.total_bytes + self.write.total_bytes >= self.region_max_size
+        self.default.total_bytes + self.write.total_bytes >= self.sst_max_size
     }
 
     pub fn need_flush_keys(&self) -> bool {
         self.default.total_bytes + self.write.total_bytes > 0
+    }
+
+    pub fn store_id(mut self, store_id: u64) -> BackupWriter {
+        self.store_id = store_id;
+        self
+    }
+
+    pub fn limiter(mut self, limiter: Limiter) -> BackupWriter {
+        self.limiter = limiter;
+        self
+    }
+
+    pub fn sst_max_size(mut self, region_max_size: u64) -> BackupWriter {
+        self.sst_max_size = region_max_size;
+        self
+    }
+
+    pub fn region(mut self, region: Region) -> BackupWriter {
+        self.region = region;
+        self
     }
 }
 
@@ -416,32 +432,22 @@ mod tests {
         let mut r = kvproto::metapb::Region::default();
         r.set_id(1);
         r.mut_peers().push(new_peer(1, 1));
-        let mut writer = BackupWriter::new(
-            db.get_sync_db(),
-            1,
-            "foo",
-            Limiter::new(INFINITY),
-            None,
-            0,
-            144 * 1024 * 1024,
-            r.clone(),
-        )
-        .unwrap();
+        let mut writer = BackupWriter::new(db.get_sync_db(), "foo", None, 0)
+            .unwrap()
+            .store_id(1)
+            .limiter(Limiter::new(INFINITY))
+            .sst_max_size(144 * 1024 * 1024)
+            .region(r.clone());
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(
-            db.get_sync_db(),
-            1,
-            "foo1",
-            Limiter::new(INFINITY),
-            None,
-            0,
-            144 * 1024 * 1024,
-            r.clone(),
-        )
-        .unwrap();
+        let mut writer = BackupWriter::new(db.get_sync_db(), "foo1", None, 0)
+            .unwrap()
+            .store_id(1)
+            .limiter(Limiter::new(INFINITY))
+            .sst_max_size(144 * 1024 * 1024)
+            .region(r.clone());
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -467,17 +473,12 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(
-            db.get_sync_db(),
-            1,
-            "foo2",
-            Limiter::new(INFINITY),
-            None,
-            0,
-            144 * 1024 * 1024,
-            r,
-        )
-        .unwrap();
+        let mut writer = BackupWriter::new(db.get_sync_db(), "foo2", None, 0)
+            .unwrap()
+            .store_id(1)
+            .limiter(Limiter::new(INFINITY))
+            .sst_max_size(144 * 1024 * 1024)
+            .region(r.clone());
         writer
             .write(
                 vec![
