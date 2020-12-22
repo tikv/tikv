@@ -231,7 +231,7 @@ impl Debug for Key {
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
+        write!(f, "{:?}", hex::encode_upper(&self.0))
     }
 }
 
