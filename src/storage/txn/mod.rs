@@ -127,10 +127,10 @@ quick_error! {
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
             display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
-                        start.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        end.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
+                        start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()))
         }
         MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
             display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",

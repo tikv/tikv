@@ -148,7 +148,9 @@ impl std::fmt::Debug for Write {
                 &self
                     .short_value
                     .as_ref()
-                    .map(hex::encode_upper)
+                    .map(|x| &x[..])
+                    .map(log_wrappers::Value::value)
+                    .map(|x| format!("{:?}", x))
                     .unwrap_or_else(|| "None".to_owned()),
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
