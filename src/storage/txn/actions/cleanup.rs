@@ -108,9 +108,6 @@ pub mod tests {
         cleanup(&mut txn, Key::from_raw(key), current_ts, true).unwrap_err()
     }
 
-    // Temporary test helper before implementing GC fence writing. After it's implemented, this
-    // should be replaced by writing a newer version, run cleanup, and then delete the newer write
-    // record.
     pub fn must_cleanup_with_gc_fence<E: Engine>(
         engine: &E,
         key: &[u8],
