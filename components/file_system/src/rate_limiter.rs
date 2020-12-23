@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{condvar::Condvar, time_util, IOOp, IOType, IO_TYPE_VARIANTS};
+use super::{condvar::Condvar, IOOp, IOType, IO_TYPE_VARIANTS};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use time::Timespec;
+use tikv_util::time::Instant;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum IOPriority {
@@ -45,7 +45,7 @@ struct PerTypeIORateLimiter {
     bytes_per_refill: AtomicUsize,
     consumed: AtomicUsize,
     refill_period: Duration,
-    last_refill_time: Mutex<Timespec>,
+    last_refill_time: Mutex<Instant>,
     condv: Condvar,
     calibrator: Option<BytesCalibrator>,
 }
@@ -65,7 +65,7 @@ impl PerTypeIORateLimiter {
             )),
             consumed: AtomicUsize::new(0),
             refill_period,
-            last_refill_time: Mutex::new(time_util::monotonic_raw_now()),
+            last_refill_time: Mutex::new(Instant::now()),
             condv: Condvar::new(),
             calibrator: None,
         }
@@ -134,9 +134,9 @@ impl PerTypeIORateLimiter {
                     continue;
                 }
             }
-            let now = time_util::monotonic_raw_now();
+            let now = Instant::now();
             if now > *last_refill_time {
-                let since_last_refill = time_util::checked_sub(now, *last_refill_time);
+                let since_last_refill = now.duration_since(*last_refill_time);
                 if since_last_refill >= self.refill_period {
                     *last_refill_time = now;
                     break self.refill_and_request(bytes);
@@ -145,7 +145,7 @@ impl PerTypeIORateLimiter {
                     let (mut last_refill_time, timed_out) = self
                         .condv
                         .wait_timeout(last_refill_time, self.refill_period - since_last_refill);
-                    let now = time_util::monotonic_raw_now();
+                    let now = Instant::now();
                     if timed_out && *last_refill_time == cached_last_refill_time {
                         // timeout, do the refill myself
                         *last_refill_time = now;
@@ -180,9 +180,9 @@ impl PerTypeIORateLimiter {
                     continue;
                 }
             }
-            let now = time_util::monotonic_raw_now();
+            let now = Instant::now();
             if now > *last_refill_time {
-                let since_last_refill = time_util::checked_sub(now, *last_refill_time);
+                let since_last_refill = now.duration_since(*last_refill_time);
                 if since_last_refill >= self.refill_period {
                     *last_refill_time = now;
                     break self.refill_and_request(bytes);
@@ -196,7 +196,7 @@ impl PerTypeIORateLimiter {
                             self.refill_period - since_last_refill,
                         )
                         .await;
-                    let now = time_util::monotonic_raw_now();
+                    let now = Instant::now();
                     if timed_out && *last_refill_time == cached_last_refill_time {
                         *last_refill_time = now;
                         break self.refill_and_request(bytes);
@@ -354,7 +354,7 @@ mod tests {
         let mut threads = vec![];
         assert_eq!(limiter.request(1000, IOPriority::Low), 100 - 2 - 10);
         assert_eq!(limiter.request(1000, IOPriority::Low), 100);
-        let begin = time_util::monotonic_now();
+        let begin = Instant::now();
         for _ in 0..50 {
             let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
@@ -365,9 +365,9 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
-        let end = time_util::monotonic_now();
-        assert!(time_util::checked_sub(end, begin) > refill_period);
-        assert!(time_util::checked_sub(end, begin) < refill_period * 2);
+        let end = Instant::now();
+        assert!(end.duration_since(begin) > refill_period);
+        assert!(end.duration_since(begin) < refill_period * 2);
         assert_eq!(limiter.request(1000, IOPriority::Low), 50);
     }
 

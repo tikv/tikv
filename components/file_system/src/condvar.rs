@@ -206,10 +206,11 @@ impl Condvar {
 
 #[cfg(test)]
 mod tests {
-    use super::super::time_util;
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    use tikv_util::time::Instant;
 
     use test::Bencher;
 
@@ -225,7 +226,7 @@ mod tests {
         let enter_ticket = Arc::new(AtomicUsize::new(0));
         let exit_ticket = Arc::new(AtomicUsize::new(0));
 
-        let begin = time_util::monotonic_now();
+        let begin = Instant::now();
         for i in 0..total_waits {
             let (mu, condv, enter, exit) = (
                 mu.clone(),
@@ -274,8 +275,8 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
-        let end = time_util::monotonic_now();
-        assert!(time_util::checked_sub(end, begin) < Duration::from_secs(short_timeout_millis * 2));
+        let end = Instant::now();
+        assert!(end.duration_since(begin) < Duration::from_secs(short_timeout_millis * 2));
     }
 
     #[bench]
