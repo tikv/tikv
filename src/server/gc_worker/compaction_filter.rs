@@ -663,33 +663,29 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    if ratio_threshold < 1.0 {
-        return true;
-    }
-
-    let check_props = |props: &MvccProperties| {
+    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
         if props.min_ts > safe_point {
-            return false;
+            return (false, false);
         }
-        if context.is_bottommost_level() {
+        if ratio_threshold < 1.0 || context.is_bottommost_level() {
             // According to our tests, `split_ts` on keys and `parse_write` on values
             // won't utilize much CPU. So always perform GC at the bottommost level
             // to avoid garbage accumulation.
-            return true;
+            return (true, true);
         }
         if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
             // treat internal levels specially.
-            return true;
+            return (true, false);
         }
 
         // When comparing `num_versions` with `num_puts`, trait internal levels specially
         // because MVCC-delete marks can't be handled at those levels.
         let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
         if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
-            return true;
+            return (true, false);
         }
-        props.max_row_versions > 1024
+        (props.max_row_versions > 1024, false)
     };
 
     let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
@@ -701,13 +697,19 @@ fn check_need_gc(
         };
         if let Ok(props) = RocksMvccProperties::decode(user_props) {
             sum_props.add(&props);
-            if check_props(&props) {
+            let (sst_needs_gc, skip_more_checks) = check_props(&props);
+            if sst_needs_gc {
                 needs_gc += 1;
+            }
+            if skip_more_checks {
+                // It's the bottommost level or ratio_threshold is less than 1.
+                needs_gc = context.file_numbers().len();
+                break;
             }
         }
     }
 
-    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props)
+    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
 }
 
 #[cfg(test)]
