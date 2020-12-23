@@ -15,12 +15,12 @@ enum IOPriority {
 
 fn get_priority(io_type: IOType) -> IOPriority {
     match io_type {
-        IOType::Flush | IOType::Compaction => IOPriority::Low,
+        IOType::Compaction => IOPriority::Low,
         _ => IOPriority::High,
     }
 }
 
-/// Used to calibrate actual bytes through after last reset.
+/// Used to calibrate actual bytes through since last reset.
 #[derive(Debug)]
 struct BytesCalibrator {
     io_type: IOType,
