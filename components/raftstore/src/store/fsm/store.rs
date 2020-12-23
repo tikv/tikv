@@ -95,8 +95,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> (term, leader)
-    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
+    /// region_id -> (term, leader_peer_id)
+    pub leaders: HashMap<u64, (u64, u64)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -2353,10 +2353,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let regions = leaders
             .into_iter()
             .map(|leader_info| {
-                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                if let Some((term, leader_id)) = meta.leaders.get(&leader_info.region_id) {
                     if let Some(region) = meta.regions.get(&leader_info.region_id) {
                         if *term == leader_info.term
-                            && leader.id == leader_info.peer_id
+                            && *leader_id == leader_info.peer_id
                             && util::compare_region_epoch(
                                 leader_info.get_region_epoch(),
                                 region,
@@ -2370,11 +2370,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         }
                         debug!("check leader failed";
                             "leader_info" => ?leader_info,
+                            "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
                         );
                     }
                 }
+                debug!("check leader failed, meta not found";
+                    "leader_info" => ?leader_info,
+                );
                 None
             })
             .filter_map(|r| r)
