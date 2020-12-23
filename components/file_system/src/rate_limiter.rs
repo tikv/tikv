@@ -40,6 +40,40 @@ impl BytesCalibrator {
     pub fn reset(&self) {}
 }
 
+/// Used for testing and metrics.
+#[derive(Debug)]
+pub struct BytesRecorder {
+    read: [AtomicUsize; IO_TYPE_VARIANTS],
+    write: [AtomicUsize; IO_TYPE_VARIANTS],
+}
+
+impl BytesRecorder {
+    pub fn new() -> Self {
+        BytesRecorder {
+            read: Default::default(),
+            write: Default::default(),
+        }
+    }
+
+    pub fn add(&self, io_type: IOType, io_op: IOOp, len: usize) {
+        match io_op {
+            IOOp::Read => {
+                self.read[io_type as usize].fetch_add(len, Ordering::Relaxed);
+            }
+            IOOp::Write => {
+                self.write[io_type as usize].fetch_add(len, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn fetch(&self, io_type: IOType, io_op: IOOp) -> usize {
+        match io_op {
+            IOOp::Read => self.read[io_type as usize].load(Ordering::Relaxed),
+            IOOp::Write => self.write[io_type as usize].load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct PerTypeIORateLimiter {
     bytes_per_refill: AtomicUsize,
@@ -219,15 +253,17 @@ pub struct IORateLimiter {
     write_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
     read_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
     total_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
+    recorder: Arc<BytesRecorder>,
 }
 
 impl IORateLimiter {
     // TODO: pass in rate limiting options
-    pub fn new(bytes_per_sec: usize) -> IORateLimiter {
+    pub fn new(bytes_per_sec: usize, recorder: Arc<BytesRecorder>) -> IORateLimiter {
         let limiter = IORateLimiter {
             write_limiters: Default::default(),
             read_limiters: Default::default(),
             total_limiters: Default::default(),
+            recorder,
         };
         if bytes_per_sec != 0 {
             for l in limiter.write_limiters.iter() {
@@ -256,20 +292,18 @@ impl IORateLimiter {
             IOOp::Write => {
                 bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
-                    self.write_limiters[io_type as usize].request(bytes, prio)
-                } else {
-                    bytes
+                    bytes = self.write_limiters[io_type as usize].request(bytes, prio);
                 }
             }
             IOOp::Read => {
                 bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
-                    self.read_limiters[io_type as usize].request(bytes, prio)
-                } else {
-                    bytes
+                    bytes = self.read_limiters[io_type as usize].request(bytes, prio);
                 }
             }
         }
+        self.recorder.add(io_type, io_op, bytes);
+        bytes
     }
 
     /// Asynchronously requests for token for bytes and potentially update
@@ -292,11 +326,9 @@ impl IORateLimiter {
                     .async_request(bytes, prio)
                     .await;
                 if io_type != IOType::Other {
-                    self.write_limiters[io_type as usize]
+                    bytes = self.write_limiters[io_type as usize]
                         .async_request(bytes, prio)
                         .await
-                } else {
-                    bytes
                 }
             }
             IOOp::Read => {
@@ -304,14 +336,14 @@ impl IORateLimiter {
                     .async_request(bytes, prio)
                     .await;
                 if io_type != IOType::Other {
-                    self.read_limiters[io_type as usize]
+                    bytes = self.read_limiters[io_type as usize]
                         .async_request(bytes, prio)
                         .await
-                } else {
-                    bytes
                 }
             }
         }
+        self.recorder.add(io_type, io_op, bytes);
+        bytes
     }
 }
 
@@ -408,7 +440,7 @@ mod tests {
 
     #[bench]
     fn bench_acquire_limiter(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(0));
+        set_io_rate_limiter(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
         b.iter(|| {
             let _ = get_io_rate_limiter().unwrap();
         });
@@ -416,7 +448,7 @@ mod tests {
 
     #[bench]
     fn bench_noop_limiter(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(0));
+        set_io_rate_limiter(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
         let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
@@ -426,7 +458,7 @@ mod tests {
 
     #[bench]
     fn bench_not_limited(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(10000));
+        set_io_rate_limiter(IORateLimiter::new(10000, Arc::new(BytesRecorder::new())));
         let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
@@ -436,7 +468,10 @@ mod tests {
 
     #[bench]
     fn bench_limited_fast(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(usize::max_value()));
+        set_io_rate_limiter(IORateLimiter::new(
+            usize::max_value(),
+            Arc::new(BytesRecorder::new()),
+        ));
         let _context = start_background_jobs(3, IOType::Compaction, IOOp::Write, 1);
         let limiter = get_io_rate_limiter().unwrap();
         b.iter(|| {
