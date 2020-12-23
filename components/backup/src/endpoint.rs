@@ -234,7 +234,7 @@ impl BackupRange {
                     entries.as_slice().get(0).map_or_else(
                         || Err(Error::Other(box_err!("get entry error"))),
                         |x| match x.as_key() {
-                            Ok(k) => writer.rebuild(Option::from(Key::from_raw(&k))),
+                            Ok(k) => writer.rebuild(Some(Key::from_raw(&k))),
                             Err(e) => {
                                 error!(?e; "backup save file failed");
                                 Err(Error::Other(box_err!("Decode error: {:?}", e)))
