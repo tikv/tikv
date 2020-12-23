@@ -1,5 +1,25 @@
 #!/usr/bin/env bash
+#
+# Generate self-signed certs for the various TiKV components and clients
+#
+#     mkdir certs
+#     cd certs
+#     cert_dir="$(pwd)"
+#     CERT_PATH="${cert_dir}" ../scripts/certs-generate
+#     cd ..
+#     pushd "$GOPATH/src/github.com/tikv/pd"
+#     ./scripts/run-tls --config "${cert_dir}/pd-certs.toml" &
+#     popd
+#     ./scripts/run-tls --config certs/tikv-certs.toml
+#
 set -euo pipefail
+
+# Useful to create an absolute path for the cert
+# Does not have a trailing slash
+CERT_PATH=${CERT_PATH:-""}
+if [[ -n $CERT_PATH ]] ; then
+	CERT_PATH="${CERT_PATH}/"
+fi
 
 if ! [[ -e openssl.cnf ]] ; then
     cp "$(find / -name openssl.cnf -print -quit 2>/dev/null)" .
@@ -52,9 +72,9 @@ for component in "${components[@]}" ; do
     if [[ $component == tikv ]] ; then
 cat <<-EOF > "${component}-certs.toml"
 [security]
-ca-path = "root.crt"
-cert-path = "${component}.crt"
-key-path = "${component}.key"
+ca-path = "${CERT_PATH}root.crt"
+cert-path = "${CERT_PATH}${component}.crt"
+key-path = "${CERT_PATH}${component}.key"
 # cert-allowed-cn = ["${component}-ctl", "${component}", "tidb", "pd"]
 EOF
 fi
@@ -63,11 +83,11 @@ fi
 cat <<-EOF > "${component}-certs.toml"
 [security]
 # Path of file that contains list of trusted SSL CAs. If set, following four settings shouldn't be empty
-cacert-path = "root.crt"
+cacert-path = "${CERT_PATH}root.crt"
 # Path of file that contains X509 certificate in PEM format.
-cert-path = "${component}.crt"
+cert-path = "${CERT_PATH}${component}.crt"
 # Path of file that contains X509 key in PEM format.
-key-path = "${component}.key"
+key-path = "${CERT_PATH}${component}.key"
 EOF
 fi
 
@@ -75,11 +95,11 @@ fi
 cat <<-EOF > "${component}-certs.toml"
 [security]
 # Path of file that contains list of trusted SSL CAs for connection with cluster components.
-cluster-ssl-ca = "root.crt"
+cluster-ssl-ca = "${CERT_PATH}root.crt"
 # Path of file that contains X509 certificate in PEM format for connection with cluster components.
-cluster-ssl-cert = "${component}.crt"
+cluster-ssl-cert = "${CERT_PATH}${component}.crt"
 # Path of file that contains X509 key in PEM format for connection with cluster components.
-cluster-ssl-key = "${component}.key"
+cluster-ssl-key = "${CERT_PATH}${component}.key"
 EOF
 fi
 
