@@ -142,12 +142,16 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 let (column, remaining) = split_datum(datums, false)?;
                 datums = remaining;
                 data.extend_from_slice(column);
+                // If it's Version_2, we don't collect cmsketch anymore.
+                if stats_version == ANALYZE_VERSION_V2 {
+                    continue;
+                }
                 if let Some(cms) = cms.as_mut() {
                     cms.insert(&data);
                 }
             }
-            hist.append(&data);
             if stats_version == ANALYZE_VERSION_V2 {
+                hist.append_v2(&data);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
                 } else {
@@ -159,6 +163,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     }
                     cur_val = (1, data);
                 }
+            } else {
+                hist.append(&data);
             }
         }
 
@@ -171,7 +177,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
             }
             if let Some(c) = cms.as_mut() {
                 for heap_item in topn_heap {
-                    c.sub(&(heap_item.0).1, (heap_item.0).0);
                     c.push_to_top_n((heap_item.0).1, (heap_item.0).0 as u64);
                 }
             }

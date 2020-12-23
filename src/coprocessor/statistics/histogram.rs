@@ -12,6 +12,8 @@ struct Bucket {
     lower_bound: Vec<u8>,
     // the number of repeats of the bucket's upper_bound, it can be used to find popular values.
     repeats: u64,
+    // the number of distinct value in this bucket. 0 for not maintained.
+    ndv: u64,
 }
 
 impl Bucket {
@@ -21,6 +23,23 @@ impl Bucket {
             upper_bound,
             lower_bound,
             repeats,
+            ndv: 0,
+        }
+    }
+
+    fn new_v2(
+        count: u64,
+        upper_bound: Vec<u8>,
+        lower_bound: Vec<u8>,
+        repeats: u64,
+        ndv: u64,
+    ) -> Bucket {
+        Bucket {
+            count,
+            upper_bound,
+            lower_bound,
+            repeats,
+            ndv,
         }
     }
 
@@ -37,12 +56,22 @@ impl Bucket {
         self.repeats = 1;
     }
 
+    // insert a item bigger than current upper_bound,
+    // we need data to set as upper_bound
+    fn append_v2(&mut self, data: Vec<u8>) {
+        self.upper_bound = data;
+        self.count += 1;
+        self.repeats = 1;
+        self.ndv += 1;
+    }
+
     fn into_proto(self) -> tipb::Bucket {
         let mut bucket = tipb::Bucket::default();
         bucket.set_repeats(self.repeats as i64);
         bucket.set_count(self.count as i64);
         bucket.set_lower_bound(self.lower_bound);
         bucket.set_upper_bound(self.upper_bound);
+        bucket.set_ndv(self.ndv as i64);
         bucket
     }
 }
@@ -111,6 +140,36 @@ impl Histogram {
             .push(Bucket::new(count, data.to_vec(), data.to_vec(), 1));
     }
 
+    // insert a data bigger than or equal to the max value in current histogram.
+    pub fn append_v2(&mut self, data: &[u8]) {
+        if let Some(bucket) = self.buckets.last_mut() {
+            // The new item has the same value as last bucket value, to ensure that
+            // a same value only stored in a single bucket, we do not increase bucket
+            // even if it exceeds per_bucket_limit.
+            if bucket.upper_bound == data {
+                bucket.count_repeated();
+                return;
+            }
+        }
+        self.ndv += 1;
+        if self.buckets.len() >= self.buckets_num && self.is_last_bucket_full() {
+            self.merge_buckets();
+        }
+
+        if !self.is_last_bucket_full() {
+            self.buckets.last_mut().unwrap().append_v2(data.to_vec());
+            return;
+        }
+
+        // create a new bucket and insert data
+        let mut count = 1;
+        if let Some(bucket) = self.buckets.last() {
+            count += bucket.count
+        }
+        self.buckets
+            .push(Bucket::new_v2(count, data.to_vec(), data.to_vec(), 1, 1));
+    }
+
     // check whether the last bucket is full.
     fn is_last_bucket_full(&self) -> bool {
         if self.buckets.is_empty() {
@@ -133,6 +192,7 @@ impl Histogram {
             mem::swap(&mut left[0].upper_bound, &mut right[0].upper_bound);
             left[0].count = right[0].count;
             left[0].repeats = right[0].repeats;
+            left[0].ndv += right[0].ndv
         }
         for id in 1..bucket_num {
             let (left, right) = self.buckets.split_at_mut(id * 2);
@@ -144,6 +204,7 @@ impl Histogram {
             mem::swap(&mut left[id].upper_bound, &mut right[1].upper_bound);
             left[id].count = right[1].count;
             left[id].repeats = right[1].repeats;
+            left[id].ndv = right[0].ndv + right[1].ndv
         }
         self.buckets.drain(bucket_num..);
         self.per_bucket_limit *= 2;
