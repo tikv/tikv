@@ -432,6 +432,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
+            if self.cfg_tracker.value().enable_compaction_filter {
+                // `enable_compaction_filter` is switched on by dynamic configuration change.
+                return Ok(());
+            }
 
             // Check the current GC progress and determine if we are going to rewind or we have
             // finished the round of GC.
