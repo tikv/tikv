@@ -480,6 +480,8 @@ where
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    pub safe_ts: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -573,6 +575,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            safe_ts: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2120,7 +2123,7 @@ where
 
         let policy = self.inspect(&req);
         let res = match policy {
-            Ok(RequestPolicy::ReadLocal) => {
+            Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
                 self.read_local(ctx, req, cb);
                 return false;
             }
@@ -3041,6 +3044,30 @@ where
                 };
             }
         }
+        if req.get_header().get_read_ts() > 0 {
+            let read_ts = req.get_header().get_read_ts();
+            let safe_ts = self.safe_ts.load(Ordering::Relaxed);
+            if safe_ts < read_ts {
+                debug!(
+                    "read rejected by safe timestamp";
+                    "safe ts" => safe_ts,
+                    "read ts" => read_ts,
+                    "tag" => &self.tag
+                );
+                let mut response = cmd_resp::new_error(Error::DataIsNotReady(
+                    region.get_id(),
+                    self.peer_id(),
+                    region.get_region_epoch().clone(),
+                    safe_ts,
+                ));
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
@@ -3425,6 +3452,7 @@ where
 pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
+    StaleRead,
     // Handle the read request via raft's SafeReadIndex mechanism.
     ReadIndex,
     ProposeNormal,
@@ -3475,6 +3503,10 @@ pub trait RequestInspector {
 
         if has_write {
             return Ok(RequestPolicy::ProposeNormal);
+        }
+
+        if req.get_header().get_read_ts() > 0 {
+            return Ok(RequestPolicy::StaleRead);
         }
 
         if req.get_header().get_read_quorum() {

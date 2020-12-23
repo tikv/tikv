@@ -61,6 +61,9 @@ quick_error! {
                 log_wrappers::Value::key(region.get_end_key()),
                 region.get_id())
         }
+        DataIsNotReady(region_id: u64, peer_id: u64, epoch: metapb::RegionEpoch, max_ts: u64) {
+            display("peer {} is not ready, max_ts {}, region {}", peer_id, max_ts, region_id)
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -223,6 +226,14 @@ impl From<Error> for errorpb::Error {
                     .mut_key_not_in_region()
                     .set_end_key(end_key.to_vec());
             }
+            Error::DataIsNotReady(region_id, peer_id, epoch, max_ts) => {
+                let mut e = errorpb::DataIsNotReady::default();
+                e.set_region_id(region_id);
+                e.set_peer_id(peer_id);
+                e.set_epoch(epoch);
+                e.set_max_ts(max_ts);
+                errorpb.set_data_is_not_ready(e);
+            }
             _ => {}
         };
 
@@ -284,6 +295,7 @@ impl ErrorCodeExt for Error {
             Error::ProstDecode(_) => error_code::raftstore::PROTOBUF,
             #[cfg(feature = "prost-codec")]
             Error::ProstEncode(_) => error_code::raftstore::PROTOBUF,
+            Error::DataIsNotReady(_, _, _, _) => error_code::raftstore::DATA_IS_NOT_READY,
 
             Error::Other(_) => error_code::raftstore::UNKNOWN,
         }

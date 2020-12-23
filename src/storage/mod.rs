@@ -376,7 +376,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &concurrency_manager,
                         ) {
                             Ok(mut snap_ctx) => {
-                                snap_ctx.read_id = read_id.clone();
+                                snap_ctx.read_id = if ctx.get_stale_read() {
+                                    None
+                                } else {
+                                    read_id.clone()
+                                };
                                 snap_ctx
                             }
                             Err(e) => {
