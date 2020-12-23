@@ -221,10 +221,20 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
+    /// Gets the value of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
     pub fn get(
         &mut self,
         key: &Key,
         ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
         skip_lock_check: bool,
     ) -> Result<Option<Value>> {
         if !skip_lock_check {
@@ -234,25 +244,46 @@ impl<S: Snapshot> MvccReader<S> {
                 IsolationLevel::Rc => {}
             }
         }
-        if let Some(write) = self.get_write(key, ts)? {
+        if let Some(write) = self.get_write(key, ts, gc_fence_limit)? {
             Ok(Some(self.load_data(key, write)?))
         } else {
             Ok(None)
         }
     }
 
-    pub fn get_write(&mut self, key: &Key, mut ts: TimeStamp) -> Result<Option<Write>> {
+    /// Gets the write record of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
+    pub fn get_write(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<Option<Write>> {
         loop {
             match self.seek_write(key, ts)? {
-                Some((commit_ts, write)) => match write.write_type {
-                    WriteType::Put => {
-                        return Ok(Some(write));
+                Some((commit_ts, write)) => {
+                    if let Some(limit) = gc_fence_limit {
+                        if !write.as_ref().check_gc_fence_as_latest_version(limit) {
+                            return Ok(None);
+                        }
                     }
-                    WriteType::Delete => {
-                        return Ok(None);
+                    match write.write_type {
+                        WriteType::Put => {
+                            return Ok(Some(write));
+                        }
+                        WriteType::Delete => {
+                            return Ok(None);
+                        }
+                        WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
-                },
+                }
                 None => return Ok(None),
             }
         }
@@ -1346,40 +1377,40 @@ mod tests {
         //                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
-        assert!(reader.get_write(&key, 1.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 2.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 2.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 5.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 5.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 7.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 7.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        assert!(reader.get_write(&key, 9.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 9.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 14.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 14.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 16.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 16.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 20.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 20.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        let write = reader.get_write(&key, 24.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 24.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
         assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into())
+            .get_write(&Key::from_raw(b"j"), 100.into(), None)
             .unwrap()
             .is_none());
     }
@@ -1592,21 +1623,24 @@ mod tests {
 
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 2.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 2.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 5.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 5.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 7.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 7.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
-            assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+            assert_eq!(
+                reader.get(&key, 9.into(), None, skip_lock_check).unwrap(),
+                None
+            );
 
-            assert!(reader.get(&key, 11.into(), false).is_err());
-            assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
+            assert!(reader.get(&key, 11.into(), None, false).is_err());
+            assert_eq!(reader.get(&key, 9.into(), None, true).unwrap(), None);
         }
 
         // Commit the long value
@@ -1615,7 +1649,7 @@ mod tests {
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 11.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 11.into(), None, skip_lock_check).unwrap(),
                 Some(long_value.to_vec())
             );
         }
