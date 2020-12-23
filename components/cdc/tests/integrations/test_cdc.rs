@@ -524,9 +524,9 @@ fn test_cdc_tso_failure() {
 
 #[test]
 fn test_region_split() {
-    let cluster = new_server_cluster(1, 3);
+    let cluster = new_server_cluster(1, 1);
     cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuite::with_cluster(1, cluster);
 
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
