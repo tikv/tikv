@@ -57,6 +57,7 @@ pub enum GrpcCompressionType {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[serde(skip)]
+    #[config(skip)]
     pub cluster_id: u64,
 
     // Server listening address.
@@ -139,6 +140,7 @@ pub struct Config {
 
     #[config(skip)]
     pub snap_max_write_bytes_per_sec: ReadableSize,
+
     #[config(skip)]
     pub snap_max_total_size: ReadableSize,
 
@@ -163,6 +165,7 @@ pub struct Config {
     // Test only.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub raft_client_backoff_step: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
