@@ -827,6 +827,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
+        let safe_ts = Arc::new(AtomicU64::new(1));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -861,6 +862,7 @@ mod tests {
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                safe_ts: Arc::clone(&safe_ts),
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -998,7 +1000,7 @@ mod tests {
 
         // Reject by term mismatch in lease.
         let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
-        let mut cmd9 = cmd;
+        let mut cmd9 = cmd.clone();
         cmd9.mut_header().set_term(term6 + 3);
         {
             let mut meta = store_meta.lock().unwrap();
@@ -1028,5 +1030,19 @@ mod tests {
             reader.metrics.rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
+
+        // stale read
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
+        assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
+
+        cmd.mut_header().set_read_ts(2);
+        must_redirect(&mut reader, &rx, cmd.clone());
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+
+        safe_ts.store(2, Ordering::Relaxed);
+        let task =
+            RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        must_not_redirect(&mut reader, &rx, task);
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
     }
 }

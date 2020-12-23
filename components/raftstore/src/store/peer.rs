@@ -3804,6 +3804,16 @@ mod tests {
             table.push((req.clone(), policy));
         }
 
+        // Stale read
+        for op in vec![CmdType::Get, CmdType::Snap] {
+            let mut req = req.clone();
+            let mut request = raft_cmdpb::Request::default();
+            request.set_cmd_type(op);
+            req.set_requests(vec![request].into());
+            req.mut_header().set_read_ts(1);
+            table.push((req, RequestPolicy::StaleRead));
+        }
+
         for &applied_to_index_term in &[true, false] {
             for &lease_state in &[LeaseState::Expired, LeaseState::Suspect, LeaseState::Valid] {
                 for (req, mut policy) in table.clone() {
