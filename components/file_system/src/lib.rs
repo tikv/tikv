@@ -31,7 +31,7 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IOType {
     Other,
     Read,
@@ -49,13 +49,13 @@ thread_local! {
     static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
 }
 
-fn set_io_type(new_io_type: IOType) {
+pub fn set_io_type(new_io_type: IOType) {
     IO_TYPE.with(|io_type| {
         io_type.set(new_io_type);
     });
 }
 
-fn get_io_type() -> IOType {
+pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
