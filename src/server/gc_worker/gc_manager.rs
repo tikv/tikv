@@ -432,8 +432,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
-            if self.cfg_tracker.value().enable_compaction_filter {
-                // `enable_compaction_filter` is switched on by dynamic configuration change.
+            if is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
                 return Ok(());
             }
 
