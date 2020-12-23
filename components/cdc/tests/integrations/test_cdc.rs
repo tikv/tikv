@@ -17,8 +17,10 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
+use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
 use cdc::Task;
@@ -529,7 +531,7 @@ fn test_region_split() {
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
@@ -1109,5 +1111,56 @@ fn test_old_value_1pc() {
         }
     }
 
+    suite.stop();
+}
+
+#[test]
+fn test_region_created_replicate() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuite::with_cluster(2, cluster);
+
+    let region = suite.cluster.get_region(&[]);
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    suite
+        .cluster
+        .pd_client
+        .must_remove_peer(region.id, new_peer(1, 1));
+
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    suite.cluster.sim.wl().add_recv_filter(1, recv_filter);
+    suite
+        .cluster
+        .pd_client
+        .must_add_peer(region.id, new_peer(1, 1));
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    sleep_ms(1000);
+    suite.cluster.sim.wl().clear_recv_filters(1);
+
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.ts >= previous_ts);
+            assert!(resolved_ts.regions == vec![region.id]);
+            previous_ts = resolved_ts.ts;
+            counter += 1;
+        }
+        if counter > 5 {
+            break;
+        }
+    }
+    event_feed_wrap.replace(None);
     suite.stop();
 }
