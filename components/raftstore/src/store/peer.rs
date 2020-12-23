@@ -1381,12 +1381,14 @@ where
         leader_id: u64,
         term: u64,
     ) {
-        for peer in self.region().get_peers() {
-            if peer.id == leader_id {
-                let mut meta = ctx.store_meta.lock().unwrap();
-                meta.leaders.insert(self.region_id, (term, peer.clone()));
-            }
-        }
+        debug!(
+            "insert leader info to meta";
+            "region_id" => self.region_id,
+            "leader_id" => leader_id,
+            "term" => term,
+        );
+        let mut meta = ctx.store_meta.lock().unwrap();
+        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     #[inline]
