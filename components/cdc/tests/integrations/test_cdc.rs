@@ -1164,3 +1164,80 @@ fn test_region_created_replicate() {
     event_feed_wrap.replace(None);
     suite.stop();
 }
+
+#[test]
+fn test_cdc_scan_not_filter_gc_fence() {
+    // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
+    let mut suite = TestSuite::new(1);
+
+    let (key, v1, v2) = (b"key", b"value1", b"value2");
+
+    // Write two versions to the key.
+    let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = key.to_vec();
+    mutation.value = v1.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts1);
+
+    let commit_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
+
+    let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.key = key.to_vec();
+    mutation.value = v2.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
+
+    let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
+
+    // Assume the first version above is written by async commit and it's commit_ts is not unique.
+    // Use it's commit_ts as another transaction's start_ts.
+    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first version.
+    let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let action = suite.must_check_txn_status(
+        1,
+        key.to_vec(),
+        commit_ts1,
+        caller_start_ts,
+        caller_start_ts,
+        true,
+    );
+    assert_eq!(action, Action::LockNotExistRollback);
+
+    let req = suite.new_changedata_request(1);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    if events.len() == 1 {
+        events.extend(receive_event(false).events.into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts2.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts2.into_inner(), "{:?}", es);
+            assert_eq!(e.key, key.to_vec(), "{:?}", es);
+            assert_eq!(e.value, v2.to_vec(), "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts1.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts1.into_inner(), "{:?}", es);
+            assert_eq!(e.key, key.to_vec(), "{:?}", es);
+            assert_eq!(e.value, v1.to_vec(), "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+}
