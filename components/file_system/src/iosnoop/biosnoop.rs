@@ -54,10 +54,10 @@ static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
 thread_local! {
     static IDX: IdxWrapper = unsafe {
         let idx = IDX_ALLOCATOR.allocate();
-        if let Some((_, _, t)) = BPF_TABLE.as_mut() {
+        if let Some((_, _, type_table)) = BPF_TABLE.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
-            t.set(
+            type_table.set(
                 &mut tid.to_ne_bytes(),
                 std::slice::from_raw_parts_mut(
                     ptr as *mut u8,
@@ -126,12 +126,13 @@ pub fn get_io_type() -> IOType {
 }
 
 unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
-    if let Some((_, t, _)) = BPF_TABLE.as_mut() {
+    if let Some((_, stats_table, _)) = BPF_TABLE.as_mut() {
         let mut map = HashMap::default();
-        for e in t.iter() {
+        for e in stats_table.iter() {
             let io_type = ptr::read(e.key.as_ptr() as *const IOType);
-            let stats = ptr::read(e.value.as_ptr() as *const IOStats);
-            map.insert(io_type, stats);
+            let read = std::intrinsics::atomic_load(e.value.as_ptr() as *const u64);
+            let write = std::intrinsics::atomic_load((e.value.as_ptr() as *const u64).add(1));
+            map.insert(io_type, IOStats { read, write });
         }
         Some(map)
     } else {
