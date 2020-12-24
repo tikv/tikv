@@ -482,8 +482,8 @@ mod tests {
             (-255, None),
             (i32::MAX, Some(Collation::Utf8Mb4BinNoPadding)),
             (i32::MIN, None),
-            (-192, Some(Collation::Utf8Mb4UnicodeCi))
-            (-224, Some(Collation::Utf8Mb4UnicodeCi))
+            (-192, Some(Collation::Utf8Mb4UnicodeCi)),
+            (-224, Some(Collation::Utf8Mb4UnicodeCi)),
         ];
 
         for (collate, expected) in cases {
