@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.8"
+version = "4.0.9"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -114,7 +114,7 @@ pd_client = { path = "components/pd_client" }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
 prost = "0.6"
-pprof = { version = "^0.3.14", features = ["flamegraph", "protobuf"] }
+pprof = { git = "https://github.com/tikv/pprof-rs.git", branch = "tikv-release-4.0", features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.2"
 raft = { version = "0.6.0-alpha", default-features = false }

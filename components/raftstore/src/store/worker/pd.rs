@@ -10,9 +10,8 @@ use std::time::Duration;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use engine::rocks::DB;
 use engine_rocks::util::*;
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -21,7 +20,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::store::cmd_resp::new_error;
 use crate::store::metrics::*;
 use crate::store::util::is_epoch_stale;
@@ -68,6 +66,18 @@ impl FlowStatsReporter for Scheduler<Task> {
     }
 }
 
+pub struct HeartbeatTask {
+    pub term: u64,
+    pub region: metapb::Region,
+    pub peer: metapb::Peer,
+    pub down_peers: Vec<pdpb::PeerStats>,
+    pub pending_peers: Vec<metapb::Peer>,
+    pub written_bytes: u64,
+    pub written_keys: u64,
+    pub approximate_size: u64,
+    pub approximate_keys: u64,
+}
+
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
     AskSplit {
@@ -89,17 +99,7 @@ pub enum Task {
     AutoSplit {
         split_infos: Vec<SplitInfo>,
     },
-    Heartbeat {
-        term: u64,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        down_peers: Vec<pdpb::PeerStats>,
-        pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
-        approximate_size: Option<u64>,
-        approximate_keys: Option<u64>,
-    },
+    Heartbeat(HeartbeatTask),
     StoreHeartbeat {
         stats: pdpb::StoreStats,
         store_info: StoreInfo,
@@ -206,15 +206,11 @@ impl Display for Task {
                 region.get_id(),
                 KeysInfoFormatter(split_keys.iter())
             ),
-            Task::Heartbeat {
-                ref region,
-                ref peer,
-                ..
-            } => write!(
+            Task::Heartbeat(ref hb_task)  => write!(
                 f,
                 "heartbeat for region {:?}, leader {}",
-                region,
-                peer.get_id()
+                hb_task.region,
+                hb_task.peer.get_id()
             ),
             Task::StoreHeartbeat { ref stats, .. } => {
                 write!(f, "store heartbeat stats: {:?}", stats)
@@ -390,7 +386,6 @@ pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
     router: RaftRouter<RocksEngine>,
-    db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
@@ -411,7 +406,6 @@ impl<T: PdClient> Runner<T> {
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter<RocksEngine>,
-        db: Arc<DB>,
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
         auto_split_controller: AutoSplitController,
@@ -426,7 +420,6 @@ impl<T: PdClient> Runner<T> {
             store_id,
             pd_client,
             router,
-            db,
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
@@ -971,23 +964,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 }
             }
 
-            Task::Heartbeat {
-                term,
-                region,
-                peer,
-                down_peers,
-                pending_peers,
-                written_bytes,
-                written_keys,
-                approximate_size,
-                approximate_keys,
-            } => {
-                let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(self.db.c(), &region, 0).unwrap_or_default()
-                });
-                let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(self.db.c(), &region, 0).unwrap_or_default()
-                });
+            Task::Heartbeat(hb_task) => {
                 let (
                     read_bytes_delta,
                     read_keys_delta,
@@ -997,15 +974,15 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 ) = {
                     let peer_stat = self
                         .region_peers
-                        .entry(region.get_id())
+                        .entry(hb_task.region.get_id())
                         .or_insert_with(PeerStat::default);
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
-                    let written_keys_delta = written_keys - peer_stat.last_written_keys;
+                    let written_bytes_delta = hb_task.written_bytes - peer_stat.last_written_bytes;
+                    let written_keys_delta = hb_task.written_keys - peer_stat.last_written_keys;
                     let mut last_report_ts = peer_stat.last_report_ts;
-                    peer_stat.last_written_bytes = written_bytes;
-                    peer_stat.last_written_keys = written_keys;
+                    peer_stat.last_written_bytes = hb_task.written_bytes;
+                    peer_stat.last_written_keys = hb_task.written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
                     peer_stat.last_report_ts = UnixSecs::now();
@@ -1022,18 +999,18 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 };
                 self.handle_heartbeat(
                     handle,
-                    term,
-                    region,
-                    peer,
+                    hb_task.term,
+                    hb_task.region,
+                    hb_task.peer,
                     RegionStat {
-                        down_peers,
-                        pending_peers,
+                        down_peers: hb_task.down_peers,
+                        pending_peers: hb_task.pending_peers,
                         written_bytes: written_bytes_delta,
                         written_keys: written_keys_delta,
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
-                        approximate_size,
-                        approximate_keys,
+                        approximate_size: hb_task.approximate_size,
+                        approximate_keys: hb_task.approximate_keys,
                         last_report_ts,
                     },
                 )

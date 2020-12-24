@@ -110,14 +110,14 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18c4fde11fd6a6f244541acc8df7dda88f346363e70f52f8ea4dd66e299c815c"
+checksum = "c832f4cc51a4c7420c8e84ed9571e760f551531478fa1f72fcda2f768bd10271"
 dependencies = [
  "futures-core",
  "futures-io",
  "futures-timer",
- "pin-project-lite",
+ "pin-project-lite 0.2.0",
 ]
 
 [[package]]
@@ -2768,6 +2768,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237844750cfbb86f67afe27eee600dfbbcb6188d734139b534cbfbf4f96792ae"
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
+
+[[package]]
 name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2812,8 +2818,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc5942d2bd52ec562b572798496532e343c2f69383777740e1eeddf0e468cf3"
+source = "git+https://github.com/tikv/pprof-rs.git?branch=tikv-release-4.0#e47d299873bb0c37e9675ea2e8c313a57211842a"
 dependencies = [
  "backtrace",
  "inferno",
@@ -3454,7 +3459,7 @@ dependencies = [
  "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "serde",
  "serde_urlencoded",
  "time 0.1.42",
@@ -4605,7 +4610,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.8"
+version = "4.0.9"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4934,7 +4939,7 @@ dependencies = [
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "signal-hook-registry",
  "slab",
  "tokio-macros",
@@ -5159,7 +5164,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "tokio 0.2.13",
 ]
 

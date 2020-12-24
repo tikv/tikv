@@ -759,6 +759,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
             |_| unreachable!()
         );
 
+        fail_point!(
+            "on_peer_collect_message_2",
+            peer.peer_id() == 2,
+            |_| unreachable!()
+        );
+
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
@@ -1261,7 +1267,6 @@ impl RaftBatchSystem {
             store.get_id(),
             Arc::clone(&pd_client),
             self.router.clone(),
-            Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
             auto_split_controller,
