@@ -679,8 +679,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         Err(e) => {
                             error!(?e; "backup region failed";
                                 "region" => ?brange.region,
-                                "start_key" => hex::encode_upper(&start_key),
-                                "end_key" => hex::encode_upper(&end_key),
+                                "start_key" => &log_wrappers::Value::key(&start_key),
+                                "end_key" => &log_wrappers::Value::key(&end_key),
                             );
                             response.set_error(e.into());
                         }
