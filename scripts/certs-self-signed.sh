@@ -26,10 +26,18 @@ if [[ -n $CERT_PATH ]] ; then
 fi
 
 if ! [[ -e openssl.cnf ]] ; then
-    cp "$(find / -name openssl.cnf -print -quit 2>/dev/null)" .
+    echo "Please add an openssl.cnf to the working directory." >&2
+    echo "You should be able to copy an existing openssl.cnf from your computer." >&2
+    exit 1
+fi
+
+addition="# TiKV self-signed cert"
+if ! grep "$addition" openssl.cnf >/dev/null ; then
+    # Another approach would be to use an include
     # echo ".include filename"
     cat <<-EOF >> openssl.cnf
 
+$addition
 [ req ]
 req_extensions = v3_req
 
