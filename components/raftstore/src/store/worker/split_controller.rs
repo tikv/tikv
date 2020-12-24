@@ -269,7 +269,6 @@ impl ReadStats {
         ReadStats {
             sample_num: DEFAULT_SAMPLE_NUM,
             region_infos: HashMap::default(),
-            flows: HashMap::default(),
         }
     }
 
