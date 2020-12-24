@@ -33,7 +33,13 @@ const MAX_THREAD_IDX: usize = 192;
 
 // Hold the BPF to keep it not dropped.
 // The two tables are `stats_by_type` and `type_by_pid` respectively.
-static mut BPF_TABLE: Option<(BPF, Table, Table)> = None;
+static mut BPF_CONTEXT: Option<BPFContext> = None;
+
+struct BPFContext {
+    bpf: BPF,
+    stats_table: Table,
+    type_table: Table,
+}
 
 // This array records the IO-type for every thread. The address of this array
 // will be passed into eBPF, so eBPF code can get IO-type for specific thread
@@ -54,10 +60,10 @@ static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
 thread_local! {
     static IDX: IdxWrapper = unsafe {
         let idx = IDX_ALLOCATOR.allocate();
-        if let Some((_, _, type_table)) = BPF_TABLE.as_mut() {
+        if let Some(ctx) = BPF_CONTEXT.as_mut() {
             let tid = nix::unistd::gettid().as_raw() as u32;
             let ptr : *const *const _ = &IO_TYPE_ARRAY.as_ptr().add(idx.0);
-            type_table.set(
+            ctx.type_table.set(
                 &mut tid.to_ne_bytes(),
                 std::slice::from_raw_parts_mut(
                     ptr as *mut u8,
@@ -126,9 +132,9 @@ pub fn get_io_type() -> IOType {
 }
 
 unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
-    if let Some((_, stats_table, _)) = BPF_TABLE.as_mut() {
+    if let Some(ctx) = BPF_CONTEXT.as_mut() {
         let mut map = HashMap::default();
-        for e in stats_table.iter() {
+        for e in ctx.stats_table.iter() {
             let io_type = ptr::read(e.key.as_ptr() as *const IOType);
             let read = std::intrinsics::atomic_load(e.value.as_ptr() as *const u64);
             let write = std::intrinsics::atomic_load((e.value.as_ptr() as *const u64).add(1));
@@ -175,7 +181,7 @@ impl IOContext {
 
 pub fn init_io_snooper() -> Result<(), String> {
     unsafe {
-        if BPF_TABLE.is_some() {
+        if BPF_CONTEXT.is_some() {
             return Ok(());
         }
     }
@@ -215,7 +221,11 @@ pub fn init_io_snooper() -> Result<(), String> {
     let stats_table = bpf.table("stats_by_type").map_err(|e| e.to_string())?;
     let type_table = bpf.table("type_by_pid").map_err(|e| e.to_string())?;
     unsafe {
-        BPF_TABLE = Some((bpf, stats_table, type_table));
+        BPF_CONTEXT = Some(BPFContext {
+            bpf,
+            stats_table,
+            type_table,
+        });
     }
     let _ = IO_CONTEXT.lock().unwrap(); // trigger init of io context
     Ok(())
@@ -226,7 +236,7 @@ lazy_static! {
 }
 
 macro_rules! flush_io_latency_and_bytes {
-    ($bpf:ident, $delta:ident, $metrics:ident, $type:expr) => {
+    ($bpf:expr, $delta:ident, $metrics:ident, $type:expr) => {
         let mut t = $bpf
             .table(concat!(stringify!($metrics), "_read_latency"))
             .unwrap();
@@ -263,18 +273,18 @@ macro_rules! flush_io_latency_and_bytes {
 
 pub fn flush_io_metrics() {
     unsafe {
-        if let Some((bpf, _, _)) = BPF_TABLE.as_mut() {
+        if let Some(ctx) = BPF_CONTEXT.as_mut() {
             let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
-            flush_io_latency_and_bytes!(bpf, delta, other, IOType::Other);
-            flush_io_latency_and_bytes!(bpf, delta, read, IOType::Read);
-            flush_io_latency_and_bytes!(bpf, delta, write, IOType::Write);
-            flush_io_latency_and_bytes!(bpf, delta, coprocessor, IOType::Coprocessor);
-            flush_io_latency_and_bytes!(bpf, delta, flush, IOType::Flush);
-            flush_io_latency_and_bytes!(bpf, delta, compaction, IOType::Compaction);
-            flush_io_latency_and_bytes!(bpf, delta, replication, IOType::Replication);
-            flush_io_latency_and_bytes!(bpf, delta, load_balance, IOType::LoadBalance);
-            flush_io_latency_and_bytes!(bpf, delta, import, IOType::Import);
-            flush_io_latency_and_bytes!(bpf, delta, export, IOType::Export);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, other, IOType::Other);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, read, IOType::Read);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, write, IOType::Write);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, coprocessor, IOType::Coprocessor);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, flush, IOType::Flush);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, compaction, IOType::Compaction);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, replication, IOType::Replication);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, load_balance, IOType::LoadBalance);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, import, IOType::Import);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, export, IOType::Export);
         }
     }
 }
@@ -283,9 +293,10 @@ pub fn flush_io_metrics() {
 mod tests {
     extern crate test;
 
-    use crate::iosnoop::imp::{BPF_TABLE, MAX_THREAD_IDX};
+    use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
     use crate::iosnoop::metrics::*;
     use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
+    use rand::Rng;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{
         fs::OpenOptions, io::Read, io::Seek, io::SeekFrom, io::Write, os::unix::fs::OpenOptionsExt,
@@ -415,7 +426,7 @@ mod tests {
 
     #[bench]
     fn bench_write_disable_io_snoop(b: &mut Bencher) {
-        unsafe { BPF_TABLE = None };
+        unsafe { BPF_CONTEXT = None };
         bench_write(b);
     }
 
@@ -427,7 +438,7 @@ mod tests {
 
     #[bench]
     fn bench_read_disable_io_snoop(b: &mut Bencher) {
-        unsafe { BPF_TABLE = None };
+        unsafe { BPF_CONTEXT = None };
         bench_read(b);
     }
 
@@ -488,21 +499,25 @@ mod tests {
             .open(&file_path)
             .unwrap();
 
-        let mut w = vec![A512::default(); 1];
+        let mut w = vec![A512::default(); 2];
         w.as_bytes_mut()[64] = 42;
-        f.write(w.as_bytes()).unwrap();
+        for _ in 0..100 {
+            f.write(w.as_bytes()).unwrap();
+        }
         f.sync_all().unwrap();
         drop(f);
 
+        let mut rng = rand::thread_rng();
         let mut f = OpenOptions::new()
             .read(true)
             .custom_flags(O_DIRECT)
             .open(&file_path)
             .unwrap();
-        let mut r = vec![A512::default(); 1];
+        let mut r = vec![A512::default(); 2];
         b.iter(|| {
             set_io_type(IOType::Read);
-            f.seek(SeekFrom::Start(0)).unwrap();
+            f.seek(SeekFrom::Start(rng.gen_range(0, 100) * 512))
+                .unwrap();
             assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
         });
     }
