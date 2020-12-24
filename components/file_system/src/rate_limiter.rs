@@ -21,7 +21,7 @@ fn get_priority(io_type: IOType) -> IOPriority {
 }
 
 /// Used to calibrate actual bytes through since last reset.
-// TODO: implement iosnoop-based calibrator
+/// TODO: implement iosnoop-based calibrator
 #[derive(Debug)]
 struct BytesCalibrator {
     io_type: IOType,
@@ -41,6 +41,7 @@ impl BytesCalibrator {
     pub fn reset(&self) {}
 }
 
+/// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
 #[derive(Debug)]
 pub struct BytesRecorder {
@@ -71,6 +72,16 @@ impl BytesRecorder {
         match io_op {
             IOOp::Read => self.read[io_type as usize].load(Ordering::Relaxed),
             IOOp::Write => self.write[io_type as usize].load(Ordering::Relaxed),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn reset(&self) {
+        for i in self.read.iter() {
+            i.store(0, Ordering::Relaxed);
+        }
+        for i in self.write.iter() {
+            i.store(0, Ordering::Relaxed);
         }
     }
 }
@@ -121,7 +132,7 @@ impl PerTypeIORateLimiter {
     #[inline]
     fn request_fast(&self, bytes_per_refill: usize, bytes: usize) -> Option<usize> {
         if self.consumed.load(Ordering::Relaxed) < bytes_per_refill {
-            // consumed bytes are allowed to be larger than the actual bytes
+            // Consumed bytes are allowed to be larger than the actual bytes
             // through when quotas are drained.
             let before = self.consumed.fetch_add(bytes, Ordering::Relaxed);
             if before < bytes_per_refill {
@@ -149,7 +160,7 @@ impl PerTypeIORateLimiter {
         }
         if priority == IOPriority::High {
             self.consumed.fetch_add(bytes, Ordering::Relaxed);
-            // Not limited requester don't do refill themselves, therefore the first
+            // Unlimited requestor don't do refills themselves, therefore the first
             // limited IO in long period will take penalty for a mandotory refill.
             return bytes;
         }
@@ -251,7 +262,7 @@ impl Default for PerTypeIORateLimiter {
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    // use IOType::Other slot to store total read or total write limiter
+    // IOType::Other slot is used to store type-less limiter
     write_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
     read_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
     total_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],

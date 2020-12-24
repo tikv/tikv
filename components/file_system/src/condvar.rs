@@ -74,7 +74,10 @@ impl CondvarNode {
 
 /// Un-prioritized conditional variable. Supports both synchronously or
 /// asynchronously waiting on the same instance.
-/// TODO: maintains multiple linked list for each priority.
+/// TODO: Prioritized waiting
+/// Maintains multiple linked list for each priority. When notified, instead of
+/// waking up all nodes at once, sort them to a seperate waiting queue and only
+/// wake up the leader.
 #[derive(Debug)]
 pub struct Condvar {
     head: Cell<Option<NonNull<CondvarNode>>>,
