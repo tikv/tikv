@@ -2573,7 +2573,13 @@ impl TiKvConfig {
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
         }
-        self.backup.sst_max_size = self.coprocessor.region_max_size;
+        if self.backup.sst_max_size == default_coprocessor.region_split_size {
+            warn!(
+                "override backup.sst-max-size with coprocessor.region-max-size, {:?}",
+                self.coprocessor.region_max_size
+            );
+            self.backup.sst_max_size = self.coprocessor.region_max_size;
+        }
 
         self.readpool.adjust_use_unified_pool();
     }
