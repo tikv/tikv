@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Generate self-signed certs for the various TiKV components and clients
+# Generate self-signed certs for the various TiKV components and clients.
+# self-signed are usefult for testing and cannot be used for production.
 #
 #     mkdir certs
 #     cd certs
