@@ -145,8 +145,6 @@ impl Condvar {
                     ptr = node.get_next();
                 }
             } else {
-                self.head.set(None);
-                self.tail.set(None);
                 break;
             }
         }
@@ -167,9 +165,7 @@ impl Condvar {
             CondvarNode::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
             _ => unreachable!(),
         };
-        if res.timed_out() {
-            self.dequeue(&mut node);
-        }
+        self.dequeue(&mut node);
         (guard, res.timed_out())
     }
 
@@ -197,9 +193,7 @@ impl Condvar {
             }
         };
         let guard = mu.lock().unwrap();
-        if timed_out {
-            self.dequeue(&mut node);
-        }
+        self.dequeue(&mut node);
         (guard, timed_out)
     }
 }

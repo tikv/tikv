@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
+use variant_count::VariantCount;
 
 #[derive(Clone, Copy, Debug)]
 pub enum IOOp {
@@ -35,7 +36,7 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, VariantCount)]
 pub enum IOType {
     Other = 0,
     Read = 1,
@@ -48,8 +49,6 @@ pub enum IOType {
     Import = 8,
     Export = 9,
 }
-
-pub const IO_TYPE_VARIANTS: usize = 10;
 
 thread_local! {
     static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)

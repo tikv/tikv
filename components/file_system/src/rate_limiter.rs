@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{condvar::Condvar, IOOp, IOType, IO_TYPE_VARIANTS};
+use super::{condvar::Condvar, IOOp, IOType};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,6 +21,7 @@ fn get_priority(io_type: IOType) -> IOPriority {
 }
 
 /// Used to calibrate actual bytes through since last reset.
+// TODO: implement iosnoop-based calibrator
 #[derive(Debug)]
 struct BytesCalibrator {
     io_type: IOType,
@@ -43,8 +44,8 @@ impl BytesCalibrator {
 /// Used for testing and metrics.
 #[derive(Debug)]
 pub struct BytesRecorder {
-    read: [AtomicUsize; IO_TYPE_VARIANTS],
-    write: [AtomicUsize; IO_TYPE_VARIANTS],
+    read: [AtomicUsize; IOType::VARIANT_COUNT],
+    write: [AtomicUsize; IOType::VARIANT_COUNT],
 }
 
 impl BytesRecorder {
@@ -250,9 +251,10 @@ impl Default for PerTypeIORateLimiter {
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    write_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
-    read_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
-    total_limiters: [PerTypeIORateLimiter; IO_TYPE_VARIANTS],
+    // use IOType::Other slot to store total read or total write limiter
+    write_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
+    read_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
+    total_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
     recorder: Arc<BytesRecorder>,
 }
 
@@ -405,12 +407,14 @@ mod tests {
 
     struct BackgroundContext {
         threads: Vec<std::thread::JoinHandle<()>>,
-        stop: Arc<AtomicBool>,
+        stop: Option<Arc<AtomicBool>>,
     }
 
     impl Drop for BackgroundContext {
         fn drop(&mut self) {
-            self.stop.store(true, Ordering::Relaxed);
+            if let Some(stop) = &self.stop {
+                stop.store(true, Ordering::Relaxed);
+            }
             for t in self.threads.drain(..) {
                 t.join().unwrap();
             }
@@ -435,7 +439,93 @@ mod tests {
             });
             threads.push(t);
         }
-        BackgroundContext { threads, stop }
+        BackgroundContext {
+            threads,
+            stop: Some(stop),
+        }
+    }
+
+    fn start_background_jobs_counted(
+        job_count: usize,
+        io_type: IOType,
+        io_op: IOOp,
+        request: usize,
+        count: usize,
+        interval: Duration,
+    ) -> BackgroundContext {
+        let mut threads = vec![];
+        for _ in 0..job_count {
+            let limiter = get_io_rate_limiter().unwrap();
+            let t = std::thread::spawn(move || {
+                let mut requested = 0;
+                while requested < count {
+                    limiter.request(io_type, io_op, request);
+                    std::thread::sleep(interval);
+                    requested += 1;
+                }
+            });
+            threads.push(t);
+        }
+        BackgroundContext {
+            threads,
+            stop: None,
+        }
+    }
+
+    #[test]
+    fn test_rate_limited_heavy_flow() {
+        let bytes_per_sec = 10000;
+        let recorder = Arc::new(BytesRecorder::new());
+        set_io_rate_limiter(IORateLimiter::new(bytes_per_sec, recorder.clone()));
+        let duration = {
+            let begin = Instant::now();
+            {
+                let _context = start_background_jobs(10, IOType::Compaction, IOOp::Write, 10);
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            let end = Instant::now();
+            end.duration_since(begin)
+        };
+        assert!(
+            recorder.fetch(IOType::Compaction, IOOp::Write)
+                <= (bytes_per_sec as f64 * duration.as_secs_f64()) as usize
+        );
+        assert!(
+            recorder.fetch(IOType::Compaction, IOOp::Write)
+                >= (bytes_per_sec as f64 * duration.as_secs_f64() * 0.95) as usize
+        );
+    }
+
+    #[test]
+    fn test_rate_limited_light_flow() {
+        let kbytes_per_sec = 3;
+        let actual_kbytes_per_sec = 2;
+        let recorder = Arc::new(BytesRecorder::new());
+        set_io_rate_limiter(IORateLimiter::new(kbytes_per_sec * 1000, recorder.clone()));
+        let duration = {
+            let begin = Instant::now();
+            {
+                // each thread request at most 1000 bytes per second, elapsed around 2 seconds
+                let _context = start_background_jobs_counted(
+                    actual_kbytes_per_sec,
+                    IOType::Compaction,
+                    IOOp::Write,
+                    1,
+                    2 * 1000,
+                    Duration::from_millis(1),
+                );
+            }
+            let end = Instant::now();
+            end.duration_since(begin)
+        };
+        assert!(
+            recorder.fetch(IOType::Compaction, IOOp::Write)
+                <= (kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0) as usize
+        );
+        assert!(
+            recorder.fetch(IOType::Compaction, IOOp::Write)
+                >= (actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0 * 0.95) as usize
+        );
     }
 
     #[bench]
