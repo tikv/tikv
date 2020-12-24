@@ -7,6 +7,7 @@ use crate::IOType;
 use collections::HashMap;
 use std::collections::VecDeque;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use bcc::{table::Table, Kprobe, BPF};
@@ -81,6 +82,12 @@ impl Drop for IdxWrapper {
     fn drop(&mut self) {
         unsafe { *IO_TYPE_ARRAY[self.0] = IOType::Other };
         IDX_ALLOCATOR.free(self.0);
+
+        // drop() of static variables won't be called when program exits.
+        // We need to call drop() of BPF to detach kprobe.
+        if IDX_ALLOCATOR.is_all_free() {
+            unsafe { BPF_CONTEXT.take() };
+        }
     }
 }
 
@@ -90,16 +97,19 @@ lazy_static! {
 
 struct IdxAllocator {
     free_list: Mutex<VecDeque<usize>>,
+    count: AtomicUsize,
 }
 
 impl IdxAllocator {
     fn new() -> Self {
         IdxAllocator {
             free_list: Mutex::new((0..MAX_THREAD_IDX).into_iter().collect()),
+            count: AtomicUsize::new(0),
         }
     }
 
     fn allocate(&self) -> IdxWrapper {
+        self.count.fetch_add(1, Ordering::SeqCst);
         IdxWrapper(
             if let Some(idx) = self.free_list.lock().unwrap().pop_front() {
                 idx
@@ -110,9 +120,14 @@ impl IdxAllocator {
     }
 
     fn free(&self, idx: usize) {
+        self.count.fetch_sub(1, Ordering::SeqCst);
         if idx != MAX_THREAD_IDX {
             self.free_list.lock().unwrap().push_back(idx);
         }
+    }
+
+    fn is_all_free(&self) -> bool {
+        self.count.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -291,8 +306,6 @@ pub fn flush_io_metrics() {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-
     use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
     use crate::iosnoop::metrics::*;
     use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
@@ -309,8 +322,18 @@ mod tests {
     use maligned::{AsBytes, AsBytesMut};
 
     #[test]
-    fn test_io_context() {
+    fn test_biosnoop() {
         init_io_snooper().unwrap();
+        // Test cases are running in parallel, while they depend on the same global variables.
+        // To make them not affect each other, run them in sequence.
+        test_thread_idx_allocation();
+        test_io_context();
+        unsafe {
+            BPF_CONTEXT.take();
+        }
+    }
+
+    fn test_io_context() {
         set_io_type(IOType::Compaction);
         assert_eq!(get_io_type(), IOType::Compaction);
         let tmp = TempDir::new().unwrap();
@@ -358,7 +381,6 @@ mod tests {
         assert_ne!(IO_BYTES_VEC.other.read.get(), 0);
     }
 
-    #[test]
     fn test_thread_idx_allocation() {
         // the thread indexes should be recycled.
         for _ in 1..=MAX_THREAD_IDX * 2 {
@@ -381,7 +403,6 @@ mod tests {
                 while !*stop {
                     stop = cvar.wait(stop).unwrap();
                 }
-                assert_eq!(get_io_type(), IOType::Compaction);
             });
             handles.push(h);
         }
@@ -419,30 +440,35 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_write_enable_io_snoop(b: &mut Bencher) {
         init_io_snooper().unwrap();
         bench_write(b);
     }
 
     #[bench]
+    #[ignore]
     fn bench_write_disable_io_snoop(b: &mut Bencher) {
         unsafe { BPF_CONTEXT = None };
         bench_write(b);
     }
 
     #[bench]
+    #[ignore]
     fn bench_read_enable_io_snoop(b: &mut Bencher) {
         init_io_snooper().unwrap();
         bench_read(b);
     }
 
     #[bench]
+    #[ignore]
     fn bench_read_disable_io_snoop(b: &mut Bencher) {
         unsafe { BPF_CONTEXT = None };
         bench_read(b);
     }
 
     #[bench]
+    #[ignore]
     fn bench_flush_io_metrics(b: &mut Bencher) {
         init_io_snooper().unwrap();
         set_io_type(IOType::Write);
