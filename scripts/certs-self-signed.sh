@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
 # Generate self-signed certs for the various TiKV components and clients.
-# self-signed are usefult for testing and cannot be used for production.
+# self-signed are useful for testing and cannot be used for production.
+#
+# This script assumes that openssl is installed.
+# You can copy an openssl.cnf into its working directory or it will run the find command to find an openssl.cnf to copy.
 #
 #     mkdir certs
 #     cd certs
 #     cert_dir="$(pwd)"
-#     CERT_PATH="${cert_dir}" ../scripts/certs-generate
+#     CERT_PATH="${cert_dir}" ../scripts/certs-self-signed.sh
 #     cd ..
 #     pushd "$GOPATH/src/github.com/tikv/pd"
 #     ./scripts/run-tls --config "${cert_dir}/pd-certs.toml" &
