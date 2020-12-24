@@ -524,7 +524,7 @@ mod tests {
         );
         assert!(
             recorder.fetch(IOType::Compaction, IOOp::Write)
-                >= (actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0 * 0.95) as usize
+                >= (actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0 * 0.9) as usize
         );
     }
 
