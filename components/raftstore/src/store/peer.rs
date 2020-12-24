@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -37,7 +37,8 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
+use crate::store::hibernate_state::GroupState;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -188,6 +189,7 @@ pub struct PeerStat {
 pub struct CheckTickResult {
     leader: bool,
     up_to_date: bool,
+    reason: &'static str,
 }
 
 pub struct ProposedAdminCmd<S: Snapshot> {
@@ -771,7 +773,7 @@ where
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
+        kv_wb.write_opt(&write_opts)?;
         ctx.engines.raft.consume(&mut raft_wb, true)?;
 
         if self.get_store().is_initialized() && !keep_data {
@@ -834,20 +836,25 @@ where
                 continue;
             }
             if pr.matched != last_index {
+                res.reason = "replication";
                 return res;
             }
         }
         if self.raft_group.raft.pending_read_count() > 0 {
+            res.reason = "pending read";
             return res;
         }
         if self.raft_group.raft.lead_transferee.is_some() {
+            res.reason = "transfer leader";
             return res;
         }
         // Unapplied entries can change the configuration of the group.
         if self.get_store().applied_index() < last_index {
+            res.reason = "unapplied";
             return res;
         }
         if self.replication_mode_need_catch_up() {
+            res.reason = "replication mode";
             return res;
         }
         res.up_to_date = true;
@@ -856,7 +863,14 @@ where
 
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
-            res.up_to_date && self.is_leader()
+            if res.up_to_date {
+                self.is_leader()
+            } else {
+                if !res.reason.is_empty() {
+                    debug!("rejecting sleeping"; "reason" => res.reason, "region_id" => self.region_id, "peer_id" => self.peer_id());
+                }
+                false
+            }
         } else {
             // If follower keeps receiving data from leader, then it's safe to stop
             // ticking, as leader will make sure it has the latest logs.
@@ -879,6 +893,10 @@ where
         if self.is_leader() {
             self.raft_group.ping();
         }
+    }
+
+    pub fn has_uncommitted_log(&self) -> bool {
+        self.raft_group.raft.raft_log.committed < self.raft_group.raft.raft_log.last_index()
     }
 
     /// Set the region of a peer.
@@ -1363,12 +1381,14 @@ where
         leader_id: u64,
         term: u64,
     ) {
-        for peer in self.region().get_peers() {
-            if peer.id == leader_id {
-                let mut meta = ctx.store_meta.lock().unwrap();
-                meta.leaders.insert(self.region_id, (term, peer.clone()));
-            }
-        }
+        debug!(
+            "insert leader info to meta";
+            "region_id" => self.region_id,
+            "leader_id" => leader_id,
+            "term" => term,
+        );
+        let mut meta = ctx.store_meta.lock().unwrap();
+        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     #[inline]
@@ -3202,13 +3222,44 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn prepare_raft_message(&self) -> RaftMessage {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        send_msg.set_from_peer(self.peer.clone());
+        send_msg
+    }
 
-        let from_peer = self.peer.clone();
+    pub fn send_extra_message<T: Transport>(
+        &self,
+        msg: ExtraMessage,
+        trans: &mut T,
+        to: &metapb::Peer,
+    ) {
+        let mut send_msg = self.prepare_raft_message();
+        let ty = msg.get_type();
+        debug!("send extra msg";
+        "region_id" => self.region_id,
+        "peer_id" => self.peer.get_id(),
+        "msg_type" => ?ty,
+        "to" => to.get_id());
+        send_msg.set_extra_msg(msg);
+        send_msg.set_to_peer(to.clone());
+        if let Err(e) = trans.send(send_msg) {
+            error!(?e;
+                "failed to send extra message";
+                "type" => ?ty,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target" => ?to,
+            );
+        }
+    }
+
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+        let mut send_msg = self.prepare_raft_message();
+
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
@@ -3231,11 +3282,9 @@ where
             "peer_id" => self.peer.get_id(),
             "msg_type" => ?msg_type,
             "msg_size" => msg.compute_size(),
-            "from" => from_peer.get_id(),
             "to" => to_peer_id,
         );
 
-        send_msg.set_from_peer(from_peer);
         send_msg.set_to_peer(to_peer);
 
         // There could be two cases:
@@ -3289,22 +3338,9 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         peer: &metapb::Peer,
     ) {
-        let mut send_msg = RaftMessage::default();
-        send_msg.set_region_id(self.region_id);
-        send_msg.set_from_peer(self.peer.clone());
-        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        send_msg.set_to_peer(peer.clone());
-        let extra_msg = send_msg.mut_extra_msg();
-        extra_msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-        if let Err(e) = ctx.trans.send(send_msg) {
-            error!(?e;
-                "failed to send wake up message";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target_peer_id" => peer.get_id(),
-                "target_store_id" => peer.get_store_id(),
-            );
-        }
+        let mut msg = ExtraMessage::default();
+        msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+        self.send_extra_message(msg, &mut ctx.trans, peer);
     }
 
     pub fn bcast_check_stale_peer_message<T: Transport>(
@@ -3319,22 +3355,9 @@ where
             if peer.get_id() == self.peer_id() {
                 continue;
             }
-            let mut send_msg = RaftMessage::default();
-            send_msg.set_region_id(self.region_id);
-            send_msg.set_from_peer(self.peer.clone());
-            send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-            send_msg.set_to_peer(peer.clone());
-            let extra_msg = send_msg.mut_extra_msg();
+            let mut extra_msg = ExtraMessage::default();
             extra_msg.set_type(ExtraMessageType::MsgCheckStalePeer);
-            if let Err(e) = ctx.trans.send(send_msg) {
-                error!(?e;
-                    "failed to send check stale peer message";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                    "target_peer_id" => peer.get_id(),
-                    "target_store_id" => peer.get_store_id(),
-                );
-            }
+            self.send_extra_message(extra_msg, &mut ctx.trans, peer);
         }
     }
 
@@ -3354,10 +3377,6 @@ where
         premerge_commit: u64,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        let mut send_msg = RaftMessage::default();
-        send_msg.set_region_id(self.region_id);
-        send_msg.set_from_peer(self.peer.clone());
-        send_msg.set_region_epoch(self.region().get_region_epoch().clone());
         let to_peer = match self.get_peer_from_cache(self.leader_id()) {
             Some(p) => p,
             None => {
@@ -3370,19 +3389,10 @@ where
                 return;
             }
         };
-        send_msg.set_to_peer(to_peer.clone());
-        let extra_msg = send_msg.mut_extra_msg();
+        let mut extra_msg = ExtraMessage::default();
         extra_msg.set_type(ExtraMessageType::MsgWantRollbackMerge);
         extra_msg.set_premerge_commit(premerge_commit);
-        if let Err(e) = ctx.trans.send(send_msg) {
-            error!(?e;
-                "failed to send want rollback merge message";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target_peer_id" => to_peer.get_id(),
-                "target_store_id" => to_peer.get_store_id(),
-            );
-        }
+        self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
     pub fn require_updating_max_ts(&self, pd_scheduler: &FutureScheduler<PdTask<EK>>) {

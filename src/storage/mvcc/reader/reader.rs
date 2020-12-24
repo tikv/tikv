@@ -19,13 +19,22 @@ pub enum TxnCommitRecord {
     /// `start_ts`. That kind of record will be returned via the `overlapped_write` field.
     /// In this case, if the current transaction is to be rolled back, the `overlapped_write` must not
     /// be overwritten.
-    None { overlapped_write: Option<Write> },
+    None {
+        overlapped_write: Option<OverlappedWrite>,
+    },
     /// Found the transaction's write record.
     SingleRecord { commit_ts: TimeStamp, write: Write },
     /// The transaction's status is found in another transaction's record's `overlapped_rollback`
     /// field. This may happen when the current transaction's `start_ts` is the same as the
     /// `commit_ts` of another transaction on this key.
     OverlappedRollback { commit_ts: TimeStamp },
+}
+
+#[derive(Clone, Debug)]
+pub struct OverlappedWrite {
+    pub write: Write,
+    /// GC fence for `overlapped_write`. PTAL at `txn_types::Write::gc_fence`.
+    pub gc_fence: TimeStamp,
 }
 
 impl TxnCommitRecord {
@@ -58,7 +67,7 @@ impl TxnCommitRecord {
         }
     }
 
-    pub fn unwrap_none(self) -> Option<Write> {
+    pub fn unwrap_none(self) -> Option<OverlappedWrite> {
         match self {
             Self::None { overlapped_write } => overlapped_write,
             _ => panic!("txn record found but not expected: {:?}", self),
@@ -212,10 +221,20 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(())
     }
 
+    /// Gets the value of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
     pub fn get(
         &mut self,
         key: &Key,
         ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
         skip_lock_check: bool,
     ) -> Result<Option<Value>> {
         if !skip_lock_check {
@@ -225,25 +244,46 @@ impl<S: Snapshot> MvccReader<S> {
                 IsolationLevel::Rc => {}
             }
         }
-        if let Some(write) = self.get_write(key, ts)? {
+        if let Some(write) = self.get_write(key, ts, gc_fence_limit)? {
             Ok(Some(self.load_data(key, write)?))
         } else {
             Ok(None)
         }
     }
 
-    pub fn get_write(&mut self, key: &Key, mut ts: TimeStamp) -> Result<Option<Write>> {
+    /// Gets the write record of the specified key's latest version before specified `ts`.
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
+    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
+    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
+    /// correct. Generally, it should be the read_ts of the current transaction, which might be
+    /// different from the `ts` passed to this function.
+    pub fn get_write(
+        &mut self,
+        key: &Key,
+        mut ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<Option<Write>> {
         loop {
             match self.seek_write(key, ts)? {
-                Some((commit_ts, write)) => match write.write_type {
-                    WriteType::Put => {
-                        return Ok(Some(write));
+                Some((commit_ts, write)) => {
+                    if let Some(limit) = gc_fence_limit {
+                        if !write.as_ref().check_gc_fence_as_latest_version(limit) {
+                            return Ok(None);
+                        }
                     }
-                    WriteType::Delete => {
-                        return Ok(None);
+                    match write.write_type {
+                        WriteType::Put => {
+                            return Ok(Some(write));
+                        }
+                        WriteType::Delete => {
+                            return Ok(None);
+                        }
+                        WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
-                },
+                }
                 None => return Ok(None),
             }
         }
@@ -260,6 +300,7 @@ impl<S: Snapshot> MvccReader<S> {
         //
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
         let mut seek_ts = TimeStamp::max();
+        let mut gc_fence = TimeStamp::from(0);
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
                 return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
@@ -269,8 +310,11 @@ impl<S: Snapshot> MvccReader<S> {
                     return Ok(TxnCommitRecord::OverlappedRollback { commit_ts });
                 }
                 return Ok(TxnCommitRecord::None {
-                    overlapped_write: Some(write),
+                    overlapped_write: Some(OverlappedWrite { write, gc_fence }),
                 });
+            }
+            if write.write_type == WriteType::Put || write.write_type == WriteType::Delete {
+                gc_fence = commit_ts;
             }
             if commit_ts < start_ts {
                 break;
@@ -474,7 +518,7 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -698,7 +742,7 @@ mod tests {
                     }
                 }
             }
-            db.c().write(&wb).unwrap();
+            wb.write().unwrap();
         }
 
         fn flush(&mut self) {
@@ -1041,8 +1085,8 @@ mod tests {
             .unwrap()
             .unwrap_none()
             .unwrap();
-        assert_eq!(overlapped_write.start_ts, 45.into());
-        assert_eq!(overlapped_write.write_type, WriteType::Put);
+        assert_eq!(overlapped_write.write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write.write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())
@@ -1333,40 +1377,40 @@ mod tests {
         //                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
-        assert!(reader.get_write(&key, 1.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 2.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 2.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 5.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 5.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        let write = reader.get_write(&key, 7.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 7.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1.into());
 
-        assert!(reader.get_write(&key, 9.into()).unwrap().is_none());
+        assert!(reader.get_write(&key, 9.into(), None).unwrap().is_none());
 
-        let write = reader.get_write(&key, 14.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 14.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 16.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 16.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12.into());
 
-        let write = reader.get_write(&key, 20.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 20.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
-        let write = reader.get_write(&key, 24.into()).unwrap().unwrap();
+        let write = reader.get_write(&key, 24.into(), None).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 18.into());
 
         assert!(reader
-            .get_write(&Key::from_raw(b"j"), 100.into())
+            .get_write(&Key::from_raw(b"j"), 100.into(), None)
             .unwrap()
             .is_none());
     }
@@ -1579,21 +1623,24 @@ mod tests {
 
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 2.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 2.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 5.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 5.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
             assert_eq!(
-                reader.get(&key, 7.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 7.into(), None, skip_lock_check).unwrap(),
                 Some(short_value.to_vec())
             );
-            assert_eq!(reader.get(&key, 9.into(), skip_lock_check).unwrap(), None);
+            assert_eq!(
+                reader.get(&key, 9.into(), None, skip_lock_check).unwrap(),
+                None
+            );
 
-            assert!(reader.get(&key, 11.into(), false).is_err());
-            assert_eq!(reader.get(&key, 9.into(), true).unwrap(), None);
+            assert!(reader.get(&key, 11.into(), None, false).is_err());
+            assert_eq!(reader.get(&key, 9.into(), None, true).unwrap(), None);
         }
 
         // Commit the long value
@@ -1602,7 +1649,7 @@ mod tests {
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         for &skip_lock_check in &[false, true] {
             assert_eq!(
-                reader.get(&key, 11.into(), skip_lock_check).unwrap(),
+                reader.get(&key, 11.into(), None, skip_lock_check).unwrap(),
                 Some(long_value.to_vec())
             );
         }

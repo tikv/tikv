@@ -12,7 +12,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-use pd_client::{ClusterVersion, PdClient};
+use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -104,8 +104,8 @@ impl Display for GcTask {
                 ..
             } => f
                 .debug_struct("GC")
-                .field("start_key", &hex::encode_upper(&start_key))
-                .field("end_key", &hex::encode_upper(&end_key))
+                .field("start_key", &log_wrappers::Value::key(&start_key))
+                .field("end_key", &log_wrappers::Value::key(&end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::UnsafeDestroyRange {
@@ -283,8 +283,8 @@ where
         self.stats.add(reader.get_statistics());
         debug!(
             "gc has finished";
-            "start_key" => hex::encode_upper(start_key),
-            "end_key" => hex::encode_upper(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
             "safe_point" => safe_point
         );
         Ok(())
@@ -459,8 +459,8 @@ where
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    log_wrappers::Value::key(&start_key),
+                    log_wrappers::Value::key(&end_key),
                     safe_point
                 );
             }
@@ -572,7 +572,7 @@ where
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
-    cluster_version: ClusterVersion,
+    feature_gate: FeatureGate,
 }
 
 impl<E, RR> Clone for GcWorker<E, RR>
@@ -594,7 +594,7 @@ where
             worker_scheduler: self.worker_scheduler.clone(),
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
-            cluster_version: self.cluster_version.clone(),
+            feature_gate: self.feature_gate.clone(),
         }
     }
 }
@@ -628,7 +628,7 @@ where
         engine: E,
         raft_store_router: RR,
         cfg: GcConfig,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
@@ -642,7 +642,7 @@ where
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
-            cluster_version,
+            feature_gate,
         }
     }
 
@@ -654,8 +654,8 @@ where
 
         let kvdb = self.engine.kv_engine();
         let cfg_mgr = self.config_manager.clone();
-        let cluster_version = self.cluster_version.clone();
-        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, cluster_version);
+        let feature_gate = self.feature_gate.clone();
+        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, feature_gate);
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
@@ -664,7 +664,7 @@ where
             safe_point.clone(),
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
-            self.cluster_version.clone(),
+            self.feature_gate.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
@@ -993,12 +993,9 @@ mod tests {
             TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
                 .build()
                 .unwrap();
-        let mut gc_worker = GcWorker::new(
-            engine,
-            RaftStoreBlackHole,
-            GcConfig::default(),
-            ClusterVersion::new(semver::Version::new(5, 0, 0)),
-        );
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let mut gc_worker = GcWorker::new(engine, RaftStoreBlackHole, GcConfig::default(), gate);
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1162,7 +1159,7 @@ mod tests {
             prefixed_engine,
             RaftStoreBlackHole,
             GcConfig::default(),
-            ClusterVersion::default(),
+            FeatureGate::default(),
         );
         gc_worker.start().unwrap();
 
