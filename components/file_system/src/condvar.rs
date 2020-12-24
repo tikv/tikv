@@ -115,22 +115,16 @@ impl Condvar {
                 prev.as_ref().set_next(next);
             }
         } else {
-            // head could be nulled by notify_all()
-            if self.head.get().is_some() {
-                assert!(self.head.get().unwrap().as_ptr() == raw_node);
-                self.head.set(next);
-            }
+            assert!(self.head.get().unwrap().as_ptr() == raw_node);
+            self.head.set(next);
         }
         if let Some(next) = next {
             unsafe {
                 next.as_ref().set_prev(prev);
             }
         } else {
-            // tail could be nulled by notify_all()
-            if self.tail.get().is_some() {
-                assert!(self.tail.get().unwrap().as_ptr() == raw_node);
-                self.tail.set(prev);
-            }
+            assert!(self.tail.get().unwrap().as_ptr() == raw_node);
+            self.tail.set(prev);
         }
     }
 
@@ -220,7 +214,7 @@ mod tests {
         let enter_ticket = Arc::new(AtomicUsize::new(0));
         let exit_ticket = Arc::new(AtomicUsize::new(0));
 
-        let begin = Instant::now();
+        let begin = Instant::now_coarse();
         for i in 0..total_waits {
             let (mu, condv, enter, exit) = (
                 mu.clone(),
@@ -269,7 +263,7 @@ mod tests {
         for t in threads {
             t.join().unwrap();
         }
-        let end = Instant::now();
+        let end = Instant::now_coarse();
         assert!(end.duration_since(begin) < Duration::from_secs(short_timeout_millis * 2));
     }
 
