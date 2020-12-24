@@ -1527,10 +1527,20 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                // Because we only handle raft ready when not applying snapshot, so following
+                // line won't be called twice for the same snapshot.
+                // 0 means snapshot is scheduled after being restarted.
+                if self.last_unpersisted_number != 0 {
+                    self.raft_group
+                        .on_persist_ready(self.last_unpersisted_number);
+                    self.raft_group.advance_apply_to(self.last_applying_idx);
+                    self.cmd_epoch_checker.advance_apply(
+                        self.last_applying_idx,
+                        self.term(),
+                        self.raft_group.store().region(),
+                    );
+                }
                 self.post_pending_read_index_on_replica(ctx);
-                // If there is a snapshot, it must belongs to the last ready.
-                self.raft_group
-                    .on_persist_ready(self.last_unpersisted_number);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1797,14 +1807,6 @@ where
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append_async(ready);
-            // Because we only handle raft ready when not applying snapshot, so following
-            // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply_to(self.last_applying_idx);
-            self.cmd_epoch_checker.advance_apply(
-                self.last_applying_idx,
-                self.term(),
-                self.raft_group.store().region(),
-            );
             return;
         }
 
