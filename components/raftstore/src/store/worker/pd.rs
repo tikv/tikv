@@ -241,14 +241,6 @@ impl Display for Task {
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
-<<<<<<< HEAD
-=======
-            Task::UpdateMaxTimestamp { region_id, .. } => write!(
-                f,
-                "update the max timestamp for region {} in the concurrency manager",
-                region_id
-            ),
->>>>>>> bc05a94e8... Add key and size threshold for load-base-split  (#9256)
             Task::QueryRegionLeader { region_id } => write!(
                 f,
                 "query the leader of region {}",

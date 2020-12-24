@@ -302,8 +302,6 @@ impl ReadStats {
     }
 }
 
-<<<<<<< HEAD
-=======
 impl Default for ReadStats {
     fn default() -> ReadStats {
         ReadStats {
@@ -313,7 +311,6 @@ impl Default for ReadStats {
     }
 }
 
->>>>>>> bc05a94e8... Add key and size threshold for load-base-split  (#9256)
 pub struct AutoSplitController {
     pub recorders: HashMap<u64, Recorder>,
     cfg: SplitConfig,
