@@ -1527,12 +1527,10 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
-                // Because we only handle raft ready when not applying snapshot, so following
-                // line won't be called twice for the same snapshot.
                 // 0 means snapshot is scheduled after being restarted.
                 if self.last_unpersisted_number != 0 {
-                    self.raft_group
-                        .on_persist_ready(self.last_unpersisted_number);
+                    // Because we only handle raft ready when not applying snapshot, so following
+                    // line won't be called twice for the same snapshot.
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
                         self.last_applying_idx,
@@ -1807,6 +1805,13 @@ where
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append_async(ready);
+            // The ready is persisted, but we don't want to handle following light
+            // ready immediately to avoid flow out of control, so use
+            // `on_persist_ready` instead of `advance_append`.
+            // We don't need to set `has_ready` to true, as snapshot is always
+            // checked when ticking.
+            self.raft_group
+                .on_persist_ready(self.last_unpersisted_number);
             return;
         }
 
