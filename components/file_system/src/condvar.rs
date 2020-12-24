@@ -131,15 +131,11 @@ impl Condvar {
     /// Notifies all waiters in queue as till now.
     pub fn notify_all(&self) {
         let mut ptr = self.head.get();
-        loop {
-            if let Some(inner) = ptr {
-                unsafe {
-                    let node = inner.as_ref();
-                    node.notify();
-                    ptr = node.get_next();
-                }
-            } else {
-                break;
+        while let Some(inner) = ptr {
+            unsafe {
+                let node = inner.as_ref();
+                node.notify();
+                ptr = node.get_next();
             }
         }
     }
