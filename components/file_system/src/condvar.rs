@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::{future::FutureExt, pin_mut, select};
+use parking_lot::{Condvar as ParkingLotCondvar, Mutex, MutexGuard};
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::Condvar as StdCondvar;
-use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::Semaphore as TokioSemaphore;
 
@@ -23,13 +22,13 @@ impl<T> DoublyLinkedNode<T> {
 }
 
 enum CondvarNode {
-    Sync(StdCondvar, DoublyLinkedNode<CondvarNode>),
+    Sync(ParkingLotCondvar, DoublyLinkedNode<CondvarNode>),
     Async(TokioSemaphore, DoublyLinkedNode<CondvarNode>),
 }
 
 impl CondvarNode {
     pub fn new_sync() -> CondvarNode {
-        CondvarNode::Sync(StdCondvar::new(), DoublyLinkedNode::new())
+        CondvarNode::Sync(ParkingLotCondvar::new(), DoublyLinkedNode::new())
     }
 
     pub fn new_async() -> CondvarNode {
@@ -38,7 +37,9 @@ impl CondvarNode {
 
     pub fn notify(&self) {
         match *self {
-            CondvarNode::Sync(ref condv, _) => condv.notify_one(),
+            CondvarNode::Sync(ref condv, _) => {
+                condv.notify_one();
+            }
             CondvarNode::Async(ref sem, _) => sem.add_permits(1),
         }
     }
@@ -147,15 +148,15 @@ impl Condvar {
     /// timing out after a specified duration.
     pub fn wait_timeout<'a, T>(
         &self,
-        guard: MutexGuard<'a, T>,
+        mut guard: MutexGuard<'a, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
         // mutable just to indulge NonNull
         let mut node = CondvarNode::new_sync();
         self.enqueue(&mut node);
         // alternative: std::thread::park_timeout suffers from spurious wake
-        let (guard, res) = match node {
-            CondvarNode::Sync(ref condv, _) => condv.wait_timeout(guard, timeout).unwrap(),
+        let res = match node {
+            CondvarNode::Sync(ref condv, _) => condv.wait_for(&mut guard, timeout),
             _ => unreachable!(),
         };
         self.dequeue(&mut node);
@@ -185,7 +186,7 @@ impl Condvar {
                 _ = tokio::time::delay_for(timeout).fuse() => true,
             }
         };
-        let guard = mu.lock().unwrap();
+        let guard = mu.lock();
         self.dequeue(&mut node);
         (guard, timed_out)
     }
@@ -195,7 +196,7 @@ impl Condvar {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Condvar as StdCondvar, Mutex as StdMutex};
 
     use tikv_util::time::Instant;
 
@@ -225,7 +226,7 @@ mod tests {
                 std::thread::yield_now();
             }
             let t = std::thread::spawn(move || {
-                let guard = mu.lock().unwrap();
+                let guard = mu.lock();
                 assert_eq!(enter.fetch_add(1, Ordering::Relaxed), i);
                 if i % 3 == 0 {
                     let (_, timed_out) = condv.wait_timeout(
@@ -256,7 +257,7 @@ mod tests {
             std::thread::yield_now();
         }
         {
-            let _guard = mu.lock().unwrap();
+            let _guard = mu.lock();
             condv.notify_all();
         }
         for t in threads {
@@ -267,8 +268,9 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_std_condvar(b: &mut Bencher) {
-        let mu = Mutex::new(());
+        let mu = StdMutex::new(());
         let condv = StdCondvar::new();
         b.iter(|| {
             let guard = mu.lock().unwrap();
@@ -277,22 +279,24 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_condvar_sync(b: &mut Bencher) {
         let mu = Mutex::new(());
         let condv = Condvar::new();
         b.iter(|| {
-            let guard = mu.lock().unwrap();
+            let guard = mu.lock();
             condv.wait_timeout(guard, Duration::from_millis(1))
         });
     }
 
     #[bench]
+    #[ignore]
     fn bench_condvar_async(b: &mut Bencher) {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mu = Mutex::new(());
         let condv = Condvar::new();
         b.iter(|| {
-            let guard = mu.lock().unwrap();
+            let guard = mu.lock();
             rt.block_on(condv.async_wait_timeout(&mu, guard, Duration::from_millis(1)))
         });
     }

@@ -2,8 +2,9 @@
 
 use super::{condvar::Condvar, IOOp, IOType};
 
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
 
@@ -168,7 +169,7 @@ impl PerTypeIORateLimiter {
             if let Some(bytes) = self.request_fast(cached_bytes_per_refill, bytes) {
                 return bytes;
             }
-            let mut last_refill_time = self.last_refill_time.lock().unwrap();
+            let mut last_refill_time = self.last_refill_time.lock();
             // double check if bytes have been refilled by others
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
@@ -196,6 +197,7 @@ impl PerTypeIORateLimiter {
                         // timeout, do the refill myself
                         *last_refill_time = now;
                         return self.refill_and_request(bytes);
+                    } else {
                     }
                 }
             }
@@ -214,9 +216,9 @@ impl PerTypeIORateLimiter {
         }
         loop {
             if let Some(bytes) = self.request_fast(cached_bytes_per_refill, bytes) {
-                break bytes;
+                return bytes;
             }
-            let mut last_refill_time = self.last_refill_time.lock().unwrap();
+            let mut last_refill_time = self.last_refill_time.lock();
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
@@ -232,7 +234,7 @@ impl PerTypeIORateLimiter {
                 let since_last_refill = now.duration_since(*last_refill_time);
                 if since_last_refill >= self.refill_period {
                     *last_refill_time = now;
-                    break self.refill_and_request(bytes);
+                    return self.refill_and_request(bytes);
                 } else {
                     let cached_last_refill_time = *last_refill_time;
                     let (mut last_refill_time, timed_out) = self
@@ -246,12 +248,17 @@ impl PerTypeIORateLimiter {
                     let now = Instant::now_coarse();
                     if timed_out && *last_refill_time == cached_last_refill_time {
                         *last_refill_time = now;
-                        break self.refill_and_request(bytes);
+                        return self.refill_and_request(bytes);
                     }
                 }
             }
             cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
         }
+    }
+
+    #[cfg(test)]
+    pub fn is_drained(&self) -> bool {
+        self.consumed.load(Ordering::Relaxed) >= self.bytes_per_refill.load(Ordering::Relaxed)
     }
 }
 
@@ -371,11 +378,11 @@ lazy_static! {
 }
 
 pub fn set_io_rate_limiter(limiter: IORateLimiter) {
-    *IO_RATE_LIMITER.lock().unwrap() = Some(Arc::new(limiter));
+    *IO_RATE_LIMITER.lock() = Some(Arc::new(limiter));
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
-    if let Some(ref limiter) = *IO_RATE_LIMITER.lock().unwrap() {
+    if let Some(ref limiter) = *IO_RATE_LIMITER.lock() {
         Some(limiter.clone())
     } else {
         None
@@ -420,6 +427,40 @@ mod tests {
         assert!(end.duration_since(begin) >= refill_period);
         assert!(end.duration_since(begin) < refill_period * 2);
         assert_eq!(limiter.request(1000, IOPriority::Low), 50);
+    }
+
+    #[test]
+    fn test_dynamic_relax_limit() {
+        let refills_in_one_sec = 10;
+        let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
+
+        let limiter = Arc::new(PerTypeIORateLimiter::new(
+            2 * refills_in_one_sec,
+            refill_period,
+        ));
+        let (limiter1, limiter2) = (limiter.clone(), limiter.clone());
+
+        fn inner(limiter: Arc<PerTypeIORateLimiter>) {
+            assert!(limiter.is_drained());
+            assert_eq!(limiter.request(100, IOPriority::Low), 100);
+        }
+        assert_eq!(limiter.request(100, IOPriority::Low), 2);
+        // only one thread do the refill after timeout
+        let t1 = std::thread::spawn(move || {
+            inner(limiter1);
+        });
+        let t2 = std::thread::spawn(move || {
+            inner(limiter2);
+        });
+        let begin = Instant::now();
+        // make sure limiters start waiting
+        std::thread::sleep(Duration::from_millis(10));
+        limiter.set_bytes_per_sec(10000 * refills_in_one_sec);
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let end = Instant::now();
+        assert!(end.duration_since(begin).as_secs_f64() >= refill_period.as_secs_f64() * 0.9);
+        assert!(end.duration_since(begin).as_secs_f64() < refill_period.as_secs_f64() * 1.1);
     }
 
     struct BackgroundContext {
@@ -553,6 +594,7 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_acquire_limiter(b: &mut Bencher) {
         set_io_rate_limiter(IORateLimiter::new(0, None));
         b.iter(|| {
@@ -561,6 +603,7 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_noop_limiter(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(0, None));
         let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
@@ -570,6 +613,7 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_not_limited(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(10000, None));
         let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
@@ -579,6 +623,7 @@ mod tests {
     }
 
     #[bench]
+    #[ignore]
     fn bench_limited_fast(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(usize::max_value(), None));
         let _context =

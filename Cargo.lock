@@ -1364,6 +1364,7 @@ dependencies = [
  "maligned",
  "nix 0.19.0",
  "openssl",
+ "parking_lot 0.11.0",
  "prometheus",
  "prometheus-static-metric",
  "rand",
