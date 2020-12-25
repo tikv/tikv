@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -632,6 +632,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let auto_split_controller = AutoSplitController::new(split_config_manager);
 
+        let safe_point = Arc::new(AtomicU64::new(0));
+        let observer = match self.config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
+                MvccConsistencyCheckObserver::new(safe_point.clone()),
+            ),
+            ConsistencyCheckMethod::Raw => {
+                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
+            }
+        };
+        self.coprocessor_host
+            .as_mut()
+            .unwrap()
+            .registry
+            .register_consistency_check_observer(100, observer);
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
@@ -640,6 +655,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
         );
+
+        // Start auto gc
+        let auto_gc_config = AutoGcConfig::new(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone(),
+            node.id(),
+        );
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+            fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
 
         node.start(
             engines.engines.clone(),
@@ -656,31 +681,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
         initial_metric(&self.config.metric);
-
-        // Start auto gc
-        let auto_gc_config = AutoGcConfig::new(
-            self.pd_client.clone(),
-            self.region_info_accessor.clone(),
-            node.id(),
-        );
-
-        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
-            Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
-            Ok(safe_point) => safe_point,
-        };
-        let observer = match self.config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => {
-                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
-            }
-            ConsistencyCheckMethod::Raw => {
-                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
-            }
-        };
-        self.coprocessor_host
-            .as_mut()
-            .unwrap()
-            .registry
-            .register_consistency_check_observer(100, observer);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
