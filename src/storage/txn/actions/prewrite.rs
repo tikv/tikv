@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::storage::txn::actions::check_extra_op::check_extra_op;
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -55,7 +56,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok(TimeStamp::zero());
     }
 
-    txn.check_extra_op(&mutation.key, mutation.mutation_type, prev_write)?;
+    check_extra_op(txn, &mutation.key, mutation.mutation_type, prev_write)?;
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 

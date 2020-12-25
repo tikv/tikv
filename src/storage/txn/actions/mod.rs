@@ -7,6 +7,7 @@
 
 pub mod acquire_pessimistic_lock;
 pub mod check_data_constraint;
+pub mod check_extra_op;
 pub mod check_txn_status;
 pub mod cleanup;
 pub mod commit;
