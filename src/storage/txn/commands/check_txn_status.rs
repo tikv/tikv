@@ -597,7 +597,8 @@ pub mod tests {
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // caller_start_ts < lock.min_commit_ts < current_ts
-        // When caller_start_ts < lock.min_commit_ts, no need to update it.
+        // When caller_start_ts < lock.min_commit_ts, no need to update it, but pushed should be
+        // true.
         must_success(
             &engine,
             k,
@@ -607,7 +608,7 @@ pub mod tests {
             r,
             false,
             false,
-            uncommitted(100, ts(9, 1), false),
+            uncommitted(100, ts(9, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -965,6 +966,12 @@ pub mod tests {
     }
 
     #[test]
+    fn test_check_txn_status() {
+        test_check_txn_status_impl(false);
+        test_check_txn_status_impl(true);
+    }
+
+    #[test]
     fn test_check_txn_status_resolving_pessimistic_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
@@ -1082,11 +1089,5 @@ pub mod tests {
         );
         must_unlocked(&engine, k);
         must_get_rollback_ts(&engine, k, ts(50, 0));
-    }
-
-    #[test]
-    fn test_check_txn_status() {
-        test_check_txn_status_impl(false);
-        test_check_txn_status_impl(true);
     }
 }

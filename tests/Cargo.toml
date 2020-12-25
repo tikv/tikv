@@ -90,7 +90,7 @@ encryption = { path = "../components/encryption" }
 cdc = { path = "../components/cdc" }
 futures = "0.3"
 grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
-hex = "0.4"
+log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
@@ -142,7 +142,6 @@ test_pd = { path = "../components/test_pd" }
 byteorder = "1.2"
 serde_json = "1.0"
 tokio = { version = "0.2", features = ["rt-threaded"] }
-semver = "0.10"
 concurrency_manager = { path = "../components/concurrency_manager" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

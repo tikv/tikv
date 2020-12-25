@@ -31,7 +31,7 @@ use collections::HashMap;
 use engine_traits::CompactedEvent;
 use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use pd_client::PdClient;
+use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -95,8 +95,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> (term, leader)
-    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
+    /// region_id -> (term, leader_peer_id)
+    pub leaders: HashMap<u64, (u64, u64)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -307,6 +307,7 @@ where
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub feature_gate: FeatureGate,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
@@ -377,20 +378,6 @@ where
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
-    }
-
-    /// Timeout is calculated from TiKV start, the node should not become
-    /// hibernated if it still within the hibernate timeout, see
-    /// https://github.com/tikv/tikv/issues/7747
-    pub fn is_hibernate_timeout(&mut self) -> bool {
-        let timeout = match self.node_start_time {
-            Some(t) => t.elapsed() >= self.cfg.hibernate_timeout.0,
-            None => return true,
-        };
-        if timeout {
-            self.node_start_time = None;
-        }
-        timeout
     }
 
     pub fn update_ticks_timeout(&mut self) {
@@ -890,6 +877,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
+    feature_gate: FeatureGate,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1099,6 +1087,7 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
+            feature_gate: self.feature_gate.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1234,6 +1223,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
+            feature_gate: pd_client.feature_gate().clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
@@ -1530,7 +1520,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             "to_peer_id" => msg.get_to_peer().get_id(),
             "store_id" => self.fsm.store.id,
             "region_id" => region_id,
-            "msg_type" => ?msg.get_message().get_msg_type(),
+            "msg_type" => %util::MsgType(&msg),
         );
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
@@ -2363,10 +2353,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let regions = leaders
             .into_iter()
             .map(|leader_info| {
-                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                if let Some((term, leader_id)) = meta.leaders.get(&leader_info.region_id) {
                     if let Some(region) = meta.regions.get(&leader_info.region_id) {
                         if *term == leader_info.term
-                            && leader.id == leader_info.peer_id
+                            && *leader_id == leader_info.peer_id
                             && util::compare_region_epoch(
                                 leader_info.get_region_epoch(),
                                 region,
@@ -2380,11 +2370,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                         }
                         debug!("check leader failed";
                             "leader_info" => ?leader_info,
+                            "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
                         );
                     }
                 }
+                debug!("check leader failed, meta not found";
+                    "leader_info" => ?leader_info,
+                );
                 None
             })
             .filter_map(|r| r)

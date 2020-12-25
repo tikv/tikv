@@ -146,7 +146,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         let to = to.unwrap_or(keys::DATA_MAX_KEY);
         let key_builder = |key: &[u8]| -> Result<Option<KeyBuilder>> {
             if !keys::validate_data_key(key) && key != keys::DATA_MAX_KEY {
-                return Err(box_err!("non-mvcc area {}", hex::encode_upper(key)));
+                return Err(box_err!("non-mvcc area {}", log_wrappers::Value::key(key)));
             }
             Ok(Some(KeyBuilder::from_vec(key.to_vec(), 0, 0)))
         };
