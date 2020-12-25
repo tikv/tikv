@@ -197,7 +197,6 @@ impl PerTypeIORateLimiter {
                         // timeout, do the refill myself
                         *last_refill_time = now;
                         return self.refill_and_request(bytes);
-                    } else {
                     }
                 }
             }
