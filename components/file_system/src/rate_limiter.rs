@@ -21,25 +21,15 @@ fn get_priority(io_type: IOType) -> IOPriority {
     }
 }
 
-/// Used to calibrate actual bytes through since last reset.
-/// TODO: implement iosnoop-based calibrator
-#[derive(Debug)]
-struct BytesCalibrator {
-    io_type: IOType,
-    io_op: IOOp,
-}
+/// Used to calibrate actual IO throughput.
+/// A naive implementation would be deducing disk IO based on empirical ratio
+/// with respect to hardware environment.
+pub trait BytesCalibrator: Send {
+    /// Calibrate estimation of throughput of current epoch. This methods can
+    /// be called several times before a reset.
+    fn calibrate(&self, before_calibration: usize) -> usize;
 
-impl BytesCalibrator {
-    #[allow(dead_code)]
-    pub fn new(io_type: IOType, io_op: IOOp) -> Self {
-        BytesCalibrator { io_type, io_op }
-    }
-
-    pub fn calibrate(&self) -> usize {
-        0
-    }
-
-    pub fn reset(&self) {}
+    fn reset(&self);
 }
 
 /// Record accumulated bytes through of different types.
@@ -87,14 +77,17 @@ impl BytesRecorder {
     }
 }
 
-#[derive(Debug)]
+struct ProtectedState {
+    last_refill_time: Instant,
+    calibrator: Option<Box<dyn BytesCalibrator>>,
+}
+
 struct PerTypeIORateLimiter {
     bytes_per_refill: AtomicUsize,
     consumed: AtomicUsize,
     refill_period: Duration,
-    last_refill_time: Mutex<Instant>,
+    state: Mutex<ProtectedState>,
     condv: Condvar,
-    calibrator: Option<BytesCalibrator>,
 }
 
 #[inline]
@@ -112,9 +105,11 @@ impl PerTypeIORateLimiter {
             )),
             consumed: AtomicUsize::new(0),
             refill_period,
-            last_refill_time: Mutex::new(Instant::now_coarse()),
+            state: Mutex::new(ProtectedState {
+                last_refill_time: Instant::now_coarse(),
+                calibrator: None,
+            }),
             condv: Condvar::new(),
-            calibrator: None,
         }
     }
 
@@ -126,8 +121,8 @@ impl PerTypeIORateLimiter {
     }
 
     #[allow(dead_code)]
-    pub fn set_calibrator(&mut self, calibrator: BytesCalibrator) {
-        self.calibrator = Some(calibrator);
+    pub fn set_calibrator(&mut self, calibrator: Box<dyn BytesCalibrator>) {
+        self.state.get_mut().calibrator = Some(calibrator);
     }
 
     #[inline]
@@ -144,10 +139,10 @@ impl PerTypeIORateLimiter {
     }
 
     #[inline]
-    fn refill_and_request(&self, bytes: usize) -> usize {
+    fn refill_and_request(&self, state: &ProtectedState, bytes: usize) -> usize {
         let token = std::cmp::min(self.bytes_per_refill.load(Ordering::Relaxed), bytes);
         self.consumed.store(token, Ordering::Relaxed);
-        if let Some(calibrator) = &self.calibrator {
+        if let Some(calibrator) = &state.calibrator {
             calibrator.reset();
         }
         self.condv.notify_all();
@@ -169,34 +164,34 @@ impl PerTypeIORateLimiter {
             if let Some(bytes) = self.request_fast(cached_bytes_per_refill, bytes) {
                 return bytes;
             }
-            let mut last_refill_time = self.last_refill_time.lock();
+            let mut state = self.state.lock();
             // double check if bytes have been refilled by others
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
-            if let Some(calibrator) = &self.calibrator {
-                let calibrated = calibrator.calibrate();
+            if let Some(calibrator) = &state.calibrator {
+                let calibrated = calibrator.calibrate(self.consumed.load(Ordering::Relaxed));
                 self.consumed.store(calibrated, Ordering::Relaxed);
                 if calibrated < cached_bytes_per_refill {
                     continue;
                 }
             }
             let now = Instant::now_coarse();
-            if now > *last_refill_time {
-                let since_last_refill = now.duration_since(*last_refill_time);
+            if now > state.last_refill_time {
+                let since_last_refill = now.duration_since(state.last_refill_time);
                 if since_last_refill >= self.refill_period {
-                    *last_refill_time = now;
-                    return self.refill_and_request(bytes);
+                    state.last_refill_time = now;
+                    return self.refill_and_request(&state, bytes);
                 } else {
-                    let cached_last_refill_time = *last_refill_time;
-                    let (mut last_refill_time, timed_out) = self
+                    let cached_last_refill_time = state.last_refill_time;
+                    let (mut state, timed_out) = self
                         .condv
-                        .wait_timeout(last_refill_time, self.refill_period - since_last_refill);
+                        .wait_timeout(state, self.refill_period - since_last_refill);
                     let now = Instant::now_coarse();
-                    if timed_out && *last_refill_time == cached_last_refill_time {
+                    if timed_out && state.last_refill_time == cached_last_refill_time {
                         // timeout, do the refill myself
-                        *last_refill_time = now;
-                        return self.refill_and_request(bytes);
+                        state.last_refill_time = now;
+                        return self.refill_and_request(&state, bytes);
                     }
                 }
             }
@@ -217,37 +212,37 @@ impl PerTypeIORateLimiter {
             if let Some(bytes) = self.request_fast(cached_bytes_per_refill, bytes) {
                 return bytes;
             }
-            let mut last_refill_time = self.last_refill_time.lock();
+            let mut state = self.state.lock();
             if self.consumed.load(Ordering::Relaxed) < cached_bytes_per_refill {
                 continue;
             }
-            if let Some(calibrator) = &self.calibrator {
-                let calibrated = calibrator.calibrate();
+            if let Some(calibrator) = &state.calibrator {
+                let calibrated = calibrator.calibrate(self.consumed.load(Ordering::Relaxed));
                 self.consumed.store(calibrated, Ordering::Relaxed);
                 if calibrated < cached_bytes_per_refill {
                     continue;
                 }
             }
             let now = Instant::now_coarse();
-            if now > *last_refill_time {
-                let since_last_refill = now.duration_since(*last_refill_time);
+            if now > state.last_refill_time {
+                let since_last_refill = now.duration_since(state.last_refill_time);
                 if since_last_refill >= self.refill_period {
-                    *last_refill_time = now;
-                    return self.refill_and_request(bytes);
+                    state.last_refill_time = now;
+                    return self.refill_and_request(&state, bytes);
                 } else {
-                    let cached_last_refill_time = *last_refill_time;
-                    let (mut last_refill_time, timed_out) = self
+                    let cached_last_refill_time = state.last_refill_time;
+                    let (mut state, timed_out) = self
                         .condv
                         .async_wait_timeout(
-                            &self.last_refill_time,
-                            last_refill_time,
+                            &self.state,
+                            state,
                             self.refill_period - since_last_refill,
                         )
                         .await;
                     let now = Instant::now_coarse();
-                    if timed_out && *last_refill_time == cached_last_refill_time {
-                        *last_refill_time = now;
-                        return self.refill_and_request(bytes);
+                    if timed_out && state.last_refill_time == cached_last_refill_time {
+                        state.last_refill_time = now;
+                        return self.refill_and_request(&state, bytes);
                     }
                 }
             }
@@ -268,7 +263,6 @@ impl Default for PerTypeIORateLimiter {
 }
 
 /// An instance of `IORateLimiter` should be safely shared between threads.
-#[derive(Debug)]
 pub struct IORateLimiter {
     // IOType::Other slot is used to store type-less limiter
     write_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
