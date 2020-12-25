@@ -324,9 +324,12 @@ impl WriteRef<'_> {
         size
     }
 
-    /// Assume the current `Write` record is the latest version found by reading at `read_ts`, check
-    /// the GC fence to determine if the `Write` record is valid. The `read_ts` is assumed to be
-    /// safe, which means, it's not earlier than the current GC safepoint.
+    /// Prev Conditions:
+    ///   * The `Write` record `self` is referring to is the latest version found by reading at `read_ts`
+    ///   * The `read_ts` is safe, which means, it's not earlier than the current GC safepoint.
+    /// Return:
+    ///   Whether the `Write` record is valid, ie. there's no GC fence or GC fence doesn't points to any other
+    ///   version.
     pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
         // It's a valid write record if there's no GC fence or GC fence doesn't points to any other
         // version.
