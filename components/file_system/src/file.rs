@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        set_io_rate_limiter(IORateLimiter::new(1, Arc::new(BytesRecorder::new())));
+        set_io_rate_limiter(IORateLimiter::new(1, None));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");

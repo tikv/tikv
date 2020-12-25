@@ -268,12 +268,12 @@ pub struct IORateLimiter {
     write_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
     read_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
     total_limiters: [PerTypeIORateLimiter; IOType::VARIANT_COUNT],
-    recorder: Arc<BytesRecorder>,
+    recorder: Option<Arc<BytesRecorder>>,
 }
 
 impl IORateLimiter {
     // TODO: pass in rate limiting options
-    pub fn new(bytes_per_sec: usize, recorder: Arc<BytesRecorder>) -> IORateLimiter {
+    pub fn new(bytes_per_sec: usize, recorder: Option<Arc<BytesRecorder>>) -> IORateLimiter {
         let limiter = IORateLimiter {
             write_limiters: Default::default(),
             read_limiters: Default::default(),
@@ -317,7 +317,9 @@ impl IORateLimiter {
                 }
             }
         }
-        self.recorder.add(io_type, io_op, bytes);
+        if let Some(recorder) = &self.recorder {
+            recorder.add(io_type, io_op, bytes);
+        }
         bytes
     }
 
@@ -357,7 +359,9 @@ impl IORateLimiter {
                 }
             }
         }
-        self.recorder.add(io_type, io_op, bytes);
+        if let Some(recorder) = &self.recorder {
+            recorder.add(io_type, io_op, bytes);
+        }
         bytes
     }
 }
@@ -491,7 +495,7 @@ mod tests {
     fn test_rate_limited_heavy_flow() {
         let bytes_per_sec = 10000;
         let recorder = Arc::new(BytesRecorder::new());
-        let limiter = Arc::new(IORateLimiter::new(bytes_per_sec, recorder.clone()));
+        let limiter = Arc::new(IORateLimiter::new(bytes_per_sec, Some(recorder.clone())));
         let duration = {
             let begin = Instant::now();
             {
@@ -517,7 +521,10 @@ mod tests {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
         let recorder = Arc::new(BytesRecorder::new());
-        let limiter = Arc::new(IORateLimiter::new(kbytes_per_sec * 1000, recorder.clone()));
+        let limiter = Arc::new(IORateLimiter::new(
+            kbytes_per_sec * 1000,
+            Some(recorder.clone()),
+        ));
         let duration = {
             let begin = Instant::now();
             {
@@ -547,7 +554,7 @@ mod tests {
 
     #[bench]
     fn bench_acquire_limiter(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
+        set_io_rate_limiter(IORateLimiter::new(0, None));
         b.iter(|| {
             let _ = get_io_rate_limiter().unwrap();
         });
@@ -555,7 +562,7 @@ mod tests {
 
     #[bench]
     fn bench_noop_limiter(b: &mut Bencher) {
-        let limiter = Arc::new(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
+        let limiter = Arc::new(IORateLimiter::new(0, None));
         let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
@@ -564,7 +571,7 @@ mod tests {
 
     #[bench]
     fn bench_not_limited(b: &mut Bencher) {
-        let limiter = Arc::new(IORateLimiter::new(10000, Arc::new(BytesRecorder::new())));
+        let limiter = Arc::new(IORateLimiter::new(10000, None));
         let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
@@ -573,10 +580,7 @@ mod tests {
 
     #[bench]
     fn bench_limited_fast(b: &mut Bencher) {
-        let limiter = Arc::new(IORateLimiter::new(
-            usize::max_value(),
-            Arc::new(BytesRecorder::new()),
-        ));
+        let limiter = Arc::new(IORateLimiter::new(usize::max_value(), None));
         let _context =
             start_background_jobs(limiter.clone(), 3, IOType::Compaction, IOOp::Write, 1);
         b.iter(|| {
