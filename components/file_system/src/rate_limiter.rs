@@ -111,7 +111,7 @@ impl PerTypeIORateLimiter {
             )),
             consumed: AtomicUsize::new(0),
             refill_period,
-            last_refill_time: Mutex::new(Instant::now()),
+            last_refill_time: Mutex::new(Instant::now_coarse()),
             condv: Condvar::new(),
             calibrator: None,
         }
@@ -154,7 +154,7 @@ impl PerTypeIORateLimiter {
     }
 
     pub fn request(&self, bytes: usize, priority: IOPriority) -> usize {
-        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        let mut cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
         if cached_bytes_per_refill == 0 {
             return bytes;
         }
@@ -166,7 +166,7 @@ impl PerTypeIORateLimiter {
         }
         loop {
             if let Some(bytes) = self.request_fast(cached_bytes_per_refill, bytes) {
-                break bytes;
+                return bytes;
             }
             let mut last_refill_time = self.last_refill_time.lock().unwrap();
             // double check if bytes have been refilled by others
@@ -180,30 +180,31 @@ impl PerTypeIORateLimiter {
                     continue;
                 }
             }
-            let now = Instant::now();
+            let now = Instant::now_coarse();
             if now > *last_refill_time {
                 let since_last_refill = now.duration_since(*last_refill_time);
                 if since_last_refill >= self.refill_period {
                     *last_refill_time = now;
-                    break self.refill_and_request(bytes);
+                    return self.refill_and_request(bytes);
                 } else {
                     let cached_last_refill_time = *last_refill_time;
                     let (mut last_refill_time, timed_out) = self
                         .condv
                         .wait_timeout(last_refill_time, self.refill_period - since_last_refill);
-                    let now = Instant::now();
+                    let now = Instant::now_coarse();
                     if timed_out && *last_refill_time == cached_last_refill_time {
                         // timeout, do the refill myself
                         *last_refill_time = now;
-                        break self.refill_and_request(bytes);
+                        return self.refill_and_request(bytes);
                     }
                 }
             }
+            cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
         }
     }
 
     pub async fn async_request(&self, bytes: usize, priority: IOPriority) -> usize {
-        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        let mut cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
         if cached_bytes_per_refill == 0 {
             return bytes;
         }
@@ -226,7 +227,7 @@ impl PerTypeIORateLimiter {
                     continue;
                 }
             }
-            let now = Instant::now();
+            let now = Instant::now_coarse();
             if now > *last_refill_time {
                 let since_last_refill = now.duration_since(*last_refill_time);
                 if since_last_refill >= self.refill_period {
@@ -242,13 +243,14 @@ impl PerTypeIORateLimiter {
                             self.refill_period - since_last_refill,
                         )
                         .await;
-                    let now = Instant::now();
+                    let now = Instant::now_coarse();
                     if timed_out && *last_refill_time == cached_last_refill_time {
                         *last_refill_time = now;
                         break self.refill_and_request(bytes);
                     }
                 }
             }
+            cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
         }
     }
 }
@@ -384,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_rate_limit() {
-        let refills_in_one_sec = 100;
+        let refills_in_one_sec = 10;
         let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
 
         let limiter = PerTypeIORateLimiter::new(2 * refills_in_one_sec, refill_period);
@@ -411,7 +413,7 @@ mod tests {
             t.join().unwrap();
         }
         let end = Instant::now();
-        assert!(end.duration_since(begin) > refill_period);
+        assert!(end.duration_since(begin) >= refill_period);
         assert!(end.duration_since(begin) < refill_period * 2);
         assert_eq!(limiter.request(1000, IOPriority::Low), 50);
     }
@@ -433,6 +435,7 @@ mod tests {
     }
 
     fn start_background_jobs(
+        limiter: Arc<IORateLimiter>,
         job_count: usize,
         io_type: IOType,
         io_op: IOOp,
@@ -442,7 +445,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         for _ in 0..job_count {
             let stop = stop.clone();
-            let limiter = get_io_rate_limiter().unwrap();
+            let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     limiter.request(io_type, io_op, request);
@@ -457,6 +460,7 @@ mod tests {
     }
 
     fn start_background_jobs_counted(
+        limiter: Arc<IORateLimiter>,
         job_count: usize,
         io_type: IOType,
         io_op: IOOp,
@@ -466,7 +470,7 @@ mod tests {
     ) -> BackgroundContext {
         let mut threads = vec![];
         for _ in 0..job_count {
-            let limiter = get_io_rate_limiter().unwrap();
+            let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
                 let mut requested = 0;
                 while requested < count {
@@ -487,11 +491,12 @@ mod tests {
     fn test_rate_limited_heavy_flow() {
         let bytes_per_sec = 10000;
         let recorder = Arc::new(BytesRecorder::new());
-        set_io_rate_limiter(IORateLimiter::new(bytes_per_sec, recorder.clone()));
+        let limiter = Arc::new(IORateLimiter::new(bytes_per_sec, recorder.clone()));
         let duration = {
             let begin = Instant::now();
             {
-                let _context = start_background_jobs(10, IOType::Compaction, IOOp::Write, 10);
+                let _context =
+                    start_background_jobs(limiter, 10, IOType::Compaction, IOOp::Write, 10);
                 std::thread::sleep(Duration::from_secs(2));
             }
             let end = Instant::now();
@@ -499,11 +504,11 @@ mod tests {
         };
         assert!(
             recorder.fetch(IOType::Compaction, IOOp::Write)
-                <= (bytes_per_sec as f64 * duration.as_secs_f64()) as usize
+                <= (bytes_per_sec as f64 * duration.as_secs_f64() * 1.1) as usize
         );
         assert!(
             recorder.fetch(IOType::Compaction, IOOp::Write)
-                >= (bytes_per_sec as f64 * duration.as_secs_f64() * 0.95) as usize
+                >= (bytes_per_sec as f64 * duration.as_secs_f64() * 0.9) as usize
         );
     }
 
@@ -512,12 +517,13 @@ mod tests {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
         let recorder = Arc::new(BytesRecorder::new());
-        set_io_rate_limiter(IORateLimiter::new(kbytes_per_sec * 1000, recorder.clone()));
+        let limiter = Arc::new(IORateLimiter::new(kbytes_per_sec * 1000, recorder.clone()));
         let duration = {
             let begin = Instant::now();
             {
                 // each thread request at most 1000 bytes per second, elapsed around 2 seconds
                 let _context = start_background_jobs_counted(
+                    limiter,
                     actual_kbytes_per_sec,
                     IOType::Compaction,
                     IOOp::Write,
@@ -549,9 +555,8 @@ mod tests {
 
     #[bench]
     fn bench_noop_limiter(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
-        let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
-        let limiter = get_io_rate_limiter().unwrap();
+        let limiter = Arc::new(IORateLimiter::new(0, Arc::new(BytesRecorder::new())));
+        let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
@@ -559,9 +564,8 @@ mod tests {
 
     #[bench]
     fn bench_not_limited(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(10000, Arc::new(BytesRecorder::new())));
-        let _context = start_background_jobs(3, IOType::Write, IOOp::Write, 10);
-        let limiter = get_io_rate_limiter().unwrap();
+        let limiter = Arc::new(IORateLimiter::new(10000, Arc::new(BytesRecorder::new())));
+        let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
@@ -569,12 +573,12 @@ mod tests {
 
     #[bench]
     fn bench_limited_fast(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(
+        let limiter = Arc::new(IORateLimiter::new(
             usize::max_value(),
             Arc::new(BytesRecorder::new()),
         ));
-        let _context = start_background_jobs(3, IOType::Compaction, IOOp::Write, 1);
-        let limiter = get_io_rate_limiter().unwrap();
+        let _context =
+            start_background_jobs(limiter.clone(), 3, IOType::Compaction, IOOp::Write, 1);
         b.iter(|| {
             limiter.request(IOType::Compaction, IOOp::Write, 1);
         });
