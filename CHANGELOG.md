@@ -2,6 +2,13 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.20] - 2020-12-25
+### Bug Fixes
+- Fix the issue that an error is returned indicating that a key exists when this key is locked and deleted in a committed transaction [#8931](https://github.com/tikv/tikv/pull/8931)
+
+### Improvements
+- Add the `end_point_slow_log_threshold` configuration item [#9145](https://github.com/tikv/tikv/pull/9145)
+
 ## [3.0.19]
 ### Bugfixes
 - Fix the bug that TiKV panics when parsing responses with missing reason phrases [#8540](https://github.com/tikv/tikv/pull/8540)
