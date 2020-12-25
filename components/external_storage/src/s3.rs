@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use rusoto_core::request::HttpClient;
 use std::io;
 use std::marker::PhantomData;
 
@@ -27,22 +28,19 @@ use kvproto::backup::S3 as Config;
 pub struct S3Storage {
     config: Config,
     client: S3Client,
-    // The current implementation (rosoto 0.43.0 + hyper 0.13.3) is not `Send`
-    // in practical. See more https://github.com/tikv/tikv/issues/7236.
-    // FIXME: remove it.
+    // This should be safe to remove now that we don't use the global client/dispatcher
+    // See https://github.com/tikv/tikv/issues/7236.
     _not_send: PhantomData<*const ()>,
 }
 
 impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: &Config) -> io::Result<S3Storage> {
-        Self::check_config(config)?;
-        let client = new_client!(S3Client, config);
-        Ok(S3Storage {
-            config: config.clone(),
-            client,
-            _not_send: PhantomData::default(),
-        })
+        // Need to explicitly create a dispatcher
+        // See https://github.com/tikv/tikv/issues/7236.
+        let dispatcher = HttpClient::new()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+        Self::with_request_dispatcher(&config, dispatcher)
     }
 
     pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>

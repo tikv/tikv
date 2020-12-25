@@ -3,11 +3,6 @@
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::config::ReadableDuration;
 
-#[cfg(test)]
-use crate::master_key::Backend;
-#[cfg(test)]
-use std::sync::Arc;
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -55,10 +50,11 @@ pub struct FileConfig {
 pub struct KmsConfig {
     pub key_id: String,
 
-    // Providing access_key and secret_access_key is recommended as it has
-    // security risk.
+    // It is preferable to use the cloud provider SDK to automatically rotate credentials
+    // Using access_key and secret_access_key creates a security risk.
+    // These fields are required by the macro new_client! that is currently in use
     #[doc(hidden)]
-    // We don's want to write access_key and secret_access_key to config file
+    // We don't want to write access_key and secret_access_key to config file
     // accidentally.
     #[serde(skip_serializing)]
     #[config(skip)]
@@ -71,18 +67,6 @@ pub struct KmsConfig {
     pub region: String,
     pub endpoint: String,
 }
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub struct Mock(pub Arc<dyn Backend>);
-#[cfg(test)]
-impl PartialEq for Mock {
-    fn eq(&self, _: &Self) -> bool {
-        false
-    }
-}
-#[cfg(test)]
-impl Eq for Mock {}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
@@ -104,10 +88,6 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
-
-    #[cfg(test)]
-    #[serde(skip)]
-    Mock(Mock),
 }
 
 impl Default for MasterKeyConfig {

@@ -5,9 +5,8 @@ extern crate tikv_util;
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::sync::Arc;
 
-use encryption::{Backend, Error, KmsBackend, KmsConfig, Result};
+use encryption::{AwsKms, Backend, Error, KmsBackend, KmsConfig, Result};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
@@ -64,10 +63,7 @@ struct KmsCommand {
     region: Option<String>,
 }
 
-fn create_kms_backend(
-    cmd: &KmsCommand,
-    credential_file: Option<&String>,
-) -> Result<Arc<dyn Backend>> {
+fn create_kms_backend(cmd: &KmsCommand, credential_file: Option<&String>) -> Result<KmsBackend> {
     let mut config = KmsConfig::default();
 
     if let Some(credential_file) = credential_file {
@@ -92,7 +88,7 @@ fn create_kms_backend(
         config.endpoint = endpoint.to_string();
     }
     config.key_id = cmd.key_id.to_owned();
-    Ok(Arc::new(KmsBackend::new(config)?))
+    KmsBackend::new(Box::new(AwsKms::new(config)?))
 }
 
 #[allow(irrefutable_let_patterns)]
@@ -105,7 +101,7 @@ fn process() -> Result<()> {
 
     let credential_file = opt.credential_file.as_ref();
     let backend = if let Command::Kms(ref cmd) = opt.command {
-        create_kms_backend(cmd, credential_file)?
+        Box::new(create_kms_backend(cmd, credential_file)?) as Box<dyn Backend>
     } else {
         unreachable!()
     };
