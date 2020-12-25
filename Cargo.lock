@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "3.0.19"
+version = "3.0.20"
 dependencies = [
  "arrow 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
