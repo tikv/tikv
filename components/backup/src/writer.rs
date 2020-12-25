@@ -249,7 +249,7 @@ impl BackupWriter {
             .build(&*name)?;
         Ok(Self {
             store_id: self.store_id,
-            name: self.name.clone(),
+            name,
             default: Writer::new(default),
             write: Writer::new(write),
             limiter: self.limiter.clone(),

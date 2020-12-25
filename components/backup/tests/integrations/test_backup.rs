@@ -72,7 +72,7 @@ macro_rules! retry_req {
 }
 
 impl TestSuite {
-    fn new(count: usize) -> TestSuite {
+    fn new(count: usize, sst_max_size: u64) -> TestSuite {
         super::init();
         let mut cluster = new_server_cluster(1, count);
         // Increase the Raft tick interval to make this test case running reliably.
@@ -94,7 +94,7 @@ impl TestSuite {
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
-                    sst_max_size: ReadableSize::mb(144),
+                    sst_max_size: ReadableSize(sst_max_size),
                 },
                 concurrency_manager.clone(),
             );
@@ -367,7 +367,7 @@ fn make_unique_dir(path: &Path) -> PathBuf {
 
 #[test]
 fn test_backup_and_import() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, 144 * 1024 * 1024);
     // 3 version for each key.
     let key_count = 60;
     suite.must_kv_put(key_count, 3);
@@ -465,8 +465,105 @@ fn test_backup_and_import() {
 }
 
 #[test]
+fn test_backup_huge_range_and_import() {
+    let mut suite = TestSuite::new(3, 100);
+    // 3 version for each key.
+    // make sure we will have two batch files
+    let key_count = 1024 * 3 / 2;
+    suite.must_kv_put(key_count, 3);
+
+    // Push down backup request.
+    let tmp = Builder::new().tempdir().unwrap();
+    let backup_ts = suite.alloc_ts();
+    let storage_path = make_unique_dir(tmp.path());
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &storage_path,
+    );
+    let resps1 = block_on(rx.collect::<Vec<_>>());
+    // Only leader can handle backup.
+    assert_eq!(resps1.len(), 1);
+    let files1 = resps1[0].files.clone();
+    // Short value is piggybacked in write cf, so we get 1 sst at least.
+    assert!(!resps1[0].get_files().is_empty());
+    assert_eq!(files1.len(), 2);
+
+    // Use importer to restore backup files.
+    let backend = make_local_backend(&storage_path);
+    let storage = create_storage(&backend).unwrap();
+    let region = suite.cluster.get_region(b"");
+    let mut sst_meta = SstMeta::default();
+    sst_meta.region_id = region.get_id();
+    sst_meta.set_region_epoch(region.get_region_epoch().clone());
+    let mut metas = vec![];
+    for f in files1.clone().into_iter() {
+        let mut reader = storage.read(&f.name);
+        let mut content = vec![];
+        block_on(reader.read_to_end(&mut content)).unwrap();
+        let mut m = sst_meta.clone();
+        m.crc32 = calc_crc32_bytes(&content);
+        m.length = content.len() as _;
+        // set different uuid for each file
+        m.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+        m.cf_name = name_to_cf(&f.name).to_owned();
+        metas.push((m, content));
+    }
+
+    for (m, c) in &metas {
+        for importer in suite.cluster.sim.rl().importers.values() {
+            let mut f = importer.create(m).unwrap();
+            f.append(c).unwrap();
+            f.finish().unwrap();
+        }
+
+        // Make ingest command.
+        let mut ingest = Request::default();
+        ingest.set_cmd_type(CmdType::IngestSst);
+        ingest.mut_ingest_sst().set_sst(m.clone());
+        let mut header = RaftRequestHeader::default();
+        let leader = suite.context.get_peer().clone();
+        header.set_peer(leader);
+        header.set_region_id(suite.context.get_region_id());
+        header.set_region_epoch(suite.context.get_region_epoch().clone());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.mut_requests().push(ingest);
+        let resp = suite
+            .cluster
+            .call_command_on_leader(cmd, Duration::from_secs(5))
+            .unwrap();
+        assert!(!resp.get_header().has_error(), resp);
+    }
+
+    // Backup file should have same contents.
+    let rx = suite.backup(
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
+        backup_ts,
+        &make_unique_dir(tmp.path()),
+    );
+    let resps3 = block_on(rx.collect::<Vec<_>>());
+    assert_eq!(files1.len(), resps3[0].files.len());
+
+    // different backup should be the same except the file names(because since_the_epoch are different)
+    let files2 = resps3[0].files.clone();
+    for i in 0..files1.len() {
+        let mut f1 = files1[i].clone();
+        let f2 = files2[i].clone();
+        f1.name = f2.name.clone();
+        assert_eq!(f1, f2);
+    }
+
+    suite.stop();
+}
+
+#[test]
 fn test_backup_meta() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, 144 * 1024 * 1024);
     // 3 version for each key.
     let key_count = 60;
     suite.must_kv_put(key_count, 3);
@@ -510,7 +607,7 @@ fn test_backup_meta() {
 
 #[test]
 fn test_backup_rawkv() {
-    let mut suite = TestSuite::new(3);
+    let mut suite = TestSuite::new(3, 144 * 1024 * 1024);
     let key_count = 60;
 
     let cf = String::from(CF_DEFAULT);
@@ -617,7 +714,7 @@ fn test_backup_rawkv() {
 
 #[test]
 fn test_backup_raw_meta() {
-    let suite = TestSuite::new(3);
+    let suite = TestSuite::new(3, 144 * 1024 * 1024);
     let key_count: u64 = 60;
     let cf = String::from(CF_DEFAULT);
 
@@ -666,7 +763,7 @@ fn test_backup_raw_meta() {
 
 #[test]
 fn test_invalid_external_storage() {
-    let mut suite = TestSuite::new(1);
+    let mut suite = TestSuite::new(1, 144 * 1024 * 1024);
     // Put some data.
     suite.must_kv_put(3, 1);
 
