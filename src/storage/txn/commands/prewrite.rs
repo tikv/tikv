@@ -20,6 +20,7 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
+use bitflags::_core::fmt::Debug;
 use engine_traits::CF_WRITE;
 use std::mem;
 use txn_types::{Key, Mutation, TimeStamp, Write, WriteType};
@@ -193,7 +194,9 @@ impl CommandExt for Prewrite {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Prewrite {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        self.into_prewriter().process_write(snapshot, context)
+        let prewriter = self.into_prewriter();
+        info!("optimistic prewrite"; "prewritter" => ?prewriter);
+        prewriter.process_write(snapshot, context)
     }
 }
 
@@ -323,11 +326,14 @@ impl CommandExt for PrewritePessimistic {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        self.into_prewriter().process_write(snapshot, context)
+        let prewriter = self.into_prewriter();
+        info!("pessimistic prewrite"; "prewriter" => ?prewriter);
+        prewriter.process_write(snapshot, context)
     }
 }
 
 /// Handles both kinds of prewrite (K statically indicates either optimistic or pessimistic).
+#[derive(Debug)]
 struct Prewriter<K: PrewriteKind> {
     kind: K,
     mutations: Vec<K::Mutation>,
@@ -531,7 +537,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 }
 
 /// Encapsulates things which must be done differently for optimistic or pessimistic transactions.
-trait PrewriteKind {
+trait PrewriteKind: Debug {
     type Mutation: MutationLock;
 
     fn txn_kind(&self) -> TransactionKind;
@@ -546,6 +552,7 @@ trait PrewriteKind {
     }
 }
 
+#[derive(Debug)]
 struct Optimistic {
     skip_constraint_check: bool,
 }
@@ -587,6 +594,7 @@ impl PrewriteKind for Optimistic {
     }
 }
 
+#[derive(Debug)]
 struct Pessimistic {
     for_update_ts: TimeStamp,
 }
@@ -603,7 +611,7 @@ impl PrewriteKind for Pessimistic {
 /// transactions, since they never include locks) or a mutation and a bool (for
 /// pessimistic transactions, where the bool indicates if the mutation is taking
 /// a pessimistic lock).
-trait MutationLock {
+trait MutationLock: Debug {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
 }

@@ -18,6 +18,7 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
     current_ts: TimeStamp,
     caller_start_ts: TimeStamp,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
+    info!("check_txn_status on key"; "key" => %primary_key, "current_ts" => current_ts, "caller_start_ts" => caller_start_ts, "lock" => ?lock);
     // Never rollback or push forward min_commit_ts in check_txn_status if it's using async commit.
     // Rollback of async-commit locks are done during ResolveLock.
     if lock.use_async_commit {

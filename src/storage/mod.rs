@@ -306,6 +306,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                             r
                         });
+                    info!("point get result"; "start_ts" => start_ts, "key" => %key, "result" => ?result);
 
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
@@ -425,6 +426,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     Ok(mut point_getter) => {
                                         let perf_statistics = PerfStatisticsInstant::new();
                                         let v = point_getter.get(&key);
+                                        info!("(batch command) point get result"; "start_ts" => start_ts, "key" => %key, "result" => ?v);
                                         let stat = point_getter.take_statistics();
                                         metrics::tls_collect_read_flow(region_id, &stat);
                                         statistics.add(&stat);
@@ -1461,12 +1463,14 @@ fn prepare_snap_ctx<'a>(
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     concurrency_manager.update_max_ts(start_ts);
+    info!("prepare_snap_ctx for txn read"; "start_ts" => start_ts, "bypass_locks" => ?bypass_locks);
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
+                    info!("check memlock for read"; "start_ts" => start_ts, "lock" => ?lock);
                     Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
                 })
                 .map_err(mvcc::Error::from)?;
