@@ -39,6 +39,13 @@ fn get_old_value<S: Snapshot>(
 ) -> MvccResult<Option<OldValue>> {
     if prev_write.write_type == WriteType::Rollback || prev_write.write_type == WriteType::Lock {
         let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
+        debug_assert_eq!(write_cursor.key(&mut txn.reader.statistics.write), key);
+        debug_assert_eq!(
+            txn_types::WriteRef::parse(cursor.value(&mut txn.reader.statistics.write))
+                .unwrap()
+                .to_owned(),
+            prev_write
+        );
         // Skip the current write record.
         write_cursor.next(&mut txn.reader.statistics.write);
         let write = seek_for_valid_write(
