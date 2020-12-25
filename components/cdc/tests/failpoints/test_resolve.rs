@@ -181,7 +181,98 @@ fn test_region_error() {
     fail::remove(multi_batch_fp);
     fail::remove(deregister_fp);
 
+<<<<<<< HEAD
     source_wrap.as_ref().replace(None);
     target_wrap.as_ref().replace(None);
+=======
+    source_wrap.replace(None);
+    target_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_joint_confchange() {
+    let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
+    cluster.cfg.cdc.hibernate_regions_compatible = true;
+    let mut suite = TestSuite::with_cluster(3, cluster);
+
+    let receive_resolved_ts = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
+        let mut last_resolved_ts = 0;
+        let mut i = 0;
+        loop {
+            let event = receive_event(true);
+            if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+                let ts = resolved_ts.ts;
+                assert!(ts > last_resolved_ts);
+                last_resolved_ts = ts;
+                i += 1;
+            }
+            if i > 10 {
+                break;
+            }
+        }
+    };
+
+    let deregister_fp = "cdc_before_handle_deregister";
+    fail::cfg(deregister_fp, "return").unwrap();
+
+    suite.cluster.must_put(b"k1", b"v1");
+    (1..=3).for_each(|i| must_get_equal(&suite.cluster.get_engine(i), b"k1", b"v1"));
+
+    let region = suite.cluster.get_region(b"k1");
+    let peers = region.get_peers();
+    assert_eq!(peers.len(), 3);
+    suite
+        .cluster
+        .must_transfer_leader(region.get_id(), peers[0].clone());
+
+    let req = suite.new_changedata_request(region.get_id());
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    receive_resolved_ts(&receive_event);
+
+    suite.cluster.stop_node(peers[1].get_store_id());
+    receive_resolved_ts(&receive_event);
+    suite.cluster.run_node(peers[1].get_store_id()).unwrap();
+
+    let confchanges = vec![(
+        ConfChangeType::AddLearnerNode,
+        new_learner_peer(peers[2].store_id, peers[2].id),
+    )];
+    suite
+        .cluster
+        .pd_client
+        .must_joint_confchange(region.get_id(), confchanges);
+    receive_resolved_ts(&receive_event);
+
+    suite.cluster.stop_node(peers[1].get_store_id());
+    let update_region_fp = "change_peer_after_update_region";
+    fail::cfg(update_region_fp, "pause").unwrap();
+    let confchanges = vec![
+        (
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(peers[1].store_id, peers[1].id),
+        ),
+        (ConfChangeType::AddNode, peers[2].clone()),
+    ];
+    suite
+        .cluster
+        .pd_client
+        .joint_confchange(region.get_id(), confchanges);
+    sleep_ms(500);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        receive_resolved_ts(&receive_event);
+        tx.send(()).unwrap();
+    });
+    assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
+
+    fail::remove(update_region_fp);
+    fail::remove(deregister_fp);
+
+    event_feed_wrap.replace(None);
+>>>>>>> 3a02e7429... *: fix make build PROST=1 (#9358)
     suite.stop();
 }

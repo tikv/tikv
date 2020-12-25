@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD:components/tidb_query/src/error.rs
 use crate::codec::Error as CodecError;
+=======
+use std::convert::Infallible;
+
+>>>>>>> 3a02e7429... *: fix make build PROST=1 (#9358):components/tidb_query_common/src/error.rs
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::Fail;
 
@@ -56,6 +61,12 @@ impl From<tikv_util::deadline::DeadlineError> for EvaluateError {
     #[inline]
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
         EvaluateError::DeadlineExceeded
+    }
+}
+
+impl From<Infallible> for EvaluateError {
+    fn from(e: Infallible) -> Self {
+        match e {}
     }
 }
 
