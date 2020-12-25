@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
 use kvproto::kvrpcpb::ExtraOp;
 use txn_types::{Key, MutationType, OldValue, Write, WriteType};
@@ -13,36 +13,12 @@ pub fn check_extra_op<S: Snapshot>(
     mutation_type: MutationType,
     prev_write: Option<Write>,
 ) -> MvccResult<()> {
-    use crate::storage::mvcc::reader::seek_for_valid_write;
-
     if txn.extra_op == ExtraOp::ReadOldValue
         && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
     {
         let old_value = if let Some(w) = prev_write {
             // If write is Rollback or Lock, seek for valid write record.
-            if w.write_type == WriteType::Rollback || w.write_type == WriteType::Lock {
-                let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
-                // Skip the current write record.
-                write_cursor.next(&mut txn.reader.statistics.write);
-                let write = seek_for_valid_write(
-                    write_cursor,
-                    key,
-                    txn.start_ts,
-                    txn.start_ts,
-                    &mut txn.reader.statistics,
-                )?;
-                write.map(|w| OldValue {
-                    short_value: w.short_value,
-                    start_ts: w.start_ts,
-                })
-            } else if w.as_ref().check_gc_fence_as_latest_version(txn.start_ts) {
-                Some(OldValue {
-                    short_value: w.short_value,
-                    start_ts: w.start_ts,
-                })
-            } else {
-                None
-            }
+            get_old_value(txn, key, w)?
         } else {
             None
         };
@@ -54,6 +30,39 @@ pub fn check_extra_op<S: Snapshot>(
         );
     }
     Ok(())
+}
+
+fn get_old_value<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    key: &Key,
+    prev_write: Write,
+) -> MvccResult<Option<OldValue>> {
+    if prev_write.write_type == WriteType::Rollback || prev_write.write_type == WriteType::Lock {
+        let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
+        // Skip the current write record.
+        write_cursor.next(&mut txn.reader.statistics.write);
+        let write = seek_for_valid_write(
+            write_cursor,
+            key,
+            txn.start_ts,
+            txn.start_ts,
+            &mut txn.reader.statistics,
+        )?;
+        Ok(write.map(|w| OldValue {
+            short_value: w.short_value,
+            start_ts: w.start_ts,
+        }))
+    } else if prev_write
+        .as_ref()
+        .check_gc_fence_as_latest_version(txn.start_ts)
+    {
+        Ok(Some(OldValue {
+            short_value: prev_write.short_value,
+            start_ts: prev_write.start_ts,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
