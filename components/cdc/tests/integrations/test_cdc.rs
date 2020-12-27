@@ -1343,9 +1343,12 @@ fn test_term_change() {
     suite
         .cluster
         .must_transfer_leader(region.id, new_peer(2, 2));
+    // Simulate network partition.
     let recv_filter =
         Box::new(RegionPacketFilter::new(region.get_id(), 1).direction(Direction::Recv));
     suite.cluster.sim.wl().add_recv_filter(1, recv_filter);
+    // Transfer leader to peer 3 and then change it back to peer 2.
+    // Peer 1 would not get a new SoftState.
     suite
         .cluster
         .must_transfer_leader(region.id, new_peer(3, 3));
