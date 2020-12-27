@@ -1316,14 +1316,12 @@ where
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
-        } else {
-            if ready.must_sync() {
-                match ready.hs() {
-                    Some(hs) if hs.get_term() != self.get_store().hard_state().get_term() => {
-                        self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
-                    }
-                    _ => (),
+        } else if ready.must_sync() {
+            match ready.hs() {
+                Some(hs) if hs.get_term() != self.get_store().hard_state().get_term() => {
+                    self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
                 }
+                _ => (),
             }
         }
     }
