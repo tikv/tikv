@@ -2353,6 +2353,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let regions = leaders
             .into_iter()
             .map(|leader_info| {
+                let store_id = meta.store_id.unwrap();
                 if let Some((term, leader_id)) = meta.leaders.get(&leader_info.region_id) {
                     if let Some(region) = meta.regions.get(&leader_info.region_id) {
                         if *term == leader_info.term
@@ -2373,11 +2374,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
+                            "store_id" => store_id,
                         );
+                        return None;
                     }
                 }
                 debug!("check leader failed, meta not found";
                     "leader_info" => ?leader_info,
+                    "store_id" => store_id,
                 );
                 None
             })

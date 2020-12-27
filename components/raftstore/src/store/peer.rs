@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::collections::hash_map::Entry as HashEntry;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1312,10 +1313,18 @@ where
                 }
                 _ => {}
             }
-            self.on_leader_changed(ctx, ss.leader_id, self.term());
+            self.on_leader_changed(ctx, Some(ss.leader_id), Some(self.term()));
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
+        }
+        if ready.must_sync() {
+            match ready.hs() {
+                Some(hs) if hs.get_term() != self.get_store().hard_state().get_term() => {
+                    self.on_leader_changed(ctx, None, Some(hs.get_term()));
+                }
+                _ => (),
+            }
         }
     }
 
@@ -1378,17 +1387,27 @@ where
     fn on_leader_changed<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        leader_id: u64,
-        term: u64,
+        leader_id: Option<u64>,
+        term: Option<u64>,
     ) {
+        let mut meta = ctx.store_meta.lock().unwrap();
+        match meta.leaders.entry(self.region_id) {
+            HashEntry::Occupied(mut e) => {
+                let term = term.unwrap_or_else(|| e.get().0);
+                let leader_id = leader_id.unwrap_or_else(|| e.get().1);
+                e.insert((term, leader_id));
+            }
+            HashEntry::Vacant(e) => {
+                e.insert((term.unwrap_or_default(), leader_id.unwrap_or_default()));
+            }
+        }
         debug!(
             "insert leader info to meta";
             "region_id" => self.region_id,
-            "leader_id" => leader_id,
-            "term" => term,
+            "leader_id" => ?leader_id,
+            "term" => ?term,
+            "store_id" => meta.store_id.unwrap(),
         );
-        let mut meta = ctx.store_meta.lock().unwrap();
-        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     #[inline]
