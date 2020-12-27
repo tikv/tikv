@@ -1391,8 +1391,8 @@ where
         debug!(
             "insert leader info to meta";
             "region_id" => self.region_id,
-            "leader_id" => ?leader_id,
-            "term" => ?term,
+            "leader_id" => leader_id,
+            "term" => term,
             "peer_id" => self.peer_id(),
         );
         let mut meta = ctx.store_meta.lock().unwrap();
