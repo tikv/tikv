@@ -497,7 +497,7 @@ impl<'a> ToInt for JsonRef<'a> {
         // MySQL: 4
         let val = match self.get_type() {
             JsonType::Object | JsonType::Array => Ok(ctx
-                .handle_truncate_err(Error::incorrect_datetime_value("Integer"))
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
                 .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as i64)),
             JsonType::I64 => Ok(self.get_i64()),
@@ -513,7 +513,7 @@ impl<'a> ToInt for JsonRef<'a> {
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match self.get_type() {
             JsonType::Object | JsonType::Array => Ok(ctx
-                .handle_truncate_err(Error::incorrect_datetime_value("Integer"))
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
                 .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as u64)),
             JsonType::I64 => Ok(self.get_i64() as u64),

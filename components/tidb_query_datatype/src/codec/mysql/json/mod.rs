@@ -400,7 +400,7 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
             JsonType::Array | JsonType::Object => ctx
-                .handle_truncate_err(Error::incorrect_datetime_value("Float"))
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
                 .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
             JsonType::I64 => self.get_i64() as f64,
