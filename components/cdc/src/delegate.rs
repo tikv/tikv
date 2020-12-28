@@ -499,9 +499,9 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row);
-                    if skip {
-                        continue;
+                    match decode_write(write.0, &write.1, &mut row) {
+                        HandleWritePolicy::Skip => continue,
+                        HandleWritePolicy::Accept | HandleWritePolicy::AcceptOnScan => {}
                     }
                     decode_default(default.1, &mut row);
 
@@ -598,9 +598,9 @@ impl Delegate {
             match put.cf.as_str() {
                 "write" => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(put.take_key(), put.get_value(), &mut row);
-                    if skip {
-                        continue;
+                    match decode_write(put.take_key(), put.get_value(), &mut row) {
+                        HandleWritePolicy::Skip | HandleWritePolicy::AcceptOnScan => continue,
+                        HandleWritePolicy::Accept => {}
                     }
 
                     if is_one_pc {
@@ -747,15 +747,28 @@ fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     }
 }
 
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
+enum HandleWritePolicy {
+    Skip,
+    Accept,
+    AcceptOnScan,
+}
+
+fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePolicy {
+    let mut result = HandleWritePolicy::Accept;
+
     let write = WriteRef::parse(value).unwrap().to_owned();
+    if write.gc_fence.is_some() {
+        debug!("write record with gc fence found"; "write" => ?write, "key" => &log_wrappers::Value::key(&key));
+        result = HandleWritePolicy::AcceptOnScan;
+    }
+
     let (op_type, r_type) = match write.write_type {
         WriteType::Put => (EventRowOpType::Put, EventLogType::Commit),
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
             debug!("skip write record"; "write" => ?other, "key" => &log_wrappers::Value::key(&key));
-            return true;
+            return HandleWritePolicy::Skip;
         }
     };
     let key = Key::from_encoded(key);
@@ -773,7 +786,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
         row.value = value;
     }
 
-    false
+    result
 }
 
 fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
