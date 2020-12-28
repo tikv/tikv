@@ -500,7 +500,9 @@ impl<K: PrewriteKind> Prewriter<K> {
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
-            let extra = txn.take_extra();
+            let mut extra = txn.take_extra();
+            // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
+            extra.one_pc = self.try_one_pc;
             let lock_guards = txn.take_guards();
             WriteResult {
                 ctx: self.ctx,

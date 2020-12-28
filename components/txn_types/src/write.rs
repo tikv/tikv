@@ -117,6 +117,18 @@ pub struct Write {
     /// For CDC and TiFlash, when they receives a commit record with `gc_fence` field set, it can
     /// determine that it must be caused by an overlapped rollback instead of an actual commit.
     ///
+    /// Note: GC fence will only be written on `PUT` and `DELETE` versions, and may only point to
+    /// a `PUT` or `DELETE` version. If there are other `Lock` and `Rollback` records after the
+    /// record that's being rewritten, they will be skipped. For example, in this case:
+    ///
+    /// ```text
+    /// Key_100_put, Key_105_lock, Key_110_rollback, Key_120_del
+    /// ```
+    ///
+    /// If overlapped rollback happens at 100, the `Key_100_put` will be rewritten as
+    /// `Key_100_put_R_120`. It points to version 120 instead of the nearest 105.
+    ///
+    ///
     /// The meaning of the field:
     /// * `None`: A record that haven't been rewritten
     /// * `Some(0)`: A commit record that has been rewritten due to overlapping rollback, but it
@@ -136,7 +148,9 @@ impl std::fmt::Debug for Write {
                 &self
                     .short_value
                     .as_ref()
-                    .map(hex::encode_upper)
+                    .map(|x| &x[..])
+                    .map(log_wrappers::Value::value)
+                    .map(|x| format!("{:?}", x))
                     .unwrap_or_else(|| "None".to_owned()),
             )
             .field("has_overlapped_rollback", &self.has_overlapped_rollback)
@@ -310,6 +324,28 @@ impl WriteRef<'_> {
         size
     }
 
+    /// Assume the current `Write` record is the latest version found by reading at `read_ts`, check
+    /// the GC fence to determine if the `Write` record is valid. The `read_ts` is assumed to be
+    /// safe, which means, it's not earlier than the current GC safepoint.
+    pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
+        // It's a valid write record if there's no GC fence or GC fence doesn't points to any other
+        // version.
+        // If there is a GC fence that's points to another version, there are two cases:
+        // * If `gc_fence_ts > read_ts`, then since `read_ts` didn't expire the GC
+        //   safepoint, so the current version must be a not-expired version or the latest version
+        //   before safepoint, so it must be a valid version
+        // * If `gc_fence_ts <= read_ts`, since the current version is the latest version found by
+        //   reading at `read_ts`, the version at `gc_fence_ts` must be missing, so the current
+        //   version must be invalid.
+        if let Some(gc_fence_ts) = self.gc_fence {
+            if !gc_fence_ts.is_zero() && gc_fence_ts <= read_ts {
+                return false;
+            }
+        }
+
+        true
+    }
+
     #[inline]
     pub fn is_protected(&self) -> bool {
         self.write_type == WriteType::Rollback
@@ -417,5 +453,33 @@ mod tests {
         )
         .as_ref()
         .is_protected());
+    }
+
+    #[test]
+    fn test_check_gc_fence() {
+        // (gc_fence, read_ts, expected_result).
+        let cases: Vec<(Option<u64>, u64, bool)> = vec![
+            (None, 10, true),
+            (None, 100, true),
+            (None, u64::max_value(), true),
+            (Some(0), 100, true),
+            (Some(0), u64::max_value(), true),
+            (Some(100), 50, true),
+            (Some(100), 100, false),
+            (Some(100), 150, false),
+            (Some(100), u64::max_value(), false),
+        ];
+
+        for case in cases {
+            let write = Write::new(WriteType::Put, 5.into(), None)
+                .set_overlapped_rollback(true, case.0.map(Into::into));
+
+            assert_eq!(
+                write
+                    .as_ref()
+                    .check_gc_fence_as_latest_version(case.1.into()),
+                case.2
+            );
+        }
     }
 }

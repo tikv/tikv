@@ -1,3 +1,8 @@
+# See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
+# Without resolver = 2, using `cargo build --features x` to build `cmd`
+# will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
+cargo-features = ["resolver"]
+
 [package]
 name = "tikv"
 version = "4.1.0-alpha"
@@ -62,6 +67,9 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "engine_test/test-engine-kv-panic",
   "engine_test/test-engine-raft-panic",
+]
+bcc-iosnoop = [
+  "file_system/bcc-iosnoop",
 ]
 
 # for testing configure propegate to other crates
@@ -188,6 +196,7 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [workspace]
+resolver = "2"
 members = [
   "fuzz",
   "fuzz/fuzzer-afl",
