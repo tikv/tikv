@@ -36,6 +36,7 @@ use yatp::ThreadPool;
 use crate::metrics::*;
 use crate::Error;
 use crate::*;
+use crate::writer::BackupWriterBuilder;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
@@ -148,7 +149,7 @@ impl BackupRange {
     /// Get entries from the scanner and save them to storage
     fn backup<E: Engine>(
         &self,
-        mut writer: BackupWriter,
+        writer_builder: BackupWriterBuilder,
         engine: &E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
@@ -218,6 +219,7 @@ impl BackupRange {
         let start_scan = Instant::now();
         let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
+        let mut writer = writer_builder.build(self.start_key.clone())?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -230,18 +232,6 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                let res = {
-                    entries.as_slice().get(0).map_or_else(
-                        || Err(Error::Other(box_err!("get entry error"))),
-                        |x| match x.as_key() {
-                            Ok(k) => writer.rebuild(Some(Key::from_raw(&k))),
-                            Err(e) => {
-                                error!(?e; "backup save file failed");
-                                Err(Error::Other(box_err!("Decode error: {:?}", e)))
-                            }
-                        },
-                    )
-                };
                 match writer.save(&storage.storage) {
                     Ok(mut split_files) => {
                         files.append(&mut split_files);
@@ -251,6 +241,18 @@ impl BackupRange {
                         return Err(e);
                     }
                 }
+                let res = {
+                    entries.as_slice().get(0).map_or_else(
+                        || Err(Error::Other(box_err!("get entry error"))),
+                        |x| match x.as_key() {
+                            Ok(k) => writer_builder.build(Some(Key::from_raw(&k))),
+                            Err(e) => {
+                                error!(?e; "backup save file failed");
+                                Err(Error::Other(box_err!("Decode error: {:?}", e)))
+                            }
+                        },
+                    )
+                };
                 match res {
                     Ok(w) => {
                         writer = w;
@@ -348,48 +350,6 @@ impl BackupRange {
             .with_label_values(&["raw_scan"])
             .observe(start.elapsed().as_secs_f64());
         Ok(statistics)
-    }
-
-    fn backup_to_file<E: Engine>(
-        &self,
-        engine: &E,
-        db: Arc<DB>,
-        storage: &LimitedStorage,
-        concurrency_manager: ConcurrencyManager,
-        store_id: u64,
-        file_name: String,
-        backup_ts: TimeStamp,
-        start_ts: TimeStamp,
-        compression_type: Option<SstCompressionType>,
-        compression_level: i32,
-        sst_max_size: u64,
-        region: Region,
-    ) -> Result<(Vec<File>, Statistics)> {
-        let writer = match BackupWriter::new(db, &file_name, compression_type, compression_level) {
-            Ok(w) => w
-                .store_id(store_id)
-                .limiter(storage.limiter.clone())
-                .sst_max_size(sst_max_size)
-                .region(region),
-            Err(e) => {
-                error!(?e; "backup writer failed");
-                return Err(e);
-            }
-        };
-        match self.backup(
-            writer,
-            engine,
-            concurrency_manager,
-            backup_ts,
-            start_ts,
-            storage,
-        ) {
-            Ok((files, stat)) => Ok((files, stat)),
-            Err(e) => {
-                error!(?e; "backup save file failed");
-                Err(e)
-            }
-        }
     }
 
     fn backup_raw_kv_to_file<E: Engine>(
@@ -748,20 +708,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
+                        let writer_builder = BackupWriterBuilder::new(store_id, storage.limiter.clone(), brange.region.clone(), db.clone(), ct, request.compression_level, sst_max_size);
                         (
-                            brange.backup_to_file(
+                            brange.backup(
+                                writer_builder,
                                 &engine,
-                                db.clone(),
-                                &storage,
                                 concurrency_manager.clone(),
-                                store_id,
-                                name,
                                 backup_ts,
                                 start_ts,
-                                ct,
-                                request.compression_level,
-                                sst_max_size,
-                                brange.region.clone(),
+                                &storage,
                             ),
                             brange
                                 .start_key
