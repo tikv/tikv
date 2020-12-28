@@ -1334,6 +1334,10 @@ fn test_cdc_filtering_gc_fence() {
     }
 }
 
+// This test is created for covering the case that term was increased without leader change.
+// Ideally leader id and term in StoreMeta should be updated together with a yielded SoftState,
+// but sometimes the leader was transferred to another store and then changed back,
+// a follower would not get a new SoftState.
 #[test]
 fn test_term_change() {
     let cluster = new_server_cluster(0, 3);
