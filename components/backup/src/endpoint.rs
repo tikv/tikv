@@ -34,9 +34,9 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
+use crate::writer::BackupWriterBuilder;
 use crate::Error;
 use crate::*;
-use crate::writer::BackupWriterBuilder;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
@@ -708,7 +708,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
-                        let writer_builder = BackupWriterBuilder::new(store_id, storage.limiter.clone(), brange.region.clone(), db.clone(), ct, request.compression_level, sst_max_size);
+                        let writer_builder = BackupWriterBuilder::new(
+                            store_id,
+                            storage.limiter.clone(),
+                            brange.region.clone(),
+                            db.clone(),
+                            ct,
+                            request.compression_level,
+                            sst_max_size,
+                        );
                         (
                             brange.backup(
                                 writer_builder,

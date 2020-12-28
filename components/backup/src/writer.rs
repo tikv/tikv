@@ -418,12 +418,28 @@ mod tests {
         let mut r = kvproto::metapb::Region::default();
         r.set_id(1);
         r.mut_peers().push(new_peer(1, 1));
-        let mut writer = BackupWriter::new(db.get_sync_db(), "foo", None, 0, Limiter::new(INFINITY), 144 * 1024 * 1024).unwrap();
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(db.get_sync_db(), "foo1", None, 0, Limiter::new(INFINITY), 144 * 1024 * 1024).unwrap();
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo1",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -449,7 +465,15 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db.get_sync_db(), "foo2", None, 0, Limiter::new(INFINITY), 144 * 1024 * 1024).unwrap();
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo2",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer
             .write(
                 vec![
