@@ -1349,3 +1349,57 @@ fn test_cdc_filtering_gc_fence() {
         }
     }
 }
+
+// This test is created for covering the case that term was increased without leader change.
+// Ideally leader id and term in StoreMeta should be updated together with a yielded SoftState,
+// but sometimes the leader was transferred to another store and then changed back,
+// a follower would not get a new SoftState.
+#[test]
+fn test_term_change() {
+    let cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuite::with_cluster(3, cluster);
+    let region = suite.cluster.get_region(&[]);
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    // Simulate network partition.
+    let recv_filter =
+        Box::new(RegionPacketFilter::new(region.get_id(), 1).direction(Direction::Recv));
+    suite.cluster.sim.wl().add_recv_filter(1, recv_filter);
+    // Transfer leader to peer 3 and then change it back to peer 2.
+    // Peer 1 would not get a new SoftState.
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(3, 3));
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    suite.cluster.sim.wl().clear_recv_filters(1);
+
+    suite
+        .cluster
+        .pd_client
+        .must_remove_peer(region.id, new_peer(3, 3));
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.ts >= previous_ts);
+            assert!(resolved_ts.regions == vec![region.id]);
+            previous_ts = resolved_ts.ts;
+            counter += 1;
+        }
+        if counter > 5 {
+            break;
+        }
+    }
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
