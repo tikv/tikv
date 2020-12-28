@@ -780,7 +780,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePo
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
@@ -805,7 +805,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
@@ -1047,14 +1047,14 @@ mod tests {
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put;
+        row1.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
         let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put;
+        row2.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();

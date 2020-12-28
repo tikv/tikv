@@ -51,18 +51,10 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
         };
     }
 
-    // Although we won't really push forward min_commit_ts when caller_start_ts is max,
-    // we should return MinCommitTsPushed result to the client to keep backward
-    // compatibility.
-    let mut min_commit_ts_pushed = caller_start_ts.is_max();
-
     // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
     // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
     // during rolling update.
     if !lock.min_commit_ts.is_zero()
-        // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-        // We don't push forward lock's min_commit_ts and the point get can ignore the lock
-        // next time because it's not committed.
         && !caller_start_ts.is_max()
         // Push forward the min_commit_ts so that reading won't be blocked by locks.
         && caller_start_ts >= lock.min_commit_ts
@@ -74,9 +66,16 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
         }
 
         txn.put_lock(primary_key, &lock);
-        min_commit_ts_pushed = true;
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
     }
+
+    // As long as the primary lock's min_commit_ts > caller_start_ts, locks belong to the same transaction
+    // can't block reading. Return MinCommitTsPushed result to the client to let it bypass locks.
+    let min_commit_ts_pushed = (!caller_start_ts.is_zero() && lock.min_commit_ts > caller_start_ts)
+        // If the caller_start_ts is max, it's a point get in the autocommit transaction.
+        // We don't push forward lock's min_commit_ts and the point get can ignore the lock
+        // next time because it's not committed yet.
+        || caller_start_ts.is_max();
 
     Ok((TxnStatus::uncommitted(lock, min_commit_ts_pushed), None))
 }
