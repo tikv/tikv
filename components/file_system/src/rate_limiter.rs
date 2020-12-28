@@ -370,8 +370,12 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
-pub fn set_io_rate_limiter(limiter: IORateLimiter) {
-    *IO_RATE_LIMITER.lock() = Some(Arc::new(limiter));
+pub fn set_io_rate_limiter(limiter: Option<IORateLimiter>) {
+    if let Some(limiter) = limiter {
+        *IO_RATE_LIMITER.lock() = Some(Arc::new(limiter));
+    } else {
+        *IO_RATE_LIMITER.lock() = None;
+    }
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
@@ -589,7 +593,7 @@ mod tests {
     #[bench]
     #[ignore]
     fn bench_acquire_limiter(b: &mut Bencher) {
-        set_io_rate_limiter(IORateLimiter::new(0, None));
+        set_io_rate_limiter(Some(IORateLimiter::new(0, None)));
         b.iter(|| {
             let _ = get_io_rate_limiter().unwrap();
         });
