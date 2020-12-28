@@ -5,7 +5,7 @@ use parking_lot::{Condvar as ParkingLotCondvar, Mutex, MutexGuard};
 use std::cell::Cell;
 use std::ptr::NonNull;
 use std::time::Duration;
-use tokio::sync::Semaphore as TokioSemaphore;
+use tokio::sync::Notify as TokioNotify;
 
 struct DoublyLinkedNode<T> {
     prev: Cell<Option<NonNull<T>>>,
@@ -23,7 +23,7 @@ impl<T> DoublyLinkedNode<T> {
 
 enum CondvarNode {
     Sync(ParkingLotCondvar, DoublyLinkedNode<CondvarNode>),
-    Async(TokioSemaphore, DoublyLinkedNode<CondvarNode>),
+    Async(TokioNotify, DoublyLinkedNode<CondvarNode>),
 }
 
 impl CondvarNode {
@@ -32,7 +32,7 @@ impl CondvarNode {
     }
 
     pub fn new_async() -> CondvarNode {
-        CondvarNode::Async(TokioSemaphore::new(0), DoublyLinkedNode::new())
+        CondvarNode::Async(TokioNotify::new(), DoublyLinkedNode::new())
     }
 
     pub fn notify(&self) {
@@ -40,7 +40,7 @@ impl CondvarNode {
             CondvarNode::Sync(ref condv, _) => {
                 condv.notify_one();
             }
-            CondvarNode::Async(ref sem, _) => sem.add_permits(1),
+            CondvarNode::Async(ref not, _) => not.notify(),
         }
     }
 
@@ -177,7 +177,7 @@ impl Condvar {
         std::mem::drop(guard);
         let timed_out = {
             let f = match node {
-                CondvarNode::Async(ref sem, _) => sem.acquire().fuse(),
+                CondvarNode::Async(ref not, _) => not.notified().fuse(),
                 _ => unreachable!(),
             };
             pin_mut!(f);
