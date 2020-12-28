@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::{future::FutureExt, pin_mut, select};
 use parking_lot::{Condvar as ParkingLotCondvar, Mutex, MutexGuard};
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -177,18 +176,14 @@ impl Condvar {
         std::mem::drop(guard);
         let timed_out = {
             let f = match node {
-                CondvarNode::Async(ref not, _) => not.notified().fuse(),
+                CondvarNode::Async(ref not, _) => not.notified(),
                 _ => unreachable!(),
             };
-            pin_mut!(f);
-            select! {
-                _ = f => false,
-                _ = tokio::time::delay_for(timeout).fuse() => true,
-            }
+            tokio::time::timeout(timeout, f).await
         };
         let guard = mu.lock();
         self.dequeue(&mut node);
-        (guard, timed_out)
+        (guard, timed_out.is_err())
     }
 }
 
