@@ -401,6 +401,7 @@ fn async_commit_timestamps<S: Snapshot>(
         }
 
         *l = Some(lock.clone());
+        info!("set memory lock"; "key" => ?key, "lock" => ?lock);
         Ok(lock.min_commit_ts)
     })?;
 

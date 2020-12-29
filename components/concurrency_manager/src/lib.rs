@@ -10,6 +10,9 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
+#[macro_use]
+extern crate tikv_util;
+
 mod key_handle;
 mod lock_table;
 

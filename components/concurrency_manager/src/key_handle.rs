@@ -69,10 +69,9 @@ impl KeyHandleGuard {
 
 impl Drop for KeyHandleGuard {
     fn drop(&mut self) {
-        // We only keep the lock in memory until the write to the underlying
-        // store finishes.
-        // The guard can be released after finishes writing.
-        *self.handle.lock_store.lock() = None;
+        let mut l = self.handle.lock_store.lock();
+        info!("drop KeyHandleGuard"; "lock" => ?l);
+        *l = None;
     }
 }
 
