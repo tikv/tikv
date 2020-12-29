@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, Collation};
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::IndexScan;
@@ -16,10 +16,12 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
-use tidb_query_datatype::codec::{datum, table};
+use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 use DecodeHandleStrategy::*;
+use tidb_query_datatype::codec::datum::decode;
+use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -408,6 +410,74 @@ impl IndexScanExecutorImpl {
         }
     }
 
+    // decodeRestoredValuesV5 decodes index values whose format is introduced in TiDB 5.0.
+    // Unlike the format in TiDB 4.0, the new format is optimized for storage space:
+    // 1. If the index is a composed index, only the non-binary string column's value need to write to value, not all.
+    // 2. If a string column's collation is _bin, then we only write the number of the truncated spaces to value.
+    // 3. If a string column is char, not varchar, then we use the sortKey directly.
+    fn decode_restored_values_v5(
+        &mut self,
+        restored_values: &[u8],
+        columns: &mut LazyBatchColumnVec,
+        for_common_handle: bool,
+    ) -> Result<()> {
+        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+
+        let start;
+        let end;
+        if for_common_handle {
+            start = self.columns_id_without_handle.len();
+            end = self.schema.len();
+        } else {
+            start = 0;
+            end = self.columns_id_without_handle.len();
+        }
+
+        for i in start..end {
+            let ft: &dyn FieldTypeAccessor = &self.schema[i];
+            if !ft.need_restored_data() {
+                continue
+            }
+
+            let top_data = columns[i as usize].raw().top();
+            if decode(&mut top_data.as_slice()).unwrap()[0] == Datum::Null {
+                continue
+            }
+
+            let id = self.columns_id_without_handle[i];
+            let original_data;
+            let row = RowSlice::from_bytes(restored_values)?;
+            if ft.collation().map(|col| col == Collation::Binary).unwrap_or(false) {
+                // _bin collation, we need to combine data from key and value to form the original data.
+                let truncate_data = columns[i].mut_raw().pop();
+                let decode_result = decode(&mut truncate_data.as_slice()).unwrap();
+                let truncate_str = decode_result[0].as_string().unwrap().unwrap();
+
+                let space_num;
+                if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
+                    let mut space_num_data = &row.values()[start..offset];
+                    space_num = decode(&mut space_num_data).unwrap()[0].as_int().unwrap().unwrap();
+                } else {
+                    return Err(other_err!("Unexpected missing column {}", id));
+                }
+
+                // Form the original data.
+                original_data = [truncate_str.as_ref(), std::iter::repeat(PADDING_SPACE).take(space_num as usize).collect::<String>().as_bytes()].concat();
+            } else {
+                if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
+                    original_data = row.values()[start..offset].to_vec();
+                } else {
+                    return Err(other_err!("Unexpected missing column {}", id));
+                }
+            }
+
+            let mut buffer_to_write = columns[i as usize].mut_raw().begin_concat_extend();
+            buffer_to_write.write_v2_as_datum(&original_data, &self.schema[i])?;
+        }
+
+        Ok(())
+    }
+
     // Process new layout index values in an extensible way,
     // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     fn process_kv_general(
@@ -421,11 +491,12 @@ impl IndexScanExecutorImpl {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
         }
 
-        // Split the value.
+        // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
+        let mut restored_v5 = false;
         let (remaining, tail) = value[1..].split_at(value.len() - 1 - tail_len);
         let (common_handle_bytes, remaining) =
             Self::split_common_handle_from_index_value(remaining)?;
-        let (partition_id_bytes, restore_values) = if remaining
+        let (partition_id_bytes, remaining) = if remaining
             .get(0)
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
@@ -439,15 +510,39 @@ impl IndexScanExecutorImpl {
         } else {
             remaining.split_at(0)
         };
+        let restore_values = if !remaining.is_empty() && remaining.get(0).
+            map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG) {
+            restored_v5 = true;
+            &remaining[1..]
+        } else if !remaining.is_empty() && remaining.get(0).
+            map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG) {
+            &remaining
+        } else {
+            "".as_bytes()
+        };
 
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
             return Err(other_err!(
                 "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
             ));
         }
+
+        Self::extract_columns_from_datum_format(
+            &mut key_payload,
+            &mut columns[..self.columns_id_without_handle.len()],
+        )?;
+
         // If there are some restore data, the index value is in new collation.
         if !restore_values.is_empty() {
-            self.extract_columns_from_row_format(restore_values, columns)?;
+            if restored_v5 {
+                Self::extract_columns_from_datum_format(
+                    &mut key_payload,
+                    &mut columns[..self.columns_id_without_handle.len()],
+                )?;
+                self.decode_restored_values_v5(restore_values, columns, false)?;
+            } else {
+                self.extract_columns_from_row_format(restore_values, columns)?;
+            }
         } else {
             // Otherwise, the index value is in old collation, we should extract the index columns from the key.
             Self::extract_columns_from_datum_format(
@@ -491,6 +586,7 @@ impl IndexScanExecutorImpl {
                         &mut columns[self.columns_id_without_handle.len()..end_index],
                     )?;
                 }
+                self.decode_restored_values_v5(restore_values, columns, true)?;
             }
         }
 
