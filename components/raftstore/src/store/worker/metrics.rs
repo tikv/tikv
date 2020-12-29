@@ -43,6 +43,7 @@ make_static_metric! {
         epoch,
         appiled_term,
         channel_full,
+        safe_ts,
     }
 
     pub struct ReadRejectCounter : IntCounter {

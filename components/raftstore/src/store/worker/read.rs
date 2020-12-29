@@ -352,7 +352,10 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+    fn pre_propose_raft_command(
+        &mut self,
+        req: &RaftCmdRequest,
+    ) -> Result<Option<(ReadDelegate, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -417,7 +420,8 @@ where
             metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
-            Ok(RequestPolicy::ReadLocal) => Ok(Some(delegate)),
+            Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
+            Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
             // It can not handle other policies.
             Ok(_) => Ok(None),
             Err(e) => Err(e),
@@ -433,32 +437,59 @@ where
         let region_id = req.get_header().get_region_id();
         loop {
             match self.pre_propose_raft_command(&req) {
-                Ok(Some(delegate)) => {
-                    let snapshot_ts = match read_id.as_mut() {
-                        // If this peer became Leader not long ago and just after the cached
-                        // snapshot was created, this snapshot can not see all data of the peer.
-                        Some(id) => {
-                            if id.create_time <= delegate.last_valid_ts {
-                                id.create_time = monotonic_raw_now();
+                Ok(Some((delegate, policy))) => {
+                    match policy {
+                        RequestPolicy::ReadLocal => {
+                            let snapshot_ts = match read_id.as_mut() {
+                                // If this peer became Leader not long ago and just after the cached
+                                // snapshot was created, this snapshot can not see all data of the peer.
+                                Some(id) => {
+                                    if id.create_time <= delegate.last_valid_ts {
+                                        id.create_time = monotonic_raw_now();
+                                    }
+                                    id.create_time
+                                }
+                                None => monotonic_raw_now(),
+                            };
+                            if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                                // Cache snapshot_time for remaining requests in the same batch.
+                                let mut response =
+                                    self.execute(&req, &delegate.region, None, read_id);
+                                // Leader can read local if and only if it is in lease.
+                                cmd_resp::bind_term(&mut response.response, delegate.term);
+                                if let Some(snap) = response.snapshot.as_mut() {
+                                    snap.max_ts_sync_status =
+                                        Some(delegate.max_ts_sync_status.clone());
+                                }
+                                response.txn_extra_op = delegate.txn_extra_op.load();
+                                cb.invoke_read(response);
+                                self.delegates.insert(region_id, Some(delegate));
+                                return;
                             }
-                            id.create_time
+                            break;
                         }
-                        None => monotonic_raw_now(),
-                    };
-                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
-                        // Cache snapshot_time for remaining requests in the same batch.
-                        let mut response = self.execute(&req, &delegate.region, None, read_id);
-                        // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut response.response, delegate.term);
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
+                        RequestPolicy::StaleRead => {
+                            let read_ts = req.get_header().get_read_ts();
+                            let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
+                            assert!(read_ts > 0);
+                            if safe_ts >= read_ts {
+                                let mut response =
+                                    self.execute(&req, &delegate.region, None, read_id);
+                                cmd_resp::bind_term(&mut response.response, delegate.term);
+                                if let Some(snap) = response.snapshot.as_mut() {
+                                    snap.max_ts_sync_status =
+                                        Some(delegate.max_ts_sync_status.clone());
+                                }
+                                response.txn_extra_op = delegate.txn_extra_op.load();
+                                cb.invoke_read(response);
+                                self.delegates.insert(region_id, Some(delegate));
+                                return;
+                            }
+                            self.metrics.rejected_by_safe_timestamp += 1;
+                            break;
                         }
-                        response.txn_extra_op = delegate.txn_extra_op.load();
-                        cb.invoke_read(response);
-                        self.delegates.insert(region_id, Some(delegate));
-                        return;
+                        _ => unreachable!(),
                     }
-                    break;
                 }
                 // It can not handle the request, forwards to raftstore.
                 Ok(None) => {
@@ -592,6 +623,7 @@ struct ReadMetrics {
     rejected_by_appiled_term: i64,
     rejected_by_channel_full: i64,
     rejected_by_cache_miss: i64,
+    rejected_by_safe_timestamp: i64,
 
     last_flush_time: Instant,
 }
@@ -611,6 +643,7 @@ impl Default for ReadMetrics {
             rejected_by_appiled_term: 0,
             rejected_by_channel_full: 0,
             rejected_by_cache_miss: 0,
+            rejected_by_safe_timestamp: 0,
             last_flush_time: Instant::now(),
         }
     }
@@ -674,6 +707,12 @@ impl ReadMetrics {
                 .channel_full
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
+        }
+        if self.rejected_by_safe_timestamp > 0 {
+            LOCAL_READ_REJECT
+                .safe_ts
+                .inc_by(self.rejected_by_safe_timestamp);
+            self.rejected_by_safe_timestamp = 0;
         }
         if self.local_executed_snapshot_cache_hit > 0 {
             LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);
