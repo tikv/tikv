@@ -549,11 +549,6 @@ impl IndexScanExecutorImpl {
             ));
         }
 
-        Self::extract_columns_from_datum_format(
-            &mut key_payload,
-            &mut columns[..self.columns_id_without_handle.len()],
-        )?;
-
         // If there are some restore data, the index value is in new collation.
         if !restore_values.is_empty() {
             if restored_v5 {
