@@ -19,13 +19,22 @@ pub enum TxnCommitRecord {
     /// `start_ts`. That kind of record will be returned via the `overlapped_write` field.
     /// In this case, if the current transaction is to be rolled back, the `overlapped_write` must not
     /// be overwritten.
-    None { overlapped_write: Option<Write> },
+    None {
+        overlapped_write: Option<OverlappedWrite>,
+    },
     /// Found the transaction's write record.
     SingleRecord { commit_ts: TimeStamp, write: Write },
     /// The transaction's status is found in another transaction's record's `overlapped_rollback`
     /// field. This may happen when the current transaction's `start_ts` is the same as the
     /// `commit_ts` of another transaction on this key.
     OverlappedRollback { commit_ts: TimeStamp },
+}
+
+#[derive(Clone, Debug)]
+pub struct OverlappedWrite {
+    pub write: Write,
+    /// GC fence for `overlapped_write`. PTAL at `txn_types::Write::gc_fence`.
+    pub gc_fence: TimeStamp,
 }
 
 impl TxnCommitRecord {
@@ -58,7 +67,7 @@ impl TxnCommitRecord {
         }
     }
 
-    pub fn unwrap_none(self) -> Option<Write> {
+    pub fn unwrap_none(self) -> Option<OverlappedWrite> {
         match self {
             Self::None { overlapped_write } => overlapped_write,
             _ => panic!("txn record found but not expected: {:?}", self),
@@ -260,6 +269,7 @@ impl<S: Snapshot> MvccReader<S> {
         //
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
         let mut seek_ts = TimeStamp::max();
+        let mut gc_fence = TimeStamp::from(0);
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
                 return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
@@ -269,8 +279,11 @@ impl<S: Snapshot> MvccReader<S> {
                     return Ok(TxnCommitRecord::OverlappedRollback { commit_ts });
                 }
                 return Ok(TxnCommitRecord::None {
-                    overlapped_write: Some(write),
+                    overlapped_write: Some(OverlappedWrite { write, gc_fence }),
                 });
+            }
+            if write.write_type == WriteType::Put || write.write_type == WriteType::Delete {
+                gc_fence = commit_ts;
             }
             if commit_ts < start_ts {
                 break;
@@ -474,7 +487,7 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatchExt};
+    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -698,7 +711,7 @@ mod tests {
                     }
                 }
             }
-            db.c().write(&wb).unwrap();
+            wb.write().unwrap();
         }
 
         fn flush(&mut self) {
@@ -1041,8 +1054,8 @@ mod tests {
             .unwrap()
             .unwrap_none()
             .unwrap();
-        assert_eq!(overlapped_write.start_ts, 45.into());
-        assert_eq!(overlapped_write.write_type, WriteType::Put);
+        assert_eq!(overlapped_write.write.start_ts, 45.into());
+        assert_eq!(overlapped_write.write.write_type, WriteType::Put);
 
         let (commit_ts, write_type) = reader
             .get_txn_commit_record(&key, 45.into())

@@ -380,7 +380,7 @@ impl Simulator for ServerCluster {
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             state,
-            Some(bg_worker.clone()),
+            bg_worker.clone(),
         );
 
         // Register the role change observer of the lock manager.

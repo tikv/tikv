@@ -147,7 +147,6 @@ prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 sst_importer = { path = "components/sst_importer" }
 sysinfo = "0.15"
-semver = "0.10"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }

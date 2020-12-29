@@ -36,7 +36,6 @@ use yatp::ThreadPool;
 use crate::metrics::*;
 use crate::*;
 
-const WORKER_TAKE_RANGE: usize = 6;
 const BACKUP_BATCH_LIMIT: usize = 1024;
 
 // if thread pool has been idle for such long time, we will shutdown it.
@@ -183,6 +182,8 @@ impl BackupRange {
             pb_ctx: &ctx,
             ..Default::default()
         };
+
+        let start_snapshot = Instant::now();
         let snapshot = match engine.snapshot(snap_ctx) {
             Ok(s) => s,
             Err(e) => {
@@ -190,6 +191,9 @@ impl BackupRange {
                 return Err(e.into());
             }
         };
+        BACKUP_RANGE_HISTOGRAM_VEC
+            .with_label_values(&["snapshot"])
+            .observe(start_snapshot.elapsed().as_secs_f64());
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -206,7 +210,7 @@ impl BackupRange {
             .entry_scanner(start_key, end_key, begin_ts, incremental)
             .unwrap();
 
-        let start = Instant::now();
+        let start_scan = Instant::now();
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
@@ -225,7 +229,7 @@ impl BackupRange {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
-            .observe(start.elapsed().as_secs_f64());
+            .observe(start_scan.elapsed().as_secs_f64());
         let stat = scanner.take_statistics();
         Ok(stat)
     }
@@ -433,7 +437,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             next_start,
             end_key,
             region_info,
-            finished: Default::default(),
+            finished: false,
             is_raw_kv,
             cf,
         }
@@ -460,7 +464,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         let res = self.region_info.seek_region(
             &start_key_,
             Box::new(move |iter| {
-                let mut sended = 0;
+                let mut count = 0;
                 for info in iter {
                     let region = &info.region;
                     if end_key.is_some() {
@@ -486,8 +490,8 @@ impl<R: RegionInfoProvider> Progress<R> {
                             cf: cf_name,
                         };
                         tx.send(backup_range).unwrap();
-                        sended += 1;
-                        if sended >= limit {
+                        count += 1;
+                        if count >= limit {
                             break;
                         }
                     }
@@ -554,7 +558,7 @@ impl ControlThreadPool {
             return;
         }
         let workers = Arc::new(
-            yatp::Builder::new(thd_name!("backup-worker"))
+            yatp::Builder::new(thd_name!("bkwkr"))
                 .max_thread_count(new_size)
                 .build_callback_pool(),
         );
@@ -618,24 +622,13 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let db = self.db.clone();
         let store_id = self.store_id;
         let concurrency_manager = self.concurrency_manager.clone();
+        let batch_size = self.config_manager.0.read().unwrap().batch_size;
         // TODO: make it async.
-        self.pool.borrow_mut().spawn(move || loop {
-            let (branges, is_raw_kv, cf) = {
-                // Release lock as soon as possible.
-                // It is critical to speed up backup, otherwise workers are
-                // blocked by each other.
-                let mut progress = prs.lock().unwrap();
-                (
-                    progress.forward(WORKER_TAKE_RANGE),
-                    progress.is_raw_kv,
-                    progress.cf,
-                )
-            };
-            if branges.is_empty() {
-                return;
-            }
-
+        self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
+            defer!({
+                tikv_alloc::remove_thread_memory_accessor();
+            });
 
             // Check if we can open external storage.
             let backend = match create_storage(&request.backend) {
@@ -650,100 +643,114 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return;
                 }
             };
+
             let storage = LimitedStorage {
-                limiter: request.limiter.clone(),
+                limiter: request.limiter,
                 storage: backend,
             };
-            for brange in branges {
-                if request.cancel.load(Ordering::SeqCst) {
-                    warn!("backup task has canceled"; "range" => ?brange);
-                    return;
-                }
-                // TODO: make file_name unique and short
-                let key = brange.start_key.clone().and_then(|k| {
-                    // use start_key sha256 instead of start_key to avoid file name too long os error
-                    let input = if is_raw_kv {
-                        k.into_encoded()
-                    } else {
-                        k.into_raw().unwrap()
-                    };
-                    file_system::sha256(&input).ok().map(hex::encode)
-                });
-                let name = backup_file_name(store_id, &brange.region, key);
-                let ct = to_sst_compression_type(request.compression_type);
 
-                let (res, start_key, end_key) = if is_raw_kv {
-                    (
-                        brange.backup_raw_kv_to_file(
-                            &engine,
-                            db.clone(),
-                            &storage,
-                            name,
-                            cf,
-                            ct,
-                            request.compression_level,
-                        ),
-                        brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
-                        brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
-                    )
-                } else {
-                    (
-                        brange.backup_to_file(
-                            &engine,
-                            db.clone(),
-                            &storage,
-                            concurrency_manager.clone(),
-                            name,
-                            backup_ts,
-                            start_ts,
-                            ct,
-                            request.compression_level,
-                        ),
-                        brange
-                            .start_key
-                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                        brange
-                            .end_key
-                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
-                    )
+            loop {
+                let (batch, is_raw_kv, cf) = {
+                    // Release lock as soon as possible.
+                    // It is critical to speed up backup, otherwise workers are
+                    // blocked by each other.
+                    let mut progress = prs.lock().unwrap();
+                    let batch = progress.forward(batch_size);
+                    if batch.is_empty() {
+                        return;
+                    }
+                    (batch, progress.is_raw_kv, progress.cf)
                 };
 
-                let mut response = BackupResponse::default();
-                match res {
-                    Err(e) => {
-                        error!(?e; "backup region failed";
-                            "region" => ?brange.region,
-                            "start_key" => hex::encode_upper(&start_key),
-                            "end_key" => hex::encode_upper(&end_key),
-                        );
-                        response.set_error(e.into());
+                for brange in batch {
+                    if request.cancel.load(Ordering::SeqCst) {
+                        warn!("backup task has canceled"; "range" => ?brange);
+                        return;
                     }
-                    Ok((mut files, stat)) => {
-                        debug!("backup region finish";
+                    // TODO: make file_name unique and short
+                    let key = brange.start_key.clone().and_then(|k| {
+                        // use start_key sha256 instead of start_key to avoid file name too long os error
+                        let input = if is_raw_kv {
+                            k.into_encoded()
+                        } else {
+                            k.into_raw().unwrap()
+                        };
+                        file_system::sha256(&input).ok().map(hex::encode)
+                    });
+                    let name = backup_file_name(store_id, &brange.region, key);
+                    let ct = to_sst_compression_type(request.compression_type);
+
+                    let (res, start_key, end_key) = if is_raw_kv {
+                        (
+                            brange.backup_raw_kv_to_file(
+                                &engine,
+                                db.clone(),
+                                &storage,
+                                name,
+                                cf,
+                                ct,
+                                request.compression_level,
+                            ),
+                            brange.start_key.map_or_else(Vec::new, |k| k.into_encoded()),
+                            brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
+                        )
+                    } else {
+                        (
+                            brange.backup_to_file(
+                                &engine,
+                                db.clone(),
+                                &storage,
+                                concurrency_manager.clone(),
+                                name,
+                                backup_ts,
+                                start_ts,
+                                ct,
+                                request.compression_level,
+                            ),
+                            brange
+                                .start_key
+                                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                            brange
+                                .end_key
+                                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        )
+                    };
+
+                    let mut response = BackupResponse::default();
+                    match res {
+                        Err(e) => {
+                            error!(?e; "backup region failed";
+                                "region" => ?brange.region,
+                                "start_key" => hex::encode_upper(&start_key),
+                                "end_key" => hex::encode_upper(&end_key),
+                            );
+                            response.set_error(e.into());
+                        }
+                        Ok((mut files, stat)) => {
+                            debug!("backup region finish";
                             "region" => ?brange.region,
                             "start_key" => hex::encode_upper(&start_key),
                             "end_key" => hex::encode_upper(&end_key),
                             "details" => ?stat);
 
-                        for file in files.iter_mut() {
-                            file.set_start_key(start_key.clone());
-                            file.set_end_key(end_key.clone());
-                            file.set_start_version(start_ts.into_inner());
-                            file.set_end_version(end_ts.into_inner());
+                            for file in files.iter_mut() {
+                                file.set_start_key(start_key.clone());
+                                file.set_end_key(end_key.clone());
+                                file.set_start_version(start_ts.into_inner());
+                                file.set_end_version(end_ts.into_inner());
+                            }
+                            response.set_files(files.into());
                         }
-                        response.set_files(files.into());
+                    }
+                    response.set_start_key(start_key);
+                    response.set_end_key(end_key);
+
+                    if let Err(e) = tx.unbounded_send(response) {
+                        error!(?e; "backup failed to send response");
+                        return;
                     }
                 }
-                response.set_start_key(start_key);
-                response.set_end_key(end_key);
-
-                if let Err(e) = tx.unbounded_send(response) {
-                    error!(?e; "backup failed to send response");
-                    return;
-                }
             }
-
-            tikv_alloc::remove_thread_memory_accessor();
         });
     }
 
@@ -975,7 +982,10 @@ pub mod tests {
                 rocks,
                 MockRegionInfoProvider::new(),
                 db,
-                BackupConfig { num_threads: 4 },
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                },
                 concurrency_manager,
             ),
         )

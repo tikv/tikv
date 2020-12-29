@@ -225,6 +225,7 @@ pub mod tests {
             ts(20, 0),
             true,
             false,
+            false,
             uncommitted(100, ts(20, 1)),
         );
         // The min_commit_ts should be ts(20, 1)
@@ -241,6 +242,7 @@ pub mod tests {
             ts(40, 0),
             true,
             false,
+            false,
             uncommitted(100, ts(40, 1)),
         );
         must_succeed(&engine, k, ts(30, 0), ts(50, 0));
@@ -254,6 +256,7 @@ pub mod tests {
             ts(70, 0),
             ts(70, 0),
             true,
+            false,
             false,
             uncommitted(100, ts(70, 1)),
         );
