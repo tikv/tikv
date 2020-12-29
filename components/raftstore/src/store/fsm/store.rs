@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::{Ord, Ordering as CmpOrdering};
-use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
@@ -117,6 +117,8 @@ pub struct StoreMeta {
     /// source_region_id -> need_atomic
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
+
+    pub region_read_progress: HashMap<u64, RegionReadProgress>,
 }
 
 impl StoreMeta {
@@ -133,6 +135,7 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
+            region_read_progress: HashMap::default(),
         }
     }
 
@@ -955,6 +958,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
             meta.regions.insert(region_id, region.clone());
+            meta.region_read_progress
+                .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             region_peers.push((tx, peer));
@@ -988,6 +993,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
+            meta.region_read_progress
+                .insert(region.get_id(), peer.peer.read_progress.clone());
             meta.regions.insert(region.get_id(), region);
             region_peers.push((tx, peer));
         }
@@ -2374,6 +2381,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             )
                             .is_ok()
                         {
+                            if let Some(pr) = meta.region_read_progress.get(&leader_info.region_id)
+                            {
+                                pr.forward_safe_ts(
+                                    leader_info.get_read_state().get_applied_index(),
+                                    leader_info.get_read_state().get_safe_ts(),
+                                );
+                            }
                             return Some(leader_info.region_id);
                         }
                         debug!("check leader failed";
@@ -2388,6 +2402,85 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .filter_map(|r| r)
             .collect();
         cb(regions);
+    }
+}
+
+#[derive(Clone)]
+pub struct RegionReadProgress {
+    applied_index: Arc<AtomicU64>,
+    safe_ts: Arc<AtomicU64>,
+    // `pending_ts` should not be accessed outside to avoid dead lock
+    pending_ts: Arc<Mutex<VecDeque<(u64, u64)>>>,
+    cap: usize,
+}
+
+impl RegionReadProgress {
+    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+        RegionReadProgress {
+            applied_index: Arc::new(AtomicU64::from(applied_index)),
+            safe_ts: Arc::new(AtomicU64::from(0)),
+            pending_ts: Arc::new(Mutex::new(VecDeque::from(cap))),
+            cap,
+        }
+    }
+
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index.load(Ordering::Relaxed)
+    }
+
+    pub fn safe_ts(&self) -> u64 {
+        self.safe_ts.load(Ordering::Relaxed)
+    }
+
+    pub fn get_safe_ts(&self) -> Arc<AtomicU64> {
+        self.safe_ts.clone()
+    }
+
+    pub fn update_applied(&self, applied: u64) {
+        let mut pending_ts = self.pending_ts.lock().unwrap();
+        let mut ts_to_update = self.safe_ts.load(Ordering::Relaxed);
+        while let Some((idx, ts)) = pending_ts.pop_front() {
+            if applied < idx {
+                pending_ts.push_front((idx, ts));
+                break;
+            }
+            if ts_to_update < ts {
+                ts_to_update = ts;
+            }
+        }
+        self.applied_index.fetch_max(applied, Ordering::Relaxed);
+        self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed);
+    }
+
+    pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
+        // Fast path
+        if self.applied_index.load(Ordering::Relaxed) >= apply_index {
+            self.safe_ts.fetch_max(ts, Ordering::Relaxed);
+            return;
+        }
+
+        let mut pending_ts = self.pending_ts.lock().unwrap();
+        if self.applied_index.load(Ordering::Relaxed) < apply_index {
+            if let Some(item) = pending_ts.back_mut() {
+                if item.0 >= apply_index && item.1 < ts {
+                    item.1 = ts;
+                    return;
+                }
+                if *item >= (apply_index, ts) {
+                    return;
+                }
+            }
+            self.push_back(pending_ts, (apply_index, ts));
+        } else {
+            self.safe_ts.fetch_max(ts, Ordering::Relaxed);
+        }
+    }
+
+    fn push_back(&self, queue: &mut VecDeque<(u64, u64)>, item: (u64, u64)) {
+        if queue.len() == self.cap {
+            queue.pop_front();
+        }
+        queue.push_back(item);
     }
 }
 

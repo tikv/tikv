@@ -146,8 +146,8 @@ pub struct ReadDelegate {
     tag: String,
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub resolved_ts: Arc<AtomicCell<TimeStamp>>,
     max_ts_sync_status: Arc<AtomicU64>,
+    pub safe_ts: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
@@ -166,7 +166,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            resolved_ts: peer.resolved_ts.clone(),
+            safe_ts: peer.read_progress.get_safe_ts(),
         }
     }
 

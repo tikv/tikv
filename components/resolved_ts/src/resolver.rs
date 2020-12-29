@@ -4,6 +4,7 @@ use collections::HashSet;
 use crossbeam::atomic::AtomicCell;
 use std::cmp;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
 
@@ -14,13 +15,13 @@ pub struct Resolver {
     // start_ts -> locked keys.
     locks: BTreeMap<TimeStamp, HashSet<Key>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: Arc<AtomicCell<TimeStamp>>,
+    resolved_ts: Arc<AtomicU64>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
-    pub fn from_resolved_ts(region_id: u64, resolved_ts: Arc<AtomicCell<TimeStamp>>) -> Resolver {
+    pub fn from_resolved_ts(region_id: u64, resolved_ts: Arc<AtomicU64>) -> Resolver {
         Resolver {
             region_id,
             resolved_ts,
@@ -30,12 +31,12 @@ impl Resolver {
     }
 
     pub fn new(region_id: u64) -> Resolver {
-        Self::from_resolved_ts(region_id, Arc::new(AtomicCell::new(TimeStamp::zero())))
+        Self::from_resolved_ts(region_id, Arc::new(AtomicU64::new(0)))
     }
 
-    pub fn resolved_ts(&self) -> Arc<AtomicCell<TimeStamp>> {
-        self.resolved_ts.clone()
-    }
+    // pub fn resolved_ts(&self) -> Arc<AtomicCell<TimeStamp>> {
+    //     self.resolved_ts.clone()
+    // }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Key>> {
         &self.locks
@@ -61,7 +62,7 @@ impl Resolver {
         );
         if let Some(commit_ts) = commit_ts {
             assert!(
-                commit_ts > self.resolved_ts.load(),
+                commit_ts > TimeStamp::from(self.resolved_ts.load(Ordering::Relaxed)),
                 "{}@{}, commit@{} < {:?}, region {}",
                 log_wrappers::Value(key.as_encoded()),
                 start_ts,
@@ -117,19 +118,11 @@ impl Resolver {
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+
         // Resolved ts never decrease.
-        let mut resolved_ts;
-        loop {
-            let old_resolved_ts = self.resolved_ts.load();
-            resolved_ts = cmp::max(old_resolved_ts, new_resolved_ts);
-            if self
-                .resolved_ts
-                .compare_exchange(old_resolved_ts, resolved_ts)
-                .is_ok()
-            {
-                break;
-            }
-        }
+        let prev_ts = self
+            .resolved_ts
+            .fetch_max(new_resolved_ts.into_inner(), Ordering::Relaxed);
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
@@ -142,7 +135,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        resolved_ts
+        cmp::max(TimeStamp::from(prev_ts), new_resolved_ts)
     }
 }
 

@@ -6,7 +6,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
+use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
@@ -259,11 +259,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
+                            let mut read_state = ReadState::default();
+                            if let Some(rp) = meta.region_read_progress.get(&region_id) {
+                                read_state.set_applied_index(rp.applied_index());
+                                read_state.set_safe_ts(rp.safe_ts());
+                            }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(leader.id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
+                            leader_info.set_read_state(read_state);
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()
