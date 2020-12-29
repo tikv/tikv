@@ -382,12 +382,14 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         for lock in pending.take_locks() {
             match lock {
-                PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key),
+                PendingLock::Track { key, start_ts } => {
+                    resolver.track_lock(start_ts, &Key::new(key))
+                }
                 PendingLock::Untrack {
                     key,
                     start_ts,
                     commit_ts,
-                } => resolver.untrack_lock(start_ts, commit_ts, key),
+                } => resolver.untrack_lock(start_ts, commit_ts, &Key::new(key)),
             }
         }
         self.resolver = Some(resolver);
@@ -404,10 +406,7 @@ impl Delegate {
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = match resolver.resolve(min_ts) {
-            Some(rts) => rts,
-            None => return None,
-        };
+        let resolved_ts = resolver.resolve(min_ts);
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
@@ -586,7 +585,7 @@ impl Delegate {
                         Some(ref mut resolver) => resolver.untrack_lock(
                             row.start_ts.into(),
                             commit_ts.map(Into::into),
-                            row.key.clone(),
+                            &Key::new(row.key.clone()),
                         ),
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");
@@ -643,7 +642,7 @@ impl Delegate {
                     // we must track inflight txns.
                     match self.resolver {
                         Some(ref mut resolver) => {
-                            resolver.track_lock(row.start_ts.into(), row.key.clone())
+                            resolver.track_lock(row.start_ts.into(), &Key::new(row.key.clone()))
                         }
                         None => {
                             assert!(self.pending.is_some(), "region resolver not ready");

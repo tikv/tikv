@@ -40,6 +40,10 @@ pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
 impl Key {
+    pub fn new(k: Vec<u8>) -> Key {
+        Key(k)
+    }
+
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {

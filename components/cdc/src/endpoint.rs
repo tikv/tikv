@@ -491,16 +491,18 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 delegate.id
             );
 
-            ChangeCmd::RegisterObserver {
-                observe_id: delegate.id,
-                region_id,
-                enabled: delegate.enabled(),
-            }
+            // ChangeCmd::RegisterObserver {
+            //     observe_id: delegate.id,
+            //     region_id,
+            //     enabled: delegate.enabled(),
+            // }
+            unimplemented!()
         } else {
-            ChangeCmd::Snapshot {
-                observe_id: delegate.id,
-                region_id,
-            }
+            // ChangeCmd::Snapshot {
+            //     observe_id: delegate.id,
+            //     region_id,
+            // }
+            unimplemented!()
         };
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
@@ -1122,7 +1124,9 @@ impl Initializer {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
-                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key),
+                        LockType::Put | LockType::Delete => {
+                            resolver.track_lock(lock.ts, &Key::new(key))
+                        }
                         _ => (),
                     };
                 }
@@ -1134,7 +1138,7 @@ impl Initializer {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
         let observe_id = self.observe_id;
-        resolver.init();
+        // resolver.init();
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "resolver initialized and schedule resolver ready";
