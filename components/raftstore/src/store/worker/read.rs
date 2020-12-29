@@ -862,7 +862,7 @@ mod tests {
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
-                resolved_ts: Arc::new(AtomicCell::new(TimeStamp::zero())),
+                safe_ts: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }

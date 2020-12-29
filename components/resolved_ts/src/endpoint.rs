@@ -281,7 +281,6 @@ where
                 obs_region.meta = incoming_region;
                 return;
             }
-            drop(obs_region);
             self.deregister_region(&incoming_region);
             self.register_region(incoming_region);
         }
@@ -334,7 +333,7 @@ where
                     if observe_region.observe_id == batch.observe_id {
                         let change_logs: Vec<_> = batch
                             .into_iter(observe_region.meta.id)
-                            .map(|cmd| ChangeLog::encode_change_log(cmd))
+                            .map(ChangeLog::encode_change_log)
                             .collect();
                         observe_region.track_change_log(&change_logs);
                         return Some((observe_region.observe_id, change_logs));

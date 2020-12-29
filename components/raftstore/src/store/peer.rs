@@ -3031,7 +3031,7 @@ where
         }
         if req.get_header().get_read_ts() > 0 {
             let read_ts = req.get_header().get_read_ts();
-            let safe_ts = self.safe_ts.load(Ordering::Relaxed);
+            let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
                 debug!(
                     "read rejected by safe timestamp";

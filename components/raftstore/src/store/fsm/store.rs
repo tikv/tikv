@@ -2419,7 +2419,7 @@ impl RegionReadProgress {
         RegionReadProgress {
             applied_index: Arc::new(AtomicU64::from(applied_index)),
             safe_ts: Arc::new(AtomicU64::from(0)),
-            pending_ts: Arc::new(Mutex::new(VecDeque::from(cap))),
+            pending_ts: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
             cap,
         }
     }
@@ -2470,7 +2470,7 @@ impl RegionReadProgress {
                     return;
                 }
             }
-            self.push_back(pending_ts, (apply_index, ts));
+            self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
             self.safe_ts.fetch_max(ts, Ordering::Relaxed);
         }

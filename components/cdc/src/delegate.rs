@@ -811,7 +811,7 @@ mod tests {
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
         let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        // resolver.init();
         for downstream in delegate.on_region_ready(resolver, region) {
             delegate.subscribe(downstream);
         }
@@ -1021,7 +1021,7 @@ mod tests {
         check_event(vec![row1, row2, row3]);
 
         let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        // resolver.init();
         delegate.on_region_ready(resolver, region);
     }
 }

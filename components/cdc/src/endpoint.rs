@@ -1592,7 +1592,7 @@ mod tests {
             version: semver::Version::new(4, 0, 6),
         });
         let mut resolver = Resolver::new(1);
-        resolver.init();
+        // resolver.init();
         let observe_id = ep.capture_regions[&1].id;
         ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
@@ -1617,7 +1617,7 @@ mod tests {
             version: semver::Version::new(4, 0, 6),
         });
         let mut resolver = Resolver::new(2);
-        resolver.init();
+        // resolver.init();
         region.set_id(2);
         let observe_id = ep.capture_regions[&2].id;
         ep.on_region_ready(observe_id, resolver, region);
@@ -1650,7 +1650,7 @@ mod tests {
             version: semver::Version::new(4, 0, 5),
         });
         let mut resolver = Resolver::new(3);
-        resolver.init();
+        // resolver.init();
         region.set_id(3);
         let observe_id = ep.capture_regions[&3].id;
         ep.on_region_ready(observe_id, resolver, region);
