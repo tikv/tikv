@@ -382,8 +382,12 @@ fn test_split_not_to_split_exist_tombstone_region() {
     fail::remove(peer_check_stale_state_fp);
 }
 
-/// A filter that collects all snapshots. Once it has two snapshots, it will skip
-/// all messages except snapshot.
+/// A filter that collects all snapshots.
+///
+/// It's different from the one in simulate_transport in two aspects:
+/// 1. It will not flush the collected snapshots.
+/// 2. It will not report error when collecting snapshots.
+/// 3. It callers can access the collected snapshots.
 pub struct CollectSnapshotFilter {
     pending_msg: Arc<Mutex<HashMap<u64, RaftMessage>>>,
     pending_count_sender: Mutex<mpsc::Sender<usize>>,
