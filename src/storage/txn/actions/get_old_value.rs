@@ -2,13 +2,13 @@
 
 use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use txn_types::{Key, OldValue, Write, WriteType};
+use txn_types::{Key, OldValue, Write};
 
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
     prev_write: Write,
-) -> MvccResult<Option<OldValue>> {
+) -> MvccResult<OldValue> {
     debug_assert_eq!(
         &Key::from_encoded(
             txn.reader
@@ -34,7 +34,7 @@ pub fn get_old_value<S: Snapshot>(
         .to_owned(),
         prev_write
     );
-    if prev_write.write_type == WriteType::Rollback || prev_write.write_type == WriteType::Lock {
+    if !prev_write.may_has_old_value() {
         let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
         // Skip the current write record.
         write_cursor.next(&mut txn.reader.statistics.write);
@@ -45,20 +45,17 @@ pub fn get_old_value<S: Snapshot>(
             txn.start_ts,
             &mut txn.reader.statistics,
         )?;
-        Ok(write.map(|w| OldValue {
-            short_value: w.short_value,
-            start_ts: w.start_ts,
-        }))
+        Ok(write.into())
     } else if prev_write
         .as_ref()
         .check_gc_fence_as_latest_version(txn.start_ts)
     {
-        Ok(Some(OldValue {
+        Ok(OldValue::Value {
             short_value: prev_write.short_value,
             start_ts: prev_write.start_ts,
-        }))
+        })
     } else {
-        Ok(None)
+        Ok(OldValue::None)
     }
 }
 
@@ -74,7 +71,7 @@ mod tests {
     #[test]
     fn test_get_old_value() {
         struct Case {
-            expected: Option<OldValue>,
+            expected: OldValue,
 
             // (write_record, put_ts)
             // all data to write to the engine
@@ -85,10 +82,10 @@ mod tests {
         let cases = vec![
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: Some(OldValue {
+                expected: OldValue::Value {
                     short_value: None,
                     start_ts: TimeStamp::new(4),
-                }),
+                },
 
                 written: vec![
                     (
@@ -103,7 +100,7 @@ mod tests {
             },
             // prev_write is Rollback, and there isn't a more previous valid write
             Case {
-                expected: None,
+                expected: OldValue::None,
 
                 written: vec![(
                     Write::new(WriteType::Rollback, TimeStamp::new(5), None),
@@ -112,10 +109,10 @@ mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: Some(OldValue {
+                expected: OldValue::Value {
                     short_value: None,
                     start_ts: TimeStamp::new(3),
-                }),
+                },
 
                 written: vec![
                     (
@@ -130,7 +127,7 @@ mod tests {
             },
             // prev_write is Lock, and there isn't a more previous valid write
             Case {
-                expected: None,
+                expected: OldValue::None,
 
                 written: vec![(
                     Write::new(WriteType::Lock, TimeStamp::new(5), None),
@@ -139,10 +136,10 @@ mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
             Case {
-                expected: Some(OldValue {
+                expected: OldValue::Value {
                     short_value: None,
                     start_ts: TimeStamp::new(7),
-                }),
+                },
                 written: vec![(
                     Write::new(WriteType::Put, TimeStamp::new(7), None)
                         .set_overlapped_rollback(true, Some(27.into())),
@@ -151,7 +148,7 @@ mod tests {
             },
             // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is false
             Case {
-                expected: None,
+                expected: OldValue::None,
                 written: vec![(
                     Write::new(WriteType::Put, TimeStamp::new(4), None)
                         .set_overlapped_rollback(true, Some(3.into())),

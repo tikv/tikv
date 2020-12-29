@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics, WriteData};
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite};
 use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};

@@ -25,7 +25,7 @@ pub fn prewrite<S: Snapshot>(
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
-) -> Result<(TimeStamp, Option<Option<OldValue>>)> {
+) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
     fail_point!("prewrite", |err| Err(
@@ -43,7 +43,7 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if let LockStatus::Locked(ts) = lock_status {
-        return Ok((ts, None));
+        return Ok((ts, OldValue::Unspecified));
     }
 
     // Note that the `prev_write` may have invalid GC fence.
@@ -54,18 +54,18 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if mutation.should_not_write {
-        return Ok((TimeStamp::zero(), None));
+        return Ok((TimeStamp::zero(), OldValue::Unspecified));
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
         if let Some(w) = prev_write {
             // If write is Rollback or Lock, seek for valid write record.
-            Some(get_old_value(txn, &mutation.key, w)?)
+            get_old_value(txn, &mutation.key, w)?
         } else {
-            Some(None)
+            OldValue::None
         }
     } else {
-        None
+        OldValue::Unspecified
     };
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
@@ -954,10 +954,12 @@ pub mod tests {
         ]
         .into_iter()
         .map(|(k, v)| {
-            let old_value = v.map(|(value, ts)| OldValue {
-                short_value: Some(value.to_vec()),
-                start_ts: ts.into(),
-            });
+            let old_value = v
+                .map(|(value, ts)| OldValue::Value {
+                    short_value: Some(value.to_vec()),
+                    start_ts: ts.into(),
+                })
+                .unwrap_or(OldValue::None);
             (Key::from_raw(k), old_value)
         })
         .collect();
@@ -971,7 +973,7 @@ pub mod tests {
                 false,
             )
             .unwrap();
-            assert_eq!(&old_value.unwrap(), expected_value);
+            assert_eq!(&old_value, expected_value);
         }
     }
 }

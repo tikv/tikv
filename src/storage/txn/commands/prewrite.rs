@@ -447,7 +447,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if let Some(old_value) = old_value {
+                    if old_value.specified() {
                         self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
