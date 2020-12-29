@@ -431,7 +431,7 @@ impl IndexScanExecutorImpl {
         let (start, end) = if for_common_handle {
             (self.columns_id_without_handle.len(), self.schema.len())
         } else {
-            (start = 0, self.columns_id_without_handle.len())
+            (0, self.columns_id_without_handle.len())
         };
 
         for i in start..end {
