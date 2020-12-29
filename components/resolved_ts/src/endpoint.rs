@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossbeam::atomic::AtomicCell;
@@ -55,7 +55,7 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, resolved_ts: Arc<AtomicCell<TimeStamp>>) -> Self {
+    fn new(meta: Region, resolved_ts: Arc<AtomicU64>) -> Self {
         ObserveRegion {
             resolver: Resolver::from_resolved_ts(meta.id, resolved_ts),
             meta,
@@ -199,7 +199,7 @@ where
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
             let reader = store_meta.readers.get(&region_id).expect("");
-            ObserveRegion::new(region.clone(), reader.resolved_ts.clone())
+            ObserveRegion::new(region.clone(), reader.safe_ts.clone())
         };
         let observe_id = observe_region.observe_id;
         let cancelled = match observe_region.resolver_status {
@@ -236,6 +236,7 @@ where
             })),
         };
         self.scanner_pool.spawn_task(scan_task);
+        self.regions.insert(region_id, observe_region);
     }
 
     fn deregister_region(&mut self, region: &Region) {
@@ -273,9 +274,17 @@ where
         self.deregister_region(&region);
     }
 
-    fn region_updated(&mut self, region: Region) {
-        self.deregister_region(&region);
-        self.register_region(region);
+    fn region_updated(&mut self, incoming_region: Region) {
+        if let Some(obs_region) = self.regions.get_mut(&incoming_region.get_id()) {
+            if obs_region.meta.get_region_epoch() == incoming_region.get_region_epoch() {
+                // only peer list change, no need to re-register region
+                obs_region.meta = incoming_region;
+                return;
+            }
+            drop(obs_region);
+            self.deregister_region(&incoming_region);
+            self.register_region(incoming_region);
+        }
     }
 
     fn region_role_changed(&mut self, region: Region, role: StateRole) {
