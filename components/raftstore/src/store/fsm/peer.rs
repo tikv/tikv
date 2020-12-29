@@ -2121,6 +2121,7 @@ where
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
+        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
@@ -2329,6 +2330,7 @@ where
                 }
             }
         }
+        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
     fn register_merge_check_tick(&mut self) {
