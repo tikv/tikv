@@ -7,7 +7,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
-use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, Value, Write, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteType};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -101,7 +101,7 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) reader: MvccReader<S>,
     pub(crate) start_ts: TimeStamp,
     pub(crate) write_size: usize,
-    pub(crate) writes: WriteData,
+    pub(crate) modifies: Vec<Modify>,
     // When 1PC is enabled, locks will be collected here instead of marshalled and put into `writes`,
     // so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
@@ -167,7 +167,7 @@ impl<S: Snapshot> MvccTxn<S> {
             reader,
             start_ts,
             write_size: 0,
-            writes: WriteData::default(),
+            modifies: vec![],
             locks_for_1pc: Vec::new(),
             collapse_rollback: true,
             concurrency_manager,
@@ -185,11 +185,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn into_modifies(self) -> Vec<Modify> {
         assert!(self.locks_for_1pc.is_empty());
-        self.writes.modifies
-    }
-
-    pub fn take_extra(&mut self) -> TxnExtra {
-        std::mem::take(&mut self.writes.extra)
+        self.modifies
     }
 
     pub fn take_guards(&mut self) -> Vec<KeyHandleGuard> {
@@ -209,7 +205,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
         let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
     }
 
     pub(crate) fn put_locks_for_1pc(&mut self, key: Key, lock: Lock, remove_pessimstic_lock: bool) {
@@ -220,32 +216,32 @@ impl<S: Snapshot> MvccTxn<S> {
         let released = ReleasedLock::new(&key, pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
         Some(released)
     }
 
     pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
     }
 
     pub(crate) fn delete_value(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
     }
 
     pub(crate) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
     }
 
     pub(crate) fn delete_write(&mut self, key: Key, ts: TimeStamp) {
         let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
         self.write_size += write.size();
-        self.writes.modifies.push(write);
+        self.modifies.push(write);
     }
 
     pub(crate) fn key_exist(
@@ -1341,7 +1337,7 @@ pub(crate) mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = prewrite(
+            let (min_commit_ts, _) = prewrite(
                 &mut txn,
                 &txn_props(
                     TimeStamp::new(2),
@@ -1396,7 +1392,7 @@ pub(crate) mod tests {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-            let min_commit_ts = prewrite(
+            let (min_commit_ts, _) = prewrite(
                 &mut txn,
                 &txn_props(
                     TimeStamp::new(2),
@@ -1450,7 +1446,7 @@ pub(crate) mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
-        let min_commit_ts = prewrite(
+        let (min_commit_ts, _) = prewrite(
             &mut txn,
             &txn_props(
                 TimeStamp::new(2),

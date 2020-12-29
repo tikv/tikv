@@ -14,7 +14,9 @@ use crate::storage::{
 };
 use fail::fail_point;
 use std::cmp;
-use txn_types::{is_short_value, Key, Mutation, MutationType, TimeStamp, Value, Write, WriteType};
+use txn_types::{
+    is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
+};
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
@@ -23,7 +25,7 @@ pub fn prewrite<S: Snapshot>(
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
-) -> Result<TimeStamp> {
+) -> Result<(TimeStamp, Option<Option<OldValue>>)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
     fail_point!("prewrite", |err| Err(
@@ -41,7 +43,7 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if let LockStatus::Locked(ts) = lock_status {
-        return Ok(ts);
+        return Ok((ts, None));
     }
 
     // Note that the `prev_write` may have invalid GC fence.
@@ -52,29 +54,25 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if mutation.should_not_write {
-        return Ok(TimeStamp::zero());
+        return Ok((TimeStamp::zero(), None));
     }
 
-    if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        let old_value = if let Some(w) = prev_write {
+    let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
+        if let Some(w) = prev_write {
             // If write is Rollback or Lock, seek for valid write record.
-            get_old_value(txn, &mutation.key, w)?
+            Some(get_old_value(txn, &mutation.key, w)?)
         } else {
-            None
-        };
-        // If write is None or cannot find a previously valid write record.
-        txn.writes.extra.add_old_value(
-            mutation.key.clone().append_ts(txn.start_ts),
-            old_value,
-            mutation.mutation_type,
-        );
-    }
+            Some(None)
+        }
+    } else {
+        None
+    };
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 
     fail_point!("after_prewrite_one_key");
 
-    Ok(final_min_commit_ts)
+    Ok((final_min_commit_ts, old_value))
 }
 
 #[derive(Clone, Debug)]
@@ -600,7 +598,7 @@ pub mod tests {
 
         // min_commit_ts must be > max_ts
         let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -613,7 +611,7 @@ pub mod tests {
 
         // min_commit_ts must be > start_ts
         let mut txn = MvccTxn::new(snapshot, 44.into(), false, cm);
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k3"), b"v1".to_vec())),
@@ -627,7 +625,7 @@ pub mod tests {
         // min_commit_ts must be > for_update_ts
         let mut props = optimistic_async_props(b"k5", 44.into(), 50.into(), 2, false);
         props.kind = TransactionKind::Pessimistic(45.into());
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &props,
             Mutation::Put((Key::from_raw(b"k5"), b"v1".to_vec())),
@@ -641,7 +639,7 @@ pub mod tests {
         // min_commit_ts must be >= txn min_commit_ts
         let mut props = optimistic_async_props(b"k7", 44.into(), 50.into(), 2, false);
         props.min_commit_ts = 46.into();
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &props,
             Mutation::Put((Key::from_raw(b"k7"), b"v1".to_vec())),
@@ -964,8 +962,8 @@ pub mod tests {
         })
         .collect();
 
-        for (key, _) in &cases {
-            prewrite(
+        for (key, expected_value) in &cases {
+            let (_, old_value) = prewrite(
                 &mut txn,
                 &txn_props,
                 Mutation::Put((key.clone(), b"value".to_vec())),
@@ -973,13 +971,7 @@ pub mod tests {
                 false,
             )
             .unwrap();
+            assert_eq!(&old_value.unwrap(), expected_value);
         }
-        let mut old_values = txn.take_extra().old_values;
-        for (key, expected_value) in cases {
-            let (old_value, mutation) = old_values.remove(&key.append_ts(50.into())).unwrap();
-            assert_eq!(old_value, expected_value);
-            assert_eq!(mutation, MutationType::Put);
-        }
-        assert!(old_values.is_empty());
     }
 }
