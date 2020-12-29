@@ -190,7 +190,8 @@ impl<S: Snapshot> MvccReader<S> {
     ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
     /// Post Condition:
     ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
-    pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {// Get the cursor for write record
+    pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
+        // Get the cursor for write record
         // Get the cursor for write record
         //
         // When it switches to another key in prefix seek mode, creates a new cursor for it

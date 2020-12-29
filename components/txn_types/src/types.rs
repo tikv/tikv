@@ -244,6 +244,12 @@ pub enum MutationType {
     Other,
 }
 
+impl MutationType {
+    pub fn may_have_old_value(&self) -> bool {
+        matches!(self, MutationType::Put | MutationType::Delete)
+    }
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {

@@ -13,9 +13,7 @@ pub fn check_extra_op<S: Snapshot>(
     mutation_type: MutationType,
     prev_write: Option<Write>,
 ) -> MvccResult<()> {
-    if txn.extra_op == ExtraOp::ReadOldValue
-        && (mutation_type == MutationType::Put || mutation_type == MutationType::Delete)
-    {
+    if txn.extra_op == ExtraOp::ReadOldValue && mutation_type.may_have_old_value() {
         let old_value = if let Some(w) = prev_write {
             // If write is Rollback or Lock, seek for valid write record.
             get_old_value(txn, key, w)?
