@@ -822,22 +822,32 @@ fn test_merge_with_slow_promote() {
 fn test_request_snapshot_after_propose_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.merge_max_log_gap = 100;
+    configure_for_lease_read(&mut cluster, Some(100), Some(1000));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.run();
+    cluster.run_conf_change();
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_peer(3, 3));
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 
     let region = pd_client.get_region(b"k3").unwrap();
     let target_region = pd_client.get_region(b"k1").unwrap();
 
-    // Make sure peer 1 is the leader.
-    cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let followers: Vec<_> = region
+        .get_peers()
+        .into_iter()
+        .filter(|p| p.id != leader.id)
+        .collect();
 
     // Drop append messages, so prepare merge can not be committed.
     cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
@@ -845,25 +855,34 @@ fn test_request_snapshot_after_propose_merge() {
     )));
     let prepare_merge = new_prepare_merge(target_region);
     let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
-    req.mut_header().set_peer(new_peer(1, 1));
+    req.mut_header().set_peer(leader.clone());
+    let (tx, rx) = mpsc::channel();
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, req, Callback::None)
+        .async_command_on_node(
+            leader.store_id,
+            req,
+            Callback::write_ext(
+                Box::new(|_| {}),
+                Some(Box::new(move || tx.send(()).unwrap())),
+                None,
+            ),
+        )
         .unwrap();
-    sleep_ms(200);
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
     // Install snapshot filter before requesting snapshot.
     let (tx, rx) = mpsc::channel();
     let notifier = Mutex::new(Some(tx));
     cluster.sim.wl().add_recv_filter(
-        2,
+        followers[1].store_id,
         Box::new(RecvSnapshotFilter {
             notifier,
             region_id: region.get_id(),
         }),
     );
-    cluster.must_request_snapshot(2, region.get_id());
+    cluster.must_request_snapshot(followers[1].store_id, region.get_id());
     // Leader should reject request snapshot if there is any proposed merge.
     rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
 }
