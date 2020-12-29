@@ -772,6 +772,16 @@ impl<T: Simulator> Cluster<T> {
                 sleep_ms(100);
                 continue;
             }
+            if resp
+                .get_header()
+                .get_error()
+                .get_message()
+                .contains("proposal dropped")
+            {
+                warn!("seems transferring leadership, let's retry");
+                sleep_ms(100);
+                continue;
+            }
             return resp;
         }
         panic!("request timeout");
