@@ -5,7 +5,7 @@ cargo-features = ["resolver"]
 
 [package]
 name = "tikv"
-version = "4.1.0-alpha"
+version = "5.0.0-rc.x"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
