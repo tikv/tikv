@@ -1178,9 +1178,12 @@ where
             return Ok(());
         }
 
-        if util::is_vote_msg(&msg.get_message())
-            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
-        {
+        let (msg_type, msg_term) = (
+            msg.get_message().get_msg_type(),
+            msg.get_message().get_term(),
+        );
+
+        if util::is_vote_msg(&msg.get_message()) || msg_type == MessageType::MsgTimeoutNow {
             if self.fsm.hibernate_state.group_state() != GroupState::Chaos {
                 self.fsm.hibernate_state.reset(GroupState::Chaos);
                 self.register_raft_base_tick();
@@ -1193,6 +1196,13 @@ where
         self.fsm.peer.insert_peer_cache(msg.take_from_peer());
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
+
+        if msg_type == MessageType::MsgHeartbeat && msg_term == self.fsm.peer.term() {
+            self.fsm
+                .peer
+                .read_progress
+                .forward_safe_ts(msg.get_applied_index(), msg.get_read_ts());
+        }
 
         if is_snapshot {
             if !self.fsm.peer.has_pending_snapshot() {
@@ -1947,6 +1957,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+        meta.region_read_progress.remove(&region_id);
     }
 
     // Update some region infos
@@ -2284,6 +2295,8 @@ where
             meta.regions.insert(new_region_id, new_region.clone());
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            meta.region_read_progress
+                .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.

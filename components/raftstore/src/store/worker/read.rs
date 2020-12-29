@@ -146,6 +146,7 @@ pub struct ReadDelegate {
     invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
+    pub safe_ts: Arc<AtomicU64>,
 }
 
 impl ReadDelegate {
@@ -164,6 +165,7 @@ impl ReadDelegate {
             invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
+            safe_ts: peer.read_progress.get_safe_ts(),
         }
     }
 
@@ -820,6 +822,7 @@ mod tests {
                 invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                safe_ts: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }

@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::PollContext;
+use crate::store::fsm::store::{PollContext, RegionReadProgress};
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
@@ -68,6 +68,7 @@ use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
+const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -480,6 +481,8 @@ where
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    pub read_progress: RegionReadProgress,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -573,6 +576,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            read_progress: RegionReadProgress::new(applied_index, REGION_READ_PROGRESS_CAP),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1695,6 +1699,9 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+            if let Some(rp) = meta.region_read_progress.get(&self.region_id) {
+                rp.update_applied(self.get_store().applied_index());
+            }
         }
 
         apply_snap_result
@@ -1968,11 +1975,11 @@ where
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        self.raft_group
-            .advance_apply_to(apply_state.get_applied_index());
+        let applied_index = apply_state.get_applied_index();
+        self.raft_group.advance_apply_to(applied_index);
 
         self.cmd_epoch_checker.advance_apply(
-            apply_state.get_applied_index(),
+            applied_index,
             self.term(),
             self.raft_group.store().region(),
         );
@@ -1998,6 +2005,8 @@ where
             }
         }
         self.pending_reads.gc();
+
+        self.read_progress.update_applied(applied_index);
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -3300,6 +3309,15 @@ where
             send_msg.set_start_key(region.get_start_key().to_vec());
             send_msg.set_end_key(region.get_end_key().to_vec());
         }
+
+        if self.is_leader()
+            && msg.get_msg_type() == MessageType::MsgHeartbeat
+            && self.has_applied_to_current_term()
+        {
+            send_msg.set_read_ts(self.read_progress.applied_index());
+            send_msg.set_read_ts(self.read_progress.safe_ts());
+        }
+
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
