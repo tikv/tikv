@@ -220,8 +220,14 @@ impl BackupRange {
         let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         let mut writer = writer_builder.build(self.start_key.clone())?;
-        let mut last_key = self.start_key.clone();
-        let mut cur_key = self.end_key.clone();
+        let mut last_key = self
+            .start_key
+            .clone()
+            .map_or_else(Vec::new, |k| k.into_encoded());
+        let mut cur_key = self
+            .end_key
+            .clone()
+            .map_or_else(Vec::new, |k| k.into_encoded());
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -239,8 +245,9 @@ impl BackupRange {
                         || Err(Error::Other(box_err!("get entry error"))),
                         |x| match x.as_key() {
                             Ok(k) => {
-                                cur_key = Some(Key::from_raw(&k));
-                                writer_builder.build(cur_key.clone())
+                                let key = Some(Key::from_raw(&k));
+                                cur_key = key.clone().map_or_else(Vec::new, |k| k.into_encoded());
+                                writer_builder.build(key)
                             }
                             Err(e) => {
                                 error!(?e; "backup save file failed");
@@ -287,9 +294,13 @@ impl BackupRange {
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
                 Ok(mut split_files) => {
+                    cur_key = self
+                        .end_key
+                        .clone()
+                        .map_or_else(Vec::new, |k| k.into_encoded());
                     for file in split_files.iter_mut() {
                         file.set_start_key(last_key.clone());
-                        file.set_end_key(self.end_key.clone());
+                        file.set_end_key(cur_key.clone());
                     }
                     files.append(&mut split_files);
                 }
