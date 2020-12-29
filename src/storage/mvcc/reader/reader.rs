@@ -605,6 +605,7 @@ mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
+                need_old_value: false,
             }
         }
 

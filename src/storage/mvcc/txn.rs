@@ -5,7 +5,7 @@ use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite};
 use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use txn_types::{Key, Lock, LockType, TimeStamp, TxnExtra, Value, Write, WriteType};
 
@@ -108,7 +108,6 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
     pub(crate) collapse_rollback: bool,
-    pub extra_op: ExtraOp,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -171,7 +170,6 @@ impl<S: Snapshot> MvccTxn<S> {
             writes: WriteData::default(),
             locks_for_1pc: Vec::new(),
             collapse_rollback: true,
-            extra_op: ExtraOp::Noop,
             concurrency_manager,
             guards: vec![],
         }
@@ -886,6 +884,7 @@ pub(crate) mod tests {
             txn_size,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
         }
     }
 

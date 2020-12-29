@@ -13,7 +13,6 @@ use crate::storage::{
     Snapshot,
 };
 use fail::fail_point;
-use kvproto::kvrpcpb::ExtraOp;
 use std::cmp;
 use txn_types::{is_short_value, Key, Mutation, MutationType, TimeStamp, Value, Write, WriteType};
 
@@ -56,7 +55,7 @@ pub fn prewrite<S: Snapshot>(
         return Ok(TimeStamp::zero());
     }
 
-    if txn.extra_op == ExtraOp::ReadOldValue && mutation.mutation_type.may_have_old_value() {
+    if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
         let old_value = if let Some(w) = prev_write {
             // If write is Rollback or Lock, seek for valid write record.
             get_old_value(txn, &mutation.key, w)?
@@ -87,6 +86,7 @@ pub struct TransactionProperties<'a> {
     pub txn_size: u64,
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
+    pub need_old_value: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -466,8 +466,6 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
-    use kvproto::kvrpcpb::ExtraOp;
-    #[cfg(test)]
     use txn_types::OldValue;
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
@@ -479,6 +477,7 @@ pub mod tests {
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
         }
     }
 
@@ -502,6 +501,7 @@ pub mod tests {
             txn_size,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         }
     }
 
@@ -716,6 +716,7 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
+                need_old_value: false,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -743,6 +744,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
@@ -785,6 +787,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
@@ -886,6 +889,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
+            need_old_value: false,
         };
 
         let cases = vec![
@@ -930,7 +934,6 @@ pub mod tests {
 
         // 2. Check GC fence when reading the old value.
         let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
-        txn.extra_op = ExtraOp::ReadOldValue;
         let txn_props = TransactionProperties {
             start_ts: 50.into(),
             kind: TransactionKind::Optimistic(false),
@@ -939,6 +942,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
+            need_old_value: true,
         };
 
         let cases: Vec<_> = vec![
