@@ -116,7 +116,7 @@ impl BufferVec {
         if let Some(offset) = self.offsets.pop() {
             let res = self.data[offset..].to_vec();
             self.data.truncate(offset);
-            return res
+            return res;
         }
         vec![]
     }
@@ -126,7 +126,7 @@ impl BufferVec {
     pub fn top(&self) -> Vec<u8> {
         if let Some(offset) = self.offsets.last() {
             let res = self.data[*offset..].to_vec();
-            return res
+            return res;
         }
         vec![]
     }

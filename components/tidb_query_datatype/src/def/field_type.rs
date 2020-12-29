@@ -283,10 +283,13 @@ pub trait FieldTypeAccessor {
 
     #[inline]
     fn need_restored_data(&self) -> bool {
-        self.is_non_binary_string_like() && !(self.collation().map(|col| col == Collation::Utf8Mb4Bin).unwrap_or(false) &&
-            self.is_varchar_like())
+        self.is_non_binary_string_like()
+            && !(self
+                .collation()
+                .map(|col| col == Collation::Utf8Mb4Bin)
+                .unwrap_or(false)
+                && self.is_varchar_like())
     }
-
 }
 
 impl FieldTypeAccessor for FieldType {

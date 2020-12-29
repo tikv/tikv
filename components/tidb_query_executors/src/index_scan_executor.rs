@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, Collation};
+use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::IndexScan;
@@ -19,9 +19,9 @@ use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_L
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
-use DecodeHandleStrategy::*;
-use tidb_query_datatype::codec::datum::decode;
 use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
+use tidb_query_datatype::codec::datum::decode;
+use DecodeHandleStrategy::*;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -436,18 +436,22 @@ impl IndexScanExecutorImpl {
         for i in start..end {
             let ft: &dyn FieldTypeAccessor = &self.schema[i];
             if !ft.need_restored_data() {
-                continue
+                continue;
             }
 
             let top_data = columns[i as usize].raw().top();
             if decode(&mut top_data.as_slice()).unwrap()[0] == Datum::Null {
-                continue
+                continue;
             }
 
             let id = self.columns_id_without_handle[i];
             let original_data;
             let row = RowSlice::from_bytes(restored_values)?;
-            if ft.collation().map(|col| col == Collation::Binary).unwrap_or(false) {
+            if ft
+                .collation()
+                .map(|col| col == Collation::Binary)
+                .unwrap_or(false)
+            {
                 // _bin collation, we need to combine data from key and value to form the original data.
                 let truncate_data = columns[i].mut_raw().pop();
                 let decode_result = decode(&mut truncate_data.as_slice()).unwrap();
@@ -456,13 +460,23 @@ impl IndexScanExecutorImpl {
                 let space_num;
                 if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
                     let mut space_num_data = &row.values()[start..offset];
-                    space_num = decode(&mut space_num_data).unwrap()[0].as_int().unwrap().unwrap();
+                    space_num = decode(&mut space_num_data).unwrap()[0]
+                        .as_int()
+                        .unwrap()
+                        .unwrap();
                 } else {
                     return Err(other_err!("Unexpected missing column {}", id));
                 }
 
                 // Form the original data.
-                original_data = [truncate_str.as_ref(), std::iter::repeat(PADDING_SPACE).take(space_num as usize).collect::<String>().as_bytes()].concat();
+                original_data = [
+                    truncate_str.as_ref(),
+                    std::iter::repeat(PADDING_SPACE)
+                        .take(space_num as usize)
+                        .collect::<String>()
+                        .as_bytes(),
+                ]
+                .concat();
             } else {
                 if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
                     original_data = row.values()[start..offset].to_vec();
@@ -510,12 +524,18 @@ impl IndexScanExecutorImpl {
         } else {
             remaining.split_at(0)
         };
-        let restore_values = if !remaining.is_empty() && remaining.get(0).
-            map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG) {
+        let restore_values = if !remaining.is_empty()
+            && remaining
+                .get(0)
+                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
+        {
             restored_v5 = true;
             &remaining[1..]
-        } else if !remaining.is_empty() && remaining.get(0).
-            map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG) {
+        } else if !remaining.is_empty()
+            && remaining
+                .get(0)
+                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+        {
             &remaining
         } else {
             "".as_bytes()
