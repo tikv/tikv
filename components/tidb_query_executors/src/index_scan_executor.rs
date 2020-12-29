@@ -543,25 +543,28 @@ impl IndexScanExecutorImpl {
             "".as_bytes()
         };
 
+        // Sanity check.
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
             return Err(other_err!(
                 "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
             ));
         }
 
-        // If there are some restore data, the index value is in new collation.
+        // If there are some restore data, we need to process them to get the original data.
         if !restore_values.is_empty() {
             if restored_v5 {
+                // Extract the data from key, then use the restore data to get the original data.
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
                 self.restore_original_data(restore_values, columns, false)?;
             } else {
+                // 4.0 version format, use the restore data directly.
                 self.extract_columns_from_row_format(restore_values, columns)?;
             }
         } else {
-            // Otherwise, the index value is in old collation, we should extract the index columns from the key.
+            // No restored data, we should extract the index columns from the key.
             Self::extract_columns_from_datum_format(
                 &mut key_payload,
                 &mut columns[..self.columns_id_without_handle.len()],
@@ -603,6 +606,7 @@ impl IndexScanExecutorImpl {
                         &mut columns[self.columns_id_without_handle.len()..end_index],
                     )?;
                 }
+                // Restored the original data in common handle if necessary.
                 self.restore_original_data(restore_values, columns, true)?;
             }
         }
