@@ -2,35 +2,9 @@
 
 use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{Key, MutationType, OldValue, Write, WriteType};
+use txn_types::{Key, OldValue, Write, WriteType};
 
-// Check and execute the extra operation.
-// Currently we use it only for reading the old value for CDC.
-pub fn check_extra_op<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
-    key: &Key,
-    mutation_type: MutationType,
-    prev_write: Option<Write>,
-) -> MvccResult<()> {
-    if txn.extra_op == ExtraOp::ReadOldValue && mutation_type.may_have_old_value() {
-        let old_value = if let Some(w) = prev_write {
-            // If write is Rollback or Lock, seek for valid write record.
-            get_old_value(txn, key, w)?
-        } else {
-            None
-        };
-        // If write is None or cannot find a previously valid write record.
-        txn.writes.extra.add_old_value(
-            key.clone().append_ts(txn.start_ts),
-            old_value,
-            mutation_type,
-        );
-    }
-    Ok(())
-}
-
-fn get_old_value<S: Snapshot>(
+pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
     prev_write: Write,

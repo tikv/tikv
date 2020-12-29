@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
-use crate::storage::txn::actions::check_extra_op::check_extra_op;
+use crate::storage::txn::actions::get_old_value::get_old_value;
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -14,6 +13,7 @@ use crate::storage::{
     Snapshot,
 };
 use fail::fail_point;
+use kvproto::kvrpcpb::ExtraOp;
 use std::cmp;
 use txn_types::{is_short_value, Key, Mutation, MutationType, TimeStamp, Value, Write, WriteType};
 
@@ -56,7 +56,20 @@ pub fn prewrite<S: Snapshot>(
         return Ok(TimeStamp::zero());
     }
 
-    check_extra_op(txn, &mutation.key, mutation.mutation_type, prev_write)?;
+    if txn.extra_op == ExtraOp::ReadOldValue && mutation.mutation_type.may_have_old_value() {
+        let old_value = if let Some(w) = prev_write {
+            // If write is Rollback or Lock, seek for valid write record.
+            get_old_value(txn, &mutation.key, w)?
+        } else {
+            None
+        };
+        // If write is None or cannot find a previously valid write record.
+        txn.writes.extra.add_old_value(
+            mutation.key.clone().append_ts(txn.start_ts),
+            old_value,
+            mutation.mutation_type,
+        );
+    }
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 
