@@ -220,6 +220,8 @@ impl BackupRange {
         let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         let mut writer = writer_builder.build(self.start_key.clone())?;
+        let mut last_key = self.start_key.clone();
+        let mut cur_key = self.end_key.clone();
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -232,20 +234,14 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                match writer.save(&storage.storage) {
-                    Ok(mut split_files) => {
-                        files.append(&mut split_files);
-                    }
-                    Err(e) => {
-                        error!(?e; "backup save file failed");
-                        return Err(e);
-                    }
-                }
                 let res = {
                     entries.as_slice().get(0).map_or_else(
                         || Err(Error::Other(box_err!("get entry error"))),
                         |x| match x.as_key() {
-                            Ok(k) => writer_builder.build(Some(Key::from_raw(&k))),
+                            Ok(k) => {
+                                cur_key = Some(Key::from_raw(&k));
+                                writer_builder.build(cur_key.clone())
+                            }
                             Err(e) => {
                                 error!(?e; "backup save file failed");
                                 Err(Error::Other(box_err!("Decode error: {:?}", e)))
@@ -253,6 +249,20 @@ impl BackupRange {
                         },
                     )
                 };
+                match writer.save(&storage.storage) {
+                    Ok(mut split_files) => {
+                        for file in split_files.iter_mut() {
+                            file.set_start_key(last_key.clone());
+                            file.set_end_key(cur_key.clone());
+                        }
+                        last_key = cur_key.clone();
+                        files.append(&mut split_files);
+                    }
+                    Err(e) => {
+                        error!(?e; "backup save file failed");
+                        return Err(e);
+                    }
+                }
                 match res {
                     Ok(w) => {
                         writer = w;
@@ -277,6 +287,10 @@ impl BackupRange {
         if writer.need_flush_keys() {
             match writer.save(&storage.storage) {
                 Ok(mut split_files) => {
+                    for file in split_files.iter_mut() {
+                        file.set_start_key(last_key.clone());
+                        file.set_end_key(self.end_key.clone());
+                    }
                     files.append(&mut split_files);
                 }
                 Err(e) => {
@@ -753,8 +767,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             "details" => ?stat);
 
                             for file in files.iter_mut() {
-                                file.set_start_key(start_key.clone());
-                                file.set_end_key(end_key.clone());
+                                if is_raw_kv {
+                                    file.set_start_key(start_key.clone());
+                                    file.set_end_key(end_key.clone());
+                                }
                                 file.set_start_version(start_ts.into_inner());
                                 file.set_end_version(end_ts.into_inner());
                             }
