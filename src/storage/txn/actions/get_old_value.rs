@@ -4,58 +4,50 @@ use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
 use txn_types::{Key, OldValue, Write};
 
+/// Read the old value for key for CDC.
+/// `prev_write` stands for the previous write record of the key
+/// it must be read in the caller and be passed in for optimization
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
     key: &Key,
-    prev_write: Write,
+    prev_write: Option<Write>,
 ) -> MvccResult<OldValue> {
-    debug_assert_eq!(
-        &Key::from_encoded(
-            txn.reader
-                .write_cursor
-                .as_ref()
+    // Precondition:
+    debug_assert!(if let Some(w) = &prev_write {
+        let cursor = txn.reader.write_cursor.as_ref().unwrap();
+        let key_under_cursor =
+            Key::from_encoded(cursor.key(&mut txn.reader.statistics.write).to_vec())
+                .truncate_ts()
+                .unwrap();
+        let write_under_cursor =
+            txn_types::WriteRef::parse(cursor.value(&mut txn.reader.statistics.write))
                 .unwrap()
-                .key(&mut txn.reader.statistics.write)
-                .to_vec()
-        )
-        .truncate_ts()
-        .unwrap(),
-        key
-    );
-    debug_assert_eq!(
-        txn_types::WriteRef::parse(
-            txn.reader
-                .write_cursor
-                .as_ref()
-                .unwrap()
-                .value(&mut txn.reader.statistics.write)
-        )
-        .unwrap()
-        .to_owned(),
-        prev_write
-    );
-    if !prev_write.may_has_old_value() {
-        let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
-        // Skip the current write record.
-        write_cursor.next(&mut txn.reader.statistics.write);
-        let write = seek_for_valid_write(
-            write_cursor,
-            key,
-            txn.start_ts,
-            txn.start_ts,
-            &mut txn.reader.statistics,
-        )?;
-        Ok(write.into())
-    } else if prev_write
-        .as_ref()
-        .check_gc_fence_as_latest_version(txn.start_ts)
-    {
-        Ok(OldValue::Value {
-            short_value: prev_write.short_value,
-            start_ts: prev_write.start_ts,
-        })
+                .to_owned();
+        key.clone() == key_under_cursor && w.clone() == write_under_cursor
     } else {
-        Ok(OldValue::None)
+        true
+    });
+    match prev_write {
+        Some(w) if !w.may_has_old_value() => {
+            let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
+            // Skip the current write record.
+            write_cursor.next(&mut txn.reader.statistics.write);
+            let write = seek_for_valid_write(
+                write_cursor,
+                key,
+                txn.start_ts,
+                txn.start_ts,
+                &mut txn.reader.statistics,
+            )?;
+            Ok(write.into())
+        }
+        Some(w) if w.as_ref().check_gc_fence_as_latest_version(txn.start_ts) => {
+            Ok(OldValue::Value {
+                short_value: w.short_value,
+                start_ts: w.start_ts,
+            })
+        }
+        _ => Ok(OldValue::None),
     }
 }
 
@@ -66,7 +58,7 @@ mod tests {
     use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use txn_types::TimeStamp;
+    use txn_types::{TimeStamp, WriteType};
 
     #[test]
     fn test_get_old_value() {
@@ -80,6 +72,11 @@ mod tests {
             written: Vec<(Write, TimeStamp)>,
         }
         let cases = vec![
+            // prev_write is None
+            Case {
+                expected: OldValue::None,
+                written: vec![],
+            },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
                 expected: OldValue::Value {
@@ -171,12 +168,17 @@ mod tests {
             write(&engine, &Context::default(), txn.into_modifies());
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(snapshot, TimeStamp::new(25), true, cm);
-            let prev_write = txn
-                .reader
-                .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
-                .unwrap()
-                .unwrap()
-                .1;
+            let prev_write = if case.written.is_empty() {
+                None
+            } else {
+                Some(
+                    txn.reader
+                        .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
+                        .unwrap()
+                        .unwrap()
+                        .1,
+                )
+            };
             let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
             assert_eq!(result, case.expected);
         }

@@ -417,7 +417,7 @@ pub(crate) fn make_txn_error(
 pub(crate) mod tests {
     use super::*;
 
-    use crate::storage::kv::RocksEngine;
+    use crate::storage::kv::{RocksEngine, WriteData};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
     use crate::storage::txn::commands::*;

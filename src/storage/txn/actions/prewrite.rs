@@ -58,12 +58,7 @@ pub fn prewrite<S: Snapshot>(
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        if let Some(w) = prev_write {
-            // If write is Rollback or Lock, seek for valid write record.
-            get_old_value(txn, &mutation.key, w)?
-        } else {
-            OldValue::None
-        }
+        get_old_value(txn, &mutation.key, prev_write)?
     } else {
         OldValue::Unspecified
     };

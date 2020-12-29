@@ -192,7 +192,6 @@ impl<S: Snapshot> MvccReader<S> {
     ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         // Get the cursor for write record
-        // Get the cursor for write record
         //
         // When it switches to another key in prefix seek mode, creates a new cursor for it
         // because the current position of the cursor is seldom around `key`.
@@ -213,6 +212,7 @@ impl<S: Snapshot> MvccReader<S> {
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
+        // parse out the write record
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
         Ok(Some((commit_ts, write)))
     }
