@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 protobuf-codec = ["kvproto/protobuf-codec"]
 prost-codec = ["kvproto/prost-codec"]
 

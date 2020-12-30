@@ -5,8 +5,19 @@ edition = "2018"
 publish = false
 
 [features]
-protobuf-codec = ["kvproto/protobuf-codec"]
-prost-codec = ["kvproto/prost-codec"]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "engine_traits/protobuf-codec",
+  "error_code/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "engine_traits/prost-codec",
+  "error_code/prost-codec",
+  "kvproto/prost-codec",
+  "tikv_util/prost-codec",
+]
 failpoints = ["fail/failpoints"]
 
 [dependencies]
@@ -15,8 +26,8 @@ bytes = "0.5"
 crossbeam = "0.7"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
-engine_traits = { path = "../engine_traits" }
-error_code = { path = "../error_code" }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 failure = "0.1"
 futures = "0.3"
@@ -38,7 +49,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 tokio = { version = "0.2", features = ["time", "rt-core"] }
 
 [dev-dependencies]

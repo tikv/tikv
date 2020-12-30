@@ -5,20 +5,28 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engines-rocksdb"]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 protobuf-codec = [
+  "concurrency_manager/protobuf-codec",
+  "engine_rocks/protobuf-codec",
   "kvproto/protobuf-codec",
   "test_storage/protobuf-codec",
+  "tidb_query_common/protobuf-codec",
   "tidb_query_datatype/protobuf-codec",
   "tikv/protobuf-codec",
+  "tikv_util/protobuf-codec",
   "tipb/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
+  "concurrency_manager/prost-codec",
+  "engine_rocks/prost-codec",
   "kvproto/prost-codec",
   "test_storage/prost-codec",
+  "tidb_query_common/prost-codec",
   "tidb_query_datatype/prost-codec",
   "tikv/prost-codec",
+  "tikv_util/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
 ]
@@ -30,16 +38,16 @@ test-engines-panic = [
 ]
 
 [dependencies]
-engine_rocks = { path = "../engine_rocks" }
+engine_rocks = { path = "../engine_rocks", default-features = false }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 protobuf = "2"
-test_storage = { path = "../test_storage" }
-tidb_query_datatype = { path = "../tidb_query_datatype" }
-tidb_query_common = { path = "../tidb_query_common" }
+test_storage = { path = "../test_storage", default-features = false }
+tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
+tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-txn_types = { path = "../txn_types" }
-concurrency_manager = { path = "../concurrency_manager" }
+txn_types = { path = "../txn_types", default-features = false }
+concurrency_manager = { path = "../concurrency_manager", default-features = false }
