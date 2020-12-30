@@ -7,6 +7,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["test-engines-rocksdb"]
 failpoints = ["fail/failpoints"]
 prost-codec = [
   "prost",
@@ -32,6 +33,12 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
 ]
 testexport = []
+test-engines-rocksdb = [
+  "engine_test/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "engine_test/test-engines-panic",
+]
 
 [dependencies]
 batch-system = { path = "../batch-system" }
@@ -41,8 +48,9 @@ concurrency_manager = { path = "../concurrency_manager" }
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 crossbeam = "0.7.2"
-engine_rocks = { path = "../engine_rocks" }
 encryption = { path = "../encryption" }
+engine_rocks = { path = "../engine_rocks" }
+engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.4"
@@ -85,7 +93,6 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-engine_test = { path = "../engine_test" }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer" }
 engine_panic = { path = "../engine_panic" }

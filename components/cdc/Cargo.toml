@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["tikv/test-engines-rocksdb"]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
   "grpcio/protobuf-codec",
@@ -32,8 +33,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
-test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 bitflags = "1.0"

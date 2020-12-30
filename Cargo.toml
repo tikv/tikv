@@ -61,12 +61,10 @@ protobuf-codec = [
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb",
-  "engine_test/test-engine-raft-rocksdb",
+  "engine_test/test-engines-rocksdb",
 ]
 test-engines-panic = [
-  "engine_test/test-engine-kv-panic",
-  "engine_test/test-engine-raft-panic",
+  "engine_test/test-engines-panic",
 ]
 bcc-iosnoop = [
   "file_system/bcc-iosnoop",
@@ -98,7 +96,7 @@ derive_more = "0.99.3"
 encryption = { path = "components/encryption" }
 engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
-engine_test = { path = "components/engine_test" }
+engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
 fail = "0.4"

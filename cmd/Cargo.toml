@@ -7,6 +7,7 @@ publish = false
 default-run = "tikv-server"
 
 [features]
+default = ["tikv/test-engines-rocksdb"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -40,8 +41,6 @@ prost-codec = [
   "cdc/prost-codec",
   "raft_log_engine/prost-codec"
 ]
-test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
-test-engines-panic = ["tikv/test-engines-panic"]
 
 [lib]
 name = "cmd"

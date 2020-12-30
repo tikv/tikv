@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["test-engines-rocksdb"]
 protobuf-codec = [
   "kvproto/protobuf-codec",
   "test_storage/protobuf-codec",
@@ -20,6 +21,12 @@ prost-codec = [
   "tikv/prost-codec",
   "tipb/prost-codec",
   "txn_types/prost-codec",
+]
+test-engines-rocksdb = [
+  "test_storage/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "test_storage/test-engines-panic",
 ]
 
 [dependencies]

@@ -9,7 +9,7 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
+default = ["protobuf-codec", "tikv/test-engines-rocksdb"]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
   "external_storage/protobuf-codec",
@@ -39,8 +39,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
-test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
 concurrency_manager = { path = "../concurrency_manager" }
