@@ -26,7 +26,7 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
-use raftstore::store::fsm::ObserveID;
+use raftstore::store::fsm::ObserveId;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
@@ -206,7 +206,7 @@ enum PendingLock {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
-    pub id: ObserveID,
+    pub id: ObserveId,
     pub region_id: u64,
     region: Option<Region>,
     pub downstreams: Vec<Downstream>,
@@ -222,7 +222,7 @@ impl Delegate {
     pub fn new(region_id: u64) -> Delegate {
         Delegate {
             region_id,
-            id: ObserveID::new(),
+            id: ObserveId::new(),
             downstreams: Vec::new(),
             resolver: None,
             region: None,

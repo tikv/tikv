@@ -416,16 +416,12 @@ where
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
         self.last_applied_index = delegate.apply_state.get_applied_index();
 
-        if let Some(observe_cmd) = &delegate.observe_cmd {
-            let region_id = delegate.region_id();
-            if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(observe_cmd.id, region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
-        }
+        let region_id = delegate.region_id();
+        self.host.prepare_for_apply(
+            delegate.observe_change.cdc_id,
+            delegate.observe_change.resolved_ts_id,
+            region_id,
+        );
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -771,7 +767,7 @@ where
     last_sync_apply_index: u64,
 
     /// Info about cmd observer.
-    observe_cmd: Option<ObserveCmd>,
+    observe_change: ObserveChange,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -801,7 +797,7 @@ where
             metrics: Default::default(),
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
-            observe_cmd: None,
+            observe_change: ObserveChange::default(),
         }
     }
 
@@ -1066,11 +1062,12 @@ where
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
         let cmd = Cmd::new(index, cmd, resp);
-        if let Some(observe_cmd) = self.observe_cmd.as_ref() {
-            apply_ctx
-                .host
-                .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
-        }
+        apply_ctx.host.on_apply_cmd(
+            self.observe_change.cdc_id,
+            self.observe_change.resolved_ts_id,
+            self.region_id(),
+            cmd.clone(),
+        );
 
         apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
@@ -2802,36 +2799,68 @@ static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ObserveID(usize);
+pub struct ObserveId(usize);
 
-impl ObserveID {
-    pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl ObserveId {
+    pub fn new() -> ObserveId {
+        ObserveId(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+    }
+
+    pub fn zero() -> ObserveId {
+        ObserveId(0)
+    }
+
+    pub fn into_inner(&self) -> usize {
+        self.0
     }
 }
 
-struct ObserveCmd {
-    id: ObserveID,
-    enabled: Arc<AtomicBool>,
+impl Default for ObserveId {
+    fn default() -> Self {
+        ObserveId(0)
+    }
 }
 
-impl Debug for ObserveCmd {
+impl From<usize> for ObserveId {
+    fn from(id: usize) -> ObserveId {
+        ObserveId(id)
+    }
+}
+
+impl From<&usize> for ObserveId {
+    fn from(id: &usize) -> ObserveId {
+        ObserveId(*id)
+    }
+}
+
+pub struct ObserveChange {
+    // TODO: merge two IDs after all related PRs merged
+    pub cdc_id: Option<ObserveId>,
+    pub resolved_ts_id: Option<ObserveId>,
+}
+
+impl Default for ObserveChange {
+    fn default() -> Self {
+        ObserveChange {
+            cdc_id: None,
+            resolved_ts_id: None,
+        }
+    }
+}
+
+impl Debug for ObserveChange {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ObserveCmd").field("id", &self.id).finish()
+        f.debug_struct("ObserveChange")
+            .field("cdc_id", &self.cdc_id)
+            .field("resolved_ts_id", &self.resolved_ts_id)
+            .finish()
     }
 }
 
 #[derive(Debug)]
-pub enum ChangeCmd {
-    RegisterObserver {
-        observe_id: ObserveID,
-        region_id: u64,
-        enabled: Arc<AtomicBool>,
-    },
-    Snapshot {
-        observe_id: ObserveID,
-        region_id: u64,
-    },
+pub struct ChangeCmd {
+    pub region_id: u64,
+    pub observe_change: Option<ObserveChange>,
 }
 
 pub enum Msg<EK>
@@ -2897,13 +2926,9 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd::RegisterObserver { region_id, .. },
+                cmd: ChangeCmd { region_id, .. },
                 ..
-            } => write!(f, "[region {}] registers cmd observer", region_id),
-            Msg::Change {
-                cmd: ChangeCmd::Snapshot { region_id, .. },
-                ..
-            } => write!(f, "[region {}] cmd snapshot", region_id),
+            } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3243,19 +3268,17 @@ where
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let (observe_id, region_id, enabled) = match cmd {
-            ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id,
-                enabled,
-            } => (observe_id, region_id, Some(enabled)),
-            ChangeCmd::Snapshot {
-                observe_id,
-                region_id,
-            } => (observe_id, region_id, None),
-        };
-        if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
-            if observe_cmd.id > observe_id {
+        let (region_id, observe_change) = (cmd.region_id, cmd.observe_change);
+        if let Some(oc) = observe_change.as_ref() {
+            if self.delegate.observe_change.cdc_id.unwrap_or_default()
+                > oc.cdc_id.unwrap_or_default()
+                || self
+                    .delegate
+                    .observe_change
+                    .resolved_ts_id
+                    .unwrap_or_default()
+                    > oc.resolved_ts_id.unwrap_or_default()
+            {
                 notify_stale_req(self.delegate.term, cb);
                 return;
             }
@@ -3293,23 +3316,14 @@ where
                 return;
             }
         };
-        if let Some(enabled) = enabled {
-            assert!(
-                !self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                "{} observer already exists {:?} {:?}",
-                self.delegate.tag,
-                self.delegate.observe_cmd,
-                observe_id
-            );
-            // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = Some(ObserveCmd {
-                id: observe_id,
-                enabled,
-            });
+
+        if let Some(oc) = observe_change {
+            if oc.cdc_id.is_some() {
+                self.delegate.observe_change.cdc_id = oc.cdc_id;
+            }
+            if oc.resolved_ts_id.is_some() {
+                self.delegate.observe_change.resolved_ts_id = oc.resolved_ts_id;
+            }
         }
 
         cb.invoke_read(resp);
@@ -3653,12 +3667,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd::RegisterObserver { region_id, .. },
-                    cb,
-                    ..
-                }
-                | Msg::Change {
-                    cmd: ChangeCmd::Snapshot { region_id, .. },
+                    cmd: ChangeCmd { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -4244,18 +4253,29 @@ mod tests {
     where
         E: KvEngine,
     {
-        fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+        fn on_prepare_for_apply(
+            &self,
+            cdc_id: Option<ObserveId>,
+            _: Option<ObserveId>,
+            region_id: u64,
+        ) {
             self.cmd_batches
                 .borrow_mut()
-                .push(CmdBatch::new(observe_id, region_id));
+                .push(CmdBatch::new(cdc_id.unwrap_or_default(), region_id));
         }
 
-        fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+        fn on_apply_cmd(
+            &self,
+            cdc_id: Option<ObserveId>,
+            _: Option<ObserveId>,
+            region_id: u64,
+            cmd: Cmd,
+        ) {
             self.cmd_batches
                 .borrow_mut()
                 .last_mut()
                 .expect("should exist some cmd batch")
-                .push(observe_id, region_id, cmd);
+                .push(cdc_id.unwrap_or_default(), region_id, cmd);
         }
 
         fn on_flush_apply(&self, _: E) {
@@ -4660,15 +4680,17 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
         // Register cmd observer to region 1.
         let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_id = ObserveId::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: enabled.clone(),
+                    observe_change: Some(ObserveChange {
+                        cdc_id: Some(observe_id),
+                        resolved_ts_id: None,
+                    }),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
@@ -4735,10 +4757,12 @@ mod tests {
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 2,
-                    enabled,
+                    observe_change: Some(ObserveChange {
+                        cdc_id: Some(observe_id),
+                        resolved_ts_id: None,
+                    }),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(resp
@@ -4905,15 +4929,17 @@ mod tests {
 
         router.schedule_task(1, Msg::Registration(reg.clone()));
         let enabled = Arc::new(AtomicBool::new(true));
-        let observe_id = ObserveID::new();
+        let observe_id = ObserveId::new();
         router.schedule_task(
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: enabled.clone(),
+                    observe_change: Some(ObserveChange {
+                        cdc_id: Some(observe_id),
+                        resolved_ts_id: None,
+                    }),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
@@ -5069,10 +5095,12 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
-                    observe_id,
+                cmd: ChangeCmd {
                     region_id: 1,
-                    enabled: Arc::new(AtomicBool::new(true)),
+                    observe_change: Some(ObserveChange {
+                        cdc_id: Some(observe_id),
+                        resolved_ts_id: None,
+                    }),
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(

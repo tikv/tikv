@@ -241,6 +241,7 @@ members = [
   "components/concurrency_manager",
   "components/file_system",
   "components/collections",
+  "components/resolved_ts",
 ]
 default-members = ["cmd"]
 

@@ -32,6 +32,7 @@ use raft::{
 use raft_proto::ConfChangeI;
 use smallvec::SmallVec;
 use time::Timespec;
+use txn_types::TimeStamp;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -480,6 +481,8 @@ where
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    pub resolved_ts: Arc<AtomicCell<TimeStamp>>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -573,6 +576,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            resolved_ts: Arc::new(AtomicCell::new(TimeStamp::zero())),
         };
 
         // If this region has only one peer and I am the one, campaign directly.

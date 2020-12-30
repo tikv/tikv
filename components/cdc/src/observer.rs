@@ -12,7 +12,7 @@ use engine_traits::{
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use raftstore::store::fsm::ObserveID;
+use raftstore::store::fsm::ObserveId;
 use raftstore::store::RegionSnapshot;
 use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
@@ -34,7 +34,7 @@ pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+    observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
     cmd_batches: RefCell<Vec<CmdBatch>>,
 }
 
@@ -68,7 +68,7 @@ impl CdcObserver {
     /// its scheduler.
     ///
     /// Return pervious ObserveID if there is one.
-    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
         self.observe_regions
             .write()
             .unwrap()
@@ -78,7 +78,7 @@ impl CdcObserver {
     /// Stops observe the region.
     ///
     /// Return ObserverID if unsubscribe successfully.
-    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
         let mut regions = self.observe_regions.write().unwrap();
         // To avoid ABA problem, we must check the unique ObserveID.
         if let Some(oid) = regions.get(&region_id) {
@@ -90,7 +90,7 @@ impl CdcObserver {
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveID> {
+    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveId> {
         self.observe_regions
             .read()
             .unwrap()
@@ -102,13 +102,13 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, observe_id: ObserveId, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
             .push(CmdBatch::new(observe_id, region_id));
     }
 
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, observe_id: ObserveId, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
@@ -317,7 +317,7 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let observer = CdcObserver::new(scheduler);
-        let observe_id = ObserveID::new();
+        let observe_id = ObserveId::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(&observer, observe_id, 0);
@@ -344,7 +344,7 @@ mod tests {
         observer.on_role_change(&mut ctx, StateRole::Follower);
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
-        let oid = ObserveID::new();
+        let oid = ObserveId::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, StateRole::Follower);

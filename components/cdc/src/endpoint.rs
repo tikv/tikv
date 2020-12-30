@@ -21,7 +21,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
+use raftstore::store::fsm::{ChangeCmd, ObserveId, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use security::SecurityManager;
@@ -54,7 +54,7 @@ pub enum Deregister {
     },
     Region {
         region_id: u64,
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         err: Error,
     },
     Conn(ConnID),
@@ -140,7 +140,7 @@ pub enum Task {
         min_ts: TimeStamp,
     },
     ResolverReady {
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         region: Region,
         resolver: Resolver,
     },
@@ -608,7 +608,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
-    fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
+    fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.id == observe_id {
@@ -713,7 +713,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<(u64, ObserveID)> = self
+        let regions: Vec<(u64, ObserveId)> = self
             .capture_regions
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.id))
@@ -776,7 +776,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     async fn region_resolved_ts_raft(
-        regions: Vec<(u64, ObserveID)>,
+        regions: Vec<(u64, ObserveId)>,
         scheduler: &Scheduler<Task>,
         raft_router: T,
         min_ts: TimeStamp,
@@ -827,7 +827,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     async fn region_resolved_ts_store(
-        regions: Vec<(u64, ObserveID)>,
+        regions: Vec<(u64, ObserveId)>,
         store_meta: Arc<Mutex<StoreMeta>>,
         pd_client: Arc<dyn PdClient>,
         security_mgr: Arc<SecurityManager>,
@@ -1006,7 +1006,7 @@ struct Initializer {
     sched: Scheduler<Task>,
 
     region_id: u64,
-    observe_id: ObserveID,
+    observe_id: ObserveId,
     downstream_id: DownstreamID,
     downstream_state: Arc<AtomicCell<DownstreamState>>,
     conn_id: ConnID,
@@ -1335,7 +1335,7 @@ mod tests {
             sched: receiver_worker.scheduler(),
 
             region_id: 1,
-            observe_id: ObserveID::new(),
+            observe_id: ObserveId::new(),
             downstream_id: DownstreamID::new(),
             downstream_state,
             conn_id: ConnID::new(),
@@ -1802,7 +1802,7 @@ mod tests {
         let deregister = Deregister::Region {
             region_id: 1,
             // A stale ObserveID (different from the actual one).
-            observe_id: ObserveID::new(),
+            observe_id: ObserveId::new(),
             err: Error::Request(err_header),
         };
         ep.run(Task::Deregister(deregister));
