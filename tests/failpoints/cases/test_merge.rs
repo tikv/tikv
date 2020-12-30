@@ -574,8 +574,8 @@ fn test_node_merge_reject_request_snapshot() {
             req,
             Callback::Write {
                 cb: Box::new(|_: WriteResponse| {}),
-                proposed_cb: None,
-                committed_cb: Some(Box::new(move || tx.send(()).unwrap())),
+                proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
+                committed_cb: None,
             },
         )
         .unwrap();
