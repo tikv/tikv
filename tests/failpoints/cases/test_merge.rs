@@ -819,8 +819,8 @@ fn test_node_merge_transfer_leader() {
 
     cluster.run();
 
-    // To ensure the region has applied to its current term, to ensure later `split` can success
-    // without any retries, so that `left_peer_3` will must be `1003`.
+    // To ensure the region has applied to its current term so that later `split` can success
+    // without any retries. Then, `left_peer_3` will must be `1003`.
     let region = pd_client.get_region(b"k1").unwrap();
     let peer_1 = find_peer(&region, 1).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), peer_1);
