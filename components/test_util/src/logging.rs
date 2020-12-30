@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::sync::{Mutex, Once};
 use std::{env, fmt, io};
@@ -100,7 +100,19 @@ pub fn init_log_for_test() {
             &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
         )
         .unwrap();
-        let writer = output.map(|f| Mutex::new(File::create(f).unwrap()));
+        let writer = if env::var("LOG_APPEND").is_ok() {
+            output.map(|f| {
+                Mutex::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(f)
+                        .unwrap(),
+                )
+            })
+        } else {
+            output.map(|f| Mutex::new(File::create(f).unwrap()))
+        };
         // We don't mind set it multiple times.
         // We hardly ever read rocksdb log in tests.
         let drainer = CaseTraceLogger {
