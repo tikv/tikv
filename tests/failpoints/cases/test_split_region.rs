@@ -384,7 +384,7 @@ fn test_split_not_to_split_exist_tombstone_region() {
 
 /// A filter that collects all snapshots.
 ///
-/// It's different from the one in simulate_transport in two aspects:
+/// It's different from the one in simulate_transport in three aspects:
 /// 1. It will not flush the collected snapshots.
 /// 2. It will not report error when collecting snapshots.
 /// 3. It callers can access the collected snapshots.
@@ -430,13 +430,14 @@ impl Filter for CollectSnapshotFilter {
             }
         }
         msgs.extend(to_send);
+        check_messages(msgs)?;
         Ok(())
     }
 }
 
-/// If the uninitialized peer and split peer are fetched into one batch, and the front
+/// If the uninitialized peer and split peer are fetched into one batch, and the first
 /// one doesn't generate ready, the second one does, ready should not be mapped to the
-/// front one.
+/// first one.
 #[test]
 fn test_split_duplicated_batch() {
     let mut cluster = new_node_cluster(0, 3);
