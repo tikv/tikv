@@ -4451,6 +4451,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "fail 0.3.0",
  "futures 0.1.29",

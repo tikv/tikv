@@ -107,6 +107,11 @@ tempfile = "3.0"
 tidb_query = { path = "../components/tidb_query" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
+<<<<<<< HEAD
+=======
+error_code = { path = "../components/error_code" }
+collections = { path = "../components/collections" }
+>>>>>>> 3745fe98b... ci: stabilize case test_auto_gc (#9386)
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio-threadpool = "0.1.13"
 toml = "0.4"
