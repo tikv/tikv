@@ -15,4 +15,6 @@ mod observer;
 mod resolver;
 mod scanner;
 
+pub use endpoint::{DummySinker, Endpoint};
+pub use observer::ChangeDataObserver;
 pub use resolver::Resolver;

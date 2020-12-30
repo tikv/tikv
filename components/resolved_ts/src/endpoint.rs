@@ -5,9 +5,12 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, Snapshot};
+use grpcio::Environment;
 use kvproto::metapb::Region;
+use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
@@ -15,6 +18,8 @@ use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange, S
 use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::util::RemoteLease;
 use raftstore::store::RegionSnapshot;
+use security::SecurityManager;
+use tikv::config::CdcConfig;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
 use txn_types::{Key, TimeStamp};
 
@@ -154,6 +159,17 @@ pub trait CmdSinker<S: Snapshot>: Send {
     );
 }
 
+pub struct DummySinker<S: Snapshot>(PhantomData<S>);
+
+impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
+    fn sink_cmd(
+        &mut self,
+        change_logs: Vec<(ObserveID, Vec<ChangeLog>)>,
+        snapshot: RegionSnapshot<S>,
+    ) {
+    }
+}
+
 pub struct Endpoint<T, E: KvEngine, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
@@ -172,13 +188,28 @@ where
     C: CmdSinker<E::Snapshot>,
 {
     pub fn new(
+        cfg: &CdcConfig,
         scheduler: Scheduler<Task<E::Snapshot>>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
-        advance_worker: AdvanceTsWorker<T, E>,
-        scanner_pool: ScannerPool<T, E>,
+        pd_client: Arc<dyn PdClient>,
+        concurrency_manager: ConcurrencyManager,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
         sinker: Option<C>,
     ) -> Self {
+        let advance_worker = AdvanceTsWorker::new(
+            pd_client,
+            scheduler.clone(),
+            raft_router.clone(),
+            store_meta.clone(),
+            concurrency_manager,
+            env,
+            security_mgr,
+            cfg.min_ts_interval.0,
+            cfg.hibernate_regions_compatible,
+        );
+        let scanner_pool = ScannerPool::new(1, raft_router.clone());
         let ep = Self {
             scheduler,
             raft_router,

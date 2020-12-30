@@ -18,12 +18,33 @@ pub struct ChangeDataObserver<E: KvEngine> {
     scheduler: Scheduler<Task<E::Snapshot>>,
 }
 
+impl<E: KvEngine> Clone for ChangeDataObserver<E> {
+    fn clone(&self) -> ChangeDataObserver<E> {
+        ChangeDataObserver {
+            cmd_batches: self.cmd_batches.clone(),
+            scheduler: self.scheduler.clone(),
+        }
+    }
+}
+
 impl<E: KvEngine> ChangeDataObserver<E> {
     pub fn new(scheduler: Scheduler<Task<E::Snapshot>>) -> Self {
         ChangeDataObserver {
             cmd_batches: RefCell::default(),
             scheduler,
         }
+    }
+
+    pub fn register_to(self, coprocessor_host: &mut CoprocessorHost<E>) {
+        coprocessor_host
+            .registry
+            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 }
 

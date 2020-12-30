@@ -471,6 +471,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let cdc_scheduler = cdc_worker.scheduler();
         let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
 
+        // Resolved TS
+        let mut resolved_ts_worker = Box::new(LazyWorker::new("resolved-ts"));
+        let resolved_ts_scheduler = resolved_ts_worker.scheduler();
+
         self.engines
             .as_mut()
             .unwrap()
@@ -567,6 +571,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Register cdc
         let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
+        let change_data_ob = resolved_ts::ChangeDataObserver::new(resolved_ts_scheduler.clone());
+        change_data_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -692,6 +699,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
+
+        let sinker: Option<resolved_ts::DummySinker<_>> = None;
+
+        // Start resolved ts worker
+        let resolved_ts_endpoint = resolved_ts::Endpoint::new(
+            &self.config.cdc,
+            resolved_ts_scheduler,
+            self.router.clone(),
+            engines.store_meta.clone(),
+            self.pd_client.clone(),
+            self.concurrency_manager.clone(),
+            server.env(),
+            self.security_mgr.clone(),
+            sinker,
+        );
+        resolved_ts_worker.start(resolved_ts_endpoint);
+        self.to_stop.push(resolved_ts_worker);
 
         self.servers = Some(Servers {
             lock_mgr,

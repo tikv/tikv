@@ -83,6 +83,7 @@ protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
 raft_log_engine = { path = "../components/raft_log_engine" }
 raftstore = { path = "../components/raftstore" }
+resolved_ts = { path = "../components/resolved_ts" }
 rand = "0.7"
 security = { path = "../components/security" }
 serde_json = "1.0"
