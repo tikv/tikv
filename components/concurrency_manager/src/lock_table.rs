@@ -5,7 +5,7 @@ use super::key_handle::{KeyHandle, KeyHandleGuard};
 use crossbeam_skiplist::SkipMap;
 use std::{
     ops::Bound,
-    sync::{Arc, Weak},
+    sync::{atomic, Arc, Weak},
 };
 use txn_types::{Key, Lock};
 
