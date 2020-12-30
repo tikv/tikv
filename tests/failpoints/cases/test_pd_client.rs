@@ -56,6 +56,8 @@ fn test_pd_client_deadlock() {
         request!(client => get_cluster_config()),
         request!(client => get_region(b"")),
         request!(client => get_region_info(b"")),
+        request!(client => block_on(get_region_async(b""))),
+        request!(client => block_on(get_region_info_async(b""))),
         request!(client => block_on(get_region_by_id(0))),
         request!(client => block_on(region_heartbeat(0, Region::default(), Peer::default(), RegionStat::default(), None))),
         request!(client => block_on(ask_split(Region::default()))),
@@ -64,7 +66,7 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(report_batch_split(vec![]))),
         request!(client => scatter_region(RegionInfo::new(Region::default(), None))),
         request!(client => block_on(get_gc_safe_point())),
-        request!(client => get_store_stats(0)),
+        request!(client => block_on(get_store_stats_async(0))),
         request!(client => get_operator(0)),
         request!(client => block_on(get_tso())),
     ];
