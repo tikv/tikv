@@ -480,6 +480,15 @@ fn test_split_duplicated_batch() {
         panic!("the snapshot is not sent before split, e: {:?}", e);
     }
 
+    let (tx1, rx1) = mpsc::sync_channel(0);
+    let tx1 = Mutex::new(tx1);
+    fail::cfg_callback("on_split", move || {
+        // First is for notification, second is waiting for configuration.
+        let _ = tx1.lock().unwrap().send(());
+        let _ = tx1.lock().unwrap().send(());
+    })
+    .unwrap();
+
     let r2 = cluster.get_region(b"k0");
     let filter_r2 = Arc::new(AtomicBool::new(true));
     // So uninitialized peer will not generate ready for response.
@@ -502,15 +511,8 @@ fn test_split_duplicated_batch() {
         }
     }
 
-    let (tx1, rx1) = mpsc::sync_channel(0);
     let (tx2, rx2) = mpsc::sync_channel(0);
-    let tx1 = Mutex::new(tx1);
-    fail::cfg_callback("on_split", move || {
-        // First is for notification, second is waiting for configuration.
-        let _ = tx1.lock().unwrap().send(());
-        let _ = tx1.lock().unwrap().send(());
-    })
-    .unwrap();
+    // r1 has split.
     rx1.recv_timeout(Duration::from_secs(3)).unwrap();
     // Notify uninitialized peer to be ready be fetched at next try.
     for (peer_id, msg) in pending_msgs.lock().unwrap().iter() {
