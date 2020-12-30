@@ -9,8 +9,7 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future;
-use futures::future::TryFutureExt;
+use futures::future::{self, TryFutureExt};
 use futures::stream::Stream;
 use futures::stream::TryStreamExt;
 use futures::task::Context;
@@ -324,15 +323,15 @@ where
                 if let Err(e) = block_on(client.reconnect()) {
                     error!(?e; "reconnect failed");
                 }
-                err.replace(e);
+                err = Some(e);
             }
         }
     }
 
-    Err(err.unwrap_or(box_err!("fail to request")))
+    Err(err.unwrap_or_else(|| box_err!("fail to request")))
 }
 
-pub fn validate_endpoints(
+pub async fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
     security_mgr: Arc<SecurityManager>,
@@ -347,7 +346,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
+        let (_, resp) = match connect(Arc::clone(&env), &security_mgr, ep).await {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -379,7 +378,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) =
-                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
+                try_connect_leader(Arc::clone(&env), security_mgr, members).await?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
