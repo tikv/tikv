@@ -556,7 +556,9 @@ fn test_node_merge_reject_request_snapshot() {
 
     let k = b"k3_for_apply_to_current_term";
     cluster.must_put(k, b"value");
-    must_get_equal(&cluster.get_engine(1), k, b"value");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), k, b"value");
+    }
 
     let apply_prepare_merge_fp = "apply_before_prepare_merge";
     fail::cfg(apply_prepare_merge_fp, "pause").unwrap();
@@ -578,7 +580,7 @@ fn test_node_merge_reject_request_snapshot() {
         )
         .unwrap();
     // Proposing merge shouldn't fail.
-    assert!(rx.recv_timeout(Duration::from_millis(1000)).is_ok());
+    assert!(rx.recv_timeout(Duration::from_millis(200)).is_ok());
 
     // Install snapshot filter before requesting snapshot.
     let (tx, rx) = mpsc::channel();
@@ -824,7 +826,7 @@ fn test_node_merge_transfer_leader() {
     let region = pd_client.get_region(b"k1").unwrap();
     let peer_1 = find_peer(&region, 1).unwrap().to_owned();
     cluster.must_transfer_leader(region.get_id(), peer_1);
-    let k = b"k3_for_apply_to_current_term";
+    let k = b"k1_for_apply_to_current_term";
     cluster.must_put(k, b"value");
     must_get_equal(&cluster.get_engine(1), k, b"value");
 
