@@ -21,13 +21,19 @@ impl Default for LockTable {
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
-            let handle = Arc::new(KeyHandle::new(key.clone(), self.clone()));
+            let handle = Arc::new(KeyHandle::new(key.clone()));
             let weak = Arc::downgrade(&handle);
             let weak2 = weak.clone();
             let guard = handle.lock().await;
 
             let entry = self.0.get_or_insert(key.clone(), weak);
             if entry.value().ptr_eq(&weak2) {
+                // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
+                // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
+                // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
+                unsafe {
+                    guard.handle().set_table(self.clone());
+                }
                 return guard;
             } else if let Some(handle) = entry.value().upgrade() {
                 return handle.lock().await;
@@ -298,5 +304,20 @@ mod test {
 
         lock_table.for_each(|h| collect(h, &mut found_locks));
         assert_eq!(found_locks, expect_locks);
+    }
+
+    #[tokio::test]
+    async fn test_lock_key_when_handle_exists() {
+        let lock_table: LockTable = LockTable::default();
+        let key = Key::from_raw(b"key");
+        let guard = lock_table.lock_key(&key).await;
+        let handle = lock_table.get(&key).unwrap();
+        drop(guard);
+
+        let guard2 = lock_table.lock_key(&key).await;
+        drop(handle);
+
+        let handle = lock_table.get(&key).unwrap();
+        assert_eq!(Arc::as_ptr(&handle), Arc::as_ptr(guard2.handle()));
     }
 }
