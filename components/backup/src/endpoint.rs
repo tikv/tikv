@@ -68,8 +68,11 @@ impl fmt::Debug for Task {
         f.debug_struct("BackupTask")
             .field("start_ts", &self.request.start_ts)
             .field("end_ts", &self.request.end_ts)
-            .field("start_key", &hex::encode_upper(&self.request.start_key))
-            .field("end_key", &hex::encode_upper(&self.request.end_key))
+            .field(
+                "start_key",
+                &log_wrappers::Value::key(&self.request.start_key),
+            )
+            .field("end_key", &log_wrappers::Value::key(&self.request.end_key))
             .field("is_raw_kv", &self.request.is_raw_kv)
             .field("cf", &self.request.cf)
             .finish()
@@ -676,16 +679,16 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         Err(e) => {
                             error!(?e; "backup region failed";
                                 "region" => ?brange.region,
-                                "start_key" => hex::encode_upper(&start_key),
-                                "end_key" => hex::encode_upper(&end_key),
+                                "start_key" => &log_wrappers::Value::key(&start_key),
+                                "end_key" => &log_wrappers::Value::key(&end_key),
                             );
                             response.set_error(e.into());
                         }
                         Ok((mut files, stat)) => {
                             debug!("backup region finish";
                             "region" => ?brange.region,
-                            "start_key" => hex::encode_upper(&start_key),
-                            "end_key" => hex::encode_upper(&end_key),
+                            "start_key" => &log_wrappers::Value::key(&start_key),
+                            "end_key" => &log_wrappers::Value::key(&end_key),
                             "details" => ?stat);
 
                             for file in files.iter_mut() {

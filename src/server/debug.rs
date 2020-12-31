@@ -442,8 +442,8 @@ impl Debugger {
                     v1!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key)
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key)
                     );
 
                     recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
@@ -966,7 +966,7 @@ impl MvccChecker {
                             "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
                             kind,
-                            hex::encode_upper(key),
+                            log_wrappers::Value::key(key),
                             kind,
                             l.ts,
                             commit_ts
@@ -989,7 +989,7 @@ impl MvccChecker {
                             v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
-                                hex::encode_upper(key),
+                                log_wrappers::Value::key(key),
                                 l.ts
                             );
                             self.delete(wb, CF_LOCK, key, None)?;
@@ -1029,7 +1029,7 @@ impl MvccChecker {
                 v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     default.unwrap()
                 );
                 self.delete(wb, CF_DEFAULT, key, default)?;
@@ -1041,7 +1041,7 @@ impl MvccChecker {
                     v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         w.start_ts,
                         commit_ts
                     );
@@ -1272,8 +1272,10 @@ impl MvccInfoIterator {
                 _ => {
                     let err_msg = format!(
                         "scan_mvcc CF_DEFAULT corrupt: want {}, got {}",
-                        hex::encode_upper(&min_prefix),
-                        hex::encode_upper(box_try!(Key::truncate_ts_for(self.default_iter.key())))
+                        &log_wrappers::Value::key(&min_prefix),
+                        &log_wrappers::Value::key(box_try!(Key::truncate_ts_for(
+                            self.default_iter.key()
+                        )))
                     );
                     return Err(box_err!(err_msg));
                 }

@@ -389,14 +389,20 @@ impl<I: Iterator> Cursor<I> {
             panic!(
                 "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
                 e,
-                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.min_key
+                    .as_ref()
+                    .map(|x| &x[..])
+                    .map(log_wrappers::Value::key),
+                self.max_key
+                    .as_ref()
+                    .map(|x| &x[..])
+                    .map(log_wrappers::Value::key),
             );
         } else {
             error!(?e;
                 "failed to iterate";
-                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
-                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "min_key" => ?self.min_key.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key),
+                "max_key" => ?self.max_key.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key),
             );
             Err(e)
         }
