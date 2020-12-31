@@ -243,7 +243,7 @@ impl BackupRange {
                 let res = {
                     entries.as_slice().get(0).map_or_else(
                         || Err(Error::Other(box_err!("get entry error"))),
-                        |x| match x.as_key() {
+                        |x| match x.to_key() {
                             Ok(k) => {
                                 cur_key = k.into_raw().unwrap();
                                 writer_builder.build(cur_key.clone())
