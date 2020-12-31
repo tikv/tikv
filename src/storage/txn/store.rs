@@ -173,9 +173,9 @@ impl TxnEntry {
     /// This method will generate this kv pair's key
     pub fn as_key(&self) -> Result<Key> {
         match self {
-            TxnEntry::Commit {
-                write, ..
-            } => Ok(Key::from_encoded_slice(Key::truncate_ts_for(&write.0).unwrap())),
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
             // Prewrite are not support
             _ => unreachable!(),
         }

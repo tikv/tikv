@@ -15,7 +15,7 @@ use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, time::Limiter};
-use txn_types::{KvPair};
+use txn_types::KvPair;
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
