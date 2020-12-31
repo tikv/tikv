@@ -1621,7 +1621,7 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, &mut ready.ready);
+        self.apply_reads(ctx, &ready.ready);
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {

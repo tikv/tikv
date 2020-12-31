@@ -875,9 +875,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.region_id()
             );
         }
-        self.fsm
-            .peer
-            .handle_raft_ready_apply(self.ctx, ready);
+        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
     }
 
     pub fn post_raft_ready_append(&mut self, mut ready: CollectedReady) {
@@ -891,9 +889,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         if !self.fsm.early_apply {
-            self.fsm
-                .peer
-                .handle_raft_ready_apply(self.ctx, &mut ready);
+            self.fsm.peer.handle_raft_ready_apply(self.ctx, &mut ready);
         }
         let res = self
             .fsm
