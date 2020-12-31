@@ -325,8 +325,6 @@ fn test_read_index_when_transfer_leader_2() {
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
-    // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
