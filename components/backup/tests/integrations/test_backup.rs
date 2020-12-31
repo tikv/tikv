@@ -365,6 +365,36 @@ fn make_unique_dir(path: &Path) -> PathBuf {
     unique
 }
 
+fn assert_same_file_name(s1: String, s2: String) {
+    let tokens1:Vec<&str> = s1.split("_").collect();
+    let tokens2:Vec<&str> = s2.split("_").collect();
+    assert_eq!(tokens1.len(), tokens2.len());
+    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
+    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
+    // should be equal
+    for i in 0..tokens1.len() {
+        if i != 4 {
+            assert_eq!(tokens1[i], tokens2[i]);
+        }
+    }
+}
+
+fn assert_same_files(files1: Vec<kvproto::backup::File>, files2: Vec<kvproto::backup::File>) {
+    assert_eq!(files1.len(), files2.len());
+
+    // After https://github.com/tikv/tikv/pull/8707 merged.
+    // the backup file name will based on local timestamp.
+    // so the two backup's file name may not be same, we should skip this check.
+    for i in 0..files1.len() {
+        let mut f1 = files1[i].clone();
+        let mut f2 = files2[i].clone();
+        assert_same_file_name(f1.name, f2.name);
+        f1.name = "".to_string();
+        f2.name = "".to_string();
+        assert_eq!(f1, f2);
+    }
+}
+
 #[test]
 fn test_backup_and_import() {
     let mut suite = TestSuite::new(3, 144 * 1024 * 1024);
@@ -459,7 +489,7 @@ fn test_backup_and_import() {
         &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_eq!(files1, resps3[0].files);
+    assert_same_files(files1.into_vec(), resps3[0].files.clone().into_vec());
 
     suite.stop();
 }
@@ -547,16 +577,7 @@ fn test_backup_huge_range_and_import() {
         &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
-    assert_eq!(files1.len(), resps3[0].files.len());
-
-    // different backup should be the same except the file names(because since_the_epoch are different)
-    let files2 = resps3[0].files.clone();
-    for i in 0..files1.len() {
-        let mut f1 = files1[i].clone();
-        let f2 = files2[i].clone();
-        f1.name = f2.name.clone();
-        assert_eq!(f1, f2);
-    }
+    assert_same_files(files1.into_vec(), resps3[0].files.clone().into_vec());
 
     suite.stop();
 }
