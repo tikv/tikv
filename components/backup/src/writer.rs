@@ -15,7 +15,7 @@ use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, time::Limiter};
-use txn_types::{Key, KvPair};
+use txn_types::{KvPair};
 
 use crate::metrics::*;
 use crate::{backup_file_name, Error, Result};
@@ -143,12 +143,8 @@ impl BackupWriterBuilder {
         }
     }
 
-    pub fn build(&self, start_key: Option<Key>) -> Result<BackupWriter> {
-        let key = start_key.and_then(|k| {
-            // use start_key sha256 instead of start_key to avoid file name too long os error
-            let input = k.into_raw().unwrap();
-            file_system::sha256(&input).ok().map(hex::encode)
-        });
+    pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter> {
+        let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key);
         BackupWriter::new(

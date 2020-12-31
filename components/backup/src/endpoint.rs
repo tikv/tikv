@@ -219,15 +219,15 @@ impl BackupRange {
         let start_scan = Instant::now();
         let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
-        let mut writer = writer_builder.build(self.start_key.clone())?;
         let mut last_key = self
             .start_key
             .clone()
-            .map_or_else(Vec::new, |k| k.into_encoded());
+            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
         let mut cur_key = self
             .end_key
             .clone()
-            .map_or_else(Vec::new, |k| k.into_encoded());
+            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+        let mut writer = writer_builder.build(last_key.clone())?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -245,9 +245,8 @@ impl BackupRange {
                         || Err(Error::Other(box_err!("get entry error"))),
                         |x| match x.as_key() {
                             Ok(k) => {
-                                let key = Some(Key::from_raw(&k));
-                                cur_key = key.clone().map_or_else(Vec::new, |k| k.into_encoded());
-                                writer_builder.build(key)
+                                cur_key = k.into_raw().unwrap();
+                                writer_builder.build(cur_key.clone())
                             }
                             Err(e) => {
                                 error!(?e; "backup save file failed");
@@ -297,7 +296,7 @@ impl BackupRange {
                     cur_key = self
                         .end_key
                         .clone()
-                        .map_or_else(Vec::new, |k| k.into_encoded());
+                        .map_or_else(Vec::new, |k| k.into_raw().unwrap());
                     for file in split_files.iter_mut() {
                         file.set_start_key(last_key.clone());
                         file.set_end_key(cur_key.clone());
