@@ -438,3 +438,29 @@ pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<
     let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
     assert!(txn::cleanup(&mut txn, Key::from_raw(key), TimeStamp::zero(), false).is_err());
 }
+
+pub fn must_one_pc<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    start_ts: impl Into<TimeStamp>,
+) {
+    let ctx = Context::default();
+    let start_ts = start_ts.into();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
+    let cm = ConcurrencyManager::new(start_ts);
+    let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
+
+    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+    let txn_props = TransactionProperties {
+        start_ts,
+        kind: TransactionKind::Optimistic(false),
+        commit_kind: CommitKind::OnePc(TimeStamp::max()),
+        primary: key,
+        txn_size: 0,
+        lock_ttl: 0,
+        min_commit_ts: start_ts,
+    };
+    prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
+    write(engine, &ctx, txn.into_modifies());
+}
