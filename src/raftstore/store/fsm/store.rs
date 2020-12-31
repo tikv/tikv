@@ -12,6 +12,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -20,6 +21,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
+=======
+use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use protobuf::Message;
+use raft::StateRole;
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
@@ -33,6 +39,7 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 #[cfg(not(feature = "no-fail"))]
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
@@ -50,6 +57,23 @@ use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
     SplitCheckRunner, SplitCheckTask,
+=======
+use crate::store::fsm::ApplyNotifier;
+use crate::store::fsm::ApplyTaskRes;
+use crate::store::fsm::{
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+    CollectedReady,
+};
+use crate::store::local_metrics::RaftMetrics;
+use crate::store::metrics::*;
+use crate::store::peer_storage::{self, HandleRaftReadyContext};
+use crate::store::transport::Transport;
+use crate::store::util::{is_initial_msg, PerfContextStatistics};
+use crate::store::worker::{
+    AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
+    CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
+    RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask, SplitCheckTask,
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
 };
 use crate::raftstore::store::{
     Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager, SnapshotDeleter,
@@ -196,8 +220,19 @@ impl RaftRouter {
     }
 }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
 pub struct PollContext<T, C: 'static> {
     pub cfg: Arc<Config>,
+=======
+pub struct PollContext<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    /// The count of processed normal Fsm.
+    pub processed_fsm_count: usize,
+    pub cfg: Config,
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -226,9 +261,13 @@ pub struct PollContext<T, C: 'static> {
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
+=======
+    pub ready_res: Vec<CollectedReady>,
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub node_start_time: Option<TiInstant>,
@@ -547,6 +586,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
             for (ready, invoke_ctx) in ready_res.drain(..) {
@@ -559,6 +599,12 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
                     .post_raft_ready_append(ready, invoke_ctx);
+=======
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
+            for ready in ready_res.drain(..) {
+                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
+                    .post_raft_ready_append(ready);
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
             }
         }
         let dur = self.timer.elapsed();
@@ -594,6 +640,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
@@ -667,7 +714,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
         delegate.collect_ready(&mut self.pending_proposals);
+=======
+        delegate.collect_ready();
+        self.poll_ctx.processed_fsm_count += 1;
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
         expected_msg_count
     }
 
@@ -893,9 +945,16 @@ where
 {
     type Handler = RaftPoller<T, C>;
 
+<<<<<<< HEAD:src/raftstore/store/fsm/store.rs
     fn build(&mut self) -> RaftPoller<T, C> {
         let ctx = PollContext {
             cfg: self.cfg.clone(),
+=======
+    fn build(&mut self) -> RaftPoller<EK, ER, T> {
+        let mut ctx = PollContext {
+            processed_fsm_count: 0,
+            cfg: self.cfg.value().clone(),
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/store.rs
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),

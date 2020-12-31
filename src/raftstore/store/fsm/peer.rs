@@ -64,6 +64,7 @@ pub struct DestroyPeerJob {
     pub peer: metapb::Peer,
 }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
 /// Represents state of the group.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GroupState {
@@ -81,6 +82,31 @@ pub enum GroupState {
 
 pub struct PeerFsm {
     peer: Peer,
+=======
+pub struct CollectedReady {
+    /// The offset of source peer in the batch system.
+    pub batch_offset: usize,
+    pub ctx: InvokeContext,
+    pub ready: Ready,
+}
+
+impl CollectedReady {
+    pub fn new(ctx: InvokeContext, ready: Ready) -> CollectedReady {
+        CollectedReady {
+            batch_offset: 0,
+            ctx,
+            ready,
+        }
+    }
+}
+
+pub struct PeerFsm<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub peer: Peer<EK, ER>,
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/peer.rs
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     /// Ticks for speed up campaign in chaos state.
@@ -572,9 +598,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             proposals.push(p);
         }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
         if let Some(r) = res {
             self.on_role_changed(&r.0);
             if !r.0.entries.is_empty() {
+=======
+        if let Some(mut r) = res {
+            // This bases on an assumption that fsm array passed in `end` method will have
+            // the same order of processing.
+            r.batch_offset = self.ctx.processed_fsm_count;
+            self.on_role_changed(&r.ready);
+            if r.ctx.has_new_entries {
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/peer.rs
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
@@ -582,6 +617,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         let res = self
@@ -590,6 +626,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
         self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
         let mut has_snapshot = false;
+=======
+    pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
+        if ready.ctx.region_id != self.fsm.region_id() {
+            panic!(
+                "{} region id not matched: {} # {}",
+                self.fsm.peer.tag,
+                ready.ctx.region_id,
+                self.fsm.region_id()
+            );
+        }
+        let is_merging = self.fsm.peer.pending_merge_state.is_some();
+        let res = self.fsm.peer.post_raft_ready_append(self.ctx, ready.ctx);
+        self.fsm
+            .peer
+            .handle_raft_ready_advance(self.ctx, ready.ready);
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/peer.rs
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             has_snapshot = true;
@@ -1486,7 +1538,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+<<<<<<< HEAD:src/raftstore/store/fsm/peer.rs
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+=======
+    fn on_ready_split_region(
+        &mut self,
+        derived: metapb::Region,
+        regions: Vec<metapb::Region>,
+        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+    ) {
+        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389):components/raftstore/src/store/fsm/peer.rs
         self.register_split_region_check_tick();
         let mut guard = self.ctx.store_meta.lock().unwrap();
         let meta: &mut StoreMeta = &mut *guard;
@@ -1621,6 +1683,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
         }
+        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
     fn register_merge_check_tick(&mut self) {
