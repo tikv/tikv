@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(core_intrinsics)]
+#![feature(option_result_contains)]
 #![feature(test)]
 
 #[macro_use]

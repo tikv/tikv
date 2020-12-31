@@ -6,6 +6,13 @@ use std::ptr::NonNull;
 use std::time::Duration;
 use tokio::sync::Notify as TokioNotify;
 
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum WaitPriority {
+    Low,
+    High,
+}
+
 struct DoublyLinkedNode<T> {
     prev: Cell<Option<NonNull<T>>>,
     next: Cell<Option<NonNull<T>>>,
@@ -26,11 +33,11 @@ enum CondvarNode {
 }
 
 impl CondvarNode {
-    pub fn new_sync() -> CondvarNode {
+    pub fn new_sync() -> Self {
         CondvarNode::Sync(ParkingLotCondvar::new(), DoublyLinkedNode::new())
     }
 
-    pub fn new_async() -> CondvarNode {
+    pub fn new_async() -> Self {
         CondvarNode::Async(TokioNotify::new(), DoublyLinkedNode::new())
     }
 
@@ -72,31 +79,21 @@ impl CondvarNode {
     }
 }
 
-/// Un-prioritized conditional variable. Supports both synchronously or
-/// asynchronously waiting on the same instance.
-/// TODO: Prioritized waiting
-/// Maintains multiple linked list for each priority. When notified, instead of
-/// waking up all nodes at once, sort them to a seperate waiting queue and only
-/// wake up the leader.
 #[derive(Debug)]
-pub struct Condvar {
+struct CondvarLinkedList {
     head: Cell<Option<NonNull<CondvarNode>>>,
     tail: Cell<Option<NonNull<CondvarNode>>>,
 }
 
-unsafe impl Send for Condvar {}
-unsafe impl Sync for Condvar {}
-
-impl Condvar {
-    pub fn new() -> Condvar {
-        Condvar {
+impl CondvarLinkedList {
+    pub fn new() -> Self {
+        CondvarLinkedList {
             head: Cell::new(None),
             tail: Cell::new(None),
         }
     }
 
-    #[inline]
-    fn enqueue(&self, raw_node: &mut CondvarNode) {
+    pub fn enqueue(&self, raw_node: &mut CondvarNode) {
         let node = unsafe { Some(NonNull::new_unchecked(raw_node)) };
         raw_node.set_prev(self.tail.get());
         if let Some(tail) = self.tail.get() {
@@ -109,36 +106,106 @@ impl Condvar {
         self.tail.set(node);
     }
 
+    pub fn append(&self, rhs: &CondvarLinkedList) {
+        if rhs.head.get().is_none() {
+            return;
+        }
+        if self.head.get().is_none() {
+            assert!(self.tail.get().is_none());
+            self.head.swap(&rhs.head);
+            self.tail.swap(&rhs.tail);
+        } else {
+            unsafe {
+                self.tail.get().unwrap().as_ref().set_next(rhs.head.get());
+                rhs.head.get().unwrap().as_ref().set_prev(self.tail.get())
+            }
+            self.tail.set(rhs.tail.get());
+            rhs.head.set(None);
+            rhs.tail.set(None);
+        }
+    }
+
+    pub fn empty(&self) -> bool {
+        self.head.get().is_none()
+    }
+}
+
+/// Un-prioritized conditional variable. Supports both synchronously or
+/// asynchronously waiting on the same instance.
+#[derive(Debug)]
+pub struct Condvar {
+    high_priority: CondvarLinkedList,
+    low_priority: CondvarLinkedList,
+    pending: CondvarLinkedList,
+}
+
+unsafe impl Send for Condvar {}
+unsafe impl Sync for Condvar {}
+
+impl Condvar {
+    pub fn new() -> Self {
+        Condvar {
+            high_priority: CondvarLinkedList::new(),
+            low_priority: CondvarLinkedList::new(),
+            pending: CondvarLinkedList::new(),
+        }
+    }
+
     #[inline]
-    fn dequeue(&self, raw_node: &mut CondvarNode) {
+    fn enqueue(&self, raw_node: &mut CondvarNode, priority: WaitPriority) {
+        match priority {
+            WaitPriority::Low => self.low_priority.enqueue(raw_node),
+            WaitPriority::High => self.high_priority.enqueue(raw_node),
+        }
+    }
+
+    #[inline]
+    fn dequeue_and_maybe_notify_next(&self, raw_node: &mut CondvarNode) {
         let prev = raw_node.get_prev();
         let next = raw_node.get_next();
+        let boxed_node = unsafe { NonNull::new_unchecked(raw_node) };
         if let Some(prev) = prev {
             unsafe {
                 prev.as_ref().set_next(next);
             }
+        } else if self.pending.head.get().contains(&boxed_node) {
+            // need to wake up next
+            if let Some(next) = next {
+                unsafe {
+                    next.as_ref().notify();
+                }
+            }
+            self.pending.head.set(next);
+        } else if self.high_priority.head.get().contains(&boxed_node) {
+            self.high_priority.head.set(next);
         } else {
-            assert!(self.head.get().unwrap().as_ptr() == raw_node);
-            self.head.set(next);
+            assert!(self.low_priority.head.get().contains(&boxed_node));
+            self.low_priority.head.set(next);
         }
         if let Some(next) = next {
             unsafe {
                 next.as_ref().set_prev(prev);
             }
+        } else if self.pending.tail.get().contains(&boxed_node) {
+            self.pending.tail.set(prev);
+        } else if self.high_priority.tail.get().contains(&boxed_node) {
+            self.high_priority.tail.set(prev);
         } else {
-            assert!(self.tail.get().unwrap().as_ptr() == raw_node);
-            self.tail.set(prev);
+            assert!(self.low_priority.tail.get().contains(&boxed_node));
+            self.low_priority.tail.set(prev);
         }
     }
 
     /// Notifies all waiters in queue as till now.
     pub fn notify_all(&self) {
-        let mut ptr = self.head.get();
-        while let Some(inner) = ptr {
-            unsafe {
-                let node = inner.as_ref();
-                node.notify();
-                ptr = node.get_next();
+        let empty = self.pending.empty();
+        self.pending.append(&self.high_priority);
+        self.pending.append(&self.low_priority);
+        if empty {
+            if let Some(head) = self.pending.head.get() {
+                unsafe {
+                    head.as_ref().notify();
+                }
             }
         }
     }
@@ -147,18 +214,27 @@ impl Condvar {
     /// timing out after a specified duration.
     pub fn wait_timeout<'a, T>(
         &self,
+        guard: MutexGuard<'a, T>,
+        timeout: Duration,
+    ) -> (MutexGuard<'a, T>, bool) {
+        self.wait_timeout_with_priority(guard, timeout, WaitPriority::High)
+    }
+
+    pub fn wait_timeout_with_priority<'a, T>(
+        &self,
         mut guard: MutexGuard<'a, T>,
         timeout: Duration,
+        priority: WaitPriority,
     ) -> (MutexGuard<'a, T>, bool) {
         // mutable just to indulge NonNull
         let mut node = CondvarNode::new_sync();
-        self.enqueue(&mut node);
+        self.enqueue(&mut node, priority);
         // alternative: std::thread::park_timeout suffers from spurious wake
         let res = match node {
             CondvarNode::Sync(ref condv, _) => condv.wait_for(&mut guard, timeout),
             _ => unreachable!(),
         };
-        self.dequeue(&mut node);
+        self.dequeue_and_maybe_notify_next(&mut node);
         (guard, res.timed_out())
     }
 
@@ -171,8 +247,19 @@ impl Condvar {
         guard: MutexGuard<'b, T>,
         timeout: Duration,
     ) -> (MutexGuard<'a, T>, bool) {
+        self.async_wait_timeout_with_priority(mu, guard, timeout, WaitPriority::High)
+            .await
+    }
+
+    pub async fn async_wait_timeout_with_priority<'a, 'b, T>(
+        &self,
+        mu: &'a Mutex<T>,
+        guard: MutexGuard<'b, T>,
+        timeout: Duration,
+        priority: WaitPriority,
+    ) -> (MutexGuard<'a, T>, bool) {
         let mut node = CondvarNode::new_async();
-        self.enqueue(&mut node);
+        self.enqueue(&mut node, priority);
         std::mem::drop(guard);
         let timed_out = {
             let f = match node {
@@ -182,7 +269,7 @@ impl Condvar {
             tokio::time::timeout(timeout, f).await
         };
         let guard = mu.lock();
-        self.dequeue(&mut node);
+        self.dequeue_and_maybe_notify_next(&mut node);
         (guard, timed_out.is_err())
     }
 }
@@ -201,7 +288,7 @@ mod tests {
     fn test_condvar() {
         let long_timeout_millis = 1000 * 100;
         let short_timeout_millis = 5;
-        let total_waits = 50;
+        let wait_group_size = 10;
 
         let mu = Arc::new(Mutex::new(()));
         let condv = Arc::new(Condvar::new());
@@ -210,7 +297,7 @@ mod tests {
         let exit_ticket = Arc::new(AtomicUsize::new(0));
 
         let begin = Instant::now_coarse();
-        for i in 0..total_waits {
+        for i in 0..wait_group_size * 3 {
             let (mu, condv, enter, exit) = (
                 mu.clone(),
                 condv.clone(),
@@ -232,22 +319,34 @@ mod tests {
                     assert_eq!(exit.fetch_add(1, Ordering::Relaxed), i / 3);
                 } else if i % 3 == 1 {
                     let mut rt = tokio::runtime::Runtime::new().unwrap();
-                    let (_, timed_out) = rt.block_on(condv.async_wait_timeout(
+                    let (_guard, timed_out) = rt.block_on(condv.async_wait_timeout_with_priority(
                         &mu,
                         guard,
                         Duration::from_millis(long_timeout_millis),
+                        WaitPriority::High,
                     ));
                     assert_eq!(timed_out, false);
+                    assert_eq!(
+                        exit.fetch_add(1, Ordering::Relaxed),
+                        wait_group_size + i / 3
+                    );
                 } else {
-                    let (_, timed_out) =
-                        condv.wait_timeout(guard, Duration::from_millis(long_timeout_millis));
+                    let (_guard, timed_out) = condv.wait_timeout_with_priority(
+                        guard,
+                        Duration::from_millis(long_timeout_millis),
+                        WaitPriority::Low,
+                    );
                     assert_eq!(timed_out, false);
+                    assert_eq!(
+                        exit.fetch_add(1, Ordering::Relaxed),
+                        wait_group_size * 2 + i / 3
+                    );
                 }
             });
             threads.push(t);
         }
-        while exit_ticket.load(Ordering::Relaxed) != (total_waits + 2) / 3
-            || enter_ticket.load(Ordering::Relaxed) != total_waits
+        while exit_ticket.load(Ordering::Relaxed) != wait_group_size
+            || enter_ticket.load(Ordering::Relaxed) != wait_group_size * 3
         {
             std::thread::yield_now();
         }
