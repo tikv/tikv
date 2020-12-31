@@ -36,8 +36,17 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+<<<<<<< HEAD
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
+=======
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
+use crate::store::hibernate_state::GroupState;
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
+use crate::store::{
+    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
+    SplitCheckTask,
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
@@ -1273,8 +1282,13 @@ impl Peer {
 
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
+<<<<<<< HEAD
         ctx: &mut PollContext<T, C>,
     ) -> Option<(Ready, InvokeContext)> {
+=======
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> Option<CollectedReady> {
+>>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
         if self.pending_remove {
             return None;
         }
@@ -1461,7 +1475,7 @@ impl Peer {
             }
         };
 
-        Some((ready, invoke_ctx))
+        Some(CollectedReady::new(invoke_ctx, ready))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(
