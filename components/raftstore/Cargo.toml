@@ -51,7 +51,6 @@ file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
-hex = "0.4"
 into_other = { path = "../into_other" }
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
@@ -78,6 +77,7 @@ tempfile = "3.0"
 tidb_query_datatype = { path = "../tidb_query_datatype" }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 time = "0.1"
 tokio = { version = "0.2", features = ["sync", "rt-threaded"] }
 txn_types = { path = "../txn_types" }

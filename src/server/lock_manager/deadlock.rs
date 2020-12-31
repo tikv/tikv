@@ -7,6 +7,7 @@ use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
+use collections::{HashMap, HashSet};
 use engine_rocks::RocksEngine;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
@@ -24,12 +25,11 @@ use raftstore::coprocessor::{
     RegionChangeEvent, RegionChangeObserver, RoleObserver,
 };
 use raftstore::store::util::is_region_initialized;
-use security::{check_common_name, SecurityManager};
+use security::SecurityManager;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
@@ -844,19 +844,13 @@ where
 pub struct Service {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: Scheduler,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: Scheduler,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(waiter_mgr_scheduler: WaiterMgrScheduler, detector_scheduler: Scheduler) -> Self {
         Self {
             waiter_mgr_scheduler,
             detector_scheduler,
-            security_mgr,
         }
     }
 }
@@ -869,9 +863,6 @@ impl Deadlock for Service {
         _req: WaitForEntriesRequest,
         sink: UnarySink<WaitForEntriesResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             let status = RpcStatus::new(
@@ -899,9 +890,6 @@ impl Deadlock for Service {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {

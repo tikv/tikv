@@ -14,6 +14,7 @@ use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
@@ -35,7 +36,6 @@ use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
-use tikv_util::collections::HashMap;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -90,7 +90,10 @@ impl TestSuite {
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
-                BackupConfig { num_threads: 4 },
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                },
                 concurrency_manager.clone(),
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));

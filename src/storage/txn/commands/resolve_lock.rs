@@ -9,7 +9,7 @@ use crate::storage::txn::commands::{
 };
 use crate::storage::txn::{cleanup, commit, Error, ErrorInner, Result};
 use crate::storage::{ProcessResult, Snapshot};
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use txn_types::{Key, Lock, TimeStamp};
 
 command! {

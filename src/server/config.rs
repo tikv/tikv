@@ -5,7 +5,7 @@ use std::{cmp, i32, isize};
 use super::Result;
 use grpcio::CompressionAlgorithms;
 
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 

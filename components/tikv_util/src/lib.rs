@@ -31,13 +31,13 @@ use std::time::Duration;
 use std::{env, thread, u64};
 
 use fs2::FileExt;
+
 use rand::rngs::ThreadRng;
 
 #[macro_use]
 pub mod log;
 pub mod buffer_vec;
 pub mod codec;
-pub mod collections;
 pub mod config;
 pub mod future;
 #[macro_use]

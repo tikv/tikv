@@ -41,8 +41,10 @@ serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { path = "../tikv_util" }
+collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 static_assertions = { version = "1.0", features = ["nightly"] }
 tidb_query_common = { path = "../tidb_query_common" }
 tikv_alloc = { path = "../tikv_alloc" }
 bstr = "0.2.8"
+log_wrappers = { path = "../log_wrappers" }

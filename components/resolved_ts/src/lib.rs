@@ -3,9 +3,9 @@
 #[macro_use(debug)]
 extern crate tikv_util;
 
+use collections::HashSet;
 use std::cmp;
 use std::collections::BTreeMap;
-use tikv_util::collections::HashSet;
 use txn_types::TimeStamp;
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
@@ -46,7 +46,7 @@ impl Resolver {
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
         debug!(
             "track lock {}@{}, region {}",
-            hex::encode_upper(key.clone()),
+            &log_wrappers::Value::key(&key),
             start_ts,
             self.region_id
         );
@@ -61,7 +61,7 @@ impl Resolver {
     ) {
         debug!(
             "untrack lock {}@{}, commit@{}, region {}",
-            hex::encode_upper(key.clone()),
+            &log_wrappers::Value::key(&key),
             start_ts,
             commit_ts.clone().unwrap_or_else(TimeStamp::zero),
             self.region_id,
@@ -70,7 +70,7 @@ impl Resolver {
             assert!(
                 self.resolved_ts.map_or(true, |rts| commit_ts > rts),
                 "{}@{}, commit@{} < {:?}, region {}",
-                hex::encode_upper(key),
+                &log_wrappers::Value::key(&key),
                 start_ts,
                 commit_ts,
                 self.resolved_ts,
@@ -79,7 +79,7 @@ impl Resolver {
             assert!(
                 commit_ts > self.min_ts,
                 "{}@{}, commit@{} < {:?}, region {}",
-                hex::encode_upper(key),
+                &log_wrappers::Value::key(&key),
                 start_ts,
                 commit_ts,
                 self.min_ts,
@@ -92,7 +92,7 @@ impl Resolver {
         assert!(
             entry.is_some() || commit_ts.is_none(),
             "{}@{}, commit@{} is not tracked, region {}",
-            hex::encode_upper(key),
+            &log_wrappers::Value::key(&key),
             start_ts,
             commit_ts.unwrap_or_else(TimeStamp::zero),
             self.region_id
@@ -101,7 +101,7 @@ impl Resolver {
             assert!(
                 locked_keys.remove(&key) || commit_ts.is_none(),
                 "{}@{}, commit@{} is not tracked, region {}, {:?}",
-                hex::encode_upper(key),
+                &log_wrappers::Value::key(&key),
                 start_ts,
                 commit_ts.unwrap_or_else(TimeStamp::zero),
                 self.region_id,

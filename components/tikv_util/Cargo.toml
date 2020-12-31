@@ -24,12 +24,11 @@ fail = "0.4"
 file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
-fxhash = "0.2.1"
 grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
-hex = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
 prometheus = { version = "0.10", features = ["nightly"] }
@@ -44,6 +43,7 @@ slog-json = "2.3"
 slog-term = "2.4"
 sysinfo = "0.15"
 tikv_alloc = { path = "../tikv_alloc" }
+collections = { path = "../collections" }
 time = "0.1"
 tokio = { version = "0.2", features = ["rt-util"] }
 tokio-executor = "0.1"
