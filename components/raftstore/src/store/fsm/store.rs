@@ -20,8 +20,7 @@ use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use protobuf::Message;
-<<<<<<< HEAD
-use raft::{Ready, StateRole};
+use raft::StateRole;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -30,9 +29,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
-=======
-use raft::StateRole;
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
 use time::{self, Timespec};
 
 use crate::coprocessor::split_observer::SplitObserver;
@@ -47,12 +43,7 @@ use crate::store::fsm::peer::{
 #[cfg(feature = "failpoints")]
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
-<<<<<<< HEAD
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-=======
-    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-    CollectedReady,
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask, CollectedReady
 };
 use crate::store::fsm::{ApplyNotifier, RegionProposal};
 use crate::store::local_metrics::RaftMetrics;
@@ -241,17 +232,9 @@ impl Clone for PeerTickBatch {
     }
 }
 
-<<<<<<< HEAD
 pub struct PollContext<T, C: 'static> {
-=======
-pub struct PollContext<EK, ER, T>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
     /// The count of processed normal Fsm.
     pub processed_fsm_count: usize,
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
@@ -280,12 +263,8 @@ where
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
-<<<<<<< HEAD
-    pub ready_res: Vec<(Ready, InvokeContext)>,
-    pub need_flush_trans: bool,
-=======
     pub ready_res: Vec<CollectedReady>,
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
+    pub need_flush_trans: bool,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -577,18 +556,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
         if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, vec![]);
-            for (ready, invoke_ctx) in &mut ready_res {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .handle_raft_ready_apply(ready, invoke_ctx);
+            let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
+            for ready in &mut ready_res {
+                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
+                    .handle_raft_ready_apply(ready);
             }
             self.poll_ctx.ready_res = ready_res;
         }
@@ -648,25 +619,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
-<<<<<<< HEAD
-            let mut batch_pos = 0;
-            let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
-            for (ready, invoke_ctx) in ready_res.drain(..) {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
-=======
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for ready in ready_res.drain(..) {
                 PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
                     .post_raft_ready_append(ready);
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
             }
         }
         let dur = self.timer.elapsed();
@@ -826,12 +782,8 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
-<<<<<<< HEAD
         delegate.collect_ready(&mut self.pending_proposals);
-=======
-        delegate.collect_ready();
         self.poll_ctx.processed_fsm_count += 1;
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
         expected_msg_count
     }
 

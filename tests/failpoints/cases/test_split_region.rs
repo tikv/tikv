@@ -11,7 +11,8 @@ use raftstore::store::util::is_vote_msg;
 use raftstore::Result;
 use tikv_util::HandyRwLock;
 
-use collections::HashMap;
+use tikv_util::collections::HashMap;
+use tikv_util::config::ReadableDuration;
 use test_raftstore::*;
 
 #[test]

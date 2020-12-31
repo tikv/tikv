@@ -36,17 +36,8 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-<<<<<<< HEAD
 use crate::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
-=======
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
-use crate::store::hibernate_state::GroupState;
-use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
-use crate::store::{
-    Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
-    SplitCheckTask,
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
+    apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
@@ -1282,13 +1273,8 @@ impl Peer {
 
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
-<<<<<<< HEAD
         ctx: &mut PollContext<T, C>,
-    ) -> Option<(Ready, InvokeContext)> {
-=======
-        ctx: &mut PollContext<EK, ER, T>,
     ) -> Option<CollectedReady> {
->>>>>>> d9eb64583... raftstore: match ready by batch_offset (#9389)
         if self.pending_remove {
             return None;
         }
@@ -1538,8 +1524,7 @@ impl Peer {
     pub fn handle_raft_ready_apply<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        ready: &mut Ready,
-        invoke_ctx: &InvokeContext,
+        ready: &mut CollectedReady,
     ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -1548,9 +1533,9 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
-            let committed_entries = ready.committed_entries.take().unwrap();
+        if raft::is_empty_snap(ready.ready.snapshot()) {
+            debug_assert!(!ready.ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
+            let committed_entries = ready.ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
             if !lease_to_be_updated {
@@ -1636,7 +1621,7 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, ready);
+        self.apply_reads(ctx, &mut ready.ready);
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
