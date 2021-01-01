@@ -15,7 +15,7 @@ prost-codec = [
 
 [dependencies]
 parking_lot = "0.11"
-tokio = { version = "0.2", features = ["sync"] }
+tokio = { version = "0.2", features = ["macros", "sync", "time"] }
 txn_types = { path = "../txn_types", default-features = false }
 fail = "0.4"
 
