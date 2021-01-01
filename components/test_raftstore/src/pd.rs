@@ -10,7 +10,7 @@ use std::{cmp, thread};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future::{err, ok, FutureExt};
+use futures::future::{err, ok, ready, BoxFuture, FutureExt};
 use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
@@ -1284,7 +1284,7 @@ impl PdClient for TestPdClient {
 
         Err(box_err!(
             "no region contains key {}",
-            hex::encode_upper(key)
+            log_wrappers::hex_encode_upper(key)
         ))
     }
 
@@ -1495,13 +1495,14 @@ impl PdClient for TestPdClient {
         Box::pin(ok(safe_point))
     }
 
-    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+    fn get_store_stats_async(&self, store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         let cluster = self.cluster.rl();
         let stats = cluster.store_stats.get(&store_id);
-        match stats {
+        ready(match stats {
             Some(s) => Ok(s.clone()),
             None => Err(Error::StoreTombstone(format!("store_id:{}", store_id))),
-        }
+        })
+        .boxed()
     }
 
     fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {

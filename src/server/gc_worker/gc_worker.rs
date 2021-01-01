@@ -104,8 +104,8 @@ impl Display for GcTask {
                 ..
             } => f
                 .debug_struct("GC")
-                .field("start_key", &hex::encode_upper(&start_key))
-                .field("end_key", &hex::encode_upper(&end_key))
+                .field("start_key", &log_wrappers::Value::key(&start_key))
+                .field("end_key", &log_wrappers::Value::key(&end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::UnsafeDestroyRange {
@@ -283,8 +283,8 @@ where
         self.stats.add(reader.get_statistics());
         debug!(
             "gc has finished";
-            "start_key" => hex::encode_upper(start_key),
-            "end_key" => hex::encode_upper(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
             "safe_point" => safe_point
         );
         Ok(())
@@ -459,8 +459,8 @@ where
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    log_wrappers::Value::key(&start_key),
+                    log_wrappers::Value::key(&end_key),
                     safe_point
                 );
             }
@@ -649,9 +649,8 @@ where
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGcConfig<S, R>,
-    ) -> Result<Arc<AtomicU64>> {
-        let safe_point = Arc::new(AtomicU64::new(0));
-
+        safe_point: Arc<AtomicU64>, // Store safe point here.
+    ) -> Result<()> {
         let kvdb = self.engine.kv_engine();
         let cfg_mgr = self.config_manager.clone();
         let feature_gate = self.feature_gate.clone();
@@ -661,14 +660,14 @@ where
         assert!(handle.is_none());
         let new_handle = GcManager::new(
             cfg,
-            safe_point.clone(),
+            safe_point,
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
-        Ok(safe_point)
+        Ok(())
     }
 
     pub fn start(&mut self) -> Result<()> {

@@ -432,6 +432,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
+            if is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
+                return Ok(());
+            }
 
             // Check the current GC progress and determine if we are going to rewind or we have
             // finished the round of GC.
@@ -527,8 +530,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => return Ok(None),
         };
 
-        let hex_start = hex::encode_upper(&start);
-        let hex_end = hex::encode_upper(&end);
+        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(

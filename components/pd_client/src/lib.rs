@@ -7,7 +7,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-extern crate hex;
 extern crate kvproto;
 #[macro_use(fail_point)]
 extern crate fail;
@@ -161,8 +160,18 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets Region which the key belongs to asynchronously.
+    fn get_region_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<metapb::Region>> {
+        unimplemented!();
+    }
+
     /// Gets Region info which the key belongs to.
     fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
+    }
+
+    /// Gets Region info which the key belongs to asynchronously.
+    fn get_region_info_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<RegionInfo>> {
         unimplemented!();
     }
 
@@ -244,8 +253,8 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Gets store state if it is not a tombstone store.
-    fn get_store_stats(&self, _store_id: u64) -> Result<pdpb::StoreStats> {
+    /// Gets store state if it is not a tombstone store asynchronously.
+    fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         unimplemented!();
     }
 

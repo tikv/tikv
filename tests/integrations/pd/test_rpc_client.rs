@@ -215,7 +215,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), mgr).is_err());
+    assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {

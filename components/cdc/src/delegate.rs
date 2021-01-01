@@ -499,9 +499,9 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row);
-                    if skip {
-                        continue;
+                    match decode_write(write.0, &write.1, &mut row) {
+                        HandleWritePolicy::Skip => continue,
+                        HandleWritePolicy::Accept | HandleWritePolicy::AcceptOnScan => {}
                     }
                     decode_default(default.1, &mut row);
 
@@ -598,9 +598,9 @@ impl Delegate {
             match put.cf.as_str() {
                 "write" => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(put.take_key(), put.get_value(), &mut row);
-                    if skip {
-                        continue;
+                    match decode_write(put.take_key(), put.get_value(), &mut row) {
+                        HandleWritePolicy::Skip | HandleWritePolicy::AcceptOnScan => continue,
+                        HandleWritePolicy::Accept => {}
                     }
 
                     if is_one_pc {
@@ -747,15 +747,28 @@ fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     }
 }
 
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
+enum HandleWritePolicy {
+    Skip,
+    Accept,
+    AcceptOnScan,
+}
+
+fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePolicy {
+    let mut result = HandleWritePolicy::Accept;
+
     let write = WriteRef::parse(value).unwrap().to_owned();
+    if write.gc_fence.is_some() {
+        debug!("write record with gc fence found"; "write" => ?write, "key" => &log_wrappers::Value::key(&key));
+        result = HandleWritePolicy::AcceptOnScan;
+    }
+
     let (op_type, r_type) = match write.write_type {
         WriteType::Put => (EventRowOpType::Put, EventLogType::Commit),
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other, "key" => hex::encode_upper(key));
-            return true;
+            debug!("skip write record"; "write" => ?other, "key" => &log_wrappers::Value::key(&key));
+            return HandleWritePolicy::Skip;
         }
     };
     let key = Key::from_encoded(key);
@@ -767,13 +780,13 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
     }
 
-    false
+    result
 }
 
 fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
@@ -784,7 +797,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
             debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
-                "key" => hex::encode_upper(key),
+                "key" => &log_wrappers::Value::key(&key),
                 "for_update_ts" => ?lock.for_update_ts);
             return true;
         }
@@ -792,7 +805,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
@@ -1034,14 +1047,14 @@ mod tests {
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put;
+        row1.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
         let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put;
+        row2.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();

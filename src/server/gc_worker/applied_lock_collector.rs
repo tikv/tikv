@@ -190,7 +190,7 @@ impl QueryObserver for LockObserver {
                 Err(e) => {
                     error!(?e;
                         "cannot parse lock";
-                        "value" => hex::encode_upper(put_request.get_value()),
+                        "value" => log_wrappers::Value::value(put_request.get_value()),
                     );
                     self.state.mark_dirty();
                     return;
