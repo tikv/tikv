@@ -1286,6 +1286,7 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
+ "grpcio",
  "http",
  "hyper",
  "hyper-tls",
