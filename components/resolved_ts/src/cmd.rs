@@ -75,7 +75,7 @@ impl ChangeLog {
                     }
                 } else {
                     let err_header = response.mut_header().take_error();
-                    Some(ChangeLog::Error(err_header.into()))
+                    Some(ChangeLog::Error(err_header))
                 }
             })
             .filter_map(|v| v)
