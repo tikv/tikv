@@ -81,10 +81,10 @@ protobuf = "2.8"
 prost = "0.6"
 
 [dev-dependencies]
-engine_traits = { path = "../engine_traits" }
+engine_traits = { path = "../engine_traits", default-features = false }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
-test_util = { path = "../test_util" }
+test_util = { path = "../test_util", default-features = false }
 panic_hook = { path = "../panic_hook" }
 raft = { version = "0.6.0-alpha", default-features = false }
 

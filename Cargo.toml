@@ -206,8 +206,8 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
-test_sst_importer = { path = "components/test_sst_importer" }
-test_util = { path = "components/test_util" }
+test_sst_importer = { path = "components/test_sst_importer", default-features = false }
+test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 

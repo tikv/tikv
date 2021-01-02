@@ -100,6 +100,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 futures-executor = "0.3"
 rand = "0.7"
 tempfile = "3.0"
-test_util = { path = "../test_util" }
+test_util = { path = "../test_util", default-features = false }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

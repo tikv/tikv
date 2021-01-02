@@ -60,5 +60,5 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 tempfile = "3.0"
-test_util = { path = "../test_util" }
-test_sst_importer = { path = "../test_sst_importer" }
+test_sst_importer = { path = "../test_sst_importer", default-features = false }
+test_util = { path = "../test_util", default-features = false }

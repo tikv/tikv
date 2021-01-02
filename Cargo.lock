@@ -1160,7 +1160,6 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
- "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio",
