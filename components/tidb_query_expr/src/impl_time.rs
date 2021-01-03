@@ -815,16 +815,15 @@ mod tests {
     #[test]
     fn test_date() {
         let cases = vec![
-            ("2011-11-11", Some("2011-11-11".as_bytes().to_vec())),
-            (
-                "2011-11-11 10:10:10",
-                Some("2011-11-11".as_bytes().to_vec()),
-            ),
+            ("2011-11-11", Some("2011-11-11")),
+            ("2011-11-11 10:10:10", Some("2011-11-11")),
             ("0000-00-00 00:00:00", None),
         ];
         let mut ctx = EvalContext::default();
         for (date, expect) in cases {
             let date = Some(DateTime::parse_datetime(&mut ctx, date, MAX_FSP, true).unwrap());
+            let expect =
+                expect.map(|expect| Time::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(date)
