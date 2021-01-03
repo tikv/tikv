@@ -386,12 +386,19 @@ pub fn has_data_in_range<S: Snapshot>(
 }
 
 /// Seek for the next valid (write type == Put or Delete) write record.
-/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record.
+///
+/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
+/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
+/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
+/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
+/// will be left remain on it.
 pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
+    gc_fence_limit: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Option<Write>>
 where
@@ -409,6 +416,9 @@ where
             Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
         );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
+            break;
+        }
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
                 ret = Some(write_ref.to_owned());
@@ -424,19 +434,28 @@ where
 }
 
 /// Seek for the last written value.
-/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record or found a delete record.
+///
+/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
+/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
+/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
+/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
+/// will be left remain on it.
 pub fn seek_for_valid_value<I>(
     write_cursor: &mut Cursor<I>,
     default_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
+    gc_fence_limit: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Option<Value>>
 where
     I: Iterator,
 {
-    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+    if let Some(write) =
+        seek_for_valid_write(write_cursor, user_key, after_ts, gc_fence_limit, statistics)?
+    {
         if write.write_type == WriteType::Put {
             let value = if let Some(v) = write.short_value {
                 v

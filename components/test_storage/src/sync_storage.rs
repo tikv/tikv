@@ -5,6 +5,7 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
+use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -88,7 +89,9 @@ impl<E: Engine> SyncTestStorage<E> {
         &mut self,
         cfg: AutoGcConfig<S, R>,
     ) {
-        self.gc_worker.start_auto_gc(cfg).unwrap();
+        self.gc_worker
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
+            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, DummyLockManager> {

@@ -90,6 +90,22 @@ fn map_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     })
 }
 
+fn map_locate_2_args_utf8_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => locate_2_args_utf8_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_locate_3_args_utf8_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => locate_3_args_utf8_fn_meta::<TT>()
+        }
+    })
+}
+
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool, bool) -> RpnFnMeta,
@@ -534,6 +550,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::UnHex => unhex_fn_meta(),
+        ScalarFuncSig::Locate2ArgsUtf8 => map_locate_2_args_utf8_sig(ft)?,
+        ScalarFuncSig::Locate3ArgsUtf8 => map_locate_3_args_utf8_sig(ft)?,
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Ord => ord_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
@@ -548,6 +566,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
         ScalarFuncSig::Rpad => rpad_fn_meta(),
+        ScalarFuncSig::AddStringAndDuration => add_string_and_duration_fn_meta(),
+        ScalarFuncSig::SubStringAndDuration => sub_string_and_duration_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
         ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
         ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
@@ -607,6 +627,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
         ScalarFuncSig::LastDay => last_day_fn_meta(),
         ScalarFuncSig::AddDurationAndDuration => add_duration_and_duration_fn_meta(),
+        ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
         _ => return Err(other_err!(

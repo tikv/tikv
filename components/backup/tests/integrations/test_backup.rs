@@ -90,7 +90,10 @@ impl TestSuite {
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
-                BackupConfig { num_threads: 4 },
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                },
                 concurrency_manager.clone(),
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));
