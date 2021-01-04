@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::raw::Env;
-use engine_traits::FileSystemInspector;
-use file_system::EngineFileSystemInspector;
+use engine_traits::{EngineFileSystemInspector, FileSystemInspector};
 use rocksdb::FileSystemInspector as DBFileSystemInspector;
 use std::sync::Arc;
 

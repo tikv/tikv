@@ -24,9 +24,9 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, MetricsFlusher,
+    RaftEngine, CF_DEFAULT, CF_WRITE,
 };
-use file_system::EngineFileSystemInspector;
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};

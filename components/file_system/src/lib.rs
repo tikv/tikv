@@ -14,8 +14,8 @@ mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
+pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -27,7 +27,6 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use engine_traits::FileSystemInspector;
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use variant_count::VariantCount;
@@ -68,39 +67,6 @@ impl WithIOType {
 impl Drop for WithIOType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
-    }
-}
-
-pub struct EngineFileSystemInspector {
-    limiter: Option<Arc<IORateLimiter>>,
-}
-
-impl EngineFileSystemInspector {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        EngineFileSystemInspector {
-            limiter: get_io_rate_limiter(),
-        }
-    }
-}
-
-impl FileSystemInspector for EngineFileSystemInspector {
-    fn read(&self, len: usize) -> Result<usize, String> {
-        if let Some(limiter) = &self.limiter {
-            let io_type = get_io_type();
-            Ok(limiter.request(io_type, IOOp::Read, len))
-        } else {
-            Ok(len)
-        }
-    }
-
-    fn write(&self, len: usize) -> Result<usize, String> {
-        if let Some(limiter) = &self.limiter {
-            let io_type = get_io_type();
-            Ok(limiter.request(io_type, IOOp::Write, len))
-        } else {
-            Ok(len)
-        }
     }
 }
 

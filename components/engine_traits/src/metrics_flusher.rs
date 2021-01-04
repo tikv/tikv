@@ -6,10 +6,11 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::raft_engine::RaftEngine;
-use crate::*;
-
 use file_system::flush_io_metrics;
+
+use crate::engine::KvEngine;
+use crate::engines::Engines;
+use crate::raft_engine::RaftEngine;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);

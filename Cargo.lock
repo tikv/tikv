@@ -1229,6 +1229,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "file_system",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -1357,7 +1358,6 @@ dependencies = [
  "collections",
  "crc32fast",
  "crossbeam-utils 0.8.1",
- "engine_traits",
  "fs2",
  "lazy_static",
  "libc",
