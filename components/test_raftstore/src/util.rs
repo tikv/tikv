@@ -26,8 +26,10 @@ use raft::eraftpb::ConfChangeType;
 
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine_rocks::config::BlobRunMode;
-use engine_rocks::encryption::get_env;
 use engine_rocks::raw::DB;
+use engine_rocks::{
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+};
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, Iterable, Peekable};
@@ -566,7 +568,8 @@ pub fn create_test_engine(
             .unwrap()
             .map(Arc::new);
 
-    let env = get_env(key_manager.clone(), None).unwrap();
+    let env = get_encrypted_env(key_manager.clone(), None).unwrap();
+    let env = get_inspected_env(Arc::new(EngineFileSystemInspector::new()), Some(env)).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
@@ -577,7 +580,7 @@ pub fn create_test_engine(
 
     if let Some(router) = router {
         let router = Mutex::new(router);
-        let cmpacted_handler = Box::new(move |event| {
+        let compacted_handler = Box::new(move |event| {
             router
                 .lock()
                 .unwrap()
@@ -585,7 +588,7 @@ pub fn create_test_engine(
                 .unwrap();
         });
         kv_db_opt.add_event_listener(CompactionListener::new(
-            cmpacted_handler,
+            compacted_handler,
             Some(dummpy_filter),
         ));
     }
