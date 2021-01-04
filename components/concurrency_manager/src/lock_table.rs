@@ -329,8 +329,7 @@ mod test {
         // After we drop the original handle, make sure the new guard refers
         // to the KeyHandle in the table.
         drop(handle);
-        let handle = lock_table.get(&key).unwrap();
-        assert!(Arc::ptr_eq(&handle, guard2.handle()));
+        assert!(Arc::ptr_eq(guard2.handle(), &lock_table.get(&key).unwrap()));
 
         // After dropping guard2, a new guard should be different to the old one.
         let old_ptr = Arc::as_ptr(guard2.handle());
