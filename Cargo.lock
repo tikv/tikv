@@ -2089,7 +2089,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "cc",
  "cmake",
@@ -2098,7 +2098,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2118,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3188,7 +3188,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "fxhash",
  "getset",
@@ -3220,7 +3220,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3556,7 +3556,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4546,6 +4546,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "fail",
  "futures 0.3.7",
