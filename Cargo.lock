@@ -1321,7 +1321,9 @@ checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 name = "file_system"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "crc32fast",
+ "engine_traits",
  "fs2",
  "lazy_static",
  "openssl",
@@ -2049,7 +2051,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd020b1920b2ba0f26687889c7e9314bc9c892ea"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=fix-export#f4a232551a5e25f9e7195fe861fd30bf53ebf36b"
 dependencies = [
  "cc",
  "cmake",
@@ -2058,7 +2060,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd020b1920b2ba0f26687889c7e9314bc9c892ea"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=fix-export#f4a232551a5e25f9e7195fe861fd30bf53ebf36b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2078,7 +2080,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd020b1920b2ba0f26687889c7e9314bc9c892ea"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=fix-export#f4a232551a5e25f9e7195fe861fd30bf53ebf36b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3498,7 +3500,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd020b1920b2ba0f26687889c7e9314bc9c892ea"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=fix-export#f4a232551a5e25f9e7195fe861fd30bf53ebf36b"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4883,7 +4885,6 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
- "file_system",
  "fs2",
  "futures 0.3.7",
  "grpcio",

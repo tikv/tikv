@@ -18,11 +18,9 @@ pub fn get_env(
 ) -> encryption::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     if let Some(manager) = key_manager {
-        // TODO(yiwu): To avoid nested Arc here, need to refactor rust-rocksdb API to accept a
-        // Box<DBEncryptionKeyManager> instead.
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
             base_env,
-            Arc::new(WrappedEncryptionKeyManager { manager }),
+            Box::new(WrappedEncryptionKeyManager { manager }),
         )?))
     } else {
         Ok(base_env)
