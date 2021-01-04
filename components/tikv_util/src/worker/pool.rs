@@ -85,6 +85,7 @@ enum Msg<T: Display + Send> {
 /// Scheduler provides interface to schedule task to underlying workers.
 pub struct Scheduler<T: Display + Send> {
     counter: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
     sender: UnboundedSender<Msg<T>>,
     pending_capacity: usize,
     metrics_pending_task_count: IntGauge,
@@ -94,11 +95,13 @@ impl<T: Display + Send> Scheduler<T> {
     fn new(
         sender: UnboundedSender<Msg<T>>,
         counter: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
         pending_capacity: usize,
         metrics_pending_task_count: IntGauge,
     ) -> Scheduler<T> {
         Scheduler {
             counter,
+            stop,
             sender,
             pending_capacity,
             metrics_pending_task_count,
@@ -112,6 +115,9 @@ impl<T: Display + Send> Scheduler<T> {
         debug!("scheduling task {}", task);
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
             return Err(ScheduleError::Full(task));
+        }
+        if self.stop.load(Ordering::Acquire) {
+            return Err(ScheduleError::Stopped(task));
         }
         self.counter.fetch_add(1, Ordering::SeqCst);
         self.metrics_pending_task_count.inc();
@@ -142,6 +148,7 @@ impl<T: Display + Send> Clone for Scheduler<T> {
             sender: self.sender.clone(),
             pending_capacity: self.pending_capacity,
             metrics_pending_task_count: self.metrics_pending_task_count.clone(),
+            stop: self.stop.clone(),
         }
     }
 }
@@ -240,6 +247,7 @@ pub fn dummy_scheduler<T: Display + Send>() -> (Scheduler<T>, ReceiverWrapper<T>
         Scheduler::new(
             tx,
             Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
             1000,
             WORKER_PENDING_TASK_VEC.with_label_values(&["dummy"]),
         ),
@@ -318,6 +326,7 @@ impl Worker {
         Scheduler::new(
             tx,
             self.counter.clone(),
+            self.stop.clone(),
             self.pending_capacity,
             metrics_pending_task_count,
         )
@@ -334,6 +343,7 @@ impl Worker {
         Scheduler::new(
             tx,
             self.counter.clone(),
+            self.stop.clone(),
             self.pending_capacity,
             metrics_pending_task_count,
         )
@@ -362,6 +372,7 @@ impl Worker {
             scheduler: Scheduler::new(
                 rx,
                 self.counter.clone(),
+                self.stop.clone(),
                 self.pending_capacity,
                 metrics_pending_task_count.clone(),
             ),
