@@ -3,11 +3,7 @@
 use std::thread;
 use std::time::Duration;
 
-<<<<<<< HEAD
-=======
-use collections::HashMap;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
->>>>>>> 3745fe98b... ci: stabilize case test_auto_gc (#9386)
 use kvproto::kvrpcpb::Context;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -230,19 +226,6 @@ fn check_data<E: Engine>(
 ) {
     let ts = ts.into();
     for (k, v) in test_data {
-<<<<<<< HEAD
-        let mut region = cluster.get_region(k);
-        let leader = cluster.leader_of_region(region.get_id()).unwrap();
-        let leader_id = leader.get_store_id();
-        let mut ctx = Context::default();
-        ctx.set_region_id(region.get_id());
-        ctx.set_region_epoch(region.take_region_epoch());
-        ctx.set_peer(leader);
-
-        let value = storages[&leader_id]
-            .get(ctx, &Key::from_raw(k), ts)
-            .unwrap();
-=======
         let mut retry_times = 0;
         let value = loop {
             let mut region = cluster.get_region(k);
@@ -254,7 +237,7 @@ fn check_data<E: Engine>(
             ctx.set_peer(leader);
 
             match storages[&leader_id].get(ctx, &Key::from_raw(k), ts) {
-                Ok(v) => break v.0,
+                Ok(v) => break v,
                 // Retry if meeting `StaleCommand` error.
                 Err(e) if e.error_code() == STALE_COMMAND => {}
                 Err(e) => panic!("storage get meets error: {:?}", e),
@@ -265,7 +248,6 @@ fn check_data<E: Engine>(
             thread::sleep(Duration::from_millis(20));
             retry_times += 1;
         };
->>>>>>> 3745fe98b... ci: stabilize case test_auto_gc (#9386)
         if expect_success {
             assert_eq!(value.unwrap().as_slice(), v.as_slice());
         } else {
