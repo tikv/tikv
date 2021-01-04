@@ -357,7 +357,7 @@ where
         }
         let store_id = self.store_id.get().unwrap();
 
-        if let Err(e) = util::check_store_id(req, store_id) {
+        if let Err(e) = util::check_store_id(req.get_header(), store_id) {
             self.metrics.rejected_by_store_id_mismatch += 1;
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
@@ -385,13 +385,13 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req.get_header(), delegate.peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.term) {
+        if let Err(e) = util::check_term(req.get_header(), delegate.term) {
             debug!(
                 "check term";
                 "delegate_term" => delegate.term,

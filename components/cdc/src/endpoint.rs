@@ -9,7 +9,7 @@ use std::time::Duration;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksWriteBatchReader};
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
@@ -262,6 +262,7 @@ pub struct Endpoint<T> {
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
+    reader: RocksWriteBatchReader,
 }
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
@@ -275,6 +276,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        reader: RocksWriteBatchReader,
     ) -> Endpoint<T> {
         let workers = Builder::new()
             .threaded_scheduler()
@@ -309,6 +311,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             old_value_cache: OldValueCache::new(cfg.old_value_cache_size),
             hibernate_regions_compatible: cfg.hibernate_regions_compatible,
             tikv_clients: Arc::new(Mutex::new(HashMap::default())),
+            reader,
         };
         ep.register_min_ts_event();
         ep
@@ -461,8 +464,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             "req_id" => request.get_request_id(),
             "downstream_id" => ?downstream_id);
         let mut is_new_delegate = false;
+        let reader = self.reader.clone();
         let delegate = self.capture_regions.entry(region_id).or_insert_with(|| {
-            let d = Delegate::new(region_id);
+            let d = Delegate::new(region_id, reader);
             is_new_delegate = true;
             d
         });
@@ -1361,6 +1365,7 @@ mod tests {
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
+        let reader = RocksWriteBatchReader::new(vec![]);
         let ep = Endpoint::new(
             cfg,
             pd_client,
@@ -1371,6 +1376,7 @@ mod tests {
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
+            reader,
         );
         (ep, raft_router, task_rx)
     }

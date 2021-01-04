@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CFNamesExt, DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{FeatureGate, PdClient};
@@ -689,7 +689,14 @@ where
         coprocessor_host: &mut CoprocessorHost<RocksEngine>,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
-        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        let cfs = self
+            .engine
+            .kv_engine()
+            .cf_names()
+            .iter()
+            .map(|cf| cf.to_string())
+            .collect();
+        let collector = Arc::new(AppliedLockCollector::new(cfs, coprocessor_host)?);
         self.applied_lock_collector = Some(collector);
         Ok(())
     }

@@ -25,7 +25,7 @@ use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::{Cmd, CmdBatch, CmdRequest};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
@@ -40,6 +40,7 @@ use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
+use engine_rocks::{RocksWriteBatchReader, ValueType};
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -215,11 +216,12 @@ pub struct Delegate {
     enabled: Arc<AtomicBool>,
     failed: bool,
     pub txn_extra_op: TxnExtraOp,
+    reader: RocksWriteBatchReader,
 }
 
 impl Delegate {
     /// Create a Delegate the given region.
-    pub fn new(region_id: u64) -> Delegate {
+    pub fn new(region_id: u64, reader: RocksWriteBatchReader) -> Delegate {
         Delegate {
             region_id,
             id: ObserveID::new(),
@@ -230,6 +232,7 @@ impl Delegate {
             enabled: Arc::new(AtomicBool::new(true)),
             failed: false,
             txn_extra_op: TxnExtraOp::default(),
+            reader,
         }
     }
 
@@ -428,24 +431,19 @@ impl Delegate {
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
                 index,
-                mut request,
+                request,
                 mut response,
             } = cmd;
+
             if !response.get_header().has_error() {
-                if !request.has_admin_request() {
-                    let flags =
-                        WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
-                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                    self.sink_data(
-                        index,
-                        request.requests.into(),
-                        old_value_cb.clone(),
-                        old_value_cache,
-                        is_one_pc,
-                    )?;
-                } else {
-                    self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
-                }
+                self.sink_data(
+                    index,
+                    request,
+                    response.take_admin_response(),
+                    old_value_cb.clone(),
+                    old_value_cache,
+                    self.reader.clone(),
+                )?;
             } else {
                 let err_header = response.mut_header().take_error();
                 self.mark_failed();
@@ -551,10 +549,11 @@ impl Delegate {
     fn sink_data(
         &mut self,
         index: u64,
-        requests: Vec<Request>,
+        request: CmdRequest,
+        response: AdminResponse,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_cache: &mut OldValueCache,
-        is_one_pc: bool,
+        reader: RocksWriteBatchReader,
     ) -> Result<()> {
         let txn_extra_op = self.txn_extra_op;
         let mut read_old_value = |row: &mut EventRow, read_old_ts| {
@@ -578,28 +577,14 @@ impl Delegate {
                 }
             }
         };
-
         let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
-        for mut req in requests {
-            // CDC cares about put requests only.
-            if req.get_cmd_type() != CmdType::Put {
-                // Do not log delete requests because they are issued by GC
-                // frequently.
-                if req.get_cmd_type() != CmdType::Delete {
-                    debug!(
-                        "skip other command";
-                        "region_id" => self.region_id,
-                        "command" => ?req,
-                    );
-                }
-                continue;
-            }
-            let mut put = req.take_put();
-            match put.cf.as_str() {
+        let region_id = self.region_id;
+        let mut change_event = |cf: &str, key: Vec<u8>, value: Vec<u8>, is_one_pc: bool| {
+            match cf {
                 "write" => {
                     let mut row = EventRow::default();
-                    match decode_write(put.take_key(), put.get_value(), &mut row) {
-                        HandleWritePolicy::Skip | HandleWritePolicy::AcceptOnScan => continue,
+                    match decode_write(key, &value, &mut row) {
+                        HandleWritePolicy::Skip | HandleWritePolicy::AcceptOnScan => return,
                         HandleWritePolicy::Accept => {}
                     }
 
@@ -650,11 +635,11 @@ impl Delegate {
                 }
                 "lock" => {
                     let mut row = EventRow::default();
-                    let lock = Lock::parse(put.get_value()).unwrap();
+                    let lock = Lock::parse(&value).unwrap();
                     let for_update_ts = lock.for_update_ts;
-                    let skip = decode_lock(put.take_key(), lock, &mut row);
+                    let skip = decode_lock(key, lock, &mut row);
                     if skip {
-                        continue;
+                        return;
                     }
 
                     let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
@@ -688,15 +673,54 @@ impl Delegate {
                     *occupied = row;
                 }
                 "" | "default" => {
-                    let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
+                    let key = Key::from_encoded(key).truncate_ts().unwrap();
                     let row = rows.entry(key.into_raw().unwrap()).or_default();
-                    decode_default(put.take_value(), row);
+                    decode_default(value, row);
                 }
                 other => {
                     panic!("invalid cf {}", other);
                 }
             }
+        };
+        match request {
+            CmdRequest::PBCmdRequest(mut req) => {
+                if !req.has_admin_request() {
+                    let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
+                    let requests: Vec<Request> = req.take_requests().into();
+                    for mut req in requests {
+                        // CDC cares about put requests only.
+                        if req.get_cmd_type() != CmdType::Put {
+                            // Do not log delete requests because they are issued by GC
+                            // frequently.
+                            if req.get_cmd_type() != CmdType::Delete {
+                                debug!(
+                                    "skip other command";
+                                    "region_id" => region_id,
+                                    "command" => ?req,
+                                );
+                            }
+                            continue;
+                        }
+                        let mut put = req.take_put();
+                        let key = put.take_key();
+                        let value = put.take_value();
+                        change_event(put.cf.as_str(), key, value, is_one_pc);
+                    }
+                } else {
+                    self.sink_admin(req.take_admin_request(), response)?;
+                }
+            }
+            CmdRequest::RawCmdRequest(data) => {
+                for (t, cf, key, value) in reader.iter(&data) {
+                    if t != ValueType::Put {
+                        continue;
+                    }
+                    change_event(cf, key.to_vec(), value.to_vec(), false);
+                }
+            }
         }
+
         let mut entries = Vec::with_capacity(rows.len());
         for (_, v) in rows {
             entries.push(v);
@@ -816,7 +840,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
 
 fn decode_default(value: Vec<u8>, row: &mut EventRow) {
     if !value.is_empty() {
-        row.value = value.to_vec();
+        row.value = value;
     }
 }
 
@@ -847,7 +871,8 @@ mod tests {
         let mut downstream =
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let reader = RocksWriteBatchReader::new(vec![]);
+        let mut delegate = Delegate::new(region_id, reader);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
@@ -977,7 +1002,8 @@ mod tests {
             Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
-        let mut delegate = Delegate::new(region_id);
+        let reader = RocksWriteBatchReader::new(vec![]);
+        let mut delegate = Delegate::new(region_id, reader);
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));

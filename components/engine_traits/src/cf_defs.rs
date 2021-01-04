@@ -10,6 +10,7 @@ pub const CF_VER_DEFAULT: CfName = "ver_default";
 pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const ALL_CFS_IN_ENGINE: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT, CF_VER_DEFAULT];
 
 pub fn name_to_cf(name: &str) -> Option<CfName> {
     if name.is_empty() {

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksWriteBatchReader, ValueType};
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
@@ -15,8 +15,8 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Sched
 
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 use raftstore::coprocessor::{
-    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
-    CoprocessorHost, ObserverContext, QueryObserver,
+    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, CmdRequest,
+    Coprocessor, CoprocessorHost, ObserverContext, QueryObserver,
 };
 
 // TODO: Use new error type for GCWorker instead of storage::Error.
@@ -114,11 +114,21 @@ impl Display for LockCollectorTask {
 struct LockObserver {
     state: Arc<LockObserverState>,
     sender: Scheduler<LockCollectorTask>,
+    reader: RocksWriteBatchReader,
 }
 
 impl LockObserver {
-    pub fn new(state: Arc<LockObserverState>, sender: Scheduler<LockCollectorTask>) -> Self {
-        Self { state, sender }
+    pub fn new(
+        state: Arc<LockObserverState>,
+        sender: Scheduler<LockCollectorTask>,
+        cfs: Vec<String>,
+    ) -> Self {
+        let reader = RocksWriteBatchReader::new(cfs);
+        Self {
+            state,
+            sender,
+            reader,
+        }
     }
 
     pub fn register(self, coprocessor_host: &mut CoprocessorHost<RocksEngine>) {
@@ -158,6 +168,55 @@ impl LockObserver {
             }
         }
     }
+
+    fn post_lock(&self, cmd: &CmdRequest, max_ts: TimeStamp) -> txn_types::Result<()> {
+        let mut locks = vec![];
+        // For each put in CF_LOCK, collect it if its ts <= max_ts.
+        match cmd {
+            CmdRequest::PBCmdRequest(req) => {
+                for req in req.get_requests() {
+                    if req.get_cmd_type() != CmdType::Put {
+                        continue;
+                    }
+                    let put_request = req.get_put();
+                    if put_request.get_cf() != CF_LOCK {
+                        continue;
+                    }
+                    let lock = Lock::parse(put_request.get_value()).map_err(|e| {
+                        error!(?e; "cannot parse lock";
+                            "value" => log_wrappers::Value::value(put_request.get_value()),
+                        );
+                        e
+                    })?;
+                    if lock.ts <= max_ts {
+                        let key = Key::from_encoded_slice(put_request.get_key());
+                        locks.push((key, lock));
+                    }
+                }
+            }
+            CmdRequest::RawCmdRequest(data) => {
+                for (t, cf, key, value) in self.reader.iter(data) {
+                    if cf != CF_LOCK || t != ValueType::Put {
+                        continue;
+                    }
+                    let lock = Lock::parse(value).map_err(|e| {
+                        error!(?e; "cannot parse lock";
+                            "value" => log_wrappers::Value::value(value),
+                        );
+                        e
+                    })?;
+                    if lock.ts <= max_ts {
+                        let key = Key::from_encoded_slice(key);
+                        locks.push((key, lock));
+                    }
+                }
+            }
+        }
+        if !locks.is_empty() {
+            self.send(locks);
+        }
+        Ok(())
+    }
 }
 
 impl Coprocessor for LockObserver {}
@@ -174,36 +233,8 @@ impl QueryObserver for LockObserver {
             return;
         }
 
-        let mut locks = vec![];
-        // For each put in CF_LOCK, collect it if its ts <= max_ts.
-        for req in cmd.request.get_requests() {
-            if req.get_cmd_type() != CmdType::Put {
-                continue;
-            }
-            let put_request = req.get_put();
-            if put_request.get_cf() != CF_LOCK {
-                continue;
-            }
-
-            let lock = match Lock::parse(put_request.get_value()) {
-                Ok(l) => l,
-                Err(e) => {
-                    error!(?e;
-                        "cannot parse lock";
-                        "value" => log_wrappers::Value::value(put_request.get_value()),
-                    );
-                    self.state.mark_dirty();
-                    return;
-                }
-            };
-
-            if lock.ts <= max_ts {
-                let key = Key::from_encoded_slice(put_request.get_key());
-                locks.push((key, lock));
-            }
-        }
-        if !locks.is_empty() {
-            self.send(locks);
+        if self.post_lock(&cmd.request, max_ts).is_err() {
+            self.state.mark_dirty();
         }
     }
 }
@@ -385,13 +416,16 @@ pub struct AppliedLockCollector {
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
+    pub fn new(
+        cfs: Vec<String>,
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+    ) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let state = Arc::new(LockObserverState::default());
         let runner = LockCollectorRunner::new(Arc::clone(&state));
         let scheduler = worker.lock().unwrap().start("lock-collector", runner);
-        let observer = LockObserver::new(state, scheduler.clone());
+        let observer = LockObserver::new(state, scheduler.clone(), cfs);
 
         observer.register(coprocessor_host);
 
@@ -501,7 +535,7 @@ mod tests {
 
     fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
         let mut coprocessor_host = CoprocessorHost::default();
-        let collector = AppliedLockCollector::new(&mut coprocessor_host).unwrap();
+        let collector = AppliedLockCollector::new(vec![], &mut coprocessor_host).unwrap();
         (collector, coprocessor_host)
     }
 

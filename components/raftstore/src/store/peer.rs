@@ -39,6 +39,7 @@ use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
+use crate::store::util::EntryCommand;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -2701,24 +2702,26 @@ where
             if entry.get_data().is_empty() {
                 continue;
             }
-            let cmd: RaftCmdRequest =
-                util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
-            if !cmd.has_admin_request() {
-                continue;
+            if let EntryCommand::PBRaftCmdRequest(cmd) =
+                util::decode_entry_data(entry.get_data(), entry.get_index(), &self.tag)
+            {
+                if !cmd.has_admin_request() {
+                    continue;
+                }
+                let cmd_type = cmd.get_admin_request().get_cmd_type();
+                match cmd_type {
+                    AdminCmdType::TransferLeader
+                    | AdminCmdType::ComputeHash
+                    | AdminCmdType::VerifyHash
+                    | AdminCmdType::InvalidAdmin => continue,
+                    _ => {}
+                }
+                // Any command that can change epoch or log gap should be rejected.
+                return Err(box_err!(
+                    "log gap contains admin request {:?}, skip merging.",
+                    cmd_type
+                ));
             }
-            let cmd_type = cmd.get_admin_request().get_cmd_type();
-            match cmd_type {
-                AdminCmdType::TransferLeader
-                | AdminCmdType::ComputeHash
-                | AdminCmdType::VerifyHash
-                | AdminCmdType::InvalidAdmin => continue,
-                _ => {}
-            }
-            // Any command that can change epoch or log gap should be rejected.
-            return Err(box_err!(
-                "log gap contains admin request {:?}, skip merging.",
-                cmd_type
-            ));
         }
         if entry_size as f64 > ctx.cfg.raft_entry_max_size.0 as f64 * 0.9 {
             return Err(box_err!(

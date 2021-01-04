@@ -2,6 +2,14 @@
 
 use crate::*;
 
+#[derive(Clone, Eq, PartialEq)]
+pub enum ValueType {
+    Put,
+    Delete,
+    DeleteRange,
+    Invalid,
+}
+
 pub trait SyncMutable {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()>;
 

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::PanicEngine;
-use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{Mutable, Result, ValueType, WriteBatch, WriteBatchExt, WriteOptions};
 
 impl WriteBatchExt for PanicEngine {
     type WriteBatch = PanicWriteBatch;
@@ -37,6 +37,9 @@ impl Mutable for PanicWriteBatch {
     fn data_size(&self) -> usize {
         panic!()
     }
+    fn data(&self) -> &[u8] {
+        panic!()
+    }
     fn count(&self) -> usize {
         panic!()
     }
@@ -47,6 +50,9 @@ impl Mutable for PanicWriteBatch {
         panic!()
     }
 
+    fn append(&mut self, data: &[u8]) -> Result<()> {
+        panic!()
+    }
     fn clear(&mut self) {
         panic!()
     }
