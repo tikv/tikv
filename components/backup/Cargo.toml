@@ -74,6 +74,7 @@ tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 txn_types = { path = "../txn_types" }
+log_wrappers = { path = "../log_wrappers" }
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"

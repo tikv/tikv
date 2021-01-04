@@ -201,7 +201,7 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(
         validate_data_key(key),
         "invalid data key {}",
-        hex::encode_upper(key)
+        &log_wrappers::Value::key(key)
     );
     &key[DATA_PREFIX_KEY.len()..]
 }
@@ -273,18 +273,18 @@ pub fn next_key(key: &[u8]) -> Vec<u8> {
 
 #[derive(Debug, Display, Fail)]
 pub enum Error {
-    #[display(fmt = "{} is not a valid raft log key", "hex::encode_upper(_0)")]
+    #[display(fmt = "{} is not a valid raft log key", "log_wrappers::Value(_0)")]
     InvalidRaftLogKey(Vec<u8>),
     #[display(
         fmt = "invalid region {} key length for key {}",
         "_0",
-        "hex::encode_upper(_1)"
+        "log_wrappers::Value(_1)"
     )]
     InvalidRegionKeyLength(String, Vec<u8>),
     #[display(
         fmt = "invalid region {} prefix for key {}",
         "_0",
-        "hex::encode_upper(_1)"
+        "log_wrappers::Value(_1)"
     )]
     InvalidRegionPrefix(String, Vec<u8>),
 }

@@ -5,12 +5,12 @@ edition = "2018"
 publish = false
 
 [dependencies]
-hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 protobuf = "2.8"
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc" }
+hex = "0.4"
 
 [features]
 protobuf-codec = [
