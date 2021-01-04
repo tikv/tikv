@@ -13,8 +13,8 @@ use rusoto_core::{
     request::DispatchSignedRequest,
     {ByteStream, RusotoError},
 };
-use rusoto_s3::*;
-use rusoto_util::new_client;
+use rusoto_s3::{*, util::AddressingStyle};
+use rusoto_util::{new_client, new_http_client};
 
 use super::{
     util::{block_on_external_io, error_stream, retry, RetryError},
@@ -36,13 +36,7 @@ pub struct S3Storage {
 impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: &Config) -> io::Result<S3Storage> {
-        Self::check_config(config)?;
-        let client = new_client!(S3Client, config);
-        Ok(S3Storage {
-            config: config.clone(),
-            client,
-            _not_send: PhantomData::default(),
-        })
+        Self::with_request_dispatcher(config, new_http_client()?)
     }
 
     pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>
@@ -50,7 +44,10 @@ impl S3Storage {
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
         Self::check_config(config)?;
-        let client = new_client!(S3Client, config, dispatcher);
+        let mut client = new_client!(S3Client, config, dispatcher);
+        if config.force_path_style {
+            client.config_mut().addressing_style = AddressingStyle::Path;
+        }
         Ok(S3Storage {
             config: config.clone(),
             client,
