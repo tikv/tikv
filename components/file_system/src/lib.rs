@@ -9,7 +9,7 @@ mod file;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
+pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use engine_traits::FileSystemInspector;
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
+use variant_count::VariantCount;
 
 #[derive(Debug)]
 pub enum IOOp {
@@ -32,7 +33,7 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, VariantCount)]
 pub enum IOType {
     Other,
     Read,

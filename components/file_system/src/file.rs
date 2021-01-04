@@ -209,23 +209,29 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        set_io_rate_limiter(IORateLimiter::new(1));
+        let recorder = Arc::new(BytesRecorder::new());
+        set_io_rate_limiter(IORateLimiter::new(1, Some(recorder.clone())));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("magic words");
         {
-            WithIOType::new(IOType::Write);
+            let _guard = WithIOType::new(IOType::Write);
             let mut f = File::create(&tmp_file).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
+            assert_eq!(recorder.fetch(IOType::Write, IOOp::Write), content.len());
         }
         {
-            WithIOType::new(IOType::Read);
+            let _guard = WithIOType::new(IOType::Read);
             let mut buffer = String::new();
             let mut f = File::open(&tmp_file).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
+            // Reason for two more chars:
+            // read_to_end doesn't exit when file.read() returns a result smaller
+            // than prefetch size. If requires two reads of EOF to finish the call.
+            assert_eq!(recorder.fetch(IOType::Read, IOOp::Read), content.len() + 2);
         }
     }
 }
