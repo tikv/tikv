@@ -220,7 +220,13 @@ where
                     .unwrap()
                     .force_send(m, &self.normal_scheduler)
             }
-            Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
+            Err(TrySendError::Disconnected(m)) => {
+                if self.is_shutdown() {
+                    Ok(())
+                } else {
+                    Err(SendError(m))
+                }
+            }
         }
     }
 
