@@ -252,4 +252,21 @@ mod tests {
             .unwrap();
         assert_eq!(escape(&middle_key), "key_049");
     }
+
+    #[test]
+    fn test_half_split_bucket_size() {
+        assert!(half_split_bucket_size(1023), 1);
+        assert!(
+            half_split_bucket_size(ReadableSize::kb(2048).0),
+            ReadableSize::kb(2)
+        );
+        assert!(
+            half_split_bucket_size(ReadableSize::gb(1).0),
+            ReadableSize::mb(1)
+        );
+        assert!(
+            half_split_bucket_size(ReadableSize::gb(512).0),
+            ReadableSize::mb(BUCKET_SIZE_LIMIT_MB).0
+        );
+    }
 }
