@@ -288,7 +288,7 @@ pub trait FieldTypeAccessor {
                 .collation()
                 .map(|col| col == Collation::Utf8Mb4Bin)
                 .unwrap_or(false)
-                && self.is_varchar_like())
+                && !self.is_varchar_like())
     }
 }
 

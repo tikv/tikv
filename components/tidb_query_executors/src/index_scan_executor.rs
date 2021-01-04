@@ -100,10 +100,17 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             .map(|ci| ci.get_column_id())
             .collect();
 
+        let columns_id_for_common_handle = columns_info
+            [columns_id_without_handle.len()..columns_info.len() - pid_column_cnt]
+            .iter()
+            .map(|ci| ci.get_column_id())
+            .collect();
+
         let imp = IndexScanExecutorImpl {
             context: EvalContext::new(config),
             schema,
             columns_id_without_handle,
+            columns_id_for_common_handle,
             decode_handle_strategy,
             pid_column_cnt,
         };
@@ -170,6 +177,8 @@ struct IndexScanExecutorImpl {
 
     /// ID of interested columns (exclude PK handle column).
     columns_id_without_handle: Vec<i64>,
+
+    columns_id_for_common_handle: Vec<i64>,
 
     /// The strategy to decode handles.
     /// Handle will be always placed in the last column.
@@ -426,7 +435,7 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
         for_common_handle: bool,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
+        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder, decode_v2_u64};
 
         let (start, end) = if for_common_handle {
             (self.columns_id_without_handle.len(), self.schema.len())
@@ -445,12 +454,16 @@ impl IndexScanExecutorImpl {
                 continue;
             }
 
-            let id = self.columns_id_without_handle[i];
+            let id = if for_common_handle {
+                self.columns_id_for_common_handle[i-self.columns_id_without_handle.len()]
+            } else {
+                self.columns_id_without_handle[i]
+            };
             let original_data;
             let row = RowSlice::from_bytes(restored_values)?;
             if ft
                 .collation()
-                .map(|col| col == Collation::Binary)
+                .map(|col| col == Collation::Utf8Mb4Bin)
                 .unwrap_or(false)
             {
                 // _bin collation, we need to combine data from key and value to form the original data.
@@ -460,11 +473,8 @@ impl IndexScanExecutorImpl {
 
                 let space_num;
                 if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
-                    let mut space_num_data = &row.values()[start..offset];
-                    space_num = decode(&mut space_num_data).unwrap()[0]
-                        .as_int()
-                        .unwrap()
-                        .unwrap();
+                    let space_num_data = &row.values()[start..offset];
+                    space_num = decode_v2_u64(space_num_data).unwrap();
                 } else {
                     return Err(other_err!("Unexpected missing column {}", id));
                 }
@@ -555,7 +565,7 @@ impl IndexScanExecutorImpl {
             if restored_v5 {
                 // Extract the data from key, then use the restore data to get the original data.
                 Self::extract_columns_from_datum_format(
-                    &mut key_payload,
+                    &mut key_payload.clone(),
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
                 self.restore_original_data(restore_values, columns, false)?;
@@ -1614,5 +1624,647 @@ mod tests {
             result.physical_columns[3].decoded().to_int_vec(),
             &[Some(pid)]
         );
+    }
+
+    #[test]
+    fn test_int_handle_char_index() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // Schema: create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a, b, c), unique key i_ua(a),
+        //  unique key i_ub(b), unique key i_uc(c), unique key i_uabc(a,b,c));
+        // insert into t values (1, "a ", "A ");
+
+        // i_a and i_ua
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
+            columns_id_without_handle: vec![1],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x3,
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[0x30],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_b and i_ub
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x2, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8,
+                    0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[0x30],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8],
+                &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_c and i_uc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![3],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x3, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9,
+                    0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[
+                    0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x7, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_abc and i_uabc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![1,2,3],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[
+                    0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
+    }
+
+    #[test]
+    fn test_int_handle_varchar_index() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // Schema: create table t(a int, b varchar(10) collate utf8mb4_bin, c varchar(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a, b, c), unique key i_ua(a),
+        //  unique key i_ub(b), unique key i_uc(c), unique key i_uabc(a,b,c));
+        // insert into t values (1, "a ", "A ");
+
+        // i_a and i_ua
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![FieldTypeTp::Long.into(), FieldTypeTp::LongLong.into()],
+            columns_id_without_handle: vec![1],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x3,
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[0x30],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_b and i_ub
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x1, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x2, 0x1, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_c and i_uc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![3],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x7, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x2, 0x0, 0x41, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_abc and i_uabc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![1,2,3],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x7d, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x2, 0x3, 0x1, 0x0, 0x3, 0x0, 0x1, 0x41, 0x20],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a ".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3d, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x2, 0x3, 0x1, 0x0, 0x3, 0x0, 0x1, 0x41, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a ".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A ".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
+    }
+
+    #[test]
+    fn test_common_handle_index() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate utf8mb4_unicode_ci, d varchar(10) collate utf8mb4_bin, e varchar(10) collate utf8mb4_general_ci
+        // , primary key(a, b, c, d, e),  key i_a(a), key i_b(b), key i_c(c), key i_d(d), key i_e(e), key i_abcde(a, b, c, d, e), unique key i_ua(a), unique key i_ub(b), unique key i_uc(
+        // c), unique key i_ud(d), unique key i_ue(e), unique key i_uabcde(a,b,c, d, e));
+        //
+        // CREATE TABLE `t` (
+        //   `a` int(11) NOT NULL,
+        //   `b` char(10) NOT NULL,
+        //   `c` char(10) COLLATE utf8mb4_unicode_ci NOT NULL,
+        //   `d` varchar(10) NOT NULL,
+        //   `e` varchar(10) COLLATE utf8mb4_general_ci NOT NULL,
+        //   PRIMARY KEY (`a`,`b`,`c`,`d`,`e`),
+        //   KEY `i_a` (`a`),
+        //   KEY `i_b` (`b`),
+        //   KEY `i_c` (`c`),
+        //   KEY `i_d` (`d`),
+        //   KEY `i_e` (`e`),
+        //   KEY `i_abcde` (`a`,`b`,`c`,`d`,`e`),
+        //   UNIQUE KEY `i_ua` (`a`),
+        //   UNIQUE KEY `i_ub` (`b`),
+        //   UNIQUE KEY `i_uc` (`c`),
+        //   UNIQUE KEY `i_ud` (`d`),
+        //   UNIQUE KEY `i_ue` (`e`),
+        //   UNIQUE KEY `i_uabcde` (`a`,`b`,`c`,`d`,`e`)
+        // ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        //
+        // insert into t values (1, "a ", "A ", "a ", "A ");
+
+        // i_a and i_ua
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into()
+            ],
+            columns_id_without_handle: vec![1],
+            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x0, 0x7d, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(decode(&mut columns[1].raw().top().as_slice()).unwrap()[0], Datum::I64(1));
+        assert_eq!(decode(&mut columns[2].raw().top().as_slice()).unwrap()[0], Datum::Bytes("a".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[3].raw().top().as_slice()).unwrap()[0], Datum::Bytes("A".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[4].raw().top().as_slice()).unwrap()[0], Datum::Bytes("a ".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[5].raw().top().as_slice()).unwrap()[0], Datum::Bytes("A ".as_bytes().to_vec()));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[0x0, 0x7f, 0x0, 0x31, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x7d, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(decode(&mut columns[1].raw().top().as_slice()).unwrap()[0], Datum::I64(1));
+        assert_eq!(decode(&mut columns[2].raw().top().as_slice()).unwrap()[0], Datum::Bytes("a".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[3].raw().top().as_slice()).unwrap()[0], Datum::Bytes("A".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[4].raw().top().as_slice()).unwrap()[0], Datum::Bytes("a ".as_bytes().to_vec()));
+        assert_eq!(decode(&mut columns[5].raw().top().as_slice()).unwrap()[0], Datum::Bytes("A ".as_bytes().to_vec()));
+
+        // i_b and i_ub
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x0, 0x7d, 0x80, 0x0, 0x3, 0x0, 0x0, 0x0, 0x3, 0x4, 0x5, 0x1, 0x0, 0x2, 0x0, 0x4, 0x0, 0x41, 0x1, 0x41, 0x20],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8],
+                &[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_c and i_uc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![3],
+            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x31, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x3, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9,
+                    0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[
+                    0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x7, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
+
+        // i_abc and i_uabc
+        idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4Bin)
+                    .into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Utf8Mb4UnicodeCi)
+                    .into(),
+                FieldTypeTp::LongLong.into(),
+            ],
+            columns_id_without_handle: vec![1,2,3],
+            columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+        };
+        columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &[
+                    0x0, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
+        idx_exe
+            .process_kv_pair(
+                &[0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x35, 0x5f, 0x69, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1, 0x61, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf8, 0x1, 0xe, 0x33, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xf9],
+                &[0x8, 0x7d, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x3, 0x1, 0x0, 0x41, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            Datum::I64(1)
+        );
+        assert_eq!(
+            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("a".as_bytes().to_vec())
+        );
+        assert_eq!(
+            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            Datum::Bytes("A".as_bytes().to_vec())
+        );
+        assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
     }
 }
