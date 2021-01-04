@@ -130,13 +130,13 @@ impl CondvarLinkedList {
     }
 }
 
-/// Un-prioritized conditional variable. Supports both synchronously or
+/// Prioritized conditional variable. Supports both synchronously or
 /// asynchronously waiting on the same instance.
 #[derive(Debug)]
 pub struct Condvar {
     high_priority: CondvarLinkedList,
     low_priority: CondvarLinkedList,
-    pending: CondvarLinkedList,
+    ready: CondvarLinkedList,
 }
 
 unsafe impl Send for Condvar {}
@@ -147,7 +147,7 @@ impl Condvar {
         Condvar {
             high_priority: CondvarLinkedList::new(),
             low_priority: CondvarLinkedList::new(),
-            pending: CondvarLinkedList::new(),
+            ready: CondvarLinkedList::new(),
         }
     }
 
@@ -168,14 +168,14 @@ impl Condvar {
             unsafe {
                 prev.as_ref().set_next(next);
             }
-        } else if self.pending.head.get().contains(&boxed_node) {
+        } else if self.ready.head.get().contains(&boxed_node) {
             // need to wake up next
             if let Some(next) = next {
                 unsafe {
                     next.as_ref().notify();
                 }
             }
-            self.pending.head.set(next);
+            self.ready.head.set(next);
         } else if self.high_priority.head.get().contains(&boxed_node) {
             self.high_priority.head.set(next);
         } else {
@@ -186,8 +186,8 @@ impl Condvar {
             unsafe {
                 next.as_ref().set_prev(prev);
             }
-        } else if self.pending.tail.get().contains(&boxed_node) {
-            self.pending.tail.set(prev);
+        } else if self.ready.tail.get().contains(&boxed_node) {
+            self.ready.tail.set(prev);
         } else if self.high_priority.tail.get().contains(&boxed_node) {
             self.high_priority.tail.set(prev);
         } else {
@@ -198,11 +198,11 @@ impl Condvar {
 
     /// Notifies all waiters in queue as till now.
     pub fn notify_all(&self) {
-        let empty = self.pending.empty();
-        self.pending.append(&self.high_priority);
-        self.pending.append(&self.low_priority);
+        let empty = self.ready.empty();
+        self.ready.append(&self.high_priority);
+        self.ready.append(&self.low_priority);
         if empty {
-            if let Some(head) = self.pending.head.get() {
+            if let Some(head) = self.ready.head.get() {
                 unsafe {
                     head.as_ref().notify();
                 }
@@ -311,7 +311,7 @@ mod tests {
                 let guard = mu.lock();
                 assert_eq!(enter.fetch_add(1, Ordering::Relaxed), i);
                 if i % 3 == 0 {
-                    let (_, timed_out) = condv.wait_timeout(
+                    let (_guard, timed_out) = condv.wait_timeout(
                         guard,
                         Duration::from_millis(short_timeout_millis * (i / 3) as u64),
                     );

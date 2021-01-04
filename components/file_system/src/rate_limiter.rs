@@ -184,9 +184,11 @@ impl PerTypeIORateLimiter {
                     return self.refill_and_request(&state, bytes);
                 } else {
                     let cached_last_refill_time = state.last_refill_time;
+                    // use a slightly larger timeout so that they can react to notification
+                    // and preserve priority information
                     let (mut state, timed_out) = self
                         .condv
-                        .wait_timeout(state, self.refill_period - since_last_refill);
+                        .wait_timeout(state, self.refill_period.mul_f32(1.05) - since_last_refill);
                     let now = Instant::now_coarse();
                     if timed_out && state.last_refill_time == cached_last_refill_time {
                         // timeout, do the refill myself
@@ -236,7 +238,7 @@ impl PerTypeIORateLimiter {
                         .async_wait_timeout(
                             &self.state,
                             state,
-                            self.refill_period - since_last_refill,
+                            self.refill_period.mul_f32(1.05) - since_last_refill,
                         )
                         .await;
                     let now = Instant::now_coarse();
