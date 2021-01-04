@@ -1,15 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(test)]
+#![feature(core_intrinsics)]
+extern crate test;
+
 #[macro_use]
 extern crate lazy_static;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod file;
+mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
 pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
+pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -17,7 +23,6 @@ pub use std::fs::{
     FileType, Metadata, Permissions, ReadDir,
 };
 
-use std::cell::Cell;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -33,7 +38,8 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, VariantCount)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
 pub enum IOType {
     Other,
     Read,
@@ -45,20 +51,6 @@ pub enum IOType {
     LoadBalance,
     Import,
     Export,
-}
-
-thread_local! {
-    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
-}
-
-pub fn set_io_type(new_io_type: IOType) {
-    IO_TYPE.with(|io_type| {
-        io_type.set(new_io_type);
-    });
-}
-
-pub fn get_io_type() -> IOType {
-    IO_TYPE.with(|io_type| io_type.get())
 }
 
 pub struct WithIOType {
