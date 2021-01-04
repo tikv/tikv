@@ -21,6 +21,9 @@ impl Default for LockTable {
 impl LockTable {
     pub async fn lock_key(&self, key: &Key) -> KeyHandleGuard {
         loop {
+            // Create a KeyHandle first, but do not bind it to the lock table first.
+            // If we fail to insert the handle into the table, this handle should be dropped
+            // without removing any entry from the table.
             let handle = Arc::new(KeyHandle::new(key.clone()));
             let weak = Arc::downgrade(&handle);
             let weak2 = weak.clone();
@@ -28,6 +31,10 @@ impl LockTable {
 
             let entry = self.0.get_or_insert(key.clone(), weak);
             if entry.value().ptr_eq(&weak2) {
+                // If the weak ptr returned by `get_or_insert` equals to the one we inserted,
+                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the handle
+                // to the table.
+
                 // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
                 // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
                 // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
@@ -310,14 +317,26 @@ mod test {
     async fn test_lock_key_when_handle_exists() {
         let lock_table: LockTable = LockTable::default();
         let key = Key::from_raw(b"key");
+
         let guard = lock_table.lock_key(&key).await;
         let handle = lock_table.get(&key).unwrap();
         drop(guard);
+        // The handle is still alive in the table.
+        assert!(Arc::ptr_eq(&handle, &lock_table.get(&key).unwrap()));
 
         let guard2 = lock_table.lock_key(&key).await;
-        drop(handle);
 
+        // After we drop the original handle, make sure the new guard refers
+        // to the KeyHandle in the table.
+        drop(handle);
         let handle = lock_table.get(&key).unwrap();
-        assert_eq!(Arc::as_ptr(&handle), Arc::as_ptr(guard2.handle()));
+        assert!(Arc::ptr_eq(&handle, guard2.handle()));
+
+        // After dropping guard2, a new guard should be different to the old one.
+        let old_ptr = Arc::as_ptr(guard2.handle());
+        drop(guard2);
+        let guard3 = lock_table.lock_key(&key).await;
+        assert_ne!(old_ptr, Arc::as_ptr(guard3.handle()));
+        assert!(Arc::ptr_eq(guard3.handle(), &lock_table.get(&key).unwrap()));
     }
 }
