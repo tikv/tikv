@@ -2408,6 +2408,7 @@ pub struct RegionReadProgress {
     safe_ts: Arc<AtomicU64>,
     // `pending_ts` should not be accessed outside to prevent dead lock
     pending_ts: Arc<Mutex<VecDeque<(u64, u64)>>>,
+    // the max size of `pending_ts`
     cap: usize,
 }
 
@@ -2457,25 +2458,35 @@ impl RegionReadProgress {
         let mut pending_ts = self.pending_ts.lock().unwrap();
         if self.applied_index.load(Ordering::Relaxed) < apply_index {
             if let Some(item) = pending_ts.back_mut() {
+                // If the previous item has larger (or equal) `index` with smaller `ts`,
+                // update the previous item's `ts` instead of adding a new item
                 if item.0 >= apply_index && item.1 < ts {
                     item.1 = ts;
                     return;
                 }
-                if *item >= (apply_index, ts) {
+                // only keep the incoming item if `(apply_index, ts)` > prevoius item
+                if (apply_index, ts) <= *item {
                     return;
                 }
             }
             self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
+            // try update `safe_ts` directly
             self.safe_ts.fetch_max(ts, Ordering::Relaxed);
         }
     }
 
     fn push_back(&self, queue: &mut VecDeque<(u64, u64)>, item: (u64, u64)) {
         if queue.len() == self.cap {
+            // drop the oldest item
             queue.pop_front();
         }
         queue.push_back(item);
+    }
+
+    // Return the number of the pending (index, ts) item
+    fn pending_ts_num(&self) -> usize {
+        self.pending_ts.lock().unwrap().len()
     }
 }
 
@@ -2533,5 +2544,60 @@ mod tests {
         let declined_bytes = event.calc_ranges_declined_bytes(&region_ranges, 1024);
         let expected_declined_bytes = vec![(2, 8192), (3, 4096)];
         assert_eq!(declined_bytes, expected_declined_bytes);
+    }
+
+    #[test]
+    fn test_region_read_progress() {
+        let cap = 10;
+        let rrp = RegionReadProgress::new(10, cap);
+        for i in 1..=20 {
+            rrp.forward_safe_ts(i, i);
+        }
+        // `safe_ts` update according to its `applied_index`
+        assert_eq!(rrp.safe_ts(), 10);
+        assert_eq!(rrp.pending_ts_num(), 10);
+
+        rrp.update_applied(20);
+        assert_eq!(rrp.safe_ts(), 20);
+        assert_eq!(rrp.pending_ts_num(), 0);
+
+        for i in 100..200 {
+            rrp.forward_safe_ts(i, i);
+        }
+        assert_eq!(rrp.safe_ts(), 20);
+        // the number of pending item should not exceed `cap`
+        assert_eq!(rrp.pending_ts_num(), cap);
+
+        // `safe_ts` will not update because previous items are dropped
+        rrp.update_applied(200 - (cap as u64) - 1);
+        assert_eq!(rrp.safe_ts(), 20);
+
+        // `applied_index` large than all pending items will clear all pending items
+        rrp.update_applied(200);
+        assert_eq!(rrp.safe_ts(), 199);
+        assert_eq!(rrp.pending_ts_num(), 0);
+
+        // pending item can be updated instead of adding a new one
+        rrp.forward_safe_ts(300, 300);
+        assert_eq!(rrp.pending_ts_num(), 1);
+        rrp.forward_safe_ts(200, 400);
+        assert_eq!(rrp.pending_ts_num(), 1);
+        rrp.forward_safe_ts(300, 500);
+        assert_eq!(rrp.pending_ts_num(), 1);
+        rrp.forward_safe_ts(301, 600);
+        assert_eq!(rrp.pending_ts_num(), 2);
+        // `safe_ts` will update to 500 instead of 300
+        rrp.update_applied(300);
+        assert_eq!(rrp.safe_ts(), 500);
+        rrp.update_applied(301);
+        assert_eq!(rrp.safe_ts(), 600);
+        assert_eq!(rrp.pending_ts_num(), 0);
+
+        // stale item will be ignored
+        rrp.forward_safe_ts(300, 500);
+        rrp.forward_safe_ts(301, 600);
+        rrp.forward_safe_ts(400, 0);
+        rrp.forward_safe_ts(0, 700);
+        assert_eq!(rrp.pending_ts_num(), 0);
     }
 }
