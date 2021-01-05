@@ -5,13 +5,14 @@ use super::{
     ExternalStorage,
 };
 
-use std::{convert::TryInto, fmt::Display, io, sync::Arc};
+use std::{fmt::Display, io, sync::Arc};
 
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
     stream::{StreamExt, TryStreamExt},
 };
+use gcp_auth::AuthenticationManager;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
 use kvproto::backup::Gcs as Config;
@@ -20,18 +21,20 @@ use tame_gcs::{
     objects::{InsertObjectOptional, Metadata, Object},
     types::{BucketName, ObjectId},
 };
-use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
 
 const HARDCODED_ENDPOINTS: &[&str] = &[
     "https://www.googleapis.com/upload/storage/v1",
     "https://www.googleapis.com/storage/v1",
 ];
 
+const READ_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_write";
+const READ_ONLY_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_only";
+
 // GCS compatible storage
 #[derive(Clone)]
 pub struct GCSStorage {
     config: Config,
-    svc_access: Arc<ServiceAccountAccess>,
+    auth_manager: Arc<AuthenticationManager>,
     client: Client<HttpsConnector<HttpConnector>, Body>,
 }
 
@@ -59,9 +62,10 @@ impl<T, E: Display> ResultExt for Result<T, E> {
 
 enum RequestError {
     Hyper(hyper::Error),
-    OAuth(tame_oauth::Error),
+    Auth(gcp_auth::Error),
     Gcs(tame_gcs::Error),
     InvalidEndpoint(http::uri::InvalidUri),
+    InvalidHeaderValue(http::header::InvalidHeaderValue),
 }
 
 impl From<hyper::Error> for RequestError {
@@ -70,9 +74,15 @@ impl From<hyper::Error> for RequestError {
     }
 }
 
-impl From<tame_oauth::Error> for RequestError {
-    fn from(err: tame_oauth::Error) -> Self {
-        Self::OAuth(err)
+impl From<gcp_auth::Error> for RequestError {
+    fn from(err: gcp_auth::Error) -> Self {
+        Self::Auth(err)
+    }
+}
+
+impl From<http::header::InvalidHeaderValue> for RequestError {
+    fn from(err: http::header::InvalidHeaderValue) -> Self {
+        Self::InvalidHeaderValue(err)
     }
 }
 
@@ -90,7 +100,7 @@ impl From<tame_gcs::Error> for RequestError {
 
 impl From<StatusCode> for RequestError {
     fn from(code: StatusCode) -> Self {
-        Self::OAuth(tame_oauth::Error::HttpStatus(code))
+        Self::Gcs(tame_gcs::Error::from(code))
     }
 }
 
@@ -101,8 +111,7 @@ impl From<RequestError> for io::Error {
                 io::ErrorKind::InvalidInput,
                 format!("invalid HTTP request: {}", e),
             ),
-            RequestError::OAuth(tame_oauth::Error::Io(e)) => e,
-            RequestError::OAuth(e) => Self::new(
+            RequestError::Auth(e) => Self::new(
                 io::ErrorKind::InvalidInput,
                 format!("authorization failed: {}", e),
             ),
@@ -114,13 +123,17 @@ impl From<RequestError> for io::Error {
                 io::ErrorKind::InvalidInput,
                 format!("invalid GCS endpoint: {}", e),
             ),
+            RequestError::InvalidHeaderValue(e) => Self::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid auth header: {}", e),
+            ),
         }
     }
 }
 
 impl RetryError for RequestError {
     fn placeholder() -> Self {
-        Self::OAuth(tame_oauth::Error::InvalidKeyFormat)
+        Self::Auth(gcp_auth::Error::ServerUnavailable)
     }
 
     fn is_retryable(&self) -> bool {
@@ -133,9 +146,11 @@ impl RetryError for RequestError {
                     || e.is_body_write_aborted()
             }
             // See https://cloud.google.com/storage/docs/exponential-backoff.
-            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::TOO_MANY_REQUESTS)) => true,
-            Self::OAuth(tame_oauth::Error::HttpStatus(StatusCode::REQUEST_TIMEOUT)) => true,
-            Self::OAuth(tame_oauth::Error::HttpStatus(status)) => status.is_server_error(),
+            Self::Auth(gcp_auth::Error::OAuthConnectionError(_)) => true,
+            Self::Auth(gcp_auth::Error::OAuthParsingError(_)) => true,
+            Self::Auth(gcp_auth::Error::ConnectionError(_)) => true,
+            Self::Auth(gcp_auth::Error::ServerUnavailable) => true,
+            Self::Auth(gcp_auth::Error::ParsingError(_)) => true,
             // Consider everything else not retryable.
             _ => false,
         }
@@ -151,20 +166,18 @@ impl GCSStorage {
                 "missing bucket name",
             ));
         }
-        if config.credentials_blob.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing credentials",
-            ));
-        }
-        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob)
-            .or_invalid_input("invalid credentials_blob")?;
-        let svc_access =
-            ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
+
+        let cred = if config.credentials_blob.is_empty() {
+            None
+        } else {
+            Some(config.credentials_blob.clone())
+        };
+        let auth_mgr = block_on_external_io(async move { gcp_auth::init(cred).await })
+            .or_invalid_input("invalid credential config")?;
         let client = Client::builder().build(HttpsConnector::new());
         Ok(GCSStorage {
             config: config.clone(),
-            svc_access: Arc::new(svc_access),
+            auth_manager: Arc::new(auth_mgr),
             client,
         })
     }
@@ -176,39 +189,19 @@ impl GCSStorage {
         key.to_owned()
     }
 
-    async fn set_auth(
-        &self,
-        req: &mut Request<Body>,
-        scope: tame_gcs::Scopes,
-    ) -> Result<(), RequestError> {
-        let token_or_request = self.svc_access.get_token(&[scope])?;
-        let token = match token_or_request {
-            TokenOrRequest::Token(token) => token,
-            TokenOrRequest::Request {
-                request,
-                scope_hash,
-                ..
-            } => {
-                let res = self.client.request(request.map(From::from)).await?;
-                if !res.status().is_success() {
-                    return Err(res.status().into());
-                }
-                let (parts, body) = res.into_parts();
-                let body = hyper::body::to_bytes(body).await?;
-                self.svc_access
-                    .parse_token_response(scope_hash, Response::from_parts(parts, body))?
-            }
-        };
+    async fn set_auth(&self, req: &mut Request<Body>, scopes: &[&str]) -> Result<(), RequestError> {
+        let token = self.auth_manager.get_token(scopes).await?;
+        let header = format!("Bearer {}", token.as_str());
+        let header = http::header::HeaderValue::from_str(&header)?;
         req.headers_mut()
-            .insert(http::header::AUTHORIZATION, token.try_into()?);
-
+            .insert(http::header::AUTHORIZATION, header);
         Ok(())
     }
 
     async fn make_request(
         &self,
         mut req: Request<Body>,
-        scope: tame_gcs::Scopes,
+        scope: &[&str],
     ) -> Result<Response<Body>, RequestError> {
         // replace the hard-coded GCS endpoint by the custom one.
         let endpoint = self.config.get_endpoint();
@@ -308,7 +301,7 @@ impl ExternalStorage for GCSStorage {
                     }),
                 )?
                 .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                self.make_request(req, &[READ_WRITE_SCOPE]).await
             })
             .await?;
             Ok::<_, io::Error>(())
@@ -329,7 +322,7 @@ impl ExternalStorage for GCSStorage {
             Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
         };
         Box::new(
-            self.make_request(request, tame_gcs::Scopes::ReadOnly)
+            self.make_request(request, &[READ_ONLY_SCOPE])
                 .and_then(|response| async {
                     if response.status().is_success() {
                         Ok(response.into_body().map_err(|e| {
