@@ -195,7 +195,7 @@ impl PerTypeIORateLimiter {
                     // and preserve priority information
                     let (mut state, timed_out) = self
                         .condv
-                        .wait_timeout(state, self.refill_period.mul_f32(1.05) - since_last_refill);
+                        .wait_timeout(state, self.refill_period.mul_f32(1.1) - since_last_refill);
                     let now = Instant::now_coarse();
                     if timed_out && state.last_refill_time == cached_last_refill_time {
                         // timeout, do the refill myself
@@ -245,7 +245,7 @@ impl PerTypeIORateLimiter {
                         .async_wait_timeout(
                             &self.state,
                             state,
-                            self.refill_period.mul_f32(1.05) - since_last_refill,
+                            self.refill_period.mul_f32(1.1) - since_last_refill,
                         )
                         .await;
                     let now = Instant::now_coarse();
@@ -478,8 +478,8 @@ mod tests {
         t1.join().unwrap();
         t2.join().unwrap();
         let end = Instant::now();
-        assert!(end.duration_since(begin).as_secs_f64() >= refill_period.as_secs_f64() * 0.9);
-        assert!(end.duration_since(begin).as_secs_f64() < refill_period.as_secs_f64() * 1.1);
+        assert!(end.duration_since(begin).as_secs_f64() > refill_period.as_secs_f64() * 0.9);
+        assert!(end.duration_since(begin).as_secs_f64() < refill_period.as_secs_f64() * 1.1 * 1.1);
     }
 
     struct BackgroundContext {
