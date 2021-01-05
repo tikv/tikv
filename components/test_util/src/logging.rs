@@ -100,19 +100,17 @@ pub fn init_log_for_test() {
             &env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_owned()),
         )
         .unwrap();
-        let writer = if env::var("LOG_APPEND").is_ok() {
-            output.map(|f| {
-                Mutex::new(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(f)
-                        .unwrap(),
-                )
-            })
-        } else {
-            output.map(|f| Mutex::new(File::create(f).unwrap()))
-        };
+        let append_instead_truncate = env::var("LOG_APPEND").is_ok();
+        let writer = output.map(|f| {
+            Mutex::new(
+                OpenOptions::new()
+                    .create(true)
+                    .truncate(!append_instead_truncate)
+                    .append(append_instead_truncate)
+                    .open(f)
+                    .unwrap(),
+            )
+        });
         // We don't mind set it multiple times.
         // We hardly ever read rocksdb log in tests.
         let drainer = CaseTraceLogger {
