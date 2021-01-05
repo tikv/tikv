@@ -38,19 +38,19 @@ impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspecto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::RocksEngine;
+    use crate::compat::Compat;
     use crate::event_listener::RocksEventListener;
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
-    use engine_traits::{CompactExt, MiscExt, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CompactExt, CF_DEFAULT};
     use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
     use keys::data_key;
-    use rocksdb::DBOptions;
+    use rocksdb::Writable;
+    use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db() -> (RocksEngine, Arc<BytesRecorder>) {
-        let temp_dir = Builder::new().prefix("test_file_system").tempdir().unwrap();
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<BytesRecorder>) {
         let recorder = Arc::new(BytesRecorder::new());
         set_io_rate_limiter(IORateLimiter::new(10000, Some(recorder.clone())));
         let mut db_opts = DBOptions::new();
@@ -60,22 +60,21 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
         cf_opts.compression_per_level(&[DBCompressionType::No; 7]);
-        let db = RocksEngine::from_db(Arc::new(
-            new_engine_opt(
-                temp_dir.path().to_str().unwrap(),
-                db_opts,
-                vec![CFOptions::new(CF_DEFAULT, cf_opts)],
-            )
-            .unwrap(),
-        ));
+        let db = Arc::new(
+            new_engine_opt(dir, db_opts, vec![CFOptions::new(CF_DEFAULT, cf_opts)]).unwrap(),
+        );
         (db, recorder)
     }
 
     #[test]
     fn test_inspected_compact() {
         let value_size = 1024;
+        let temp_dir = Builder::new()
+            .prefix("test_inspected_compact")
+            .tempdir()
+            .unwrap();
 
-        let (db, recorder) = new_test_db();
+        let (db, recorder) = new_test_db(temp_dir.path().to_str().unwrap());
         let value = vec![b'v'; value_size];
 
         db.put(&data_key(b"a1"), &value).unwrap();
@@ -90,13 +89,14 @@ mod tests {
         assert!(recorder.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
         assert!(recorder.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
         recorder.reset();
-        db.compact_range(
-            CF_DEFAULT, None,  /*start_key*/
-            None,  /*end_key*/
-            false, /*exclusive_manual*/
-            1,     /*max_subcompactions*/
-        )
-        .unwrap();
+        db.c()
+            .compact_range(
+                CF_DEFAULT, None,  /*start_key*/
+                None,  /*end_key*/
+                false, /*exclusive_manual*/
+                1,     /*max_subcompactions*/
+            )
+            .unwrap();
         assert!(recorder.fetch(IOType::Compaction, IOOp::Read) > value_size * 4);
         assert!(recorder.fetch(IOType::Compaction, IOOp::Read) < value_size * 5);
         assert!(recorder.fetch(IOType::Compaction, IOOp::Write) > value_size * 3);
