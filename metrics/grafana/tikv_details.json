@@ -64,11 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-<<<<<<< HEAD
-  "iteration": 1589260003867,
-=======
   "iteration": 1609133726628,
->>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
   "links": [],
   "panels": [
     {
