@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksWriteBatchReader};
+use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use futures::StreamExt;
 use grpcio::{ChannelBuilder, Environment};
@@ -137,7 +137,6 @@ impl TestSuite {
             endpoints.insert(id, worker);
         }
 
-        let reader = RocksWriteBatchReader::new(vec![]);
         cluster.run();
         for (id, worker) in &mut endpoints {
             let sim = cluster.sim.wl();
@@ -155,7 +154,6 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                reader.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
