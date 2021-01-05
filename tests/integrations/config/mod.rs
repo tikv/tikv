@@ -300,6 +300,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Disable,
+            bottommost_zstd_compression_dict_size: 1024,
+            bottommost_zstd_compression_sample_size: 1024,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -361,6 +364,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Zstd,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -422,6 +428,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Disable,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -483,6 +492,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Disable,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
         },
         ver_defaultcf: VersionCfConfig {
             block_size: ReadableSize::kb(12),
@@ -530,6 +542,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Zstd,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
         },
         titan: titan_db_config.clone(),
     };
@@ -606,6 +621,9 @@ fn test_serde_custom_tikv_config() {
             enable_compaction_guard: true,
             compaction_guard_min_output_file_size: ReadableSize::mb(12),
             compaction_guard_max_output_file_size: ReadableSize::mb(34),
+            bottommost_level_compression: DBCompressionType::Disable,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
         },
         titan: titan_db_config,
     };
