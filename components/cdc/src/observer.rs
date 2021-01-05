@@ -266,7 +266,7 @@ impl<S: EngineSnapshot> OldValueReader<S> {
         key: &Key,
         statistics: &mut Statistics,
     ) -> Result<Option<Value>> {
-        let user_key = Key::truncate_ts_for(key.as_encoded()).unwrap();
+        let (user_key, seek_ts) = Key::split_on_ts_for(key.as_encoded()).unwrap();
         let mut write_cursor = self.new_write_cursor(key);
         if write_cursor.near_seek(key, &mut statistics.write)?
             && Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key)
@@ -275,14 +275,17 @@ impl<S: EngineSnapshot> OldValueReader<S> {
             while Key::is_user_key_eq(write_cursor.key(&mut statistics.write), user_key) {
                 let write = WriteRef::parse(write_cursor.value(&mut statistics.write)).unwrap();
                 old_value = match write.write_type {
-                    WriteType::Put => match write.short_value {
-                        Some(short_value) => Some(short_value.to_vec()),
-                        None => {
-                            let key = key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
-                            self.get_value_default(&key, statistics)
+                    WriteType::Put if write.check_gc_fence_as_latest_version(seek_ts) => {
+                        match write.short_value {
+                            Some(short_value) => Some(short_value.to_vec()),
+                            None => {
+                                let key =
+                                    key.clone().truncate_ts().unwrap().append_ts(write.start_ts);
+                                self.get_value_default(&key, statistics)
+                            }
                         }
-                    },
-                    WriteType::Delete => None,
+                    }
+                    WriteType::Delete | WriteType::Put => None,
                     WriteType::Rollback | WriteType::Lock => {
                         if !write_cursor.next(&mut statistics.write) {
                             None
@@ -393,8 +396,6 @@ mod tests {
                     .unwrap(),
                 value
             );
-            let mut opts = ReadOptions::new();
-            opts.set_fill_cache(false);
         };
 
         must_prewrite_put(&engine, k, b"v1", k, 1);
@@ -430,5 +431,108 @@ mod tests {
         must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, true);
         must_get_eq(10, Some(b"v4".to_vec()));
         must_commit(&engine, k, 8, 11);
+    }
+
+    #[test]
+    fn test_old_value_reader_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let kv_engine = engine.get_rocksdb();
+
+        let must_get_eq = |key: &[u8], ts: u64, value| {
+            let mut old_value_reader = OldValueReader::new(Arc::new(kv_engine.snapshot()));
+            let mut statistics = Statistics::default();
+            assert_eq!(
+                old_value_reader
+                    .near_seek_old_value(&Key::from_raw(key).append_ts(ts.into()), &mut statistics)
+                    .unwrap(),
+                value
+            );
+        };
+
+        // PUT,      Read
+        //  `--------------^
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 20);
+        must_cleanup_with_gc_fence(&engine, b"k1", 20, 0, 50, true);
+
+        // PUT,      Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 20);
+        must_cleanup_with_gc_fence(&engine, b"k2", 20, 0, 40, true);
+
+        // PUT,      Read
+        //  `-----^
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 20);
+        must_cleanup_with_gc_fence(&engine, b"k3", 20, 0, 30, true);
+
+        // PUT,   PUT,       Read
+        //  `-----^ `----^
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 14);
+        must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
+        must_commit(&engine, b"k4", 15, 20);
+        must_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30, true);
+
+        // PUT,   DEL,       Read
+        //  `-----^ `----^
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
+        must_commit(&engine, b"k5", 13, 14);
+        must_prewrite_delete(&engine, b"k5", b"v5", 15);
+        must_commit(&engine, b"k5", 15, 20);
+        must_cleanup_with_gc_fence(&engine, b"k5", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, true);
+
+        // PUT, LOCK, LOCK,   Read
+        //  `------------------------^
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
+        must_commit(&engine, b"k6", 16, 20);
+        must_prewrite_lock(&engine, b"k6", b"k6", 25);
+        must_commit(&engine, b"k6", 25, 26);
+        must_prewrite_lock(&engine, b"k6", b"k6", 28);
+        must_commit(&engine, b"k6", 28, 29);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 50, true);
+
+        // PUT, LOCK,   LOCK,   Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 20);
+        must_prewrite_lock(&engine, b"k7", b"k7", 25);
+        must_commit(&engine, b"k7", 25, 26);
+        must_cleanup_with_gc_fence(&engine, b"k7", 20, 0, 27, true);
+        must_prewrite_lock(&engine, b"k7", b"k7", 28);
+        must_commit(&engine, b"k7", 28, 29);
+
+        // PUT,  Read
+        //  * (GC fence ts is 0)
+        must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
+        must_commit(&engine, b"k8", 17, 30);
+        must_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0, true);
+
+        // PUT, LOCK,     Read
+        // `-----------^
+        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
+        must_commit(&engine, b"k9", 18, 20);
+        must_prewrite_lock(&engine, b"k9", b"k9", 25);
+        must_commit(&engine, b"k9", 25, 26);
+        must_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27, true);
+
+        let expected_results = vec![
+            (b"k1", Some(b"v1")),
+            (b"k2", None),
+            (b"k3", None),
+            (b"k4", None),
+            (b"k5", None),
+            (b"k6", Some(b"v6")),
+            (b"k7", None),
+            (b"k8", Some(b"v8")),
+            (b"k9", None),
+        ];
+
+        for (k, v) in expected_results {
+            must_get_eq(k, 40, v.map(|v| v.to_vec()));
+        }
     }
 }

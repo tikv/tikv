@@ -8,14 +8,14 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKVServer` struct.
 
+use std::thread;
 use std::{
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    thread,
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -47,6 +47,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
+use tikv::server::gc_worker::AutoGcConfig;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
     coprocessor,
@@ -667,6 +668,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
         );
+
+        // Start auto gc
+        let auto_gc_config = AutoGcConfig::new(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone(),
+            node.id(),
+        );
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, Arc::new(AtomicU64::new(0))) {
+            fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
 
         node.start(
             engines.engines.clone(),
