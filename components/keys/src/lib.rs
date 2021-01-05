@@ -210,6 +210,14 @@ pub fn data_key(key: &[u8]) -> Vec<u8> {
     v
 }
 
+pub fn data_key_with_buff<'a>(buf: &'a mut Vec<u8>, key: &[u8]) -> &'a [u8] {
+    let l = DATA_PREFIX_KEY.len() + key.len();
+    buf.clear();
+    buf.extend_from_slice(DATA_PREFIX_KEY);
+    buf.extend_from_slice(key);
+    &buf[..l]
+}
+
 pub fn origin_key(key: &[u8]) -> &[u8] {
     assert!(
         validate_data_key(key),
