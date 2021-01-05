@@ -32,7 +32,7 @@ use engine_rocks::{
 };
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Engines, Iterable, Peekable};
+use engine_traits::{EngineFileSystemInspector, Engines, Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
