@@ -215,13 +215,13 @@ mod tests {
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("magic words");
         {
-            WithIOType::new(IOType::Write);
+            WithIOType::new(IOType::ForegroundWrite);
             let mut f = File::create(&tmp_file).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
         }
         {
-            WithIOType::new(IOType::Read);
+            WithIOType::new(IOType::ForegroundRead);
             let mut buffer = String::new();
             let mut f = File::open(&tmp_file).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());

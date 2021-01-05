@@ -1574,7 +1574,12 @@ where
 
         if !self.raft_group.has_ready() {
             // Generating snapshot task won't set ready for raft group.
-            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
+                if let Some(progress) = self.raft_group.status().progress {
+                    if progress.iter().any(|(_, pr)| pr.matched == 0) {
+                        gen_task.mark_for_balance();
+                    }
+                }
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router
@@ -1779,7 +1784,12 @@ where
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
         // TODO: maybe we should move this code to other place to make the logic more clear.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+        if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
+            if let Some(progress) = self.raft_group.status().progress {
+                if progress.iter().any(|(_, pr)| pr.matched == 0) {
+                    gen_task.mark_for_balance();
+                }
+            }
             self.pending_request_snapshot_count
                 .fetch_add(1, Ordering::SeqCst);
             ctx.apply_router

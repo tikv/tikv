@@ -40,9 +40,12 @@ pub enum IOOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IOType {
     Other,
-    Read,
-    Write,
-    Coprocessor,
+    // Including coprocessor and storage read.
+    ForegroundRead,
+    // Including scheduler worker, raftstore and apply. Scheduler worker only
+    // does read related works, but it's on the path of foreground write, so
+    // account it as foreground-write instead of foreground-read.
+    ForegroundWrite,
     Flush,
     Compaction,
     Replication,

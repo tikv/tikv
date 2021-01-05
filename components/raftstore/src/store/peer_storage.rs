@@ -1518,6 +1518,7 @@ pub fn do_snapshot<E>(
     region_id: u64,
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
+    for_balance: bool,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1586,6 +1587,7 @@ where
         &mut snap_data,
         &mut stat,
     )?;
+    snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 

@@ -12,9 +12,8 @@ struct stats_t {
 // TODO: auto-generate this enum
 typedef enum {
   Other = 0,
-  Read,
-  Write,
-  Coprocessor,
+  ForegroundRead,
+  ForegroundWrite,
   Flush,
   Compaction,
   Replication,
@@ -36,9 +35,8 @@ BPF_HASH(stats_by_type, io_type, struct stats_t);
 // When using BPF_ARRAY_OF_MAPS, hist_arrays[idx].increment() is not availble
 // due to bpf API limition. So define separate hists for every io type.
 BPF_HISTOGRAM(other_read_latency, int, 25);
-BPF_HISTOGRAM(read_read_latency, int, 25);
-BPF_HISTOGRAM(write_read_latency, int, 25);
-BPF_HISTOGRAM(coprocessor_read_latency, int, 25);
+BPF_HISTOGRAM(foreground_read_read_latency, int, 25);
+BPF_HISTOGRAM(foreground_write_read_latency, int, 25);
 BPF_HISTOGRAM(flush_read_latency, int, 25);
 BPF_HISTOGRAM(compaction_read_latency, int, 25);
 BPF_HISTOGRAM(replication_read_latency, int, 25);
@@ -47,9 +45,8 @@ BPF_HISTOGRAM(import_read_latency, int, 25);
 BPF_HISTOGRAM(export_read_latency, int, 25);
 
 BPF_HISTOGRAM(other_write_latency, int, 25);
-BPF_HISTOGRAM(read_write_latency, int, 25);
-BPF_HISTOGRAM(write_write_latency, int, 25);
-BPF_HISTOGRAM(coprocessor_write_latency, int, 25);
+BPF_HISTOGRAM(foreground_read_write_latency, int, 25);
+BPF_HISTOGRAM(foreground_write_write_latency, int, 25);
 BPF_HISTOGRAM(flush_write_latency, int, 25);
 BPF_HISTOGRAM(compaction_write_latency, int, 25);
 BPF_HISTOGRAM(replication_write_latency, int, 25);
@@ -77,15 +74,17 @@ int trace_req_start(struct pt_regs *ctx, struct request *req) {
     return 0;
   }
 
-  io_type **type_ptr = type_by_pid.lookup(&pid);
-  if (type_ptr == 0)
-    return 0;
   struct info_t info;
   __builtin_memset(&info, 0, sizeof(info)); // ensure padding is always zeroed,
                                             // otherwise verifier will complain.
-  int err = bpf_probe_read(&info.type, sizeof(io_type), (void *)*type_ptr);
-  if (err != 0) {
-    info.type = Other;
+  io_type **type_ptr = type_by_pid.lookup(&pid);
+  if (type_ptr == 0) {
+    info.type = Other 
+  } else {
+    int err = bpf_probe_read(&info.type, sizeof(io_type), (void *)*type_ptr);
+    if (err != 0) {
+      info.type = Other;
+    }
   }
   info.start_ts = bpf_ktime_get_ns();
 
@@ -134,25 +133,18 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req) {
       other_read_latency.increment(bpf_log2l(delta));
     }
     break;
-  case Read:
+  case ForegroundRead:
     if (rwflag == 1) {
-      read_write_latency.increment(bpf_log2l(delta));
+      foreground_read_write_latency.increment(bpf_log2l(delta));
     } else {
-      read_read_latency.increment(bpf_log2l(delta));
+      foreground_read_read_latency.increment(bpf_log2l(delta));
     }
     break;
-  case Write:
+  case ForegroundWrite:
     if (rwflag == 1) {
-      write_write_latency.increment(bpf_log2l(delta));
+      foreground_write_write_latency.increment(bpf_log2l(delta));
     } else {
-      write_read_latency.increment(bpf_log2l(delta));
-    }
-    break;
-  case Coprocessor:
-    if (rwflag == 1) {
-      coprocessor_write_latency.increment(bpf_log2l(delta));
-    } else {
-      coprocessor_read_latency.increment(bpf_log2l(delta));
+      foreground_write_read_latency.increment(bpf_log2l(delta));
     }
     break;
   case Flush:
