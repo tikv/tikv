@@ -69,10 +69,7 @@ impl PartialOrd for Set {
 
 impl crate::codec::data_type::AsMySQLBool for Set {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value > 0)
     }
 }

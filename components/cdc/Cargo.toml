@@ -38,7 +38,6 @@ test-engines-panic = ["tikv/test-engines-panic"]
 [dependencies]
 bitflags = "1.0"
 crossbeam = "0.7"
-hex = "0.4"
 engine_rocks = { path = "../engine_rocks" }
 engine_traits = { path = "../engine_traits" }
 failure = "0.1"
@@ -61,6 +60,7 @@ txn_types = { path = "../txn_types" }
 concurrency_manager = { path = "../concurrency_manager" }
 fail = "0.4"
 lazy_static = "1.3"
+log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
 prost = "0.6"

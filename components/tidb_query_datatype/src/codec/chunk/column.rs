@@ -996,7 +996,7 @@ mod tests {
     #[test]
     fn test_column_duration() {
         let fields: Vec<FieldType> = vec![FieldTypeTp::Duration.into()];
-        let duration = Duration::parse(&mut EvalContext::default(), b"10:11:12", 0).unwrap();
+        let duration = Duration::parse(&mut EvalContext::default(), "10:11:12", 0).unwrap();
         let data = vec![Datum::Null, Datum::Dur(duration)];
         test_colum_datum(fields, data);
     }

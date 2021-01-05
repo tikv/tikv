@@ -79,10 +79,24 @@ impl Filter for MessageTypeNotifier {
     }
 
     fn after(&self, _: Result<()>) -> Result<()> {
-        while self.pending_notify.load(Ordering::SeqCst) > 0 {
-            debug!("notify {:?}", self.message_type);
-            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            let _ = self.notifier.lock().unwrap().send(());
+        let mut n = self.pending_notify.load(Ordering::SeqCst);
+        loop {
+            if n == 0 {
+                break;
+            }
+
+            match self.pending_notify.compare_exchange_weak(
+                n,
+                n - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    let _ = self.notifier.lock().unwrap().send(());
+                    n -= 1;
+                }
+                Err(v) => n = v,
+            }
         }
         Ok(())
     }
