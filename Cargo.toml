@@ -1,3 +1,8 @@
+# See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
+# Without resolver = 2, using `cargo build --features x` to build `cmd`
+# will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
+cargo-features = ["resolver"]
+
 [package]
 name = "tikv"
 version = "4.1.0-alpha"
@@ -191,6 +196,7 @@ prometheus = { git = "https://github.com/solotzg/rust-prometheus.git", rev = "f6
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [workspace]
+resolver = "2"
 members = [
   "cmd",
   "components/tikv_alloc",
