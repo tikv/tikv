@@ -437,8 +437,8 @@ impl<ER: RaftEngine> Debugger<ER> {
                     v1!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key)
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key)
                     );
 
                     let result = recover_mvcc_for_range(
@@ -993,7 +993,7 @@ impl MvccChecker {
                             "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
                             kind,
-                            hex::encode_upper(key),
+                            log_wrappers::Value::key(key),
                             kind,
                             l.ts,
                             commit_ts
@@ -1016,7 +1016,7 @@ impl MvccChecker {
                             v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
-                                hex::encode_upper(key),
+                                log_wrappers::Value::key(key),
                                 l.ts
                             );
                             self.delete(wb, CF_LOCK, key, None)?;
@@ -1056,7 +1056,7 @@ impl MvccChecker {
                 v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     default.unwrap()
                 );
                 self.delete(wb, CF_DEFAULT, key, default)?;
@@ -1068,7 +1068,7 @@ impl MvccChecker {
                     v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         w.start_ts,
                         commit_ts
                     );

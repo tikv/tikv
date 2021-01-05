@@ -9,9 +9,9 @@ protobuf-codec = ["txn_types/protobuf-codec"]
 prost-codec = ["txn_types/prost-codec"]
 
 [dependencies]
-hex = "0.4"
 tikv_util = { path = "../tikv_util" }
 collections = { path = "../collections" }
 txn_types = { path = "../txn_types" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+log_wrappers = { path = "../log_wrappers" }

@@ -1604,8 +1604,8 @@ where
                     "{} failed to delete {:?} in ranges [{}, {}): {:?}",
                     self.tag,
                     strategy,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    &log_wrappers::Value::key(&start_key),
+                    &log_wrappers::Value::key(&end_key),
                     e
                 )
             };
