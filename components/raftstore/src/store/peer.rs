@@ -37,7 +37,7 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
-use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, Proposal};
+use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
@@ -1316,6 +1316,13 @@ where
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
+        } else if ready.must_sync() {
+            match ready.hs() {
+                Some(hs) if hs.get_term() != self.get_store().hard_state().get_term() => {
+                    self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
+                }
+                _ => (),
+            }
         }
     }
 
@@ -1386,6 +1393,7 @@ where
             "region_id" => self.region_id,
             "leader_id" => leader_id,
             "term" => term,
+            "peer_id" => self.peer_id(),
         );
         let mut meta = ctx.store_meta.lock().unwrap();
         meta.leaders.insert(self.region_id, (term, leader_id));
@@ -1502,7 +1510,7 @@ where
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-    ) -> Option<(Ready, InvokeContext)> {
+    ) -> Option<CollectedReady> {
         if self.pending_remove {
             return None;
         }
@@ -1527,10 +1535,18 @@ where
                 return None;
             }
             CheckApplyingSnapStatus::Success => {
+                // 0 means snapshot is scheduled after being restarted.
+                if self.last_unpersisted_number != 0 {
+                    // Because we only handle raft ready when not applying snapshot, so following
+                    // line won't be called twice for the same snapshot.
+                    self.raft_group.advance_apply_to(self.last_applying_idx);
+                    self.cmd_epoch_checker.advance_apply(
+                        self.last_applying_idx,
+                        self.term(),
+                        self.raft_group.store().region(),
+                    );
+                }
                 self.post_pending_read_index_on_replica(ctx);
-                // If there is a snapshot, it must belongs to the last ready.
-                self.raft_group
-                    .on_persist_ready(self.last_unpersisted_number);
             }
             CheckApplyingSnapStatus::Idle => {}
         }
@@ -1655,7 +1671,7 @@ where
             }
         };
 
-        Some((ready, invoke_ctx))
+        Some(CollectedReady::new(invoke_ctx, ready))
     }
 
     pub fn post_raft_ready_append<T: Transport>(
@@ -1797,14 +1813,13 @@ where
             // Snapshot's metadata has been applied.
             self.last_applying_idx = self.get_store().truncated_index();
             self.raft_group.advance_append_async(ready);
-            // Because we only handle raft ready when not applying snapshot, so following
-            // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply_to(self.last_applying_idx);
-            self.cmd_epoch_checker.advance_apply(
-                self.last_applying_idx,
-                self.term(),
-                self.raft_group.store().region(),
-            );
+            // The ready is persisted, but we don't want to handle following light
+            // ready immediately to avoid flow out of control, so use
+            // `on_persist_ready` instead of `advance_append`.
+            // We don't need to set `has_ready` to true, as snapshot is always
+            // checked when ticking.
+            self.raft_group
+                .on_persist_ready(self.last_unpersisted_number);
             return;
         }
 
