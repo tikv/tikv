@@ -16,6 +16,7 @@ codec = { path = "../codec" }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 file_system = { path = "../file_system" }
 hex = "0.4"
+log_wrappers = { path = "../log_wrappers" }
 match_template = { path = "../match_template" }
 num = { version = "0.3", default-features = false }
 num-traits = "0.2"

@@ -252,8 +252,13 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.modifies.push(write);
     }
 
-    pub(crate) fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
-        Ok(self.reader.get_write(&key, ts)?.is_some())
+    pub(crate) fn key_exist(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<bool> {
+        Ok(self.reader.get_write(&key, ts, gc_fence_limit)?.is_some())
     }
 
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
@@ -362,17 +367,20 @@ impl<S: Snapshot> MvccTxn<S> {
                         write_cursor,
                         key,
                         self.start_ts,
+                        self.start_ts,
                         &mut self.reader.statistics,
                     )?;
                     write.map(|w| OldValue {
                         short_value: w.short_value,
                         start_ts: w.start_ts,
                     })
-                } else {
+                } else if w.as_ref().check_gc_fence_as_latest_version(self.start_ts) {
                     Some(OldValue {
                         short_value: w.short_value,
                         start_ts: w.start_ts,
                     })
+                } else {
+                    None
                 }
             } else {
                 None
@@ -1230,6 +1238,7 @@ mod tests {
                     expected_lock_info.get_key(),
                     expected_lock_info.get_primary_lock(),
                     expected_lock_info.get_lock_version(),
+                    false,
                     expected_lock_info.get_lock_ttl(),
                     expected_lock_info.get_lock_for_update_ts(),
                     false,
@@ -1631,7 +1640,7 @@ mod tests {
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
-        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, 20000, 2, false, 100);
+        must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, false, 20000, 2, false, 100);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);

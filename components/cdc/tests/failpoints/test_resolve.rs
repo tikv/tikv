@@ -185,7 +185,7 @@ fn test_joint_confchange() {
     cluster.cfg.cdc.hibernate_regions_compatible = true;
     let mut suite = TestSuite::with_cluster(3, cluster);
 
-    let receive_resolved_ts = |receive_event: &Box<dyn Fn(bool) -> ChangeDataEvent + Send>| {
+    let receive_resolved_ts = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
         let mut last_resolved_ts = 0;
         let mut i = 0;
         loop {
@@ -218,7 +218,7 @@ fn test_joint_confchange() {
     let req = suite.new_changedata_request(region.get_id());
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     receive_resolved_ts(&receive_event);
 
     suite.cluster.stop_node(peers[1].get_store_id());

@@ -395,7 +395,7 @@ impl<T: Simulator> Cluster<T> {
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
-                None => return Err(box_err!("can't get leader of region {}", region_id)),
+                None => return Err(Error::NotLeader(region_id, None)),
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
@@ -745,13 +745,18 @@ impl<T: Simulator> Cluster<T> {
             );
             let result = self.call_command_on_leader(req, timeout);
 
-            if let Err(Error::Timeout(_)) = result {
-                warn!("call command timeout, let's retry");
-                sleep_ms(100);
-                continue;
-            }
+            let resp = match result {
+                e @ Err(Error::Timeout(_))
+                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::StaleCommand) => {
+                    warn!("call command failed, retry it"; "err" => ?e);
+                    sleep_ms(100);
+                    continue;
+                }
+                Err(e) => panic!("call command failed {:?}", e),
+                Ok(resp) => resp,
+            };
 
-            let resp = result.unwrap();
             if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
@@ -788,7 +793,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {}", hex::encode_upper(key));
+        panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -1229,7 +1234,7 @@ impl<T: Simulator> Cluster<T> {
                 panic!(
                     "region {:?} has not been split by {}",
                     region,
-                    hex::encode_upper(split_key)
+                    log_wrappers::hex_encode_upper(split_key)
                 );
             }
             try_cnt += 1;

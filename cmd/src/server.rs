@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -101,7 +101,11 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
+            let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
+            if enable_io_snoop {
+                tikv.init_io_snooper();
+            }
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -628,6 +632,21 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         let auto_split_controller = AutoSplitController::new(split_config_manager);
 
+        let safe_point = Arc::new(AtomicU64::new(0));
+        let observer = match self.config.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
+                MvccConsistencyCheckObserver::new(safe_point.clone()),
+            ),
+            ConsistencyCheckMethod::Raw => {
+                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
+            }
+        };
+        self.coprocessor_host
+            .as_mut()
+            .unwrap()
+            .registry
+            .register_consistency_check_observer(100, observer);
+
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config,
@@ -636,6 +655,16 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
         );
+
+        // Start auto gc
+        let auto_gc_config = AutoGcConfig::new(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone(),
+            node.id(),
+        );
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+            fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
 
         node.start(
             engines.engines.clone(),
@@ -652,31 +681,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
         initial_metric(&self.config.metric);
-
-        // Start auto gc
-        let auto_gc_config = AutoGcConfig::new(
-            self.pd_client.clone(),
-            self.region_info_accessor.clone(),
-            node.id(),
-        );
-
-        let safe_point = match gc_worker.start_auto_gc(auto_gc_config) {
-            Err(e) => fatal!("failed to start auto_gc on storage, error: {}", e),
-            Ok(safe_point) => safe_point,
-        };
-        let observer = match self.config.coprocessor.consistency_check_method {
-            ConsistencyCheckMethod::Mvcc => {
-                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
-            }
-            ConsistencyCheckMethod::Raw => {
-                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
-            }
-        };
-        self.coprocessor_host
-            .as_mut()
-            .unwrap()
-            .registry
-            .register_consistency_check_observer(100, observer);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
@@ -714,7 +718,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -730,7 +733,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -745,7 +747,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -758,9 +759,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Lock manager.
         if servers
             .server
-            .register_service(create_deadlock(
-                servers.lock_mgr.deadlock_service(self.security_mgr.clone()),
-            ))
+            .register_service(create_deadlock(servers.lock_mgr.deadlock_service()))
             .is_some()
         {
             fatal!("failed to register deadlock service");
@@ -780,7 +779,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler, self.security_mgr.clone());
+        let backup_service = backup::Service::new(backup_scheduler);
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -803,8 +802,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         backup_worker.start_with_timer(backup_endpoint);
 
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
+        let cdc_service = cdc::Service::new(servers.cdc_scheduler.clone());
         if servers
             .server
             .register_service(create_change_data(cdc_service))
@@ -825,6 +823,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         self.to_stop.push(metrics_flusher);
+    }
+
+    fn init_io_snooper(&mut self) {
+        if let Err(e) = file_system::init_io_snooper() {
+            error!(%e; "failed to init io snooper");
+        } else {
+            info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
+        }
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
