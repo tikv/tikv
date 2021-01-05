@@ -9,7 +9,9 @@ use crate::config::Config;
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
-use crossbeam::channel::{self, SendError, TryRecvError};
+use crossbeam::channel::TryRecvError;
+use crossbeam::channel::{self, SendError};
+use file_system::{set_io_type, IOType};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -407,7 +409,10 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || poller.poll())
+                .spawn(move || {
+                    set_io_type(IOType::Write);
+                    poller.poll()
+                })
                 .unwrap();
             self.workers.push(t);
         }

@@ -1,11 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(test)]
+#![feature(core_intrinsics)]
+extern crate test;
+
 #[macro_use]
 extern crate lazy_static;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod file;
+mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
@@ -17,11 +22,11 @@ pub use std::fs::{
     FileType, Metadata, Permissions, ReadDir,
 };
 
-use std::cell::Cell;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 
@@ -31,7 +36,8 @@ pub enum IOOp {
     Write,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IOType {
     Other,
     Read,
@@ -43,20 +49,6 @@ pub enum IOType {
     LoadBalance,
     Import,
     Export,
-}
-
-thread_local! {
-    static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
-}
-
-fn set_io_type(new_io_type: IOType) {
-    IO_TYPE.with(|io_type| {
-        io_type.set(new_io_type);
-    });
-}
-
-fn get_io_type() -> IOType {
-    IO_TYPE.with(|io_type| io_type.get())
 }
 
 pub struct WithIOType {

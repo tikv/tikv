@@ -75,6 +75,10 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
+ifeq ($(BCC_IOSNOOP),1)
+ENABLE_FEATURES += bcc-iosnoop
+endif
+
 # Use Prost instead of rust-protobuf to encode and decode protocol buffers.
 ifeq ($(PROST),1)
 ENABLE_FEATURES += prost-codec

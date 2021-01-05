@@ -64,6 +64,9 @@ test-engines-panic = [
   "engine_test/test-engine-kv-panic",
   "engine_test/test-engine-raft-panic",
 ]
+bcc-iosnoop = [
+  "file_system/bcc-iosnoop",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
