@@ -111,7 +111,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            security_mgr.clone(),
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;

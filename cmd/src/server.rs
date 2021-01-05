@@ -704,7 +704,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -720,7 +719,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.router.clone(),
             self.cfg_controller.as_ref().unwrap().clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
@@ -735,7 +733,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             servers.server.get_debug_thread_pool().clone(),
             self.config.log_file.clone(),
             self.config.slow_log_file.clone(),
-            self.security_mgr.clone(),
         );
         if servers
             .server
