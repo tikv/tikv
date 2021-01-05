@@ -1789,6 +1789,7 @@ where
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
+        // TODO: maybe we should move this code to other place to make the logic more clear.
         if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
             self.pending_request_snapshot_count
                 .fetch_add(1, Ordering::SeqCst);
