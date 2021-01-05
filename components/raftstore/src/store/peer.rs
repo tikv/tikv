@@ -81,52 +81,73 @@ struct ProposalQueue<S>
 where
     S: Snapshot,
 {
+    tag: String,
     queue: VecDeque<Proposal<S>>,
 }
 
 impl<S: Snapshot> ProposalQueue<S> {
-    fn new() -> ProposalQueue<S> {
+    fn new(tag: String) -> ProposalQueue<S> {
         ProposalQueue {
+            tag,
             queue: VecDeque::new(),
         }
     }
 
-    fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
-        let (front, back) = self.queue.as_slices();
+    fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
+        let key = (term, index);
         let map = |p: &Proposal<_>| (p.term, p.index);
+        let (front, back) = self.queue.as_slices();
         let idx = front
             .binary_search_by_key(&key, map)
             .or_else(|_| back.binary_search_by_key(&key, map));
         idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
     }
 
-    // Return all proposals that before (and included) the proposal
-    // at the given term and index
-    fn take(&mut self, index: u64, term: u64) -> Vec<Proposal<S>> {
-        let mut propos = Vec::new();
-        while let Some(p) = self.queue.pop_front() {
+    // Find proposal in front or at the given term and index
+    fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<S>> {
+        self.queue.pop_front().and_then(|p| {
             // Comparing the term first then the index, because the term is
             // increasing among all log entries and the index is increasing
             // inside a given term
             if (p.term, p.index) > (term, index) {
                 self.queue.push_front(p);
-                break;
+                return None;
             }
-            if !p.cb.is_none() {
-                propos.push(p);
+            Some(p)
+        })
+    }
+
+    /// Find proposal at the given term and index and notify stale proposals
+    /// in front that term and index
+    fn find_proposal(&mut self, term: u64, index: u64, current_term: u64) -> Option<Proposal<S>> {
+        while let Some(p) = self.pop(term, index) {
+            if p.term == term {
+                if p.index == index {
+                    return if p.cb.is_none() { None } else { Some(p) };
+                } else {
+                    panic!(
+                        "{} unexpected callback at term {}, found index {}, expected {}",
+                        self.tag, term, p.index, index
+                    );
+                }
+            } else {
+                apply::notify_stale_req(current_term, p.cb);
             }
         }
-        self.gc();
-        propos
+        None
     }
 
     fn push(&mut self, p: Proposal<S>) {
-        if let Some(f) = self.queue.front() {
+        if let Some(f) = self.queue.back() {
             // The term must be increasing among all log entries and the index
             // must be increasing inside a given term
             assert!((p.term, p.index) > (f.term, f.index));
         }
         self.queue.push_back(p);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
     }
 
     fn gc(&mut self) {
@@ -526,7 +547,7 @@ where
             peer,
             region_id: region.get_id(),
             raft_group,
-            proposals: ProposalQueue::new(),
+            proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
@@ -1741,7 +1762,7 @@ where
             if lease_to_be_updated {
                 let propose_time = self
                     .proposals
-                    .find_propose_time((entry.get_term(), entry.get_index()));
+                    .find_propose_time(entry.get_term(), entry.get_index());
                 if let Some(propose_time) = propose_time {
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
@@ -1769,16 +1790,28 @@ where
                 self.raft_group.skip_bcast_commit(true);
                 self.last_urgent_proposal_idx = u64::MAX;
             }
-            let mut cbs = self
-                .proposals
-                .take(last_entry.get_index(), last_entry.get_term());
-            cbs.iter_mut().for_each(|p| {
-                if p.must_pass_epoch_check {
-                    // In this case the apply can be guaranteed to be successful. Invoke the
-                    // on_committed callback if necessary.
-                    p.cb.invoke_committed();
-                }
-            });
+            let cbs = if !self.proposals.is_empty() {
+                let current_term = self.term();
+                let cbs = committed_entries
+                    .iter()
+                    .filter_map(|e| {
+                        self.proposals
+                            .find_proposal(e.get_term(), e.get_index(), current_term)
+                    })
+                    .map(|mut p| {
+                        if p.must_pass_epoch_check {
+                            // In this case the apply can be guaranteed to be successful. Invoke the
+                            // on_committed callback if necessary.
+                            p.cb.invoke_committed();
+                        }
+                        p
+                    })
+                    .collect();
+                self.proposals.gc();
+                cbs
+            } else {
+                vec![]
+            };
             let apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
@@ -2176,7 +2209,8 @@ where
                 }
                 self.should_wake_up = true;
                 let p = Proposal {
-                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer),
+                    is_conf_change: req_admin_cmd_type == Some(AdminCmdType::ChangePeer)
+                        || req_admin_cmd_type == Some(AdminCmdType::ChangePeerV2),
                     index: idx,
                     term: self.term(),
                     cb,
@@ -3657,6 +3691,7 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::msg::ExtCallback;
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3843,29 +3878,92 @@ mod tests {
     }
 
     #[test]
-    fn test_propose_queue_find_propose_time() {
-        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
+    fn test_propose_queue_find_proposal() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
         let t = monotonic_raw_now();
+        let gen_term = |index: u64| (index / 10) + 1;
         for index in 1..=100 {
             let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
             pq.push(Proposal {
                 is_conf_change: false,
                 index,
-                term: (index / 10) + 1,
-                cb: Callback::None,
+                term: gen_term(index),
+                cb: Callback::write(Box::new(|_| {})),
                 renew_lease_time,
                 must_pass_epoch_check: false,
             });
         }
-        for remove_i in &[0, 65, 98] {
-            let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
+        let mut pre_remove = 0;
+        for remove_i in &[0, 1, 65, 98, 100] {
+            let remove_i = *remove_i;
+            // Find a proposal and remove all previous proposals
+            for i in 1..=remove_i {
+                let p = pq.find_proposal(gen_term(i), i, 0);
+                let must_found_proposal = p.is_some() && (i > pre_remove);
+                let proposal_removed_previous = p.is_none() && (i <= pre_remove);
+                assert!(must_found_proposal || proposal_removed_previous);
+                // `find_proposal` will remove proposal so `pop` must return None
+                assert!(pq.pop(gen_term(i), i).is_none());
+            }
             for i in 1..=100 {
-                let pt = pq.find_propose_time(((i / 10) + 1, i));
-                if i <= *remove_i || i % 3 == 1 {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= remove_i || i % 3 == 1 {
                     assert!(pt.is_none())
                 } else {
                     assert!(pt.is_some())
                 };
+            }
+            pre_remove = remove_i;
+        }
+    }
+
+    #[test]
+    fn test_uncommitted_proposals() {
+        struct DropPanic(bool);
+        impl Drop for DropPanic {
+            fn drop(&mut self) {
+                if self.0 {
+                    unreachable!()
+                }
+            }
+        }
+        fn must_call() -> ExtCallback {
+            let mut d = DropPanic(true);
+            Box::new(move || {
+                d.0 = false;
+            })
+        }
+        fn must_not_call() -> ExtCallback {
+            Box::new(move || unreachable!())
+        }
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
+
+        // (1, 4) and (1, 5) is not committed
+        let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];
+        let committed = vec![(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
+        for (index, term) in entries.clone() {
+            if term != 1 {
+                continue;
+            }
+            let cb = if committed.contains(&(index, term)) {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_call()))
+            } else {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_not_call()))
+            };
+            pq.push(Proposal {
+                index,
+                term,
+                cb,
+                is_conf_change: false,
+                renew_lease_time: None,
+                must_pass_epoch_check: false,
+            });
+        }
+        for (index, term) in entries {
+            if let Some(mut p) = pq.find_proposal(term, index, 0) {
+                p.cb.invoke_committed();
             }
         }
     }
