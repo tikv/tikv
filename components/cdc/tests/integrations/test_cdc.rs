@@ -17,8 +17,10 @@ use kvproto::cdcpb::{
 };
 use kvproto::kvrpcpb::*;
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::sleep_ms;
 use test_raftstore::*;
+use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
 use cdc::Task;
@@ -529,7 +531,7 @@ fn test_region_split() {
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
+        new_event_feed(suite.get_region_cdc_client(region.get_id()));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
@@ -762,48 +764,60 @@ fn test_old_value_basic() {
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
-    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 1.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 1.into(), 2.into());
+    let ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
+    let ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
     // Rollback
     let mut m2 = Mutation::default();
     m2.set_op(Op::Put);
     m2.key = k1.clone();
     m2.value = b"v2".to_vec();
-    suite.must_kv_prewrite(1, vec![m2], k1.clone(), 3.into());
-    suite.must_kv_rollback(1, vec![k1.clone()], 3.into());
+    let ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
+    suite.must_kv_rollback(1, vec![k1.clone()], ts3);
     // Update value
     let mut m3 = Mutation::default();
     m3.set_op(Op::Put);
     m3.key = k1.clone();
     m3.value = vec![b'3'; 5120];
-    suite.must_kv_prewrite(1, vec![m3], k1.clone(), 4.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 4.into(), 5.into());
+    let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m3], k1.clone(), ts4);
+    let ts5 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts4, ts5);
     // Lock
     let mut m4 = Mutation::default();
     m4.set_op(Op::Lock);
     m4.key = k1.clone();
-    suite.must_kv_prewrite(1, vec![m4], k1.clone(), 6.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 6.into(), 7.into());
+    let ts6 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m4], k1.clone(), ts6);
+    let ts7 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts6, ts7);
     // Delete value and rollback
     let mut m5 = Mutation::default();
     m5.set_op(Op::Del);
     m5.key = k1.clone();
-    suite.must_kv_prewrite(1, vec![m5], k1.clone(), 8.into());
-    suite.must_kv_rollback(1, vec![k1.clone()], 8.into());
+    let ts8 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m5], k1.clone(), ts8);
+    suite.must_kv_rollback(1, vec![k1.clone()], ts8);
     // Update value
     let mut m6 = Mutation::default();
     m6.set_op(Op::Put);
     m6.key = k1.clone();
     m6.value = b"v6".to_vec();
-    suite.must_kv_prewrite(1, vec![m6], k1.clone(), 10.into());
-    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 11.into());
+    let ts9 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let ts10 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m6], k1.clone(), ts10);
+    let ts11 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts10, ts11);
     // Delete value
     let mut m7 = Mutation::default();
     m7.set_op(Op::PessimisticLock);
     m7.key = k1.clone();
-    suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), 9.into(), 12.into());
+    let ts12 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), ts9, ts12);
     m7.set_op(Op::Del);
-    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, 9.into(), 12.into());
+    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, ts9, ts12);
 
     let mut event_count = 0;
     loop {
@@ -813,13 +827,15 @@ fn test_old_value_basic() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
-                            if row.get_start_ts() == 3 || row.get_start_ts() == 4 {
+                            if row.get_start_ts() == ts3.into_inner()
+                                || row.get_start_ts() == ts4.into_inner()
+                            {
                                 assert_eq!(row.get_old_value(), b"v1");
                                 event_count += 1;
-                            } else if row.get_start_ts() == 8 {
+                            } else if row.get_start_ts() == ts8.into_inner() {
                                 assert_eq!(row.get_old_value(), vec![b'3'; 5120].as_slice());
                                 event_count += 1;
-                            } else if row.get_start_ts() == 9 {
+                            } else if row.get_start_ts() == ts9.into_inner() {
                                 assert_eq!(row.get_old_value(), b"v6");
                                 event_count += 1;
                             }
@@ -844,16 +860,18 @@ fn test_old_value_basic() {
             match e.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
                     for row in es.take_entries().to_vec() {
-                        if row.get_type() == EventLogType::Committed && row.get_start_ts() == 1 {
+                        if row.get_type() == EventLogType::Committed
+                            && row.get_start_ts() == ts1.into_inner()
+                        {
                             assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Committed
-                            && row.get_start_ts() == 4
+                            && row.get_start_ts() == ts4.into_inner()
                         {
                             assert_eq!(row.get_old_value(), b"v1");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Prewrite
-                            && row.get_start_ts() == 9
+                            && row.get_start_ts() == ts9.into_inner()
                         {
                             assert_eq!(row.get_old_value(), b"v6");
                             event_count += 1;
@@ -965,6 +983,423 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
     }
     assert!(success, "resolved_ts not blocked by the memory lock");
 
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_1pc() {
+    let mut suite = TestSuite::new(1);
+
+    let req = suite.new_changedata_request(1);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(false);
+    event.events.into_iter().for_each(|e| {
+        match e.event.unwrap() {
+            // Even if there is no write,
+            // it should always outputs an Initialized event.
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        }
+    });
+
+    let (k1, v1) = (b"k1", b"v1");
+    let (k2, v2) = (b"k2", &[0u8; 512]);
+
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    // Let resolved_ts update.
+    sleep_ms(500);
+
+    // Prewrite
+    let mut prewrite_req = PrewriteRequest::default();
+    let region_id = 1;
+    prewrite_req.set_context(suite.get_context(region_id));
+    let mut m1 = Mutation::default();
+    m1.set_op(Op::Put);
+    m1.key = k1.to_vec();
+    m1.value = v1.to_vec();
+    prewrite_req.mut_mutations().push(m1);
+    let mut m2 = Mutation::default();
+    m2.set_op(Op::Put);
+    m2.key = k2.to_vec();
+    m2.value = v2.to_vec();
+    prewrite_req.mut_mutations().push(m2);
+    prewrite_req.primary_lock = k1.to_vec();
+    prewrite_req.start_version = start_ts.into_inner();
+    prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+    prewrite_req.set_try_one_pc(true);
+    let prewrite_resp = suite
+        .get_tikv_client(region_id)
+        .kv_prewrite(&prewrite_req)
+        .unwrap();
+    assert!(prewrite_resp.get_one_pc_commit_ts() > 0);
+
+    let mut resolved_ts = 0;
+    loop {
+        let mut cde = receive_event(true);
+        if cde.get_resolved_ts().get_ts() > resolved_ts {
+            resolved_ts = cde.get_resolved_ts().get_ts();
+        }
+        let events = cde.mut_events();
+        if !events.is_empty() {
+            assert_eq!(events.len(), 1);
+            match events.pop().unwrap().event.unwrap() {
+                Event_oneof_event::Entries(entries) => {
+                    assert_eq!(entries.entries.len(), 2);
+                    let (e0, e1) = (&entries.entries[0], &entries.entries[1]);
+                    assert_eq!(e0.get_type(), EventLogType::Committed);
+                    assert_eq!(e0.get_key(), k1);
+                    assert_eq!(e0.get_value(), v1);
+                    assert!(e0.commit_ts > resolved_ts);
+                    assert_eq!(e1.get_type(), EventLogType::Committed);
+                    assert_eq!(e1.get_key(), k2);
+                    assert_eq!(e1.get_value(), v2);
+                    assert!(e1.commit_ts > resolved_ts);
+                    break;
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_old_value_1pc() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Insert value
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 15.into());
+
+    // Prewrite with 1PC
+    let start_ts = 20;
+    let mut prewrite_req = PrewriteRequest::default();
+    let region_id = 1;
+    prewrite_req.set_context(suite.get_context(region_id));
+    let mut m2 = Mutation::default();
+    m2.set_op(Op::Put);
+    m2.key = k1.clone();
+    m2.value = b"v2".to_vec();
+    prewrite_req.mut_mutations().push(m2);
+    prewrite_req.primary_lock = k1;
+    prewrite_req.start_version = start_ts;
+    prewrite_req.lock_ttl = 1000;
+    prewrite_req.set_try_one_pc(true);
+    let prewrite_resp = suite
+        .get_tikv_client(region_id)
+        .kv_prewrite(&prewrite_req)
+        .unwrap();
+    assert!(prewrite_resp.get_one_pc_commit_ts() > 0);
+
+    'outer: loop {
+        let events = receive_event(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Committed
+                            && row.get_start_ts() == start_ts
+                        {
+                            assert_eq!(row.get_old_value(), b"v1");
+                            break 'outer;
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_region_created_replicate() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuite::with_cluster(2, cluster);
+
+    let region = suite.cluster.get_region(&[]);
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    suite
+        .cluster
+        .pd_client
+        .must_remove_peer(region.id, new_peer(1, 1));
+
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    suite.cluster.sim.wl().add_recv_filter(1, recv_filter);
+    suite
+        .cluster
+        .pd_client
+        .must_add_peer(region.id, new_peer(1, 1));
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    sleep_ms(1000);
+    suite.cluster.sim.wl().clear_recv_filters(1);
+
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.ts >= previous_ts);
+            assert!(resolved_ts.regions == vec![region.id]);
+            previous_ts = resolved_ts.ts;
+            counter += 1;
+        }
+        if counter > 5 {
+            break;
+        }
+    }
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_scan_not_filter_gc_fence() {
+    // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
+    let mut suite = TestSuite::new(1);
+
+    let (key, v1, v2) = (b"key", b"value1", b"value2");
+
+    // Write two versions to the key.
+    let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = key.to_vec();
+    mutation.value = v1.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts1);
+
+    let commit_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
+
+    let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.key = key.to_vec();
+    mutation.value = v2.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
+
+    let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
+
+    // Assume the first version above is written by async commit and it's commit_ts is not unique.
+    // Use it's commit_ts as another transaction's start_ts.
+    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first version.
+    let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let action = suite.must_check_txn_status(
+        1,
+        key.to_vec(),
+        commit_ts1,
+        caller_start_ts,
+        caller_start_ts,
+        true,
+    );
+    assert_eq!(action, Action::LockNotExistRollback);
+
+    let req = suite.new_changedata_request(1);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    if events.len() == 1 {
+        events.extend(receive_event(false).events.into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts2.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts2.into_inner(), "{:?}", es);
+            assert_eq!(e.key, key.to_vec(), "{:?}", es);
+            assert_eq!(e.value, v2.to_vec(), "{:?}", es);
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.start_ts, start_ts1.into_inner(), "{:?}", es);
+            assert_eq!(e.commit_ts, commit_ts1.into_inner(), "{:?}", es);
+            assert_eq!(e.key, key.to_vec(), "{:?}", es);
+            assert_eq!(e.value, v1.to_vec(), "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+}
+
+#[test]
+fn test_cdc_filtering_gc_fence() {
+    let mut suite = TestSuite::new(1);
+
+    let req = suite.new_changedata_request(1);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    sleep_ms(1000);
+
+    // Write two versions of a key
+    let (key, v1, v2) = (b"key", b"value1", b"value2");
+    let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = key.to_vec();
+    mutation.value = v1.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts1);
+
+    let commit_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
+
+    let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = key.to_vec();
+    mutation.value = v2.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
+
+    let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
+
+    // We don't care about the events caused by the previous writings in this test case, and it's
+    // too complicated to check them. Just skip them here, and wait for resolved_ts to be pushed to
+    // a greater value than the two versions' commit_ts-es.
+    let skip_to_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    loop {
+        let e = receive_event(true);
+        if let Some(r) = e.resolved_ts.as_ref() {
+            if r.ts > skip_to_ts.into_inner() {
+                break;
+            }
+        }
+    }
+
+    // Assume the two versions of the key are written by async commit transactions, and their
+    // commit_ts-es are also other transaction's start_ts-es. Run check_txn_status on the
+    // commit_ts-es of the two versions to cause overlapping rollback.
+    let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_check_txn_status(
+        1,
+        key.to_vec(),
+        commit_ts1,
+        caller_start_ts,
+        caller_start_ts,
+        true,
+    );
+    suite.must_check_txn_status(
+        1,
+        key.to_vec(),
+        commit_ts2,
+        caller_start_ts,
+        caller_start_ts,
+        true,
+    );
+
+    // Then nothing should be received by CDC.
+    let latest_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    loop {
+        let event = receive_event(true);
+
+        if let Some(r) = event.resolved_ts.as_ref() {
+            assert_ne!(r.ts, 0);
+            if r.ts > latest_ts.into_inner() {
+                break;
+            }
+        }
+    }
+}
+
+// This test is created for covering the case that term was increased without leader change.
+// Ideally leader id and term in StoreMeta should be updated together with a yielded SoftState,
+// but sometimes the leader was transferred to another store and then changed back,
+// a follower would not get a new SoftState.
+#[test]
+fn test_term_change() {
+    let cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuite::with_cluster(3, cluster);
+    let region = suite.cluster.get_region(&[]);
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    // Simulate network partition.
+    let recv_filter =
+        Box::new(RegionPacketFilter::new(region.get_id(), 1).direction(Direction::Recv));
+    suite.cluster.sim.wl().add_recv_filter(1, recv_filter);
+    // Transfer leader to peer 3 and then change it back to peer 2.
+    // Peer 1 would not get a new SoftState.
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(3, 3));
+    suite
+        .cluster
+        .must_transfer_leader(region.id, new_peer(2, 2));
+    suite.cluster.sim.wl().clear_recv_filters(1);
+
+    suite
+        .cluster
+        .pd_client
+        .must_remove_peer(region.id, new_peer(3, 3));
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut counter = 0;
+    let mut previous_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.ts >= previous_ts);
+            assert!(resolved_ts.regions == vec![region.id]);
+            previous_ts = resolved_ts.ts;
+            counter += 1;
+        }
+        if counter > 5 {
+            break;
+        }
+    }
     event_feed_wrap.replace(None);
     suite.stop();
 }

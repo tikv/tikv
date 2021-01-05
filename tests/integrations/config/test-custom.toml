@@ -5,6 +5,7 @@ slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
+enable-io-snoop = false
 
 [readpool.unified]
 min-thread-count = 5
@@ -153,7 +154,6 @@ store-pool-size = 3
 store-reschedule-duration = "2s"
 future-poll-size = 2
 hibernate-regions = false
-hibernate-timeout = "1h"
 dev-assert = true
 perf-level = 5
 
@@ -188,7 +188,7 @@ info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 rate-limiter-refill-period = "10ms"
 rate-limiter-mode = 3
-auto-tuned = false
+rate-limiter-auto-tuned = false
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
@@ -226,6 +226,9 @@ compression-per-level = [
     "zstd",
     "lz4",
 ]
+bottommost-level-compression = "disable"
+bottommost-zstd-compression-dict-size = 1024
+bottommost-zstd-compression-sample-size = 1024
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12

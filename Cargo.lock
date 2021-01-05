@@ -212,6 +212,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pd_client",
  "prometheus",
  "raft",
@@ -260,12 +261,33 @@ dependencies = [
  "criterion",
  "crossbeam",
  "derive_more",
+ "file_system",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
  "tikv_util",
 ]
+
+[[package]]
+name = "bcc"
+version = "0.0.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5dbbe5cc2887bc0bc8506b26dcd4c41d1b54bdf4ff1de8e12d404deee60e4ec"
+dependencies = [
+ "bcc-sys",
+ "bitflags",
+ "byteorder",
+ "libc",
+ "regex",
+ "thiserror",
+]
+
+[[package]]
+name = "bcc-sys"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42d3c07869b846ba3306739375e9ed2f8055a8759fcf7f72ab7bf3bc4df38b9b"
 
 [[package]]
 name = "bindgen"
@@ -357,9 +379,9 @@ checksum = "12ae9db68ad7fac5fe51304d20f016c911539251075a214f8e663babefa35187"
 
 [[package]]
 name = "byteorder"
-version = "1.3.2"
+version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7c3dd8985a7111efc5c80b44e23ecdd8c007de8ade3b96595387e812b957cf5"
+checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
 
 [[package]]
 name = "bytes"
@@ -460,9 +482,9 @@ dependencies = [
  "failure",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -920,6 +942,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-utils"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d96d1e189ef58269ebe5b97953da3274d83a93af647c2ddd6f9dab28cedb8d"
+dependencies = [
+ "autocfg 1.0.0",
+ "cfg-if 1.0.0",
+ "lazy_static",
+]
+
+[[package]]
 name = "crypto-mac"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1195,6 +1228,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "error_code",
+ "file_system",
  "kvproto",
  "log_wrappers",
  "protobuf",
@@ -1319,10 +1353,18 @@ checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 name = "file_system"
 version = "0.1.0"
 dependencies = [
+ "bcc",
+ "collections",
  "crc32fast",
+ "crossbeam-utils 0.8.1",
  "fs2",
  "lazy_static",
+ "libc",
+ "maligned",
+ "nix 0.19.0",
  "openssl",
+ "prometheus",
+ "prometheus-static-metric",
  "rand",
  "tempfile",
  "tikv_alloc",
@@ -1613,9 +1655,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9846867f136ecbb87e66c5e96763f67a006e9281a85eb6312976cd451d9ed0c0"
+checksum = "2dfdbacbc27f875402f878928c7e9dc22ee26d01a56a9faf655f7090e7e25109"
 dependencies = [
  "bytes 0.5.3",
  "futures 0.3.7",
@@ -1643,9 +1685,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e6ea7ecb083588c8b3446270e95415c14ea856539e41ed3ad0c53614398a13f"
+checksum = "01cf1bf66e791876cfb406952895d87912eab70e858a5474c3608e5297509eba"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -1962,16 +2004,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f3dafca4c7fd5af12fd83b9cf8540b1a32f61c02"
+source = "git+https://github.com/pingcap/kvproto.git#fc36d7869035ffd96810efdb9c1f053c6081a773"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -1991,9 +2034,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.76"
+version = "0.2.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "755456fae044e6fa1ebbbd1b3e902ae19e73097ed4ed87bb79934a867c007bc3"
+checksum = "4d58d1b70b004888f764dfbf6a26a3b0342a1632d33968e4a179d8011c760614"
 
 [[package]]
 name = "libflate"
@@ -2046,7 +2089,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "cc",
  "cmake",
@@ -2055,7 +2098,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2075,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2161,6 +2204,12 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[package]]
+name = "maligned"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e88c3cbe8288f77f293e48a28b3232e3defd203a6d839fa7f68ea4329e83464"
 
 [[package]]
 name = "match_template"
@@ -2429,6 +2478,18 @@ name = "nix"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if 0.1.10",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85db2feff6bf70ebc3a4793191517d5f0331100a2f10f9bf93b5e5214f32b7b7"
 dependencies = [
  "bitflags",
  "cc",
@@ -2726,10 +2787,10 @@ dependencies = [
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -3127,7 +3188,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "fxhash",
  "getset",
@@ -3159,7 +3220,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3210,7 +3271,6 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3379,14 +3439,14 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.3.1"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc220bd33bdce8f093101afe22a037b8eb0e5af33592e6a9caafff0d4cb81cbd"
+checksum = "38cf2c13ed4745de91a5eb834e11c00bcc3709e773173b2ce4c56c9fbde04b9c"
 dependencies = [
  "aho-corasick",
  "memchr",
  "regex-syntax",
- "thread_local",
+ "thread_local 1.0.1",
 ]
 
 [[package]]
@@ -3400,9 +3460,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.12"
+version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11a7e20d1cce64ef2fed88b66d347f88bd9babb82845b2b858f3edbf59a4f716"
+checksum = "3b181ba2dcf07aaccad5448e8ead58db5b742cf85dfe035e2227f137a539a189"
 
 [[package]]
 name = "remove_dir_all"
@@ -3453,7 +3513,7 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "collections",
- "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3496,7 +3556,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#3f082c17d314b7961e8270ca93de18a1500b7216"
+source = "git+https://github.com/tikv/rust-rocksdb.git#0f288436ad908d24747ec5425eb46d5fccca0115"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3946,7 +4006,7 @@ checksum = "e544d16c6b230d84c866662fe55e31aacfca6ae71e6fc49ae9a311cb379bfc2f"
 dependencies = [
  "slog",
  "take_mut",
- "thread_local",
+ "thread_local 0.3.6",
 ]
 
 [[package]]
@@ -3982,7 +4042,7 @@ dependencies = [
  "chrono",
  "slog",
  "term",
- "thread_local",
+ "thread_local 0.3.6",
 ]
 
 [[package]]
@@ -4401,10 +4461,10 @@ dependencies = [
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raftstore",
@@ -4486,14 +4546,15 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "fail",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "hyper",
  "keys",
  "kvproto",
+ "log_wrappers",
  "more-asserts",
  "panic_hook",
  "pd_client",
@@ -4542,18 +4603,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.6"
+version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc6b305ec0e323c7b6cfff6098a22516e0063d0bb7c3d88660a890217dca099a"
+checksum = "0e9ae34b84616eedaaf1e9dd6026dbe00dcafa92aa0c8077cb69df1fcfe5e53e"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.6"
+version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45ba8d810d9c48fc456b7ad54574e8bfb7c7918a57ad7a6e6a0985d7959e8597"
+checksum = "9ba20f23e85b10754cd195504aebf6a27e2e6cbe28c17778a0c930724628dd56"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4565,6 +4626,15 @@ name = "thread_local"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6b53e329000edc2b34dbe8545fd20e55a333362d0a321909685a19bd28c3f1b"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
+name = "thread_local"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d40c6d1b69745a6ec6fb1ca717914848da4b44ae29d9b3080cbee91d72a69b14"
 dependencies = [
  "lazy_static",
 ]
@@ -4603,9 +4673,9 @@ dependencies = [
  "derive_more",
  "error_code",
  "failure",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
  "tikv_util",
@@ -4629,6 +4699,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4657,7 +4728,6 @@ dependencies = [
  "collections",
  "fail",
  "failure",
- "hex 0.4.2",
  "kvproto",
  "log_wrappers",
  "match_template",
@@ -4688,6 +4758,7 @@ dependencies = [
  "file_system",
  "flate2",
  "hex 0.4.2",
+ "log_wrappers",
  "match_template",
  "num",
  "num-traits",
@@ -4711,7 +4782,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.1.0-alpha"
+version = "5.0.0-rc.x"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4884,11 +4955,11 @@ dependencies = [
  "fs2",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "minitrace",
  "num_cpus",
  "openssl",
@@ -5136,8 +5207,8 @@ dependencies = [
  "collections",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",
