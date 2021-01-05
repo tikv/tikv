@@ -22,7 +22,7 @@ pub fn get_env(
         // Box<DBEncryptionKeyManager> instead.
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
             base_env,
-            Arc::new(WrappedEncryptionKeyManager { manager }),
+            Box::new(WrappedEncryptionKeyManager { manager }),
         )?))
     } else {
         Ok(base_env)
