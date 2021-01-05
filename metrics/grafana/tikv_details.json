@@ -64,7 +64,11 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
+<<<<<<< HEAD
   "iteration": 1597894550929,
+=======
+  "iteration": 1609133726628,
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
   "links": [],
   "panels": [
     {
@@ -7488,7 +7492,11 @@
         "h": 1,
         "w": 24,
         "x": 0,
+<<<<<<< HEAD
         "y": 9
+=======
+        "y": 8
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
       },
       "id": 2751,
       "panels": [
@@ -7781,7 +7789,26 @@
             "align": false,
             "alignLevel": null
           }
+<<<<<<< HEAD
         },
+=======
+        }
+      ],
+      "repeat": null,
+      "title": "Raft process",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 2750,
+      "panels": [
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
         {
           "aliasColors": {},
           "bars": false,
@@ -9203,7 +9230,11 @@
         "h": 1,
         "w": 24,
         "x": 0,
+<<<<<<< HEAD
         "y": 13
+=======
+        "y": 11
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
       },
       "id": 2754,
       "panels": [
@@ -9604,15 +9635,515 @@
               "intervalFactor": 2,
               "legendFormat": "busy",
               "refId": "A",
+<<<<<<< HEAD
               "step": 20
+=======
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Check split",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The time consumed when running split check in .9999",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 18
+          },
+          "id": 71,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 2,
+          "links": [],
+          "nullPointMode": "null as zero",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.9999, sum(rate(tikv_raftstore_check_split_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le, instance))",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}",
+              "metric": "tikv_raftstore_check_split_duration_seconds_bucket",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "99.99% Check split duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "repeat": null,
+      "title": "Raft admin",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 2753,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of rejections from the local read thread and The number of total requests",
+          "fill": 1,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "id": 2292,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "/.*-total/i",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_local_read_reject_total{instance=~\"$instance\"}[1m])) by (instance, reason)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-reject-by-{{reason}}",
+              "refId": "A"
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
             },
             {
               "expr": "sum(rate(tikv_scheduler_stage_total{instance=~\"$instance\"}[1m])) by (stage)",
               "format": "time_series",
               "intervalFactor": 2,
+<<<<<<< HEAD
               "legendFormat": "{{stage}}",
               "refId": "B",
               "step": 20
+=======
+              "legendFormat": "{{instance}}-total",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Local reader requests",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "repeat": null,
+      "title": "Local reader",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 4200,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time used by each level in the unified read pool per second. Level 0 refers to small queries.",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 13
+          },
+          "id": 4194,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": 250,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_multilevel_level_elapsed{instance=~\"$instance\", name=\"unified-read-pool\"}[1m])) by (level)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{level}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Time used by level",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "µs",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The chance that level 0 (small) tasks are scheduled in the unified read pool.",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 13
+          },
+          "id": 4196,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": true,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "tikv_multilevel_level0_chance{instance=~\"$instance\", name=\"unified-read-pool\"}",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Level 0 chance",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "percentunit",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of concurrently running tasks in the unified read pool.",
+          "fill": 1,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 21
+          },
+          "id": 4198,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(avg_over_time(tikv_unified_read_pool_running_tasks[1m])) by (instance)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
             }
           ],
           "thresholds": [],
@@ -9655,7 +10186,25 @@
             "align": false,
             "alignLevel": null
           }
+<<<<<<< HEAD
         },
+=======
+        }
+      ],
+      "title": "Unified Read Pool",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 2754,
+      "panels": [
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
         {
           "aliasColors": {},
           "bars": false,
@@ -9830,7 +10379,11 @@
           },
           "yaxes": [
             {
+<<<<<<< HEAD
               "format": "ops",
+=======
+              "format": "short",
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
               "label": null,
               "logBase": 1,
               "max": null,
@@ -9851,6 +10404,156 @@
             "alignLevel": null
           }
         },
+<<<<<<< HEAD
+=======
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 22
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 15,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "sum(delta(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le)",
+              "format": "heatmap",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Storage async snapshot duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed by processing asynchronous write requests",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 22
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 109,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "sum(delta(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le)",
+              "format": "heatmap",
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A",
+              "step": 4
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Storage async write duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": false
+          },
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "auto",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        }
+      ],
+      "repeat": null,
+      "title": "Storage",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 2755,
+      "panels": [
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
         {
           "alert": {
             "conditions": [
@@ -10367,7 +11070,26 @@
             "align": false,
             "alignLevel": null
           }
+<<<<<<< HEAD
         },
+=======
+        }
+      ],
+      "repeat": null,
+      "title": "Scheduler",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 2756,
+      "panels": [
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
         {
           "aliasColors": {},
           "bars": false,
@@ -11460,7 +12182,26 @@
             "align": false,
             "alignLevel": null
           }
+<<<<<<< HEAD
         },
+=======
+        }
+      ],
+      "repeat": "command",
+      "title": "Scheduler - $command",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 2758,
+      "panels": [
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
         {
           "aliasColors": {},
           "bars": false,
@@ -12413,7 +13154,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 18
       },
       "id": 2759,
       "panels": [
@@ -12927,7 +13668,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 19
       },
       "id": 2760,
       "panels": [
@@ -13338,7 +14079,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "id": 2757,
       "panels": [
@@ -14137,7 +14878,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 21
       },
       "id": 3197,
       "panels": [
@@ -15154,7 +15895,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 22
       },
       "id": 2761,
       "panels": [
@@ -15550,7 +16291,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 23
       },
       "id": 2762,
       "panels": [
@@ -19738,7 +20479,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 24
       },
       "id": 3301,
       "panels": [
@@ -22653,7 +23394,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 25
       },
       "id": 2820,
       "panels": [
@@ -23381,7 +24122,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 26
       },
       "id": 2763,
       "panels": [
@@ -23485,7 +24226,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 27
       },
       "id": 3922,
       "panels": [
@@ -23504,7 +24245,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 57
+            "y": 56
           },
           "id": 3924,
           "legend": {
@@ -23610,7 +24351,7 @@
             "h": 7,
             "w": 4,
             "x": 12,
-            "y": 57
+            "y": 56
           },
           "id": 3926,
           "links": [],
@@ -23672,7 +24413,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 57
+            "y": 56
           },
           "id": 5264,
           "legend": {
@@ -23770,7 +24511,7 @@
             "h": 7,
             "w": 8,
             "x": 0,
-            "y": 64
+            "y": 63
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -23847,7 +24588,7 @@
             "h": 7,
             "w": 8,
             "x": 8,
-            "y": 64
+            "y": 63
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -23917,7 +24658,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 64
+            "y": 63
           },
           "id": 3929,
           "legend": {
@@ -24035,7 +24776,7 @@
             "h": 7,
             "w": 4,
             "x": 0,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24112,7 +24853,7 @@
             "h": 7,
             "w": 6,
             "x": 4,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24189,12 +24930,12 @@
             "h": 7,
             "w": 6,
             "x": 10,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 5265,
+          "id": 6905,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -24259,7 +25000,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 71
+            "y": 70
           },
           "id": 3928,
           "legend": {
@@ -24377,7 +25118,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 78
+            "y": 77
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24449,7 +25190,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 78
+            "y": 77
           },
           "id": 4936,
           "legend": {
@@ -24555,7 +25296,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 85
+            "y": 84
           },
           "id": 5267,
           "legend": {
@@ -24660,7 +25401,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 85
+            "y": 84
           },
           "id": 5269,
           "legend": {
@@ -24758,7 +25499,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 92
+            "y": 91
           },
           "id": 5925,
           "legend": {
@@ -24786,7 +25527,7 @@
           "renderer": "flot",
           "seriesOverrides": [
             {
-              "alias": "/restore-count.*/",
+              "alias": "/import-count.*/",
               "yaxis": 2
             }
           ],
@@ -24799,7 +25540,7 @@
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "restore-{{instance}}",
+              "legendFormat": "import-{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "A",
               "step": 4
@@ -24819,7 +25560,7 @@
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "restore-count-{{instance}}",
+              "legendFormat": "import-count-{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "D",
               "step": 4
@@ -24829,7 +25570,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore CPU Utilization",
+          "title": "Import CPU Utilization",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -24880,7 +25621,7 @@
             "h": 7,
             "w": 4,
             "x": 12,
-            "y": 92
+            "y": 91
           },
           "id": 5926,
           "links": [],
@@ -24925,7 +25666,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Restore Thread Count",
+          "title": "Import Thread Count",
           "transform": "timeseries_aggregations",
           "type": "table"
         },
@@ -24942,7 +25683,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 92
+            "y": 91
           },
           "id": 5932,
           "legend": {
@@ -24983,7 +25724,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore Errors",
+          "title": "Import Errors",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25031,7 +25772,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 99
+            "y": 98
           },
           "id": 5931,
           "legend": {
@@ -25079,7 +25820,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore RPC Duration",
+          "title": "Import RPC Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25129,7 +25870,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 99
+            "y": 98
           },
           "id": 6267,
           "legend": {
@@ -25184,7 +25925,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore RPC Ops",
+          "title": "Import RPC Ops",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25240,9 +25981,9 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 8,
+            "w": 6,
             "x": 0,
-            "y": 106
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -25273,7 +26014,7 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Write/Download RPC Duration",
+          "title": "Import Write/Download RPC Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -25317,14 +26058,91 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 5,
-            "x": 8,
-            "y": 106
+            "w": 6,
+            "x": 6,
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
           "id": 5929,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_download_duration_bucket{instance=~\"$instance\", type=\"queue\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Wait Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 105
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 6906,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -25350,7 +26168,7 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Read SST Duration",
+          "title": "Import Read SST Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -25394,9 +26212,9 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 5,
-            "x": 13,
-            "y": 106
+            "w": 6,
+            "x": 18,
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -25427,7 +26245,238 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Rewrite SST Duration",
+          "title": "Import Rewrite SST Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 0,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5939,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_rpc_duration_bucket{instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest RPC Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 6,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5938,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_ingest_duration_bucket{instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest SST Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5937,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_ingest_byte{instance=~\"$instance\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest SST Bytes",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -25463,7 +26512,7 @@
             "h": 7,
             "w": 6,
             "x": 18,
-            "y": 106
+            "y": 112
           },
           "id": 5927,
           "legend": {
@@ -25514,7 +26563,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore Download SST Throughput",
+          "title": "Import Download SST Throughput",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25550,240 +26599,9 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 10,
-            "x": 0,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5939,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_rpc_duration_bucket{instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest RPC Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 7,
-            "x": 10,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5938,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_duration_bucket{instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest SST Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 7,
-            "x": 17,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5937,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_byte{instance=~\"$instance\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest SST Bytes",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
         }
       ],
-      "title": "Backup & Restore",
+      "title": "Backup & Import",
       "type": "row"
     },
     {
@@ -25792,7 +26610,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 28
       },
       "id": 4466,
       "panels": [
@@ -26487,5 +27305,10 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
+<<<<<<< HEAD
   "version": 25
 }
+=======
+  "version": 4
+}
+>>>>>>> a69c8eaa8... import: add download wait duration metrics (#9373)
