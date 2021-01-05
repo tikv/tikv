@@ -1565,19 +1565,13 @@ mod tests {
 
     fn check_overflow(ctx: &EvalContext, overflow: bool, log: &str) {
         if overflow {
-            assert_eq!(
-                ctx.warnings.warning_cnt, 1,
-                "{}, {:?}",
-                log, ctx.warnings.warnings
-            );
-            assert_eq!(
-                ctx.warnings.warnings[0].get_code(),
-                ERR_DATA_OUT_OF_RANGE,
-                "{}",
-                log
-            );
-        } else {
-            assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log);
+            check_warning(ctx, Some(ERR_DATA_OUT_OF_RANGE), log)
+        }
+    }
+
+    fn check_truncate(ctx: &EvalContext, truncate: bool, log: &str) {
+        if truncate {
+            check_warning(ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log)
         }
     }
 
@@ -2493,53 +2487,79 @@ mod tests {
 
         // no overflow
         let cs = vec![
-            // (origin, expect, overflow)
-            (Json::from_object(BTreeMap::default()).unwrap(), 0, false),
-            (Json::from_array(vec![]).unwrap(), 0, false),
-            (Json::from_i64(10).unwrap(), 10i64, false),
-            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false),
-            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false),
-            (Json::from_u64(0).unwrap(), 0, false),
-            (Json::from_u64(u64::MAX).unwrap(), u64::MAX as i64, false),
+            // (origin, expect, overflow, truncate)
+            (
+                Json::from_object(BTreeMap::default()).unwrap(),
+                0,
+                false,
+                true,
+            ),
+            (Json::from_array(vec![]).unwrap(), 0, false, true),
+            (Json::from_i64(10).unwrap(), 10i64, false, false),
+            (Json::from_i64(i64::MAX).unwrap(), i64::MAX, false, false),
+            (Json::from_i64(i64::MIN).unwrap(), i64::MIN, false, false),
+            (Json::from_u64(0).unwrap(), 0, false, false),
+            (
+                Json::from_u64(u64::MAX).unwrap(),
+                u64::MAX as i64,
+                false,
+                false,
+            ),
             (
                 Json::from_f64(i64::MIN as u64 as f64).unwrap(),
                 i64::MAX,
+                false,
                 false,
             ),
             (
                 Json::from_f64(i64::MAX as u64 as f64).unwrap(),
                 i64::MAX,
                 false,
+                false,
             ),
             (
                 Json::from_f64(i64::MIN as u64 as f64).unwrap(),
                 i64::MAX,
                 false,
+                false,
             ),
-            (Json::from_f64(i64::MIN as f64).unwrap(), i64::MIN, false),
-            (Json::from_f64(10.5).unwrap(), 11, false),
-            (Json::from_f64(10.4).unwrap(), 10, false),
-            (Json::from_f64(-10.4).unwrap(), -10, false),
-            (Json::from_f64(-10.5).unwrap(), -11, false),
-            (Json::from_string(String::from("10.0")).unwrap(), 10, false),
-            (Json::from_bool(true).unwrap(), 1, false),
-            (Json::from_bool(false).unwrap(), 0, false),
-            (Json::none().unwrap(), 0, false),
+            (
+                Json::from_f64(i64::MIN as f64).unwrap(),
+                i64::MIN,
+                false,
+                false,
+            ),
+            (Json::from_f64(10.5).unwrap(), 11, false, false),
+            (Json::from_f64(10.4).unwrap(), 10, false, false),
+            (Json::from_f64(-10.4).unwrap(), -10, false, false),
+            (Json::from_f64(-10.5).unwrap(), -11, false, false),
+            (
+                Json::from_string(String::from("10.0")).unwrap(),
+                10,
+                false,
+                false,
+            ),
+            (Json::from_bool(true).unwrap(), 1, false, false),
+            (Json::from_bool(false).unwrap(), 0, false, false),
+            (Json::none().unwrap(), 0, false, false),
             (
                 Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
                 i64::MAX,
                 true,
+                false,
             ),
             (
                 Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
                 i64::MIN,
                 true,
+                false,
             ),
         ];
 
-        for (input, expect, overflow) in cs {
+        for (input, expect, overflow, truncate) in cs {
             let mut ctx = CtxConfig {
                 overflow_as_warning: true,
+                truncate_as_warning: true,
                 ..CtxConfig::default()
             }
             .into();
@@ -2547,6 +2567,7 @@ mod tests {
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_overflow(&ctx, overflow, log.as_str());
+            check_truncate(&ctx, truncate, log.as_str())
         }
     }
 
@@ -5249,19 +5270,6 @@ mod tests {
 
         // TODO: add test case that make Decimal::from_str failed
         let cs: Vec<(Json, bool, bool, Decimal)> = vec![
-            // (cast_func_input, in_union, is_res_unsigned, base_result)
-            (
-                Json::from_object(BTreeMap::default()).unwrap(),
-                false,
-                false,
-                Decimal::zero(),
-            ),
-            (
-                Json::from_array(vec![]).unwrap(),
-                false,
-                false,
-                Decimal::zero(),
-            ),
             (
                 Json::from_i64(10).unwrap(),
                 false,
@@ -5360,6 +5368,41 @@ mod tests {
             |x| x.to_string(),
             "cast_json_as_decimal",
         );
+    }
+
+    #[test]
+    fn test_truncate_when_cast_json_object_or_array_as_decimal() {
+        test_none_with_ctx(cast_any_as_any::<Real, Int>);
+
+        let cs = vec![
+            // (origin, result, errcode)
+            (
+                Json::from_object(BTreeMap::default()).unwrap(),
+                Decimal::zero(),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ),
+            (
+                Json::from_array(vec![]).unwrap(),
+                Decimal::zero(),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ),
+        ];
+
+        for (input, result, errcode) in cs {
+            let mut ctx = CtxConfig {
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
+
+            let rft = FieldTypeConfig::default().into();
+            let extra = make_extra(&rft);
+            let r = cast_json_as_decimal(&mut ctx, &extra, Some(input.as_ref()));
+
+            let log = make_log(&input, &result, &r);
+            check_result(Some(&result), &r, log.as_str());
+            check_warning(&ctx, Some(errcode), log.as_str());
+        }
     }
 
     #[test]
