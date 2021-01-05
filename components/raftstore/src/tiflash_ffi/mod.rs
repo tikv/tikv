@@ -283,18 +283,23 @@ pub extern "C" fn ffi_handle_rename_file(
         (*proxy_ptr).key_manager.as_ref().map_or(
             FileEncryptionInfoRes::new(FileEncryptionRes::Disabled),
             |key_manager| {
-                let p = key_manager.rename_file(
-                    std::str::from_utf8_unchecked(src.to_slice()),
-                    std::str::from_utf8_unchecked(dst.to_slice()),
-                );
-                p.map_or_else(
-                    |e| {
-                        FileEncryptionInfoRes::error(get_tiflash_server_helper().gen_cpp_string(
-                            format!("Encryption key manager rename file failure: {}", e).as_ref(),
-                        ))
-                    },
-                    |_| FileEncryptionInfoRes::new(FileEncryptionRes::Ok),
-                )
+                key_manager
+                    .link_file(
+                        std::str::from_utf8_unchecked(src.to_slice()),
+                        std::str::from_utf8_unchecked(dst.to_slice()),
+                    )
+                    .map(|_| key_manager.delete_file(std::str::from_utf8_unchecked(src.to_slice())))
+                    .map_or_else(
+                        |e| {
+                            FileEncryptionInfoRes::error(
+                                get_tiflash_server_helper().gen_cpp_string(
+                                    format!("Encryption key manager rename file failure: {}", e)
+                                        .as_ref(),
+                                ),
+                            )
+                        },
+                        |_| FileEncryptionInfoRes::new(FileEncryptionRes::Ok),
+                    )
             },
         )
     }
@@ -519,6 +524,7 @@ impl SnapshotHelper {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct BaseBuffView {
     data: *const u8,
     len: u64,

@@ -71,6 +71,23 @@ pub struct DestroyPeerJob {
     pub peer: metapb::Peer,
 }
 
+pub struct CollectedReady {
+    /// The offset of source peer in the batch system.
+    pub batch_offset: usize,
+    pub ctx: InvokeContext,
+    pub ready: Ready,
+}
+
+impl CollectedReady {
+    pub fn new(ctx: InvokeContext, ready: Ready) -> CollectedReady {
+        CollectedReady {
+            batch_offset: 0,
+            ctx,
+            ready,
+        }
+    }
+}
+
 pub struct PeerFsm<EK, ER>
 where
     EK: KvEngine,
@@ -889,9 +906,12 @@ where
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(r) = res {
-            self.on_role_changed(&r.0);
-            if r.1.has_new_entries {
+        if let Some(mut r) = res {
+            // This bases on an assumption that fsm array passed in `end` method will have
+            // the same order of processing.
+            r.batch_offset = self.ctx.processed_fsm_count;
+            self.on_role_changed(&r.ready);
+            if r.ctx.has_new_entries {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
@@ -899,10 +919,20 @@ where
         }
     }
 
-    pub fn post_raft_ready_append(&mut self, ready: Ready, invoke_ctx: InvokeContext) {
+    pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
+        if ready.ctx.region_id != self.fsm.region_id() {
+            panic!(
+                "{} region id not matched: {} # {}",
+                self.fsm.peer.tag,
+                ready.ctx.region_id,
+                self.fsm.region_id()
+            );
+        }
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
-        let res = self.fsm.peer.post_raft_ready_append(self.ctx, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_advance(self.ctx, ready);
+        let res = self.fsm.peer.post_raft_ready_append(self.ctx, ready.ctx);
+        self.fsm
+            .peer
+            .handle_raft_ready_advance(self.ctx, ready.ready);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             if is_merging {
@@ -2127,6 +2157,7 @@ where
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
+        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_id = derived.get_id();
@@ -2335,6 +2366,7 @@ where
                 }
             }
         }
+        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
     fn register_merge_check_tick(&mut self) {

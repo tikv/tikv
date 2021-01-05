@@ -64,7 +64,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1608108077834,
+  "iteration": 1609133726628,
   "links": [],
   "panels": [
     {
@@ -7170,7 +7170,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 7
+        "y": 8
       },
       "id": 2749,
       "panels": [
@@ -7568,7 +7568,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 8
+        "y": 9
       },
       "id": 2750,
       "panels": [
@@ -8162,7 +8162,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 10
       },
       "id": 2751,
       "panels": [
@@ -9081,7 +9081,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 11
       },
       "id": 2752,
       "panels": [
@@ -9489,7 +9489,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 12
       },
       "id": 2753,
       "panels": [
@@ -9606,7 +9606,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "id": 4200,
       "panels": [
@@ -9886,7 +9886,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 2754,
       "panels": [
@@ -10232,7 +10232,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 15
       },
       "id": 2755,
       "panels": [
@@ -10687,7 +10687,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 2756,
       "panels": [
@@ -11740,7 +11740,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 17
       },
       "id": 2758,
       "panels": [
@@ -12879,7 +12879,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 18
       },
       "id": 2759,
       "panels": [
@@ -13393,7 +13393,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 19
       },
       "id": 2760,
       "panels": [
@@ -13804,7 +13804,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "id": 2757,
       "panels": [
@@ -14603,7 +14603,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 21
       },
       "id": 3197,
       "panels": [
@@ -15620,7 +15620,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 22
       },
       "id": 2761,
       "panels": [
@@ -16016,7 +16016,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 23
       },
       "id": 2762,
       "panels": [
@@ -20305,7 +20305,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 24
       },
       "id": 3301,
       "panels": [
@@ -23313,7 +23313,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 25
       },
       "id": 2820,
       "panels": [
@@ -24041,7 +24041,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 26
       },
       "id": 2763,
       "panels": [
@@ -24145,7 +24145,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 27
       },
       "id": 3922,
       "panels": [
@@ -24164,7 +24164,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 57
+            "y": 56
           },
           "id": 3924,
           "legend": {
@@ -24270,7 +24270,7 @@
             "h": 7,
             "w": 4,
             "x": 12,
-            "y": 57
+            "y": 56
           },
           "id": 3926,
           "links": [],
@@ -24332,7 +24332,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 57
+            "y": 56
           },
           "id": 5264,
           "legend": {
@@ -24430,7 +24430,7 @@
             "h": 7,
             "w": 8,
             "x": 0,
-            "y": 64
+            "y": 63
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24507,7 +24507,7 @@
             "h": 7,
             "w": 8,
             "x": 8,
-            "y": 64
+            "y": 63
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24577,7 +24577,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 64
+            "y": 63
           },
           "id": 3929,
           "legend": {
@@ -24695,7 +24695,7 @@
             "h": 7,
             "w": 4,
             "x": 0,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24772,7 +24772,7 @@
             "h": 7,
             "w": 6,
             "x": 4,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -24849,12 +24849,12 @@
             "h": 7,
             "w": 6,
             "x": 10,
-            "y": 71
+            "y": 70
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 5265,
+          "id": 6905,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -24919,7 +24919,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 71
+            "y": 70
           },
           "id": 3928,
           "legend": {
@@ -25037,7 +25037,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 78
+            "y": 77
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -25109,7 +25109,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 78
+            "y": 77
           },
           "id": 4936,
           "legend": {
@@ -25215,7 +25215,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 85
+            "y": 84
           },
           "id": 5267,
           "legend": {
@@ -25320,7 +25320,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 85
+            "y": 84
           },
           "id": 5269,
           "legend": {
@@ -25418,7 +25418,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 92
+            "y": 91
           },
           "id": 5925,
           "legend": {
@@ -25446,7 +25446,7 @@
           "renderer": "flot",
           "seriesOverrides": [
             {
-              "alias": "/restore-count.*/",
+              "alias": "/import-count.*/",
               "yaxis": 2
             }
           ],
@@ -25459,7 +25459,7 @@
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
-              "legendFormat": "restore-{{instance}}",
+              "legendFormat": "import-{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "A",
               "step": 4
@@ -25479,7 +25479,7 @@
               "format": "time_series",
               "hide": true,
               "intervalFactor": 2,
-              "legendFormat": "restore-count-{{instance}}",
+              "legendFormat": "import-count-{{instance}}",
               "metric": "tikv_thread_cpu_seconds_total",
               "refId": "D",
               "step": 4
@@ -25489,7 +25489,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore CPU Utilization",
+          "title": "Import CPU Utilization",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -25540,7 +25540,7 @@
             "h": 7,
             "w": 4,
             "x": 12,
-            "y": 92
+            "y": 91
           },
           "id": 5926,
           "links": [],
@@ -25585,7 +25585,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Restore Thread Count",
+          "title": "Import Thread Count",
           "transform": "timeseries_aggregations",
           "type": "table"
         },
@@ -25602,7 +25602,7 @@
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 92
+            "y": 91
           },
           "id": 5932,
           "legend": {
@@ -25643,7 +25643,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore Errors",
+          "title": "Import Errors",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25691,7 +25691,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 99
+            "y": 98
           },
           "id": 5931,
           "legend": {
@@ -25739,7 +25739,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore RPC Duration",
+          "title": "Import RPC Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25789,7 +25789,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 99
+            "y": 98
           },
           "id": 6267,
           "legend": {
@@ -25844,7 +25844,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore RPC Ops",
+          "title": "Import RPC Ops",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -25900,9 +25900,9 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 8,
+            "w": 6,
             "x": 0,
-            "y": 106
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -25933,7 +25933,7 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Write/Download RPC Duration",
+          "title": "Import Write/Download RPC Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -25977,14 +25977,91 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 5,
-            "x": 8,
-            "y": 106
+            "w": 6,
+            "x": 6,
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
           "id": 5929,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_download_duration_bucket{instance=~\"$instance\", type=\"queue\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Wait Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 105
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 6906,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -26010,7 +26087,7 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Read SST Duration",
+          "title": "Import Read SST Duration",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -26054,9 +26131,9 @@
           "description": "",
           "gridPos": {
             "h": 7,
-            "w": 5,
-            "x": 13,
-            "y": 106
+            "w": 6,
+            "x": 18,
+            "y": 105
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -26087,7 +26164,238 @@
               "refId": "A"
             }
           ],
-          "title": "Restore Rewrite SST Duration",
+          "title": "Import Rewrite SST Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 0,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5939,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_rpc_duration_bucket{instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest RPC Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 6,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5938,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_ingest_duration_bucket{instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest SST Duration",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 1,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cards": {
+            "cardPadding": 0,
+            "cardRound": 0
+          },
+          "color": {
+            "cardColor": "#FF9830",
+            "colorScale": "linear",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": 0,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 12,
+            "y": 112
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 5937,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "links": [],
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "max(rate(tikv_import_ingest_byte{instance=~\"$instance\"}[1m])) by (le)",
+              "format": "heatmap",
+              "instant": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Import Ingest SST Bytes",
           "tooltip": {
             "show": true,
             "showHistogram": true
@@ -26123,7 +26431,7 @@
             "h": 7,
             "w": 6,
             "x": 18,
-            "y": 106
+            "y": 112
           },
           "id": 5927,
           "legend": {
@@ -26174,7 +26482,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Restore Download SST Throughput",
+          "title": "Import Download SST Throughput",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -26210,240 +26518,9 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 10,
-            "x": 0,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5939,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_rpc_duration_bucket{instance=~\"$instance\", request=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest RPC Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 7,
-            "x": 10,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5938,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_duration_bucket{instance=~\"$instance\", type=~\"ingest\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest SST Duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "gridPos": {
-            "h": 7,
-            "w": 7,
-            "x": 17,
-            "y": 113
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 5937,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "expr": "max(rate(tikv_import_ingest_byte{instance=~\"$instance\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "Restore Ingest SST Bytes",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
         }
       ],
-      "title": "Backup & Restore",
+      "title": "Backup & Import",
       "type": "row"
     },
     {
@@ -26452,7 +26529,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 28
       },
       "id": 4466,
       "panels": [
@@ -27147,5 +27224,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-Details",
   "uid": "RDVQiEzZz",
-  "version": 3
+  "version": 4
 }
