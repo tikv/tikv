@@ -4341,29 +4341,25 @@ mod tests {
 
         fn put(self, key: &[u8], value: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.put(&k, value).unwrap();
+            b.wb.put(key, value).unwrap();
             b
         }
 
         fn put_cf(self, cf: &str, key: &[u8], value: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.put_cf(cf, &k, value).unwrap();
+            b.wb.put_cf(cf, key, value).unwrap();
             b
         }
 
         fn delete(self, key: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.delete(&k).unwrap();
+            b.wb.delete(key).unwrap();
             b
         }
 
         fn delete_cf(self, cf: &str, key: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.delete_cf(cf, &k).unwrap();
+            b.wb.delete_cf(cf, key).unwrap();
             b
         }
 
