@@ -277,12 +277,12 @@ impl Condvar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Condvar as StdCondvar, Mutex as StdMutex};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     use tikv_util::time::Instant;
-
-    use test::Bencher;
 
     #[test]
     fn test_condvar() {
@@ -359,39 +359,5 @@ mod tests {
         }
         let end = Instant::now_coarse();
         assert!(end.duration_since(begin) < Duration::from_secs(short_timeout_millis * 2));
-    }
-
-    #[bench]
-    #[ignore]
-    fn bench_std_condvar(b: &mut Bencher) {
-        let mu = StdMutex::new(());
-        let condv = StdCondvar::new();
-        b.iter(|| {
-            let guard = mu.lock().unwrap();
-            condv.wait_timeout(guard, Duration::from_millis(1))
-        });
-    }
-
-    #[bench]
-    #[ignore]
-    fn bench_condvar_sync(b: &mut Bencher) {
-        let mu = Mutex::new(());
-        let condv = Condvar::new();
-        b.iter(|| {
-            let guard = mu.lock();
-            condv.wait_timeout(guard, Duration::from_millis(1))
-        });
-    }
-
-    #[bench]
-    #[ignore]
-    fn bench_condvar_async(b: &mut Bencher) {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-        let mu = Mutex::new(());
-        let condv = Condvar::new();
-        b.iter(|| {
-            let guard = mu.lock();
-            rt.block_on(condv.async_wait_timeout(&mu, guard, Duration::from_millis(1)))
-        });
     }
 }

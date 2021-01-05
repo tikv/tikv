@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
 
+const IO_RATE_LIMITER_REFILL_PERIOD: Duration = Duration::from_millis(10);
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum IOPriority {
     Low,
@@ -118,6 +120,11 @@ impl PerTypeIORateLimiter {
             calculate_bytes_per_refill(bytes_per_sec, self.refill_period),
             Ordering::Relaxed,
         );
+    }
+
+    #[allow(dead_code)]
+    pub fn set_refill_period(&mut self, refill_period: Duration) {
+        self.refill_period = refill_period;
     }
 
     #[allow(dead_code)]
@@ -260,7 +267,7 @@ impl PerTypeIORateLimiter {
 
 impl Default for PerTypeIORateLimiter {
     fn default() -> PerTypeIORateLimiter {
-        PerTypeIORateLimiter::new(0, Duration::from_millis(10))
+        PerTypeIORateLimiter::new(0, IO_RATE_LIMITER_REFILL_PERIOD)
     }
 }
 
@@ -294,6 +301,19 @@ impl IORateLimiter {
             }
         }
         limiter
+    }
+
+    #[allow(dead_code)]
+    pub fn set_bytes_per_sec(&self, io_type: IOType, io_op: Option<IOOp>, bytes_per_sec: usize) {
+        match io_op {
+            Some(IOOp::Write) => {
+                self.write_limiters[io_type as usize].set_bytes_per_sec(bytes_per_sec)
+            }
+            Some(IOOp::Read) => {
+                self.read_limiters[io_type as usize].set_bytes_per_sec(bytes_per_sec)
+            }
+            None => self.total_limiters[io_type as usize].set_bytes_per_sec(bytes_per_sec),
+        }
     }
 
     /// Requests for token for bytes and potentially update statistics. If this
@@ -478,12 +498,13 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct Request(IOType, IOOp, usize);
+
     fn start_background_jobs(
         limiter: Arc<IORateLimiter>,
         job_count: usize,
-        io_type: IOType,
-        io_op: IOOp,
-        request: usize,
+        request: Request,
     ) -> BackgroundContext {
         let mut threads = vec![];
         let stop = Arc::new(AtomicBool::new(false));
@@ -491,8 +512,9 @@ mod tests {
             let stop = stop.clone();
             let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
+                let Request(io_type, io_op, len) = request;
                 while !stop.load(Ordering::Relaxed) {
-                    limiter.request(io_type, io_op, request);
+                    limiter.request(io_type, io_op, len);
                 }
             });
             threads.push(t);
@@ -506,19 +528,18 @@ mod tests {
     fn start_background_jobs_counted(
         limiter: Arc<IORateLimiter>,
         job_count: usize,
-        io_type: IOType,
-        io_op: IOOp,
-        request: usize,
-        count: usize,
+        request_count: usize,
         interval: Duration,
+        request: Request,
     ) -> BackgroundContext {
         let mut threads = vec![];
         for _ in 0..job_count {
             let limiter = limiter.clone();
             let t = std::thread::spawn(move || {
                 let mut requested = 0;
-                while requested < count {
-                    limiter.request(io_type, io_op, request);
+                let Request(io_type, io_op, len) = request;
+                while requested < request_count {
+                    limiter.request(io_type, io_op, len);
                     std::thread::sleep(interval);
                     requested += 1;
                 }
@@ -539,8 +560,11 @@ mod tests {
         let duration = {
             let begin = Instant::now();
             {
-                let _context =
-                    start_background_jobs(limiter, 10, IOType::Compaction, IOOp::Write, 10);
+                let _context = start_background_jobs(
+                    limiter,
+                    10, /*job_count*/
+                    Request(IOType::Compaction, IOOp::Write, 10),
+                );
                 std::thread::sleep(Duration::from_secs(2));
             }
             let end = Instant::now();
@@ -571,12 +595,10 @@ mod tests {
                 // each thread request at most 1000 bytes per second, elapsed around 2 seconds
                 let _context = start_background_jobs_counted(
                     limiter,
-                    actual_kbytes_per_sec,
-                    IOType::Compaction,
-                    IOOp::Write,
-                    1,
-                    2 * 1000,
-                    Duration::from_millis(1),
+                    actual_kbytes_per_sec,    /*job_count*/
+                    2 * 1000,                 /*request_count*/
+                    Duration::from_millis(1), /*interval*/
+                    Request(IOType::Compaction, IOOp::Write, 1),
                 );
             }
             let end = Instant::now();
@@ -605,7 +627,11 @@ mod tests {
     #[ignore]
     fn bench_noop_limiter(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(0, None));
-        let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
+        let _context = start_background_jobs(
+            limiter.clone(),
+            3, /*job_count*/
+            Request(IOType::Write, IOOp::Write, 10),
+        );
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
@@ -615,7 +641,11 @@ mod tests {
     #[ignore]
     fn bench_not_limited(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(10000, None));
-        let _context = start_background_jobs(limiter.clone(), 3, IOType::Write, IOOp::Write, 10);
+        let _context = start_background_jobs(
+            limiter.clone(),
+            3, /*job_count*/
+            Request(IOType::Write, IOOp::Write, 10),
+        );
         b.iter(|| {
             limiter.request(IOType::Write, IOOp::Write, 10);
         });
@@ -625,8 +655,11 @@ mod tests {
     #[ignore]
     fn bench_limited_fast(b: &mut Bencher) {
         let limiter = Arc::new(IORateLimiter::new(usize::max_value(), None));
-        let _context =
-            start_background_jobs(limiter.clone(), 3, IOType::Compaction, IOOp::Write, 1);
+        let _context = start_background_jobs(
+            limiter.clone(),
+            3, /*job_count*/
+            Request(IOType::Compaction, IOOp::Write, 1),
+        );
         b.iter(|| {
             limiter.request(IOType::Compaction, IOOp::Write, 1);
         });
