@@ -339,7 +339,7 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
         cursor
             .near_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
-        hex::encode_upper(key)
+        log_wrappers::hex_encode_upper(key)
     );
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
@@ -351,7 +351,7 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
         cursor
             .near_reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap(),
-        hex::encode_upper(key)
+        log_wrappers::hex_encode_upper(key)
     );
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);

@@ -11,7 +11,6 @@ prost-codec = ["kvproto/prost-codec"]
 [dependencies]
 byteorder = "1.2"
 farmhash = "1.1.5"
-hex = "0.4"
 derive-new = "0.5"
 error_code = { path = "../error_code" }
 codec = { path = "../codec" }
@@ -20,3 +19,4 @@ slog = "2.3"
 quick-error = "1.2.2"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+log_wrappers = { path = "../log_wrappers" }

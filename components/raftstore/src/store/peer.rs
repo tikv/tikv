@@ -3244,7 +3244,7 @@ where
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        &log_wrappers::Value::key(key),
                         cf,
                         e
                     )
@@ -3256,7 +3256,7 @@ where
                     panic!(
                         "[region {}] failed to get {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        &log_wrappers::Value::key(key),
                         e
                     )
                 })
