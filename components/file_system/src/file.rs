@@ -228,9 +228,8 @@ mod tests {
             let mut f = File::open(&tmp_file).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
-            // Reason for two more chars:
-            // read_to_end doesn't exit when file.read() returns a result smaller
-            // than prefetch size. If requires two reads of EOF to finish the call.
+            // read_to_string only exit when file.read() returns zero, which means
+            // it requires two EOF reads to finish the call.
             assert_eq!(recorder.fetch(IOType::Read, IOOp::Read), content.len() + 2);
         }
     }
