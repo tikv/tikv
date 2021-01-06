@@ -1207,7 +1207,6 @@ impl<T: Simulator> Cluster<T> {
             .unwrap()
             .unwrap();
         let prepare_merge = new_prepare_merge(region);
-<<<<<<< HEAD
         let source = self
             .pd_client
             .get_region_by_id(source)
@@ -1233,28 +1232,6 @@ impl<T: Simulator> Cluster<T> {
             Duration::from_secs(5),
         )
         .unwrap()
-    }
-
-    pub fn must_try_merge(&mut self, source: u64, target: u64) {
-        let resp = self.try_merge(source, target);
-        if is_error_response(&resp) {
-            panic!(
-                "{} failed to try merge to {}, resp {:?}",
-                source, target, resp
-            );
-        }
-=======
-        let source_region = block_on(self.pd_client.get_region_by_id(source))
-            .unwrap()
-            .unwrap();
-        let req = new_admin_request(
-            source_region.get_id(),
-            source_region.get_region_epoch(),
-            prepare_merge,
-        );
-        self.call_command_on_leader(req, Duration::from_secs(5))
-            .unwrap()
->>>>>>> 296023b71... test: make try_merge reliable (#8559)
     }
 
     pub fn must_try_merge(&mut self, source: u64, target: u64) {
