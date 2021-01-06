@@ -10,6 +10,7 @@ publish = false
 failpoints = ["fail/failpoints"]
 prost-codec = [
   "prost",
+  "batch-system/prost-codec",
   "engine_rocks/prost-codec",
   "into_other/prost-codec",
   "keys/prost-codec",
@@ -21,6 +22,7 @@ prost-codec = [
   "txn_types/prost-codec",
 ]
 protobuf-codec = [
+  "batch-system/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "into_other/protobuf-codec",
   "keys/protobuf-codec",
