@@ -520,6 +520,9 @@ fn test_backup_huge_range_and_import() {
     // Short value is piggybacked in write cf, so we get 1 sst at least.
     assert!(!resps1[0].get_files().is_empty());
     assert_eq!(files1.len(), 2);
+    assert_ne!(files1[0].start_key, files1[0].end_key);
+    assert_ne!(files1[1].start_key, files1[1].end_key);
+    assert_eq!(files1[0].end_key, files1[1].start_key);
 
     // Use importer to restore backup files.
     let backend = make_local_backend(&storage_path);
