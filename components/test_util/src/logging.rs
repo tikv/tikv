@@ -105,6 +105,7 @@ pub fn init_log_for_test() {
             Mutex::new(
                 OpenOptions::new()
                     .create(true)
+                    .write(!append_instead_truncate)
                     .truncate(!append_instead_truncate)
                     .append(append_instead_truncate)
                     .open(f)
