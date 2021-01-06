@@ -29,7 +29,7 @@ configuration = { path = "../configuration" }
 serde = "1.0"
 serde_derive = "1.0"
 coarsetime = "0.1"
-fail = "0.3"
+fail = "0.4"
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
