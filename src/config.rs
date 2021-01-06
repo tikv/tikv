@@ -1982,6 +1982,7 @@ mod readpool_tests {
 pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
+    pub sst_max_size: ReadableSize,
 }
 
 impl BackupConfig {
@@ -1998,11 +1999,13 @@ impl BackupConfig {
 
 impl Default for BackupConfig {
     fn default() -> Self {
+        let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
             batch_size: 8,
+            sst_max_size: default_coprocessor.region_max_size,
         }
     }
 }
@@ -2345,6 +2348,19 @@ impl TiKvConfig {
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
+        }
+        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+            warn!(
+                "override backup.sst-max-size with min sst-max-size, {:?}",
+                default_coprocessor.region_max_size / 10
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
+        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            warn!(
+                "override backup.sst-max-size with max sst-max-size, {:?}",
+                default_coprocessor.region_max_size * 2
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
         }
 
         self.readpool.adjust_use_unified_pool();
