@@ -81,7 +81,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-fail = { version = "0.3", optional = true }
+fail = "0.4"
 batch-system = { path = "../components/batch-system" }
 crc64fast = "0.1"
 crossbeam = "0.8"
