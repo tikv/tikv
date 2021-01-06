@@ -20,7 +20,7 @@ pub fn get_env(
     if let Some(manager) = key_manager {
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
             base_env,
-            Box::new(WrappedEncryptionKeyManager { manager }),
+            WrappedEncryptionKeyManager { manager },
         )?))
     } else {
         Ok(base_env)

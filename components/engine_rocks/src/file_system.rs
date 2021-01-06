@@ -14,7 +14,7 @@ pub fn get_env(
     if let Some(inspector) = inspector {
         Ok(Arc::new(Env::new_file_system_inspected_env(
             base_env,
-            Box::new(WrappedFileSystemInspector { inspector }),
+            WrappedFileSystemInspector { inspector },
         )?))
     } else {
         Ok(base_env)
