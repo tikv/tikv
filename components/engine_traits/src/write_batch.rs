@@ -24,7 +24,6 @@ pub trait Mutable: Send {
     fn is_empty(&self) -> bool;
     fn should_write_to_engine(&self) -> bool;
 
-    fn append(&mut self, data: &[u8]) -> Result<()>;
     fn clear(&mut self);
     fn set_save_point(&mut self);
     fn pop_save_point(&mut self) -> Result<()>;

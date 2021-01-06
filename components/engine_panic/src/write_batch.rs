@@ -50,9 +50,6 @@ impl Mutable for PanicWriteBatch {
         panic!()
     }
 
-    fn append(&mut self, data: &[u8]) -> Result<()> {
-        panic!()
-    }
     fn clear(&mut self) {
         panic!()
     }
