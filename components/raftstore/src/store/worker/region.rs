@@ -285,7 +285,7 @@ where
     ) {
         SNAP_COUNTER.generate.all.inc();
         let start = tikv_util::time::Instant::now();
-        let _ = WithIOType::new(if for_balance {
+        let _io_type_guard = WithIOType::new(if for_balance {
             IOType::LoadBalance
         } else {
             IOType::Replication
