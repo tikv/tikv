@@ -32,11 +32,11 @@ use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
-use tikv::{config::BackupConfig, storage::kv::SnapContext};
+use tikv::config::BackupConfig;
 use tikv_util::collections::HashMap;
 use tikv_util::config::ReadableSize;
 use tikv_util::file::calc_crc32_bytes;
-use tikv_util::worker::{LazyWorker, Worker};
+use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
