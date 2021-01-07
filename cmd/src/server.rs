@@ -677,16 +677,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.background_worker.clone(),
         );
 
-        // Start auto gc
-        let auto_gc_config = AutoGcConfig::new(
-            self.pd_client.clone(),
-            self.region_info_accessor.clone(),
-            node.id(),
-        );
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, Arc::new(AtomicU64::new(0))) {
-            fatal!("failed to start auto_gc on storage, error: {}", e);
-        }
-
         node.start(
             engines.engines.clone(),
             server.transport(),
