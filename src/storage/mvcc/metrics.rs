@@ -25,6 +25,7 @@ make_static_metric! {
         rollback,
         update_ts,
         get_commit_info,
+        pessimistic_rollback,
     }
 
     pub struct MvccConflictCounterVec: IntCounter {

@@ -225,13 +225,13 @@ impl Clone for Key {
 
 impl Debug for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
     }
 }
 
 impl Display for Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode_upper(&self.0))
+        write!(f, "{:?}", &log_wrappers::Value::key(&self.0))
     }
 }
 
@@ -342,6 +342,9 @@ pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
 #[derive(Default, Debug, Clone)]
 pub struct TxnExtra {
     pub old_values: OldValues,
+    // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
+    // in the raft command request.
+    pub one_pc: bool,
 }
 
 impl TxnExtra {

@@ -8,6 +8,7 @@ use std::{
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
+use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
@@ -23,7 +24,7 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -243,6 +244,7 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -270,10 +272,20 @@ where
         }
 
         let len = reqs.len();
-        let header = self.new_request_header(ctx);
+        let mut header = self.new_request_header(ctx);
+        if txn_extra.one_pc {
+            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+        }
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
+
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
 
         self.router
             .send_command(
@@ -422,15 +434,10 @@ where
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !batch.extra.is_empty() {
-                tx.schedule(batch.extra);
-            }
-        }
-
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -728,6 +735,16 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
+    }
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
     }
 }
 
