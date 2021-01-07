@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
-use raft::{Ready, StateRole};
+use raft::StateRole;
 use time::{self, Timespec};
 
 use collections::HashMap;
@@ -53,10 +53,11 @@ use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+    CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
 use crate::store::worker::{
@@ -294,6 +295,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    /// The count of processed normal Fsm.
+    pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<EK>>,
@@ -333,7 +336,7 @@ where
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
@@ -667,18 +670,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         );
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
-            let mut batch_pos = 0;
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
-            for (ready, invoke_ctx) in ready_res.drain(..) {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
+            for ready in ready_res.drain(..) {
+                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
+                    .post_raft_ready_append(ready);
             }
         }
         let dur = self.timer.elapsed();
@@ -737,6 +732,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
@@ -832,6 +828,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready();
+        self.poll_ctx.processed_fsm_count += 1;
         expected_msg_count
     }
 
@@ -1054,6 +1051,7 @@ where
 
     fn build(&mut self) -> RaftPoller<EK, ER, T> {
         let mut ctx = PollContext {
+            processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -2373,11 +2371,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
+                            "store_id" => self.fsm.store.id,
                         );
+                        return None;
                     }
                 }
                 debug!("check leader failed, meta not found";
                     "leader_info" => ?leader_info,
+                    "store_id" => self.fsm.store.id,
                 );
                 None
             })

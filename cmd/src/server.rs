@@ -19,9 +19,13 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine};
+use engine_rocks::{
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    RocksEngine,
+};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, MetricsFlusher,
+    RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 use fs2::FileExt;
@@ -903,7 +907,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
 impl TiKVServer<RocksEngine> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
-        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
+        let env =
+            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
+        let env =
+            get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -966,7 +973,10 @@ impl TiKVServer<RocksEngine> {
 
 impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
-        let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
+        let env =
+            get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
+        let env =
+            get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.

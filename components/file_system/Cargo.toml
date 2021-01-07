@@ -8,8 +8,8 @@ publish = false
 bcc-iosnoop = ["bcc"]
 
 [dependencies]
-crc32fast = "1.2"
 collections = { path = "../collections" }
+crc32fast = "1.2"
 futures = "0.3"
 fs2 = "0.4"
 lazy_static = "1.3"

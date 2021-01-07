@@ -55,12 +55,6 @@ pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
-// Copied from file_system to avoid cyclic dependency
-fn file_exists<P: AsRef<Path>>(file: P) -> bool {
-    let path = file.as_ref();
-    path.exists() && path.is_file()
-}
-
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
 }
@@ -88,6 +82,12 @@ pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
 pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     let file = panic_mark_file_path(data_dir);
     File::create(&file).unwrap();
+}
+
+// Copied from file_system to avoid cyclic dependency
+fn file_exists<P: AsRef<Path>>(file: P) -> bool {
+    let path = file.as_ref();
+    path.exists() && path.is_file()
 }
 
 pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {

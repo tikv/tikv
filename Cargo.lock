@@ -1188,6 +1188,7 @@ dependencies = [
  "encryption",
  "engine_traits",
  "fail",
+ "file_system",
  "keys",
  "kvproto",
  "lazy_static",
@@ -2095,7 +2096,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#22c0b10f73e637a7475e64c3229318596eea7f96"
 dependencies = [
  "cc",
  "cmake",
@@ -2104,7 +2105,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#22c0b10f73e637a7475e64c3229318596eea7f96"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2124,7 +2125,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#22c0b10f73e637a7475e64c3229318596eea7f96"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3212,7 +3213,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "fxhash",
  "getset",
@@ -3244,7 +3245,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#34829a8152c845ab642a8094a9ad5887dc64c85e"
+source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "lazy_static",
  "prost",
@@ -3580,7 +3581,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#954c2a47b628a3b12743476e3a03d86568bf0e89"
+source = "git+https://github.com/tikv/rust-rocksdb.git#22c0b10f73e637a7475e64c3229318596eea7f96"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4581,6 +4582,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "fail",
  "futures 0.3.7",
@@ -4816,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.1.0-alpha"
+version = "5.0.0-rc.x"
 dependencies = [
  "async-stream",
  "async-trait",

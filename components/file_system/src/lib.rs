@@ -16,6 +16,7 @@ mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
+pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, BytesRecorder, IORateLimiter,
 };
@@ -30,7 +31,6 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use variant_count::VariantCount;
