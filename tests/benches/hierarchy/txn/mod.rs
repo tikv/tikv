@@ -39,6 +39,7 @@ where
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
         };
         prewrite(
             &mut txn,
@@ -81,6 +82,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                     txn_size: 0,
                     lock_ttl: 0,
                     min_commit_ts: TimeStamp::default(),
+                    need_old_value: false,
                 };
                 prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
