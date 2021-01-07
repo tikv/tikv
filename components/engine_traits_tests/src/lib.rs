@@ -1340,7 +1340,7 @@ mod write_batch {
     #[test]
     fn should_write_to_engine() {
         let db = default_engine();
-        let mut wb = db.engine.write_batch_with_cap(2);
+        let mut wb = db.engine.write_batch();
         let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
 
         let mut key = vec![];
@@ -1362,7 +1362,7 @@ mod write_batch {
     #[test]
     fn should_write_to_engine_but_whatever() {
         let db = default_engine();
-        let mut wb = db.engine.write_batch_with_cap(2);
+        let mut wb = db.engine.write_batch();
         let max_keys = KvTestEngine::WRITE_BATCH_MAX_KEYS;
 
         let mut key = vec![];
@@ -1390,6 +1390,35 @@ mod write_batch {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn data_size() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        let size1 = wb.data_size();
+        wb.put(b"a", b"").unwrap();
+        let size2 = wb.data_size();
+        assert!(size1 < size2);
+        wb.write().unwrap();
+        let size3 = wb.data_size();
+        assert_eq!(size2, size3);
+        wb.clear();
+        let size4 = wb.data_size();
+        assert_eq!(size4, size1);
+        wb.put(b"a", b"").unwrap();
+        let size5 = wb.data_size();
+        assert!(size4 < size5);
+        wb.delete(b"a").unwrap();
+        let size6 = wb.data_size();
+        assert!(size5 < size6);
+        wb.delete_range_cf(CF_DEFAULT, b"a", b"b").unwrap();
+        let size7 = wb.data_size();
+        assert!(size6 < size7);
+        wb.clear();
+        let size8 = wb.data_size();
+        assert_eq!(size8, size1);
     }
 
 }
