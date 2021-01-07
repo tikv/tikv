@@ -49,9 +49,8 @@ protobuf = "2"
 fail = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/tabokie/rust-rocksdb.git"
+git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
-branch = "fix-export"
 features = ["encryption", "static_libcpp"]
 
 [dev-dependencies]

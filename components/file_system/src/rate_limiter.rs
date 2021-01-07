@@ -57,14 +57,14 @@ impl BytesRecorder {
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    refill_bytes: atomic::AtomicUsize,
+    refill_bytes: AtomicUsize,
     recorder: Option<Arc<BytesRecorder>>,
 }
 
 impl IORateLimiter {
     pub fn new(refill_bytes: usize, recorder: Option<Arc<BytesRecorder>>) -> IORateLimiter {
         IORateLimiter {
-            refill_bytes: atomic::AtomicUsize::new(refill_bytes),
+            refill_bytes: AtomicUsize::new(refill_bytes),
             recorder,
         }
     }
