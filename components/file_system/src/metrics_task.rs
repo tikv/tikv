@@ -11,98 +11,93 @@ use crate::{IOOp, IOType};
 
 pub struct MetricsTask {
     recorder: Option<Arc<BytesRecorder>>,
+    last_fetch: [(i64, i64); IOType::VARIANT_COUNT],
 }
 
 impl MetricsTask {
     pub fn new(recorder: Option<Arc<BytesRecorder>>) -> Self {
-        MetricsTask { recorder }
+        MetricsTask {
+            recorder,
+            last_fetch: [(0, 0); IOType::VARIANT_COUNT],
+        }
     }
+}
+
+macro_rules! flush_io_bytes {
+    ($recorder:expr, $metrics:ident, $io_type:expr, $last_fetch:expr) => {
+        let read = $recorder.fetch($io_type, IOOp::Read) as i64;
+        let write = $recorder.fetch($io_type, IOOp::Write) as i64;
+        let (last_read, last_write) = $last_fetch;
+        IO_BYTES_VEC.$metrics.read.inc_by(read - last_read);
+        IO_BYTES_VEC.$metrics.write.inc_by(write - last_write);
+        $last_fetch = (read, write);
+    };
 }
 
 impl IntervalRunnable for MetricsTask {
     fn on_tick(&mut self) {
         flush_io_metrics();
         if let Some(recorder) = &self.recorder {
-            IO_BYTES_VEC
-                .other
-                .read
-                .inc_by(recorder.fetch(IOType::Other, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .other
-                .write
-                .inc_by(recorder.fetch(IOType::Other, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .read
-                .read
-                .inc_by(recorder.fetch(IOType::Read, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .read
-                .write
-                .inc_by(recorder.fetch(IOType::Read, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .write
-                .read
-                .inc_by(recorder.fetch(IOType::Write, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .write
-                .write
-                .inc_by(recorder.fetch(IOType::Write, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .coprocessor
-                .read
-                .inc_by(recorder.fetch(IOType::Coprocessor, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .coprocessor
-                .write
-                .inc_by(recorder.fetch(IOType::Coprocessor, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .flush
-                .read
-                .inc_by(recorder.fetch(IOType::Flush, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .flush
-                .write
-                .inc_by(recorder.fetch(IOType::Flush, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .compaction
-                .read
-                .inc_by(recorder.fetch(IOType::Compaction, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .compaction
-                .write
-                .inc_by(recorder.fetch(IOType::Compaction, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .replication
-                .read
-                .inc_by(recorder.fetch(IOType::Replication, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .replication
-                .write
-                .inc_by(recorder.fetch(IOType::Replication, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .load_balance
-                .read
-                .inc_by(recorder.fetch(IOType::LoadBalance, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .load_balance
-                .write
-                .inc_by(recorder.fetch(IOType::LoadBalance, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .import
-                .read
-                .inc_by(recorder.fetch(IOType::Import, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .import
-                .write
-                .inc_by(recorder.fetch(IOType::Import, IOOp::Write) as i64);
-            IO_BYTES_VEC
-                .export
-                .read
-                .inc_by(recorder.fetch(IOType::Export, IOOp::Read) as i64);
-            IO_BYTES_VEC
-                .export
-                .write
-                .inc_by(recorder.fetch(IOType::Export, IOOp::Write) as i64);
+            flush_io_bytes!(
+                recorder,
+                other,
+                IOType::Other,
+                self.last_fetch[IOType::Other as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                read,
+                IOType::Read,
+                self.last_fetch[IOType::Read as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                write,
+                IOType::Write,
+                self.last_fetch[IOType::Write as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                coprocessor,
+                IOType::Coprocessor,
+                self.last_fetch[IOType::Coprocessor as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                flush,
+                IOType::Flush,
+                self.last_fetch[IOType::Flush as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                compaction,
+                IOType::Compaction,
+                self.last_fetch[IOType::Compaction as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                replication,
+                IOType::Replication,
+                self.last_fetch[IOType::Replication as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                load_balance,
+                IOType::LoadBalance,
+                self.last_fetch[IOType::LoadBalance as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                import,
+                IOType::Import,
+                self.last_fetch[IOType::Import as usize]
+            );
+            flush_io_bytes!(
+                recorder,
+                export,
+                IOType::Export,
+                self.last_fetch[IOType::Export as usize]
+            );
         }
     }
 }
