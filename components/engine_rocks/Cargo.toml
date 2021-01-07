@@ -32,6 +32,7 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 encryption = { path = "../encryption", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+file_system = { path = "../file_system" }
 keys = { path = "../keys", default-features = false }
 num_cpus = "1"
 prometheus = { version = "0.10", features = ["nightly"] }

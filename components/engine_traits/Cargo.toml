@@ -23,12 +23,12 @@ prost-codec = [
 
 [dependencies]
 error_code = { path = "../error_code", default-features = false }
+file_system = { path = "../file_system" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
 quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
-file_system = { path = "../file_system" }
 txn_types = { path = "../txn_types", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
