@@ -5,7 +5,7 @@ use std::vec::IntoIter;
 use engine_traits::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -79,16 +79,6 @@ pub trait AdminObserver: Coprocessor {
 }
 
 pub trait QueryObserver: Coprocessor {
-    /// Hook to call before proposing write request.
-    ///
-    /// We don't propose read request, hence there is no hook for it yet.
-    fn pre_propose_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Request>) -> Result<()> {
-        Ok(())
-    }
-
-    /// Hook to call before applying write request.
-    fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
-
     /// Hook to call after applying write request.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Cmd) {}
 }
@@ -159,14 +149,29 @@ pub trait RegionChangeObserver: Coprocessor {
 }
 
 #[derive(Clone, Debug)]
+pub enum CmdRequest {
+    PBCmdRequest(RaftCmdRequest),
+    RawCmdRequest(Vec<u8>),
+}
+
+#[derive(Clone, Debug)]
 pub struct Cmd {
     pub index: u64,
-    pub request: RaftCmdRequest,
+    pub request: CmdRequest,
     pub response: RaftCmdResponse,
 }
 
 impl Cmd {
-    pub fn new(index: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
+    pub fn new(index: u64, req: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
+        let request = CmdRequest::PBCmdRequest(req);
+        Cmd {
+            index,
+            request,
+            response,
+        }
+    }
+    pub fn from_raw(index: u64, req: Vec<u8>, response: RaftCmdResponse) -> Cmd {
+        let request = CmdRequest::RawCmdRequest(req);
         Cmd {
             index,
             request,
@@ -218,11 +223,21 @@ impl CmdBatch {
                 ref response,
                 ..
             } = cmd;
-            if !response.get_header().has_error() && !request.has_admin_request() {
-                for req in request.requests.iter() {
-                    let put = req.get_put();
-                    cmd_bytes += put.get_key().len();
-                    cmd_bytes += put.get_value().len();
+
+            if !response.get_header().has_error() {
+                match request {
+                    CmdRequest::PBCmdRequest(pb_request) => {
+                        if !pb_request.has_admin_request() {
+                            for req in pb_request.requests.iter() {
+                                let put = req.get_put();
+                                cmd_bytes += put.get_key().len();
+                                cmd_bytes += put.get_value().len();
+                            }
+                        }
+                    }
+                    CmdRequest::RawCmdRequest(data) => {
+                        cmd_bytes += data.len();
+                    }
                 }
             }
         }

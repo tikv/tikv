@@ -15,8 +15,8 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Sched
 
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 use raftstore::coprocessor::{
-    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
-    CoprocessorHost, ObserverContext, QueryObserver,
+    ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, CmdRequest,
+    Coprocessor, CoprocessorHost, ObserverContext, QueryObserver,
 };
 
 // TODO: Use new error type for GCWorker instead of storage::Error.
@@ -174,9 +174,17 @@ impl QueryObserver for LockObserver {
             return;
         }
 
+        let request = match &mut cmd.request {
+            CmdRequest::PBCmdRequest(req) => req,
+            CmdRequest::RawCmdRequest(_) => {
+                // TODO: compatible for new entry-format
+                return;
+            }
+        };
+
         let mut locks = vec![];
         // For each put in CF_LOCK, collect it if its ts <= max_ts.
-        for req in cmd.request.get_requests() {
+        for req in request.get_requests() {
             if req.get_cmd_type() != CmdType::Put {
                 continue;
             }

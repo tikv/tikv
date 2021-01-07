@@ -19,6 +19,7 @@ pub trait WriteBatchExt: Sized {
 
 pub trait Mutable: Send {
     fn data_size(&self) -> usize;
+    fn data(&self) -> &[u8];
     fn count(&self) -> usize;
     fn is_empty(&self) -> bool;
     fn should_write_to_engine(&self) -> bool;

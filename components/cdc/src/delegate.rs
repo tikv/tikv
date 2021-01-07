@@ -25,7 +25,7 @@ use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{Region, RegionEpoch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, Request};
-use raftstore::coprocessor::{Cmd, CmdBatch};
+use raftstore::coprocessor::{Cmd, CmdBatch, CmdRequest};
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
@@ -428,23 +428,30 @@ impl Delegate {
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
                 index,
-                mut request,
+                request,
                 mut response,
             } = cmd;
             if !response.get_header().has_error() {
-                if !request.has_admin_request() {
-                    let flags =
-                        WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
-                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                    self.sink_data(
-                        index,
-                        request.requests.into(),
-                        old_value_cb.clone(),
-                        old_value_cache,
-                        is_one_pc,
-                    )?;
+                if let CmdRequest::PBCmdRequest(mut request) = request {
+                    if !request.has_admin_request() {
+                        let flags =
+                            WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+                        let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
+                        self.sink_data(
+                            index,
+                            request.requests.into(),
+                            old_value_cb.clone(),
+                            old_value_cache,
+                            is_one_pc,
+                        )?;
+                    } else {
+                        self.sink_admin(
+                            request.take_admin_request(),
+                            response.take_admin_response(),
+                        )?;
+                    }
                 } else {
-                    self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
+                    // TODO: compatible for new entry-format
                 }
             } else {
                 let err_header = response.mut_header().take_error();

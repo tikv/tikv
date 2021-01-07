@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::mem;
 use std::ops::Deref;
 
 use engine_traits::{CfName, KvEngine};
@@ -338,16 +337,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// Call all propose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
-            let query = req.mut_requests();
-            let mut vec_query = mem::take(query).into();
-            let result = try_loop_ob!(
-                region,
-                &self.registry.query_observers,
-                pre_propose_query,
-                &mut vec_query,
-            );
-            *query = vec_query.into();
-            result
+            Ok(())
         } else {
             let admin = req.mut_admin_request();
             try_loop_ob!(
@@ -361,15 +351,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     /// Call all pre apply hook until bypass is set to true.
     pub fn pre_apply(&self, region: &Region, req: &RaftCmdRequest) {
-        if !req.has_admin_request() {
-            let query = req.get_requests();
-            loop_ob!(
-                region,
-                &self.registry.query_observers,
-                pre_apply_query,
-                query,
-            );
-        } else {
+        if req.has_admin_request() {
             let admin = req.get_admin_request();
             loop_ob!(
                 region,
@@ -613,24 +595,6 @@ mod tests {
     }
 
     impl QueryObserver for TestCoprocessor {
-        fn pre_propose_query(
-            &self,
-            ctx: &mut ObserverContext<'_>,
-            _: &mut Vec<Request>,
-        ) -> Result<()> {
-            self.called.fetch_add(4, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
-            if self.return_err.load(Ordering::SeqCst) {
-                return Err(box_err!("error"));
-            }
-            Ok(())
-        }
-
-        fn pre_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request]) {
-            self.called.fetch_add(5, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
-        }
-
         fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
@@ -732,34 +696,34 @@ mod tests {
         let mut query_req = RaftCmdRequest::default();
         query_req.set_requests(vec![Request::default()].into());
         host.pre_propose(&region, &mut query_req).unwrap();
-        assert_all!(&[&ob.called], &[10]);
+        assert_all!(&[&ob.called], &[6]);
         host.pre_apply(&region, &query_req);
-        assert_all!(&[&ob.called], &[15]);
+        assert_all!(&[&ob.called], &[6]);
         let query_resp = RaftCmdResponse::default();
         host.post_apply(&region, &mut Cmd::new(0, query_req, query_resp));
-        assert_all!(&[&ob.called], &[21]);
+        assert_all!(&[&ob.called], &[12]);
 
         host.on_role_change(&region, StateRole::Leader);
-        assert_all!(&[&ob.called], &[28]);
+        assert_all!(&[&ob.called], &[19]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
-        assert_all!(&[&ob.called], &[36]);
+        assert_all!(&[&ob.called], &[27]);
 
         host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
-        assert_all!(&[&ob.called], &[45]);
+        assert_all!(&[&ob.called], &[36]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
-        assert_all!(&[&ob.called], &[55]);
+        assert_all!(&[&ob.called], &[46]);
         let observe_id = ObserveID::new();
         host.prepare_for_apply(observe_id, 0);
-        assert_all!(&[&ob.called], &[66]);
+        assert_all!(&[&ob.called], &[57]);
         host.on_apply_cmd(
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),
         );
-        assert_all!(&[&ob.called], &[78]);
+        assert_all!(&[&ob.called], &[69]);
         host.on_flush_apply(PanicEngine);
-        assert_all!(&[&ob.called], &[91]);
+        assert_all!(&[&ob.called], &[82]);
     }
 
     #[test]
@@ -785,7 +749,7 @@ mod tests {
         let query_req = RaftCmdRequest::default();
         let query_resp = RaftCmdResponse::default();
 
-        let cases = vec![(0, admin_req, admin_resp), (3, query_req, query_resp)];
+        let cases = vec![(1, admin_req, admin_resp), (0, query_req, query_resp)];
 
         for (base_score, mut req, resp) in cases {
             set_all!(&[&ob1.return_err, &ob2.return_err], false);
@@ -795,30 +759,29 @@ mod tests {
             host.pre_propose(&region, &mut req).unwrap();
 
             // less means more.
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score]);
 
             host.pre_apply(&region, &req);
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, 3 * base_score]);
 
             host.post_apply(&region, &mut Cmd::new(0, req.clone(), resp.clone()));
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
+            assert_all!(&[&ob1.called, &ob2.called], &[0, 6]);
 
             set_all!(&[&ob2.bypass], false);
             set_all!(&[&ob2.called], 0);
 
             host.pre_propose(&region, &mut req).unwrap();
 
-            assert_all!(
-                &[&ob1.called, &ob2.called],
-                &[base_score + 1, base_score + 1]
-            );
+            assert_all!(&[&ob1.called, &ob2.called], &[base_score, base_score]);
 
             set_all!(&[&ob1.called, &ob2.called], 0);
 
             // when return error, following coprocessor should not be run.
-            set_all!(&[&ob2.return_err], true);
-            host.pre_propose(&region, &mut req).unwrap_err();
-            assert_all!(&[&ob1.called, &ob2.called], &[0, base_score + 1]);
+            if base_score > 0 {
+                set_all!(&[&ob2.return_err], true);
+                host.pre_propose(&region, &mut req).unwrap_err();
+                assert_all!(&[&ob1.called, &ob2.called], &[0, 1]);
+            }
         }
     }
 }

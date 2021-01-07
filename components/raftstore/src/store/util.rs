@@ -6,11 +6,14 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use byteorder::{BigEndian, ByteOrder};
 use collections::HashMap;
 use engine_rocks::{set_perf_level, PerfContext, PerfLevel};
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
+use kvproto::raft_cmdpb::{
+    AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest, RaftRequestHeader,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
@@ -22,6 +25,9 @@ use time::{Duration, Timespec};
 use super::peer_storage;
 use crate::{Error, Result};
 use tikv_util::Either;
+
+const ENTRY_DATA_FORMAT_HEAD: u8 = 129;
+const ENTRY_DATA_FORMAT_VERSION: u8 = 1;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -310,8 +316,8 @@ pub fn compare_region_epoch(
 }
 
 #[inline]
-pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
-    let peer = req.get_header().get_peer();
+pub fn check_store_id(header: &RaftRequestHeader, store_id: u64) -> Result<()> {
+    let peer = header.get_peer();
     if peer.get_store_id() == store_id {
         Ok(())
     } else {
@@ -320,8 +326,7 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
 }
 
 #[inline]
-pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
-    let header = req.get_header();
+pub fn check_term(header: &RaftRequestHeader, term: u64) -> Result<()> {
     if header.get_term() == 0 || term <= header.get_term() + 1 {
         Ok(())
     } else {
@@ -332,8 +337,7 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
 }
 
 #[inline]
-pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
-    let header = req.get_header();
+pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
@@ -734,6 +738,62 @@ impl<
                 log_wrappers::Value::key(it.next_back().unwrap())
             ),
         }
+    }
+}
+
+pub struct EntryRequestRef<'a> {
+    pub epoch: metapb::RegionEpoch,
+    pub data: &'a [u8],
+}
+
+impl<'a> EntryRequestRef<'a> {
+    pub fn new(epoch: metapb::RegionEpoch, data: &'a [u8]) -> EntryRequestRef<'a> {
+        EntryRequestRef { epoch, data }
+    }
+}
+
+pub enum EntryCommand<'a> {
+    PBRaftCmdRequest(RaftCmdRequest),
+    RawEntryCmdRequest {
+        epoch: metapb::RegionEpoch,
+        data: &'a [u8],
+    },
+}
+
+pub fn encode_entry_data(epoch: &metapb::RegionEpoch, wb_data: &[u8]) -> Vec<u8> {
+    let mut data = vec![0; 24 + wb_data.len()];
+    data[0] = ENTRY_DATA_FORMAT_HEAD;
+    data[1] = ENTRY_DATA_FORMAT_VERSION;
+    BigEndian::write_u16(&mut data[2..4], 16);
+    BigEndian::write_u64(&mut data[4..12], epoch.get_conf_ver());
+    BigEndian::write_u64(&mut data[12..20], epoch.get_version());
+    BigEndian::write_u32(&mut data[20..24], wb_data.len() as u32);
+    data[24..].copy_from_slice(wb_data);
+    data
+}
+
+pub fn decode_entry_data<'a>(data: &'a [u8], index: u64, tag: &str) -> EntryCommand<'a> {
+    if data.len() < 4 || data[0] != ENTRY_DATA_FORMAT_HEAD {
+        let req = parse_data_at::<RaftCmdRequest>(data, index, tag);
+        return EntryCommand::PBRaftCmdRequest(req);
+    }
+    let dlen = BigEndian::read_u16(&data[2..4]);
+    let wb_pos = dlen as usize + 4;
+    if data.len() <= wb_pos {
+        let req = parse_data_at::<RaftCmdRequest>(data, index, tag);
+        return EntryCommand::PBRaftCmdRequest(req);
+    }
+    let mut epoch = metapb::RegionEpoch::default();
+    epoch.set_conf_ver(BigEndian::read_u64(&data[4..12]));
+    epoch.set_version(BigEndian::read_u64(&data[12..20]));
+    let wb_len = BigEndian::read_u32(&data[wb_pos..(wb_pos + 4)]) as usize;
+    if wb_len + wb_pos + 4 != data.len() {
+        let req = parse_data_at::<RaftCmdRequest>(data, index, tag);
+        return EntryCommand::PBRaftCmdRequest(req);
+    }
+    EntryCommand::RawEntryCmdRequest {
+        epoch,
+        data: &data[wb_pos + 4..],
     }
 }
 
@@ -1386,30 +1446,30 @@ mod tests {
 
     #[test]
     fn test_check_store_id() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().mut_peer().set_store_id(1);
-        check_store_id(&req, 1).unwrap();
-        check_store_id(&req, 2).unwrap_err();
+        let mut header = RaftRequestHeader::default();
+        header.mut_peer().set_store_id(1);
+        check_store_id(&header, 1).unwrap();
+        check_store_id(&header, 2).unwrap_err();
     }
 
     #[test]
     fn test_check_peer_id() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().mut_peer().set_id(1);
-        check_peer_id(&req, 1).unwrap();
-        check_peer_id(&req, 2).unwrap_err();
+        let mut header = RaftRequestHeader::default();
+        header.mut_peer().set_id(1);
+        check_peer_id(&header, 1).unwrap();
+        check_peer_id(&header, 2).unwrap_err();
     }
 
     #[test]
     fn test_check_term() {
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().set_term(7);
-        check_term(&req, 7).unwrap();
-        check_term(&req, 8).unwrap();
+        let mut header = RaftRequestHeader::default();
+        header.set_term(7);
+        check_term(&header, 7).unwrap();
+        check_term(&header, 8).unwrap();
         // If header's term is 2 verions behind current term,
         // leadership may have been changed away.
-        check_term(&req, 9).unwrap_err();
-        check_term(&req, 10).unwrap_err();
+        check_term(&header, 9).unwrap_err();
+        check_term(&header, 10).unwrap_err();
     }
 
     #[test]
@@ -1538,6 +1598,21 @@ mod tests {
         use protobuf::ProtobufEnum;
         for cmd_type in AdminCmdType::values() {
             assert!(ADMIN_CMD_EPOCH_MAP.contains_key(cmd_type));
+        }
+    }
+    #[test]
+    fn test_decode_entry_data() {
+        let mut expect_epoch = metapb::RegionEpoch::default();
+        expect_epoch.set_conf_ver(1);
+        expect_epoch.set_version(1_000_000_007);
+        let wb_data = b"aaaaaa";
+        let data = encode_entry_data(&expect_epoch, wb_data);
+        match decode_entry_data(&data, 0, "a") {
+            EntryCommand::PBRaftCmdRequest(_) => panic!("This object can not be RaftCmdRequest"),
+            EntryCommand::RawEntryCmdRequest { epoch, data } => {
+                assert_eq!(expect_epoch, epoch);
+                assert_eq!(data.to_vec(), wb_data.to_vec());
+            }
         }
     }
 }
