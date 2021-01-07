@@ -1,5 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Batches of multiple writes that are committed atomically
+//!
+//! Because write batches are atomic, once written to disk all their effects are
+//! visible as if all other writes in the system were written either before or
+//! after the batch. This includes range deletes.
+//!
+//! The exact strategy used by WriteBatch is up to the implementation.
+//! RocksDB though _seems_ to serialize the writes to an in-memory buffer,
+//! and then write the whole serialized batch to disk at once.
+//!
+//! Write batches may be reused after being written.
+//! In that case they write exactly the same data as previously.
+
+
 use crate::errors::Result;
 use crate::options::WriteOptions;
 
@@ -11,13 +25,26 @@ pub trait WriteBatchExt: Sized {
 
     const WRITE_BATCH_MAX_KEYS: usize;
 
+    /// Indicates whether the WriteBatchVec type can be created and works
+    /// as expected.
+    ///
+    /// If this returns false then creating a WriteBatchVec will panic.
     fn support_write_batch_vec(&self) -> bool;
 
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
 }
 
+/// A trait implemented by WriteBatch
+///
+/// FIXME: This trait is misnamed, as it is implemented only by WriteBatch and
+/// is filled with WriteBatch-specific methods. Merge it into WriteBatch.
 pub trait Mutable: Send {
+    /// The data size of a write batch
+    ///
+    /// This is necessarily engine-dependent. In RocksDB though it appears to
+    /// represent the byte length of all write commands in the batch, as
+    /// serialized in memory, prior to being written to disk.
     fn data_size(&self) -> usize;
     fn count(&self) -> usize;
     fn is_empty(&self) -> bool;
