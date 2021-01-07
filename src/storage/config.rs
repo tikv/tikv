@@ -321,8 +321,8 @@ impl Default for IORateLimitConfig {
 }
 
 impl IORateLimitConfig {
-    pub fn build_io_rate_limiter(&self) -> Option<IORateLimiter> {
-        let limiter = IORateLimiter::new(None);
+    pub fn apply<T: AsRef<IORateLimiter>>(&self, limiter: T) {
+        let limiter = limiter.as_ref();
         if let Some(limit) = self.total.0 {
             limiter.set_bytes_per_sec(IOType::Other, None /*IOOp*/, limit.as_b() as usize);
         }
@@ -351,6 +351,5 @@ impl IORateLimitConfig {
         if let Some(limit) = self.export.0 {
             limiter.set_bytes_per_sec(IOType::Export, Some(IOOp::Read), limit.as_b() as usize);
         }
-        Some(limiter)
     }
 }

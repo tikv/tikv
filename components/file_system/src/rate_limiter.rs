@@ -380,9 +380,9 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
-pub fn set_io_rate_limiter(limiter: Option<IORateLimiter>) {
+pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
     if let Some(limiter) = limiter {
-        *IO_RATE_LIMITER.lock() = Some(Arc::new(limiter));
+        *IO_RATE_LIMITER.lock() = Some(limiter);
     } else {
         *IO_RATE_LIMITER.lock() = None;
     }

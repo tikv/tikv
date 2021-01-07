@@ -23,6 +23,7 @@ use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{
     compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
+use file_system::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -106,6 +107,7 @@ pub fn run_tikv(config: TiKvConfig) {
             if enable_io_snoop {
                 tikv.init_io_snooper();
             }
+            tikv.init_io_rate_limit();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -831,6 +833,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         } else {
             info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
         }
+    }
+
+    fn init_io_rate_limit(&mut self) {
+        let limiter = get_io_rate_limiter().unwrap_or_else(|| {
+            let limiter = Arc::new(IORateLimiter::new(None));
+            set_io_rate_limiter(Some(limiter.clone()));
+            limiter
+        });
+        self.config.storage.io_rate_limit.apply(&limiter);
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
