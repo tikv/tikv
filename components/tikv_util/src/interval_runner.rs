@@ -4,31 +4,26 @@ use std::io;
 use std::result::Result;
 use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::time::{Duration, Instant};
-
-use file_system::flush_io_metrics;
-
-use crate::engine::KvEngine;
-use crate::engines::Engines;
-use crate::raft_engine::RaftEngine;
+use std::time::Duration;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
-pub struct MetricsFlusher<K: KvEngine, R: RaftEngine> {
-    pub engines: Engines<K, R>,
+pub struct IntervalRunner {
+    name: String,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
+    tasks: Vec<Box<dyn IntervalRunnable>>,
 }
 
-impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
-    pub fn new(engines: Engines<K, R>) -> Self {
-        MetricsFlusher {
-            engines,
+impl IntervalRunner {
+    pub fn new(name: &str) -> Self {
+        IntervalRunner {
+            name: name.to_owned(),
             interval: DEFAULT_FLUSH_INTERVAL,
             handle: None,
             sender: None,
+            tasks: vec![],
         }
     }
 
@@ -36,29 +31,30 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
         self.interval = interval;
     }
 
+    pub fn add_task<T: IntervalRunnable + 'static>(&mut self, task: T) {
+        self.tasks.push(Box::new(task));
+    }
+
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let (kv_db, raft_db) = (self.engines.kv.clone(), self.engines.raft.clone());
         let interval = self.interval;
         let (tx, rx) = mpsc::channel();
         self.sender = Some(tx);
+        let mut tasks = vec![];
+        std::mem::swap(&mut tasks, &mut self.tasks);
         let h = ThreadBuilder::new()
-            .name("metrics-flusher".to_owned())
+            .name(self.name.clone())
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
-                let mut last_reset = Instant::now();
+                for task in &mut tasks {
+                    task.init();
+                }
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    kv_db.flush_metrics("kv");
-                    raft_db.flush_metrics("raft");
-                    flush_io_metrics(); // TODO: better flush it in io limiter
-                    if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
-                        kv_db.reset_statistics();
-                        raft_db.reset_statistics();
-                        last_reset = Instant::now();
+                    for task in &mut tasks {
+                        task.on_tick();
                     }
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
-
         self.handle = Some(h);
         Ok(())
     }
@@ -70,8 +66,14 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
         }
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
-            error!("join metrics flusher failed"; "err" => ?e);
+            error!("join thread failed"; "err" => ?e, "name" => self.name.as_str());
             return;
         }
     }
+}
+
+pub trait IntervalRunnable: Send + Sync {
+    fn init(&mut self) {}
+    fn on_tick(&mut self);
+    fn stop(&mut self) {}
 }

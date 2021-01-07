@@ -52,7 +52,8 @@ mod tests {
 
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<BytesRecorder>) {
         let recorder = Arc::new(BytesRecorder::new());
-        set_io_rate_limiter(IORateLimiter::new(10000, Some(recorder.clone())));
+        let limiter = Arc::new(IORateLimiter::new(1, Some(recorder.clone())));
+        set_io_rate_limiter(Some(limiter));
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
         let env = get_env(Some(Arc::new(EngineFileSystemInspector::new())), None).unwrap();

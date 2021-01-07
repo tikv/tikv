@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::*;
 use super::IOStats;
+
+use crate::metrics::*;
 use crate::IOType;
 
 use collections::HashMap;

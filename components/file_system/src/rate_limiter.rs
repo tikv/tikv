@@ -98,8 +98,8 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
-pub fn set_io_rate_limiter(limiter: IORateLimiter) {
-    *IO_RATE_LIMITER.lock().unwrap() = Some(Arc::new(limiter));
+pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
+    *IO_RATE_LIMITER.lock().unwrap() = limiter;
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {

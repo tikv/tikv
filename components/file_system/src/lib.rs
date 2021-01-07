@@ -11,10 +11,13 @@ extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
+mod metrics;
+mod metrics_task;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type, IOContext};
+pub use metrics_task::MetricsTask;
 pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 
 pub use std::fs::{

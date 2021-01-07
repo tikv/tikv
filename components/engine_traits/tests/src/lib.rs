@@ -3,4 +3,4 @@
 extern crate slog_global;
 
 #[cfg(test)]
-mod test_metrics_fluster;
+mod test_metrics_task;

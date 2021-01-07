@@ -18,6 +18,7 @@ openssl = "0.10"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
 variant_count = "1.0.0"
 
 
