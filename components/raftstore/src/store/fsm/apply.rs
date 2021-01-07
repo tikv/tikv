@@ -1068,7 +1068,7 @@ where
                             let data_key = keys::data_key(key);
                             self.metrics.size_diff_hint += data_key.len() as i64;
                             self.metrics.size_diff_hint += value.len() as i64;
-                            wb.put_cf(cf, data_key, value).unwrap_or_else(|e| {
+                            wb.put_cf(cf, &data_key, value).unwrap_or_else(|e| {
                                 panic!(
                                     "{} failed to append data of entry (index: {}, term: {}): {:?}",
                                     self.tag, index, term, e
@@ -1078,7 +1078,7 @@ where
                         ValueType::Delete => {
                             let data_key = keys::data_key(key);
                             self.metrics.size_diff_hint -= data_key.len() as i64;
-                            wb.delete_cf(cf, data_key).unwrap_or_else(|e| {
+                            wb.delete_cf(cf, &data_key).unwrap_or_else(|e| {
                                 panic!(
                                     "{} failed to append data of entry (index: {}, term: {}): {:?}",
                                     self.tag, index, term, e

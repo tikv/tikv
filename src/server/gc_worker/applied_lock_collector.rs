@@ -176,9 +176,7 @@ impl QueryObserver for LockObserver {
 
         let request = match &mut cmd.request {
             CmdRequest::PBCmdRequest(req) => req,
-            CmdRequest::RawCmdRequest(_) => {
-                todo!()
-            }
+            CmdRequest::RawCmdRequest(_) => todo!(),
         };
 
         let mut locks = vec![];
