@@ -399,6 +399,10 @@ where
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
+
+                // Remove the stale delegate
+                self.delegates.remove(&region_id);
+
                 let meta = self.store_meta.lock().unwrap();
                 match meta.readers.get(&region_id).cloned().map(Arc::new) {
                     Some(reader) => {
