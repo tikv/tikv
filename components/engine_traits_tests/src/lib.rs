@@ -1292,6 +1292,22 @@ mod write_batch {
     }
 
     #[test]
+    fn write_batch_count_2() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        assert_eq!(wb.count(), 0);
+        wb.put(b"a", b"").unwrap();
+        assert_eq!(wb.count(), 1);
+        wb.delete(b"a").unwrap();
+        assert_eq!(wb.count(), 2);
+        wb.delete_range_cf(CF_DEFAULT, b"a", b"b").unwrap();
+        assert_eq!(wb.count(), 3);
+        wb.write().unwrap();
+        assert_eq!(wb.count(), 3);
+    }
+
+    #[test]
     fn write_batch_clear() {
         let db = default_engine();
         let mut wb = db.engine.write_batch();
