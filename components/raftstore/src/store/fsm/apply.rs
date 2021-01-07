@@ -2769,7 +2769,7 @@ impl GenSnapTask {
         }
     }
 
-    pub fn mark_for_balance(&mut self) {
+    pub fn set_for_balance(&mut self) {
         self.for_balance = true;
     }
 

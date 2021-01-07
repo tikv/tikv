@@ -16,6 +16,8 @@ use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
+use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
+
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -480,4 +482,40 @@ fn test_request_snapshot_apply_repeatedly() {
         "{:?}",
         raft_state
     );
+}
+
+#[test]
+fn test_inspected_snapshot() {
+    let recorder = Arc::new(BytesRecorder::new());
+    set_io_rate_limiter(IORateLimiter::new(10000, Some(recorder.clone())));
+
+    let mut cluster = new_server_cluster(1, 3);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.stop_node(3);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    // Sleep for a while to ensure all logs are compacted.
+    std::thread::sleep(Duration::from_millis(100));
+
+    assert_eq!(recorder.fetch(IOType::Replication, IOOp::Read), 0);
+    assert_eq!(recorder.fetch(IOType::Replication, IOOp::Write), 0);
+    // Let store 3 inform leader to generate a snapshot.
+    cluster.run_node(3).unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    assert_ne!(recorder.fetch(IOType::Replication, IOOp::Read), 0);
+    assert_ne!(recorder.fetch(IOType::Replication, IOOp::Write), 0);
+    
+    pd_client.must_remove_peer(1, new_peer(2, 2));
+    assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Read), 0);
+    assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    assert_ne!(recorder.fetch(IOType::LoadBalance, IOOp::Read), 0);
+    assert_ne!(recorder.fetch(IOType::LoadBalance, IOOp::Write), 0);
 }

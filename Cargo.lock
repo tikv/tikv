@@ -4580,6 +4580,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "fail",
+ "file_system",
  "futures 0.3.7",
  "grpcio",
  "hyper",

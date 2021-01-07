@@ -1110,7 +1110,27 @@ where
             return Ok(());
         }
 
+        let from_id = m.get_from();
+        let has_snap_task = self.get_store().has_gen_snap_task();
         self.raft_group.step(m)?;
+
+        let mut for_balance = false;
+        if !has_snap_task && self.get_store().has_gen_snap_task() {
+           if let Some(progress) = self.raft_group.status().progress {
+                if let Some(pr) = progress.get(from_id) {
+                    // When a peer is uninitialized (e.g. created by load balance),
+                    // the last index of the peer is 0 which makes the matched index to be 0.
+                    if pr.matched == 0 {
+                        for_balance = true;
+                    }
+                }
+            }
+        }
+        if for_balance {
+            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
+                gen_task.set_for_balance();
+            }
+        }
         Ok(())
     }
 
@@ -1611,12 +1631,7 @@ where
 
         if !self.raft_group.has_ready() {
             // Generating snapshot task won't set ready for raft group.
-            if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
-                if let Some(progress) = self.raft_group.status().progress {
-                    if progress.iter().any(|(_, pr)| pr.matched == 0) {
-                        gen_task.mark_for_balance();
-                    }
-                }
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router
@@ -1833,12 +1848,7 @@ where
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
         // TODO: maybe we should move this code to other place to make the logic more clear.
-        if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
-            if let Some(progress) = self.raft_group.status().progress {
-                if progress.iter().any(|(_, pr)| pr.matched == 0) {
-                    gen_task.mark_for_balance();
-                }
-            }
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
             self.pending_request_snapshot_count
                 .fetch_add(1, Ordering::SeqCst);
             ctx.apply_router

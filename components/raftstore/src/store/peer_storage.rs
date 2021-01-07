@@ -1002,6 +1002,14 @@ where
         ))
     }
 
+    pub fn has_gen_snap_task(&self) -> bool {
+        self.gen_snap_task.borrow().is_some()
+    }
+
+    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
+        self.gen_snap_task.get_mut()
+    }
+
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
     }
