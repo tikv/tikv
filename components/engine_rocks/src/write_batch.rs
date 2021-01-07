@@ -11,7 +11,6 @@ use rocksdb::{
 };
 
 const WRITE_BATCH_LIMIT: usize = 16;
-const WRITE_BATCH_MAX_DATA_SIZE: usize = 8192;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatch;
@@ -100,11 +99,6 @@ impl Mutable for RocksWriteBatch {
 
     fn should_write_to_engine(&self) -> bool {
         self.wb.count() > RocksEngine::WRITE_BATCH_MAX_KEYS
-    }
-
-    fn append(&mut self, data: &[u8]) -> Result<()> {
-        self.wb.append(data);
-        Ok(())
     }
 
     fn clear(&mut self) {
@@ -243,38 +237,6 @@ impl Mutable for RocksWriteBatchVec {
 
     fn should_write_to_engine(&self) -> bool {
         self.count() > RocksEngine::WRITE_BATCH_MAX_KEYS
-    }
-
-    fn append(&mut self, data: &[u8]) -> Result<()> {
-        if data.len() > WRITE_BATCH_MAX_DATA_SIZE {
-            let wb_ref = WriteBatchRef::new(data);
-            if wb_ref.count() > WRITE_BATCH_LIMIT * 2 {
-                for (tp, cf_id, key, value) in wb_ref.iter() {
-                    self.check_switch_batch();
-                    let handle = self
-                        .db
-                        .cf_handle_by_id(cf_id as usize)
-                        .ok_or_else(|| Error::Engine(format!("cf {} not found", cf_id)))?;
-                    match tp {
-                        DBValueType::TypeValue => {
-                            self.wbs[self.index]
-                                .put_cf(handle, key, value)
-                                .map_err(Error::Engine)?;
-                        }
-                        DBValueType::TypeDeletion => {
-                            self.wbs[self.index]
-                                .delete_cf(handle, key)
-                                .map_err(Error::Engine)?;
-                        }
-                        _ => {}
-                    }
-                }
-                return Ok(());
-            }
-        }
-        self.check_switch_batch();
-        self.wbs[self.index].append(data);
-        Ok(())
     }
 
     fn clear(&mut self) {

@@ -19,10 +19,9 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksEngine, RocksWriteBatchReader};
+use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, CFNamesExt, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT,
-    CF_WRITE,
+    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -683,14 +682,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
         initial_metric(&self.config.metric);
 
-        let cfs = engines
-            .engines
-            .kv
-            .cf_names()
-            .iter()
-            .map(|cf| cf.to_string())
-            .collect();
-        let reader = RocksWriteBatchReader::new(cfs);
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
             &self.config.cdc,
@@ -702,7 +693,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.concurrency_manager.clone(),
             server.env(),
             self.security_mgr.clone(),
-            reader,
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);

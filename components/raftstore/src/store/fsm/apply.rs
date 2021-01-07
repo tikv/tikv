@@ -165,10 +165,6 @@ where
         self.conf_change.take()
     }
 
-    fn is_empty(&self) -> bool {
-        self.normals.is_empty() && self.conf_change.is_none()
-    }
-
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
         self.conf_change = Some(cmd);
@@ -1065,26 +1061,33 @@ where
             include_region,
         ) {
             Ok(()) => {
-                if !self.pending_cmds.is_empty() {
-                    for (t, _, key, value) in apply_ctx.entry_reader.iter(data) {
-                        match t {
-                            ValueType::Put => {
-                                self.metrics.size_diff_hint += key.len() as i64;
-                                self.metrics.size_diff_hint += value.len() as i64;
-                            }
-                            ValueType::Delete => {
-                                self.metrics.size_diff_hint -= key.len() as i64;
-                            }
-                            _ => (),
+                let wb = &mut apply_ctx.kv_wb;
+                for (t, cf, key, value) in apply_ctx.entry_reader.iter(data) {
+                    match t {
+                        ValueType::Put => {
+                            let data_key = keys::data_key(key);
+                            self.metrics.size_diff_hint += data_key.len() as i64;
+                            self.metrics.size_diff_hint += value.len() as i64;
+                            wb.put_cf(cf, data_key, value).unwrap_or_else(|e| {
+                                panic!(
+                                    "{} failed to append data of entry (index: {}, term: {}): {:?}",
+                                    self.tag, index, term, e
+                                )
+                            });
                         }
+                        ValueType::Delete => {
+                            let data_key = keys::data_key(key);
+                            self.metrics.size_diff_hint -= data_key.len() as i64;
+                            wb.delete_cf(cf, data_key).unwrap_or_else(|e| {
+                                panic!(
+                                    "{} failed to append data of entry (index: {}, term: {}): {:?}",
+                                    self.tag, index, term, e
+                                )
+                            });
+                        }
+                        _ => (),
                     }
                 }
-                apply_ctx.kv_wb_mut().append(data).unwrap_or_else(|e| {
-                    panic!(
-                        "{} failed to append data of entry (index: {}, term: {}): {:?}",
-                        self.tag, index, term, e
-                    )
-                });
                 RaftCmdResponse::default()
             }
             Err(e) => cmd_resp::new_error(e),
@@ -4338,29 +4341,25 @@ mod tests {
 
         fn put(self, key: &[u8], value: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.put(&k, value).unwrap();
+            b.wb.put(key, value).unwrap();
             b
         }
 
         fn put_cf(self, cf: &str, key: &[u8], value: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.put_cf(cf, &k, value).unwrap();
+            b.wb.put_cf(cf, key, value).unwrap();
             b
         }
 
         fn delete(self, key: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.delete(&k).unwrap();
+            b.wb.delete(key).unwrap();
             b
         }
 
         fn delete_cf(self, cf: &str, key: &[u8]) -> WriteBatchEntryBuilder {
             let mut b = self;
-            let k = keys::data_key(key);
-            b.wb.delete_cf(cf, &k).unwrap();
+            b.wb.delete_cf(cf, key).unwrap();
             b
         }
 

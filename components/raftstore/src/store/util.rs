@@ -741,17 +741,9 @@ impl<
     }
 }
 
-pub struct EntryRequestRef<'a> {
-    pub epoch: metapb::RegionEpoch,
-    pub data: &'a [u8],
-}
-
-impl<'a> EntryRequestRef<'a> {
-    pub fn new(epoch: metapb::RegionEpoch, data: &'a [u8]) -> EntryRequestRef<'a> {
-        EntryRequestRef { epoch, data }
-    }
-}
-
+/// This struct will be encode into bytes and store in `Entry::data`. `PBRaftCmdRequest` is a
+/// protobuf struct while `RawEntryCmdRequest` is encoded by `encode_entry_data` and decoded by
+/// `decode_entry_data`, which are both fixed encode format.
 pub enum EntryCommand<'a> {
     PBRaftCmdRequest(RaftCmdRequest),
     RawEntryCmdRequest {
