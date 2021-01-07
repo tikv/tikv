@@ -925,6 +925,14 @@
 ## The default value is set to min(CPU_NUM * 0.75, 32).
 # num-threads = 24
 
+## Number of ranges to backup in one batch.
+# batch = 8
+
+## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
+## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
+## little larger).
+# sst-max-size = "144MB"
+
 [pessimistic-txn]
 ## Enable pessimistic transaction
 # enabled = true
