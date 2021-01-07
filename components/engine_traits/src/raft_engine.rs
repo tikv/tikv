@@ -125,7 +125,7 @@ macro_rules! def_raft_engine {
         };
         use $crate::{Error, RaftEngine, RaftLogBatch, Result};
         use $crate::{
-            Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+            Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
             WriteOptions, CF_DEFAULT,
         };
 
@@ -228,7 +228,7 @@ macro_rules! def_raft_engine {
                 let bytes = batch.data_size();
                 let mut opts = WriteOptions::default();
                 opts.set_sync(sync_log);
-                self.write_opt(batch, &opts)?;
+                batch.write_opt(&opts)?;
                 batch.clear();
                 Ok(bytes)
             }
@@ -305,14 +305,14 @@ macro_rules! def_raft_engine {
                     let key = keys::raft_log_key(raft_group_id, idx);
                     raft_wb.delete(&key)?;
                     if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                        self.write(&raft_wb)?;
+                        raft_wb.write()?;
                         raft_wb.clear();
                     }
                 }
 
                 // TODO: disable WAL here.
                 if !Mutable::is_empty(&raft_wb) {
-                    self.write(&raft_wb)?;
+                    raft_wb.write()?;
                 }
                 Ok((to - from) as usize)
             }

@@ -22,7 +22,6 @@ extern crate test;
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
-use std::io;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +29,6 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
-use fs2::FileExt;
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -56,7 +54,6 @@ pub mod worker;
 pub mod yatp_pool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
-const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -87,27 +84,15 @@ pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
     File::create(&file).unwrap();
 }
 
-pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
-    let path = panic_mark_file_path(data_dir);
-    file_system::file_exists(path)
+// Copied from file_system to avoid cyclic dependency
+fn file_exists<P: AsRef<Path>>(file: P) -> bool {
+    let path = file.as_ref();
+    path.exists() && path.is_file()
 }
 
-// create a file with hole, to reserve space for TiKV.
-pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
-    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
-    if file_system::file_exists(path.clone()) {
-        if file_system::get_file_size(path.clone())? == file_size {
-            return Ok(());
-        }
-        file_system::delete_file_if_exist(path.clone())?;
-    }
-    if file_size > 0 {
-        let f = File::create(path)?;
-        f.allocate(file_size)?;
-        f.sync_all()?;
-        file_system::sync_dir(data_dir)?;
-    }
-    Ok(())
+pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
+    let path = panic_mark_file_path(data_dir);
+    file_exists(path)
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
@@ -720,24 +705,5 @@ mod tests {
             // the test would fail.
         });
         res.unwrap_err();
-    }
-
-    #[test]
-    fn test_reserve_space_for_recover() {
-        let tmp_dir = Builder::new()
-            .prefix("test_reserve_space_for_recover")
-            .tempdir()
-            .unwrap();
-        let data_path = tmp_dir.path();
-        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
-        let file = file_path.as_path();
-        let reserve_size = 4096 * 4;
-        assert!(!file.exists());
-        reserve_space_for_recover(data_path, reserve_size).unwrap();
-        assert!(file.exists());
-        let meta = file.metadata().unwrap();
-        assert_eq!(meta.len(), reserve_size);
-        reserve_space_for_recover(data_path, 0).unwrap();
-        assert!(!file.exists());
     }
 }

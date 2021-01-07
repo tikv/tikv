@@ -18,6 +18,7 @@ prost-codec = [
 
 [dependencies]
 error_code = { path = "../error_code" }
+file_system = { path = "../file_system" }
 keys = { path = "../keys" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"

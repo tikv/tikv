@@ -279,6 +279,8 @@ mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
+mod file_system;
+pub use crate::file_system::*;
 mod import;
 pub use import::*;
 mod misc;
