@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let limiter = IORateLimiter::new(None);
+        let limiter = Arc::new(IORateLimiter::new(None));
         limiter.set_bytes_per_sec(IOType::Other, None /*IOOp*/, 1);
         set_io_rate_limiter(Some(limiter));
 
