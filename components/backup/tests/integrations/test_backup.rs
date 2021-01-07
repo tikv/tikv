@@ -28,20 +28,15 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::{IntervalRange, Range};
-use tikv::config::BackupConfig;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
-<<<<<<< HEAD
-use tikv_util::collections::HashMap;
-use tikv_util::file::calc_crc32_bytes;
-use tikv_util::worker::Worker;
-=======
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
+use tikv_util::collections::HashMap;
 use tikv_util::config::ReadableSize;
+use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::{LazyWorker, Worker};
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 

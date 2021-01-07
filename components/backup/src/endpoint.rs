@@ -205,10 +205,9 @@ impl BackupRange {
             }
             debug!("backup scan entries"; "len" => batch.len());
 
-            let entries = batch.drain();
             if writer.need_split_keys() {
                 let res = {
-                    entries.as_slice().get(0).map_or_else(
+                    batch.iter().next().map_or_else(
                         || Err(Error::Other(box_err!("get entry error"))),
                         |x| match x.to_key() {
                             Ok(k) => {
@@ -248,7 +247,7 @@ impl BackupRange {
             }
 
             // Build sst files.
-            if let Err(e) = writer.write(entries, true) {
+            if let Err(e) = writer.write(batch.drain(), true) {
                 error!(?e; "backup build sst failed");
                 return Err(e);
             }
@@ -341,47 +340,6 @@ impl BackupRange {
         Ok(statistics)
     }
 
-<<<<<<< HEAD
-    fn backup_to_file<E: Engine>(
-        &self,
-        engine: &E,
-        db: Arc<DB>,
-        storage: &LimitedStorage,
-        file_name: String,
-        backup_ts: TimeStamp,
-        start_ts: TimeStamp,
-        compression_type: Option<SstCompressionType>,
-        compression_level: i32,
-    ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(
-            db,
-            &file_name,
-            storage.limiter.clone(),
-            compression_type,
-            compression_level,
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                error!(?e; "backup writer failed");
-                return Err(e);
-            }
-        };
-        let stat = match self.backup(&mut writer, engine, backup_ts, start_ts) {
-            Ok(s) => s,
-            Err(e) => return Err(e),
-        };
-        // Save sst files to storage.
-        match writer.save(&storage.storage) {
-            Ok(files) => Ok((files, stat)),
-            Err(e) => {
-                error!(?e; "backup save file failed");
-                Err(e)
-            }
-        }
-    }
-
-=======
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
     fn backup_raw_kv_to_file<E: Engine>(
         &self,
         engine: &E,
@@ -666,10 +624,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let db = self.db.clone();
         let store_id = self.store_id;
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
-<<<<<<< HEAD
-=======
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
 
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
@@ -748,20 +703,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             sst_max_size,
                         );
                         (
-                            brange.backup(
-                                writer_builder,
-                                &engine,
-<<<<<<< HEAD
-                                db.clone(),
-                                &storage,
-                                name,
-=======
-                                concurrency_manager.clone(),
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
-                                backup_ts,
-                                start_ts,
-                                &storage,
-                            ),
+                            brange.backup(writer_builder, &engine, backup_ts, start_ts, &storage),
                             brange
                                 .start_key
                                 .map_or_else(Vec::new, |k| k.into_raw().unwrap()),

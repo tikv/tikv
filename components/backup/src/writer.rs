@@ -143,7 +143,7 @@ impl BackupWriterBuilder {
     }
 
     pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter> {
-        let key = file_system::sha256(&start_key).ok().map(hex::encode);
+        let key = tikv_util::file::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key);
         BackupWriter::new(
@@ -410,15 +410,11 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-<<<<<<< HEAD
-        let mut writer =
-            BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
-=======
         let mut r = kvproto::metapb::Region::default();
         r.set_id(1);
         r.mut_peers().push(new_peer(1, 1));
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db.clone(),
             "foo",
             None,
             0,
@@ -426,17 +422,12 @@ mod tests {
             144 * 1024 * 1024,
         )
         .unwrap();
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-<<<<<<< HEAD
-        let mut writer =
-            BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
-=======
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db.clone(),
             "foo1",
             None,
             0,
@@ -444,7 +435,6 @@ mod tests {
             144 * 1024 * 1024,
         )
         .unwrap();
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -470,11 +460,8 @@ mod tests {
         );
 
         // Test write and default.
-<<<<<<< HEAD
-        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY), None, 0).unwrap();
-=======
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db,
             "foo2",
             None,
             0,
@@ -482,7 +469,6 @@ mod tests {
             144 * 1024 * 1024,
         )
         .unwrap();
->>>>>>> 1bb82f0a2... backup: support split big region into small backup files (#9283)
         writer
             .write(
                 vec![
