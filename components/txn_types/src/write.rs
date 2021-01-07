@@ -219,7 +219,7 @@ impl Write {
         }
     }
 
-    pub fn may_has_old_value(&self) -> bool {
+    pub fn may_have_old_value(&self) -> bool {
         matches!(self.write_type, WriteType::Put | WriteType::Delete)
     }
 }

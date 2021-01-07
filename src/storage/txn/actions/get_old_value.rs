@@ -28,7 +28,7 @@ pub fn get_old_value<S: Snapshot>(
         true
     });
     match prev_write {
-        Some(w) if !w.may_has_old_value() => {
+        Some(w) if !w.may_have_old_value() => {
             let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
             // Skip the current write record.
             write_cursor.next(&mut txn.reader.statistics.write);
