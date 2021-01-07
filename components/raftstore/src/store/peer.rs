@@ -2525,7 +2525,7 @@ impl Peer {
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2703,7 +2703,7 @@ impl Peer {
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
