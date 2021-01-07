@@ -41,13 +41,13 @@ pub trait Mutable: Send {
     /// serialized in memory, prior to being written to disk.
     fn data_size(&self) -> usize;
 
-    /// The number of puts / deletes in this batch
+    /// The number of commands in this batch
     fn count(&self) -> usize;
 
-    /// Whether any puts / deletes have been issued to this batch
+    /// Whether any commands have been issued to this batch
     fn is_empty(&self) -> bool;
 
-    /// Whether the number of puts and deletes exceeds WRITE_BATCH_MAX_KEYS
+    /// Whether the number of commands exceeds WRITE_BATCH_MAX_KEYS
     ///
     /// If so, the `write` method should be called.
     fn should_write_to_engine(&self) -> bool;
@@ -89,6 +89,9 @@ pub trait Mutable: Send {
 
 /// Batches of multiple writes that are committed atomically
 ///
+/// Each write batch consists of a series of commands: put, delete
+/// delete_range, and their column-family-specific equivalents.
+///
 /// Because write batches are atomic, once written to disk all their effects are
 /// visible as if all other writes in the system were written either before or
 /// after the batch. This includes range deletes.
@@ -101,8 +104,14 @@ pub trait Mutable: Send {
 /// exactly the same data as previously, Replacing any keys that may have
 /// changed in between the two batch writes.
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
+
+    /// Create a write batch with a given command capacity
     fn with_capacity(e: &E, cap: usize) -> Self;
+
+    /// Commit the WriteBatch to disk with the given options
     fn write_opt(&self, opts: &WriteOptions) -> Result<()>;
+
+    /// Commit the WriteBatch to disk atomically
     fn write(&self) -> Result<()> {
         self.write_opt(&WriteOptions::default())
     }
