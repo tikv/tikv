@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::Display;
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest};
+use kvproto::raft_serverpb::RaftMessage;
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
@@ -817,6 +819,18 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
         cc.set_changes(changes.into());
         cc.set_context(ctx);
         cc
+    }
+}
+
+pub struct MsgType<'a>(pub &'a RaftMessage);
+
+impl Display for MsgType<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if !self.0.has_extra_msg() {
+            write!(f, "{:?}", self.0.get_message().get_msg_type())
+        } else {
+            write!(f, "{:?}", self.0.get_extra_msg().get_type())
+        }
     }
 }
 

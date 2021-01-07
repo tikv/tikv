@@ -496,7 +496,7 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 #[rpn_fn(writer)]
 #[inline]
 pub fn hex_str_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    Ok(writer.write(Some(hex::encode_upper(arg).into_bytes())))
+    Ok(writer.write(Some(log_wrappers::hex_encode_upper(arg).into_bytes())))
 }
 
 #[rpn_fn]

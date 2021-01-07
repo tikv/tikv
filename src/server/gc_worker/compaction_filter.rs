@@ -32,7 +32,7 @@ const NEAR_SEEK_LIMIT: usize = 8;
 // The default version that can enable compaction filter for GC. This is necessary because after
 // compaction filter is enabled, it's impossible to fallback to ealier version which modifications
 // of GC are distributed to other replicas by Raft.
-const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::acquire(5, 0, 0);
+const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as these fields are
 // not available when construcing `WriteCompactionFilterFactory`.
@@ -663,29 +663,29 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    if ratio_threshold < 1.0 || context.is_bottommost_level() {
-        // According to our tests, `split_ts` on keys and `parse_write` on values
-        // won't utilize much CPU.
-        return true;
-    }
-
-    let check_props = |props: &MvccProperties| {
+    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
         if props.min_ts > safe_point {
-            return false;
+            return (false, false);
+        }
+        if ratio_threshold < 1.0 || context.is_bottommost_level() {
+            // According to our tests, `split_ts` on keys and `parse_write` on values
+            // won't utilize much CPU. So always perform GC at the bottommost level
+            // to avoid garbage accumulation.
+            return (true, true);
         }
         if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
             // When comparing `num_versions` with `num_rows`, it's unnecessary to
             // treat internal levels specially.
-            return true;
+            return (true, false);
         }
 
         // When comparing `num_versions` with `num_puts`, trait internal levels specially
         // because MVCC-delete marks can't be handled at those levels.
         let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
         if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
-            return true;
+            return (true, false);
         }
-        props.max_row_versions > 1024
+        (props.max_row_versions > 1024, false)
     };
 
     let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
@@ -697,13 +697,19 @@ fn check_need_gc(
         };
         if let Ok(props) = RocksMvccProperties::decode(user_props) {
             sum_props.add(&props);
-            if check_props(&props) {
+            let (sst_needs_gc, skip_more_checks) = check_props(&props);
+            if sst_needs_gc {
                 needs_gc += 1;
+            }
+            if skip_more_checks {
+                // It's the bottommost level or ratio_threshold is less than 1.
+                needs_gc = context.file_numbers().len();
+                break;
             }
         }
     }
 
-    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props)
+    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
 }
 
 #[cfg(test)]
@@ -781,13 +787,14 @@ pub mod tests {
                 callbacks.push(callback.clone());
             }
         }
-        fn post_gc(&self) {
+        fn post_gc(&mut self) {
+            self.callbacks_on_drop.clear();
             let mut gc_context = GC_CONTEXT.lock().unwrap();
             let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
             callbacks.clear();
         }
 
-        fn gc(&self, raw_engine: &RocksEngine) {
+        fn gc(&mut self, raw_engine: &RocksEngine) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(raw_engine);
 
@@ -802,7 +809,7 @@ pub mod tests {
             self.post_gc();
         }
 
-        fn gc_on_files(&self, raw_engine: &RocksEngine, input_files: &[String]) {
+        fn gc_on_files(&mut self, raw_engine: &RocksEngine, input_files: &[String]) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(raw_engine);
             let db = raw_engine.as_inner();
@@ -920,11 +927,15 @@ pub mod tests {
     // filter will be created.
     #[test]
     fn test_mvcc_properties() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGCRunner::default();
-        gc_runner.ratio_threshold = Some(10.0);
 
         for start_ts in &[100, 110, 120, 130] {
             must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
@@ -933,9 +944,42 @@ pub mod tests {
         must_prewrite_delete(&engine, b"zkey", b"zkey", 140);
         must_commit(&engine, b"zkey", 140, 145);
 
-        // Can't GC stale versions because of the threshold.
-        gc_runner.gc(&raw_engine);
-        for commit_ts in &[105, 115, 125, 135] {
+        // Can't perform GC because the min timestamp is greater than safe point.
+        gc_runner
+            .callbacks_on_drop
+            .push(Arc::new(|_: &WriteCompactionFilter| {
+                unreachable!();
+            }));
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(100).gc(&raw_engine);
+
+        // Can perform GC at the bottommost level even if the threshold can't be reached.
+        gc_runner.ratio_threshold = Some(10.0);
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(140).gc(&raw_engine);
+        for commit_ts in &[105, 115, 125] {
+            must_get_none(&engine, b"zkey", commit_ts);
+        }
+
+        // Put an extra key to make the memtable overlap with the bottommost one.
+        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 200);
+        must_commit(&engine, b"zkey1", 200, 205);
+        for start_ts in &[200, 210, 220, 230] {
+            must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
+            must_commit(&engine, b"zkey", *start_ts, *start_ts + 5);
+        }
+        must_prewrite_delete(&engine, b"zkey", b"zkey", 240);
+        must_commit(&engine, b"zkey", 240, 245);
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+
+        // At internal levels can't perform GC because the threshold is not reached.
+        let level_files = rocksdb_level_files(&raw_engine, CF_WRITE);
+        let l0_file = dir.path().join(&level_files[0][0]);
+        let files = &[l0_file.to_str().unwrap().to_owned()];
+        gc_runner.target_level = Some(5);
+        gc_runner.ratio_threshold = Some(10.0);
+        gc_runner.safe_point(300).gc_on_files(&raw_engine, files);
+        for commit_ts in &[205, 215, 225, 235] {
             must_get(&engine, b"zkey", commit_ts, &value);
         }
     }

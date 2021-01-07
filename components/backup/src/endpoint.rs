@@ -34,6 +34,8 @@ use yatp::task::callback::{Handle, TaskCell};
 use yatp::ThreadPool;
 
 use crate::metrics::*;
+use crate::writer::BackupWriterBuilder;
+use crate::Error;
 use crate::*;
 
 const BACKUP_BATCH_LIMIT: usize = 1024;
@@ -73,8 +75,11 @@ impl fmt::Debug for Task {
         f.debug_struct("BackupTask")
             .field("start_ts", &self.request.start_ts)
             .field("end_ts", &self.request.end_ts)
-            .field("start_key", &hex::encode_upper(&self.request.start_key))
-            .field("end_key", &hex::encode_upper(&self.request.end_key))
+            .field(
+                "start_key",
+                &log_wrappers::Value::key(&self.request.start_key),
+            )
+            .field("end_key", &log_wrappers::Value::key(&self.request.end_key))
             .field("is_raw_kv", &self.request.is_raw_kv)
             .field("cf", &self.request.cf)
             .finish()
@@ -144,12 +149,13 @@ impl BackupRange {
     /// Get entries from the scanner and save them to storage
     fn backup<E: Engine>(
         &self,
-        writer: &mut BackupWriter,
+        writer_builder: BackupWriterBuilder,
         engine: &E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-    ) -> Result<Statistics> {
+        storage: &LimitedStorage,
+    ) -> Result<(Vec<File>, Statistics)> {
         assert!(!self.is_raw_kv);
 
         let mut ctx = Context::default();
@@ -211,7 +217,17 @@ impl BackupRange {
             .unwrap();
 
         let start_scan = Instant::now();
+        let mut files: Vec<File> = Vec::with_capacity(2);
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
+        let mut last_key = self
+            .start_key
+            .clone()
+            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+        let mut cur_key = self
+            .end_key
+            .clone()
+            .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+        let mut writer = writer_builder.build(last_key.clone())?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -221,8 +237,51 @@ impl BackupRange {
                 break;
             }
             debug!("backup scan entries"; "len" => batch.len());
+
+            let entries = batch.drain();
+            if writer.need_split_keys() {
+                let res = {
+                    entries.as_slice().get(0).map_or_else(
+                        || Err(Error::Other(box_err!("get entry error"))),
+                        |x| match x.to_key() {
+                            Ok(k) => {
+                                cur_key = k.into_raw().unwrap();
+                                writer_builder.build(cur_key.clone())
+                            }
+                            Err(e) => {
+                                error!(?e; "backup save file failed");
+                                Err(Error::Other(box_err!("Decode error: {:?}", e)))
+                            }
+                        },
+                    )
+                };
+                match writer.save(&storage.storage) {
+                    Ok(mut split_files) => {
+                        for file in split_files.iter_mut() {
+                            file.set_start_key(last_key.clone());
+                            file.set_end_key(cur_key.clone());
+                        }
+                        last_key = cur_key.clone();
+                        files.append(&mut split_files);
+                    }
+                    Err(e) => {
+                        error!(?e; "backup save file failed");
+                        return Err(e);
+                    }
+                }
+                match res {
+                    Ok(w) => {
+                        writer = w;
+                    }
+                    Err(e) => {
+                        error!(?e; "backup writer failed");
+                        return Err(e);
+                    }
+                }
+            }
+
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain(), true) {
+            if let Err(e) = writer.write(entries, true) {
                 error!(?e; "backup build sst failed");
                 return Err(e);
             }
@@ -230,8 +289,29 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["scan"])
             .observe(start_scan.elapsed().as_secs_f64());
+
+        if writer.need_flush_keys() {
+            match writer.save(&storage.storage) {
+                Ok(mut split_files) => {
+                    cur_key = self
+                        .end_key
+                        .clone()
+                        .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+                    for file in split_files.iter_mut() {
+                        file.set_start_key(last_key.clone());
+                        file.set_end_key(cur_key.clone());
+                    }
+                    files.append(&mut split_files);
+                }
+                Err(e) => {
+                    error!(?e; "backup save file failed");
+                    return Err(e);
+                }
+            }
+        }
+
         let stat = scanner.take_statistics();
-        Ok(stat)
+        Ok((files, stat))
     }
 
     fn backup_raw<E: Engine>(
@@ -294,51 +374,6 @@ impl BackupRange {
             .with_label_values(&["raw_scan"])
             .observe(start.elapsed().as_secs_f64());
         Ok(statistics)
-    }
-
-    fn backup_to_file<E: Engine>(
-        &self,
-        engine: &E,
-        db: Arc<DB>,
-        storage: &LimitedStorage,
-        concurrency_manager: ConcurrencyManager,
-        file_name: String,
-        backup_ts: TimeStamp,
-        start_ts: TimeStamp,
-        compression_type: Option<SstCompressionType>,
-        compression_level: i32,
-    ) -> Result<(Vec<File>, Statistics)> {
-        let mut writer = match BackupWriter::new(
-            db,
-            &file_name,
-            storage.limiter.clone(),
-            compression_type,
-            compression_level,
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                error!(?e; "backup writer failed");
-                return Err(e);
-            }
-        };
-        let stat = match self.backup(
-            &mut writer,
-            engine,
-            concurrency_manager,
-            backup_ts,
-            start_ts,
-        ) {
-            Ok(s) => s,
-            Err(e) => return Err(e),
-        };
-        // Save sst files to storage.
-        match writer.save(&storage.storage) {
-            Ok(files) => Ok((files, stat)),
-            Err(e) => {
-                error!(?e; "backup save file failed");
-                Err(e)
-            }
-        }
     }
 
     fn backup_raw_kv_to_file<E: Engine>(
@@ -623,6 +658,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
+        let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
+
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
@@ -695,17 +732,23 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                             brange.end_key.map_or_else(Vec::new, |k| k.into_encoded()),
                         )
                     } else {
+                        let writer_builder = BackupWriterBuilder::new(
+                            store_id,
+                            storage.limiter.clone(),
+                            brange.region.clone(),
+                            db.clone(),
+                            ct,
+                            request.compression_level,
+                            sst_max_size,
+                        );
                         (
-                            brange.backup_to_file(
+                            brange.backup(
+                                writer_builder,
                                 &engine,
-                                db.clone(),
-                                &storage,
                                 concurrency_manager.clone(),
-                                name,
                                 backup_ts,
                                 start_ts,
-                                ct,
-                                request.compression_level,
+                                &storage,
                             ),
                             brange
                                 .start_key
@@ -721,21 +764,23 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         Err(e) => {
                             error!(?e; "backup region failed";
                                 "region" => ?brange.region,
-                                "start_key" => hex::encode_upper(&start_key),
-                                "end_key" => hex::encode_upper(&end_key),
+                                "start_key" => &log_wrappers::Value::key(&start_key),
+                                "end_key" => &log_wrappers::Value::key(&end_key),
                             );
                             response.set_error(e.into());
                         }
                         Ok((mut files, stat)) => {
                             debug!("backup region finish";
                             "region" => ?brange.region,
-                            "start_key" => hex::encode_upper(&start_key),
-                            "end_key" => hex::encode_upper(&end_key),
+                            "start_key" => &log_wrappers::Value::key(&start_key),
+                            "end_key" => &log_wrappers::Value::key(&end_key),
                             "details" => ?stat);
 
                             for file in files.iter_mut() {
-                                file.set_start_key(start_key.clone());
-                                file.set_end_key(end_key.clone());
+                                if is_raw_kv {
+                                    file.set_start_key(start_key.clone());
+                                    file.set_end_key(end_key.clone());
+                                }
                                 file.set_start_version(start_ts.into_inner());
                                 file.set_end_version(end_ts.into_inner());
                             }
@@ -860,7 +905,7 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 /// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
 /// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
 /// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
-fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
     let start = SystemTime::now();
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
@@ -914,6 +959,7 @@ pub mod tests {
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
+    use tikv_util::config::ReadableSize;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -985,6 +1031,7 @@ pub mod tests {
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
+                    sst_max_size: ReadableSize::mb(144),
                 },
                 concurrency_manager,
             ),
@@ -1238,8 +1285,10 @@ pub mod tests {
             let resp = resp.unwrap();
             assert!(!resp.has_error(), "{:?}", resp);
             let file_len = if *len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
+            let files = resp.get_files();
+            info!("{:?}", files);
             assert_eq!(
-                resp.get_files().len(),
+                files.len(),
                 file_len, /* default and write */
                 "{:?}",
                 resp

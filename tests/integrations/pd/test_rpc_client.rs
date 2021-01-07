@@ -215,7 +215,7 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(validate_endpoints(env, &new_config(eps), mgr).is_err());
+    assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
@@ -466,9 +466,9 @@ fn test_cluster_version() {
     let server = MockServer::<Service>::new(3);
     let eps = server.bind_addrs();
 
-    let feature_a = Feature::acquire(0, 0, 1);
-    let feature_b = Feature::acquire(5, 0, 0);
-    let feature_c = Feature::acquire(5, 0, 1);
+    let feature_a = Feature::require(0, 0, 1);
+    let feature_b = Feature::require(5, 0, 0);
+    let feature_c = Feature::require(5, 0, 1);
 
     let client = new_client(eps, None);
     let feature_gate = client.feature_gate();

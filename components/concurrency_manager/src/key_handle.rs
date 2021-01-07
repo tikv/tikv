@@ -2,7 +2,7 @@
 
 use super::lock_table::LockTable;
 use parking_lot::Mutex;
-use std::{mem, sync::Arc};
+use std::{cell::UnsafeCell, mem, sync::Arc};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use txn_types::{Key, Lock};
 
@@ -10,16 +10,16 @@ use txn_types::{Key, Lock};
 /// key.
 pub struct KeyHandle {
     pub key: Key,
-    table: LockTable,
+    table: UnsafeCell<Option<LockTable>>,
     mutex: AsyncMutex<()>,
     lock_store: Mutex<Option<Lock>>,
 }
 
 impl KeyHandle {
-    pub fn new(key: Key, table: LockTable) -> Self {
+    pub fn new(key: Key) -> Self {
         KeyHandle {
             key,
-            table,
+            table: UnsafeCell::new(None),
             mutex: AsyncMutex::new(()),
             lock_store: Mutex::new(None),
         }
@@ -39,13 +39,28 @@ impl KeyHandle {
     pub fn with_lock<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
         f(&*self.lock_store.lock())
     }
+
+    /// Set the LockTable that the KeyHandle is in.
+    ///
+    /// This method is not thread safe. Make sure that no other threads access
+    /// `table` at the same time.
+    pub(crate) unsafe fn set_table(&self, table: LockTable) {
+        *self.table.get() = Some(table);
+    }
 }
 
 impl Drop for KeyHandle {
     fn drop(&mut self) {
-        self.table.remove(&self.key);
+        // SAFETY: `&mut self` ensures it's the only thread that can access `table`.
+        unsafe {
+            if let Some(table) = &*self.table.get() {
+                table.remove(&self.key);
+            }
+        }
     }
 }
+
+unsafe impl Sync for KeyHandle {}
 
 /// A `KeyHandle` with its mutex locked.
 pub struct KeyHandleGuard {
@@ -64,6 +79,10 @@ impl KeyHandleGuard {
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T) -> T {
         f(&mut *self.handle.lock_store.lock())
+    }
+
+    pub(crate) fn handle(&self) -> &Arc<KeyHandle> {
+        &self.handle
     }
 }
 
@@ -87,11 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_mutex() {
-        let table = LockTable::default();
-        let key_handle = Arc::new(KeyHandle::new(Key::from_raw(b"k"), table.clone()));
-        table
-            .0
-            .insert(Key::from_raw(b"k"), Arc::downgrade(&key_handle));
+        let key_handle = Arc::new(KeyHandle::new(Key::from_raw(b"k")));
 
         let counter = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -120,8 +135,11 @@ mod tests {
 
         let k = Key::from_raw(b"k");
 
-        let handle = Arc::new(KeyHandle::new(k.clone(), table.clone()));
+        let handle = Arc::new(KeyHandle::new(k.clone()));
         table.0.insert(k.clone(), Arc::downgrade(&handle));
+        unsafe {
+            handle.set_table(table.clone());
+        }
         let lock_ref1 = table.get(&k).unwrap();
         let lock_ref2 = table.get(&k).unwrap();
         drop(handle);

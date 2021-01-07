@@ -90,7 +90,7 @@ encryption = { path = "../components/encryption" }
 cdc = { path = "../components/cdc" }
 futures = "0.3"
 grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
-hex = "0.4"
+log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
@@ -108,6 +108,7 @@ tidb_query_executors = { path = "../components/tidb_query_executors" }
 tidb_query_expr = { path = "../components/tidb_query_expr" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
+error_code = { path = "../components/error_code" }
 collections = { path = "../components/collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 toml = "0.5"

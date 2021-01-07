@@ -10,6 +10,7 @@ publish = false
 failpoints = ["fail/failpoints"]
 prost-codec = [
   "prost",
+  "batch-system/prost-codec",
   "engine_rocks/prost-codec",
   "into_other/prost-codec",
   "keys/prost-codec",
@@ -21,6 +22,7 @@ prost-codec = [
   "txn_types/prost-codec",
 ]
 protobuf-codec = [
+  "batch-system/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "into_other/protobuf-codec",
   "keys/protobuf-codec",
@@ -51,7 +53,6 @@ file_system = { path = "../file_system" }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
-hex = "0.4"
 into_other = { path = "../into_other" }
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
