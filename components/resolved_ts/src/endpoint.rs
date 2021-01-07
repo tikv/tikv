@@ -290,7 +290,7 @@ where
                         },
                     },
                     region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::None,
+                    callback: Callback::Read(Box::new(|_| {})),
                 },
             ) {
                 info!("send msg to deregister region failed"; "region_id" => region_id, "err" => ?e);
