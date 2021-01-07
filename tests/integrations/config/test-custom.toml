@@ -86,6 +86,16 @@ strict-capacity-limit = true
 high-pri-pool-ratio = 0.8
 memory-allocator = "nodump"
 
+[storage.io-rate-limit]
+total = "1000MB"
+read = "1000MB"
+write = "1000MB"
+compaction = "400MB"
+compaction-read = "200MB"
+compaction-write = "200MB"
+import = "200MB"
+export = "200MB"
+
 [pd]
 endpoints = [
     "example.com:443",

@@ -233,6 +233,16 @@
 ## Otherwise, the OOM problem might occur in TiKV.
 # capacity = "1GB"
 
+[storage.io-rate-limit]
+# total = "1GB"
+# read = "1GB"
+# write = "1GB"
+# compaction = "1GB"
+# compaction-read = "1GB"
+# compaction-write = "1GB"
+# import = "1GB"
+# export = "1GB"
+
 [pd]
 ## PD endpoints.
 # endpoints = []

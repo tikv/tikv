@@ -141,6 +141,10 @@ impl ReadableSize {
     pub const fn as_mb(self) -> u64 {
         self.0 / MB
     }
+
+    pub const fn as_b(self) -> u64 {
+        self.0
+    }
 }
 
 impl Div<u64> for ReadableSize {

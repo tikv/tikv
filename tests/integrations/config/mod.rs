@@ -24,7 +24,7 @@ use tikv::server::config::GrpcCompressionType;
 use tikv::server::gc_worker::GcConfig;
 use tikv::server::lock_manager::Config as PessimisticTxnConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig, IORateLimitConfig};
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
 
 mod dynamic;
@@ -645,6 +645,16 @@ fn test_serde_custom_tikv_config() {
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
+        },
+        io_rate_limit: IORateLimitConfig {
+            total: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            read: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            write: OptionReadableSize(Some(ReadableSize::mb(1000))),
+            compaction: OptionReadableSize(Some(ReadableSize::mb(400))),
+            compaction_read: OptionReadableSize(Some(ReadableSize::mb(200))),
+            compaction_write: OptionReadableSize(Some(ReadableSize::mb(200))),
+            import: OptionReadableSize(Some(ReadableSize::mb(200))),
+            export: OptionReadableSize(Some(ReadableSize::mb(200))),
         },
     };
     value.coprocessor = CopConfig {

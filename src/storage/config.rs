@@ -7,6 +7,7 @@ use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Res
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
+use file_system::{get_io_rate_limiter, IOOp, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
@@ -48,6 +49,8 @@ pub struct Config {
     pub enable_async_apply_prewrite: bool,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
+    #[config(submodule)]
+    pub io_rate_limit: IORateLimitConfig,
 }
 
 impl Default for Config {
@@ -63,6 +66,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
             enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
+            io_rate_limit: IORateLimitConfig::default(),
         }
     }
 }
@@ -115,6 +119,93 @@ impl ConfigManager for StorageConfigManger {
                     CONFIG_ROCKSDB_GAUGE
                         .with_label_values(&[CF_DEFAULT, "block_cache_size"])
                         .set(size.0 as f64);
+                }
+            }
+        }
+        if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
+            let limiter = get_io_rate_limiter();
+            if limiter.is_none() {
+                return Err("IO rate limiter is not present".into());
+            }
+            let limiter = limiter.unwrap();
+            if let Some(limit) = io_rate_limit.remove("total") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Other,
+                        None, /*IOOp*/
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("read") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Other,
+                        Some(IOOp::Read),
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("write") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Other,
+                        Some(IOOp::Write),
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("compaction") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Compaction,
+                        None, /*IOOp*/
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("compaction_read") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Compaction,
+                        Some(IOOp::Read),
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("compaction_write") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Compaction,
+                        Some(IOOp::Write),
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("import") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Import,
+                        Some(IOOp::Write),
+                        limit.as_b() as usize,
+                    );
+                }
+            }
+            if let Some(limit) = io_rate_limit.remove("export") {
+                let limit: OptionReadableSize = limit.into();
+                if let Some(limit) = limit.0 {
+                    limiter.set_bytes_per_sec(
+                        IOType::Export,
+                        Some(IOOp::Read),
+                        limit.as_b() as usize,
+                    );
                 }
             }
         }
@@ -197,5 +288,69 @@ impl BlockCacheConfig {
             }
         };
         None
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct IORateLimitConfig {
+    pub total: OptionReadableSize,
+    pub read: OptionReadableSize,
+    pub write: OptionReadableSize,
+    pub compaction: OptionReadableSize,
+    pub compaction_read: OptionReadableSize,
+    pub compaction_write: OptionReadableSize,
+    pub import: OptionReadableSize,
+    pub export: OptionReadableSize,
+}
+
+impl Default for IORateLimitConfig {
+    fn default() -> IORateLimitConfig {
+        IORateLimitConfig {
+            total: OptionReadableSize(None),
+            read: OptionReadableSize(None),
+            write: OptionReadableSize(None),
+            compaction: OptionReadableSize(None),
+            compaction_read: OptionReadableSize(None),
+            compaction_write: OptionReadableSize(None),
+            import: OptionReadableSize(None),
+            export: OptionReadableSize(None),
+        }
+    }
+}
+
+impl IORateLimitConfig {
+    pub fn build_io_rate_limiter(&self) -> Option<IORateLimiter> {
+        let limiter = IORateLimiter::new(None);
+        if let Some(limit) = self.total.0 {
+            limiter.set_bytes_per_sec(IOType::Other, None /*IOOp*/, limit.as_b() as usize);
+        }
+        if let Some(limit) = self.read.0 {
+            limiter.set_bytes_per_sec(IOType::Other, Some(IOOp::Read), limit.as_b() as usize);
+        }
+        if let Some(limit) = self.write.0 {
+            limiter.set_bytes_per_sec(IOType::Other, Some(IOOp::Write), limit.as_b() as usize);
+        }
+        if let Some(limit) = self.compaction.0 {
+            limiter.set_bytes_per_sec(
+                IOType::Compaction,
+                None, /*IOOp*/
+                limit.as_b() as usize,
+            );
+        }
+        if let Some(limit) = self.compaction_read.0 {
+            limiter.set_bytes_per_sec(IOType::Compaction, Some(IOOp::Read), limit.as_b() as usize);
+        }
+        if let Some(limit) = self.compaction_write.0 {
+            limiter.set_bytes_per_sec(IOType::Compaction, Some(IOOp::Write), limit.as_b() as usize);
+        }
+        if let Some(limit) = self.import.0 {
+            limiter.set_bytes_per_sec(IOType::Import, Some(IOOp::Write), limit.as_b() as usize);
+        }
+        if let Some(limit) = self.export.0 {
+            limiter.set_bytes_per_sec(IOType::Export, Some(IOOp::Read), limit.as_b() as usize);
+        }
+        Some(limiter)
     }
 }
