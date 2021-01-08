@@ -34,7 +34,7 @@ const CLIENT_PREFIX: &str = "pd";
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: Arc<LeaderClient>,
-    monitor: ThreadPool<TaskCell>,
+    monitor: Arc<ThreadPool<TaskCell>>,
 }
 
 impl RpcClient {
@@ -65,6 +65,11 @@ impl RpcClient {
             -1 => std::isize::MAX,
             v => v.checked_add(1).unwrap_or(std::isize::MAX),
         };
+        let monitor = Arc::new(
+            yatp::Builder::new(thd_name!("pdmonitor"))
+                .max_thread_count(1)
+                .build_future_pool(),
+        );
         for i in 0..retries {
             match validate_endpoints(Arc::clone(&env), cfg, security_mgr.clone()).await {
                 Ok((client, members)) => {
@@ -76,9 +81,7 @@ impl RpcClient {
                             client,
                             members,
                         )),
-                        monitor: yatp::Builder::new(thd_name!("pdmonitor"))
-                            .max_thread_count(1)
-                            .build_future_pool(),
+                        monitor: monitor.clone(),
                     };
 
                     // spawn a background future to update PD information periodically
