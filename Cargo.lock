@@ -2805,6 +2805,7 @@ dependencies = [
  "tikv_util",
  "tokio-timer",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
