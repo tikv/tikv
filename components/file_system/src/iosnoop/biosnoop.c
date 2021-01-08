@@ -79,7 +79,7 @@ int trace_req_start(struct pt_regs *ctx, struct request *req) {
                                             // otherwise verifier will complain.
   io_type **type_ptr = type_by_pid.lookup(&pid);
   if (type_ptr == 0) {
-    info.type = Other 
+    info.type = Other;
   } else {
     int err = bpf_probe_read(&info.type, sizeof(io_type), (void *)*type_ptr);
     if (err != 0) {
