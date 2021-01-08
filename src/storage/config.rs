@@ -308,13 +308,13 @@ pub struct IORateLimitConfig {
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
-            total: OptionReadableSize(None),
+            total: OptionReadableSize(Some(ReadableSize::mb(2000))),
             read: OptionReadableSize(None),
             write: OptionReadableSize(None),
-            compaction: OptionReadableSize(None),
+            compaction: OptionReadableSize(Some(ReadableSize::mb(2000))),
             compaction_read: OptionReadableSize(None),
             compaction_write: OptionReadableSize(None),
-            import: OptionReadableSize(None),
+            import: OptionReadableSize(Some(ReadableSize::mb(2000))),
             export: OptionReadableSize(None),
         }
     }
