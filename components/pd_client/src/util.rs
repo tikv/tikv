@@ -167,7 +167,7 @@ impl LeaderClient {
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
     pub async fn reconnect(&self) -> Result<()> {
-        let (future, start_connect) = {
+        let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -175,19 +175,16 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-
-            (
-                try_connect_leader(
-                    Arc::clone(&inner.env),
-                    Arc::clone(&inner.security_mgr),
-                    inner.members.clone(),
-                ),
-                start,
-            )
+            let fut = try_connect_leader(
+                Arc::clone(&inner.env),
+                Arc::clone(&inner.security_mgr),
+                inner.members.clone(),
+            );
+            slow_log!(start.elapsed(), "PD client try connect leader");
+            (fut, start)
         };
 
         let (client, members) = future.await?;
-        slow_log!(start_connect.elapsed(), "PD client connect leader",);
         fail_point!("leader_client_reconnect");
 
         {
@@ -217,7 +214,7 @@ impl LeaderClient {
                 "PD client refresh region heartbeat",
             );
         }
-        info!("updating PD client done"; "spend" => ?start_connect.elapsed());
+        info!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }

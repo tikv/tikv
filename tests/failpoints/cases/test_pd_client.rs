@@ -90,7 +90,7 @@ fn test_pd_client_deadlock() {
         let mut timeout = Duration::from_millis(500);
         if name == "region_heartbeat" {
             // region_heartbeat may need to retry a few times due to reconnection so increases its timeout.
-            timeout = Duration::from_secs(3);
+            timeout = Duration::from_secs(30);
         }
         if rx.recv_timeout(timeout).is_err() {
             panic!("PdClient::{}() hangs", name);
