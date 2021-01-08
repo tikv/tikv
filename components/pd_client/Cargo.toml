@@ -36,5 +36,5 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
-fail = "0.3"
+fail = "0.4"
 log_wrappers = { path = "../log_wrappers" }

@@ -37,7 +37,7 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
 };
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
 use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
@@ -1274,7 +1274,7 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-    ) -> Option<(Ready, InvokeContext)> {
+    ) -> Option<CollectedReady> {
         if self.pending_remove {
             return None;
         }
@@ -1461,7 +1461,7 @@ impl Peer {
             }
         };
 
-        Some((ready, invoke_ctx))
+        Some(CollectedReady::new(invoke_ctx, ready))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(
@@ -1524,8 +1524,7 @@ impl Peer {
     pub fn handle_raft_ready_apply<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        ready: &mut Ready,
-        invoke_ctx: &InvokeContext,
+        ready: &mut CollectedReady,
     ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -1534,9 +1533,9 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
-            let committed_entries = ready.committed_entries.take().unwrap();
+        if raft::is_empty_snap(ready.ready.snapshot()) {
+            debug_assert!(!ready.ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
+            let committed_entries = ready.ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
             if !lease_to_be_updated {
@@ -1622,7 +1621,7 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, ready);
+        self.apply_reads(ctx, &ready.ready);
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
@@ -2526,7 +2525,7 @@ impl Peer {
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2704,7 +2703,7 @@ impl Peer {
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
