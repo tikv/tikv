@@ -281,7 +281,6 @@ pub struct IORateLimiter {
 }
 
 impl IORateLimiter {
-    // TODO: pass in rate limiting options
     pub fn new(recorder: Option<Arc<BytesRecorder>>) -> IORateLimiter {
         IORateLimiter {
             write_limiters: Default::default(),
@@ -308,22 +307,23 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
+        // priority only make sense when multiple types are limited together
         let prio = get_priority(io_type);
         let mut bytes = self.total_limiters[IOType::Other as usize].request(bytes, prio);
         if io_type != IOType::Other {
-            bytes = self.total_limiters[io_type as usize].request(bytes, prio);
+            bytes = self.total_limiters[io_type as usize].request(bytes, IOPriority::Low);
         }
         match io_op {
             IOOp::Write => {
                 bytes = self.write_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
-                    bytes = self.write_limiters[io_type as usize].request(bytes, prio);
+                    bytes = self.write_limiters[io_type as usize].request(bytes, IOPriority::Low);
                 }
             }
             IOOp::Read => {
                 bytes = self.read_limiters[IOType::Other as usize].request(bytes, prio);
                 if io_type != IOType::Other {
-                    bytes = self.read_limiters[io_type as usize].request(bytes, prio);
+                    bytes = self.read_limiters[io_type as usize].request(bytes, IOPriority::Low);
                 }
             }
         }

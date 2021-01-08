@@ -211,13 +211,14 @@ mod tests {
     fn test_instrumented_file() {
         let recorder = Arc::new(BytesRecorder::new());
         let limiter = Arc::new(IORateLimiter::new(Some(recorder.clone())));
+        // make sure only grant 1 byte pre request, to avoid interference from prefetching
+        limiter.set_bytes_per_sec(IOType::Export, None /*IOOp*/, 100);
         set_io_rate_limiter(Some(limiter));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("magic words");
         {
-            // Use a wierd IO type to avoid interruption from concurrent tests
             let _guard = WithIOType::new(IOType::Export);
             let mut f = File::create(&tmp_file).unwrap();
             f.write_all(content.as_bytes()).unwrap();
@@ -228,6 +229,7 @@ mod tests {
             let _guard = WithIOType::new(IOType::Export);
             let mut buffer = String::new();
             let mut f = File::open(&tmp_file).unwrap();
+            recorder.reset();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
             // read_to_string only exit when file.read() returns zero, which means
