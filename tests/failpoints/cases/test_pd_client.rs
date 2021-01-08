@@ -107,7 +107,7 @@ fn test_slow_periodical_update() {
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
 
-    let mut cfg = new_config(eps.clone());
+    let mut cfg = new_config(eps);
     let env = Arc::new(EnvBuilder::new().cq_count(1).build());
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
@@ -117,7 +117,7 @@ fn test_slow_periodical_update() {
 
     // client2 never updates leader in the test.
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    let client2 = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+    let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
     fail::cfg(leader_client_update, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
