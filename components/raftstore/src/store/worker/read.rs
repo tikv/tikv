@@ -154,6 +154,10 @@ pub struct ReadDelegate {
 struct TrackVer {
     version: Arc<AtomicU64>,
     local_ver: u64,
+    // source set to `true` means the `TrackVer` is created by `TrackVer::new` instead
+    // of `TrackVer::clone`, more specific, only the `ReadDelegate` created by `ReadDelegate::new`
+    // will have source `TrackVer` and be able to increase `TrackVer::version`, because these
+    // `ReadDelegate` are store at `StoreMeta` and only them will invoke `ReadDelegate::update`
     source: bool,
 }
 
@@ -307,6 +311,7 @@ where
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
+    // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     delegates: HashMap<u64, Arc<ReadDelegate>>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
@@ -392,6 +397,11 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
+    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
+    // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
+    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
+    // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
+    // make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
         match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
@@ -443,6 +453,8 @@ where
             }
         };
 
+        // FIXME: if the `ReadDelegate` is marked invalid but no incoming request
+        // to it, it will not be removed and consuming memory
         if delegate.invalid.load(Ordering::Acquire) {
             self.delegates.remove(&region_id);
             return Ok(None);
