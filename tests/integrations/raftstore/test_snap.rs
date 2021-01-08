@@ -11,13 +11,12 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
+use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
-use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
-
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -510,7 +509,7 @@ fn test_inspected_snapshot() {
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     assert_ne!(recorder.fetch(IOType::Replication, IOOp::Read), 0);
     assert_ne!(recorder.fetch(IOType::Replication, IOOp::Write), 0);
-    
+
     pd_client.must_remove_peer(1, new_peer(2, 2));
     assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Read), 0);
     assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Write), 0);

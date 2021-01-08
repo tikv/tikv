@@ -220,7 +220,10 @@ mod tests {
             let mut f = File::create(&tmp_file).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
-            assert_eq!(recorder.fetch(IOType::ForegroundWrite, IOOp::Write), content.len());
+            assert_eq!(
+                recorder.fetch(IOType::ForegroundWrite, IOOp::Write),
+                content.len()
+            );
         }
         {
             let _guard = WithIOType::new(IOType::ForegroundRead);
@@ -230,7 +233,10 @@ mod tests {
             assert_eq!(buffer, content);
             // read_to_string only exit when file.read() returns zero, which means
             // it requires two EOF reads to finish the call.
-            assert_eq!(recorder.fetch(IOType::ForegroundRead, IOOp::Read), content.len() + 2);
+            assert_eq!(
+                recorder.fetch(IOType::ForegroundRead, IOOp::Read),
+                content.len() + 2
+            );
         }
     }
 }

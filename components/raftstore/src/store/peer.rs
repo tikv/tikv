@@ -1116,7 +1116,7 @@ where
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
-           if let Some(progress) = self.raft_group.status().progress {
+            if let Some(progress) = self.raft_group.status().progress {
                 if let Some(pr) = progress.get(from_id) {
                     // When a peer is uninitialized (e.g. created by load balance),
                     // the last index of the peer is 0 which makes the matched index to be 0.
