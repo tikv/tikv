@@ -16,7 +16,7 @@ quick_error! {
             description("Key is out of range")
             display(
                 "Key {} is out of [region {}] [{}, {})",
-                hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
+                &log_wrappers::Value::key(&key), region_id, &log_wrappers::Value::key(&start), &log_wrappers::Value::key(&end)
             )
         }
         Protobuf(err: protobuf::ProtobufError) {

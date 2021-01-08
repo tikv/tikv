@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.8"
+version = "4.0.9"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -81,7 +81,7 @@ engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
-fail = "0.3"
+fail = "0.4"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"

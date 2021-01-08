@@ -38,6 +38,7 @@ sysinfo = "0.14"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
+log_wrappers = { path = "../log_wrappers" }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"

@@ -256,8 +256,8 @@ impl<E: Engine> GcRunner<E> {
                 error!(
                     "failed to get range properties from write cf";
                     "region_id" => ctx.get_region_id(),
-                    "start_key" => hex::encode_upper(&start_key),
-                    "end_key" => hex::encode_upper(&end_key),
+                    "start_key" => &log_wrappers::Value::key(&start_key),
+                    "end_key" => &log_wrappers::Value::key(&end_key),
                     "err" => ?e,
                 );
                 return true;

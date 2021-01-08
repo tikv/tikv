@@ -19,16 +19,16 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 error_code = { path = "../error_code" }
 derive_more = "0.99.3"
-fail = "0.3"
+fail = "0.4"
 fs2 = "0.4"
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 fxhash = "0.2.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
-hex = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
 openssl = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }

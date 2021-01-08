@@ -72,9 +72,9 @@ checksum = "bc4662175ead9cd84451d5c35070517777949a2ed84551764129cedb88384841"
 
 [[package]]
 name = "arc-swap"
-version = "0.4.4"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b8a9123b8027467bce0099fe556c628a53c8d83df0507084c31e9ba2e39aff"
+checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
 name = "arrayref"
@@ -110,14 +110,14 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18c4fde11fd6a6f244541acc8df7dda88f346363e70f52f8ea4dd66e299c815c"
+checksum = "c832f4cc51a4c7420c8e84ed9571e760f551531478fa1f72fcda2f768bd10271"
 dependencies = [
  "futures-core",
  "futures-io",
  "futures-timer",
- "pin-project-lite",
+ "pin-project-lite 0.2.0",
 ]
 
 [[package]]
@@ -217,6 +217,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "raft",
  "raftstore",
@@ -450,13 +451,13 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1077,7 +1078,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
- "fail 0.4.0",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1118,6 +1119,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prost",
  "protobuf",
@@ -1154,7 +1156,7 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -1252,17 +1254,6 @@ dependencies = [
  "tikv_alloc",
  "tokio 0.2.13",
  "url",
-]
-
-[[package]]
-name = "fail"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63eec71a3013ee912a0ecb339ff0c5fa5ed9660df04bfefa10c250b885d018c"
-dependencies = [
- "lazy_static",
- "log",
- "rand 0.6.5",
 ]
 
 [[package]]
@@ -1949,10 +1940,11 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2569,9 +2561,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "1.0.2"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18869315e81473c951eb56ad5558bbc56978562d3ecfb87abb7a1e944cea4518"
+checksum = "3305af35278dd29f46fcdd139e0b1fbfae2153f0e5928b39b035542dd31e37b7"
 dependencies = [
  "num-traits",
 ]
@@ -2678,14 +2670,14 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -2766,6 +2758,12 @@ name = "pin-project-lite"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237844750cfbb86f67afe27eee600dfbbcb6188d734139b534cbfbf4f96792ae"
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
 
 [[package]]
 name = "pin-utils"
@@ -3109,12 +3107,11 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3453,7 +3450,7 @@ dependencies = [
  "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "serde",
  "serde_urlencoded",
  "time 0.1.42",
@@ -3470,7 +3467,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3921,7 +3918,7 @@ version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94f478ede9f64724c5d173d7bb56099ec3e2d9fc2774aac65d34b8b890405f41"
 dependencies = [
- "arc-swap 0.4.4",
+ "arc-swap 0.4.8",
  "libc",
 ]
 
@@ -4340,7 +4337,7 @@ dependencies = [
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "grpcio",
  "kvproto",
@@ -4362,9 +4359,9 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raftstore",
@@ -4412,7 +4409,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "fail 0.3.0",
+ "fail",
  "grpcio",
  "kvproto",
  "rand 0.7.3",
@@ -4444,7 +4441,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "external_storage",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
@@ -4453,6 +4450,7 @@ dependencies = [
  "hyper",
  "keys",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "profiler",
@@ -4546,6 +4544,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4598,13 +4597,14 @@ dependencies = [
  "bstr",
  "error_code",
  "failure",
+ "log_wrappers",
  "tikv_alloc",
  "tipb",
 ]
 
 [[package]]
 name = "tikv"
-version = "4.0.8"
+version = "4.0.9"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4626,7 +4626,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "failure",
  "fs2",
  "futures 0.1.29",
@@ -4770,17 +4770,17 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -4933,7 +4933,7 @@ dependencies = [
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "signal-hook-registry",
  "slab",
  "tokio-macros",
@@ -5158,7 +5158,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "tokio 0.2.13",
 ]
 
@@ -5208,8 +5208,8 @@ dependencies = [
  "derive-new",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",
@@ -5565,7 +5565,7 @@ dependencies = [
  "const-random-macro",
  "crossbeam-deque 0.7.1",
  "dashmap",
- "fail 0.4.0",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.8.0",

@@ -190,11 +190,12 @@ impl SSTImporter {
         speed_limiter: Limiter,
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
-        let start = Instant::now();
         let path = self.dir.join(meta)?;
         let url = url_of_backend(backend);
 
         {
+            let start_read = Instant::now();
+
             // prepare to download the file from the external_storage
             let ext_storage = create_storage(backend)?;
             let mut ext_reader = ext_storage.read(name);
@@ -235,6 +236,10 @@ impl SSTImporter {
                 .append(true)
                 .open(&path.temp)?
                 .sync_data()?;
+
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["read"])
+                .observe(start_read.elapsed().as_secs_f64());
         }
 
         // now validate the SST file.
@@ -275,6 +280,7 @@ impl SSTImporter {
             Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
         })?;
 
+        let start_rename_rewrite = Instant::now();
         // read and first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter();
@@ -312,7 +318,6 @@ impl SSTImporter {
         })()?;
 
         if let Some(range) = direct_retval {
-            // TODO: what about encrypted SSTs?
             fs::rename(&path.temp, &path.save)?;
             if let Some(key_manager) = &self.key_manager {
                 let temp_str = path
@@ -325,10 +330,9 @@ impl SSTImporter {
                     .ok_or_else(|| Error::InvalidSSTPath(path.save.clone()))?;
                 key_manager.rename_file(temp_str, save_str)?;
             }
-            let duration = start.elapsed();
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
-                .observe(duration.as_secs_f64());
+                .observe(start_rename_rewrite.elapsed().as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -392,13 +396,17 @@ impl SSTImporter {
 
         let _ = fs::remove_file(&path.temp);
 
-        let duration = start.elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
-            .observe(duration.as_secs_f64());
+            .observe(start_rename_rewrite.elapsed().as_secs_f64());
 
         if let Some(start_key) = first_key {
+            let start_finish = Instant::now();
             sst_writer.finish()?;
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["finish"])
+                .observe(start_finish.elapsed().as_secs_f64());
+
             let mut final_range = Range::default();
             final_range.set_start(start_key);
             final_range.set_end(keys::origin_key(&key).to_vec());
@@ -646,12 +654,12 @@ impl ImportDir {
         // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
         // currently we can not handle sst file size after rewrite,
         // we need re-compute length & crc32 and fill back to sstMeta.
-        if length != 0 && crc32 != 0 {
-            // we only validate if the length and CRC32 are explicitly provided.
-            engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
+        if length != 0 {
+            if crc32 != 0 {
+                // we only validate if the length and CRC32 are explicitly provided.
+                engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
+            }
             IMPORTER_INGEST_BYTES.observe(length as _)
-        } else {
-            debug!("skipping SST validation since length and crc32 are both 0");
         }
 
         let mut opts = E::IngestExternalFileOptions::new();

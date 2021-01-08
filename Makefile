@@ -286,6 +286,7 @@ ALLOWED_CLIPPY_LINTS=-A clippy::module_inception -A clippy::needless_pass_by_val
 # PROST feature works differently in test cdc and backup package, they need to be checked under their folders.
 ifneq (,$(findstring prost-codec,"$(ENABLE_FEATURES)"))
 clippy: pre-clippy
+	@./scripts/check-redact-log
 	@cargo clippy --workspace --all-targets --no-default-features \
 		--exclude cdc --exclude backup --exclude tests --exclude cmd \
 		--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
@@ -303,6 +304,7 @@ clippy: pre-clippy
 	done
 else
 clippy: pre-clippy
+	@./scripts/check-redact-log
 	@cargo clippy --workspace \
 		--exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
 		--features "${ENABLE_FEATURES}" -- $(ALLOWED_CLIPPY_LINTS)
