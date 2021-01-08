@@ -220,9 +220,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let region_info_accessor =
             RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
 
-        // rocksdb metrics put here
-        // file_system metrics put here
-
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
