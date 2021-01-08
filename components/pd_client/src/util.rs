@@ -167,7 +167,7 @@ impl LeaderClient {
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
     pub async fn reconnect(&self) -> Result<()> {
-        let (future, start) = {
+        let (future, start_connect) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
                 // Avoid unnecessary updating.
@@ -187,9 +187,11 @@ impl LeaderClient {
         };
 
         let (client, members) = future.await?;
+        slow_log!(start_connect.elapsed(), "PD client connect leader",);
         fail_point!("leader_client_reconnect");
 
         {
+            let start_refresh = Instant::now();
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
                 panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
@@ -210,8 +212,12 @@ impl LeaderClient {
             if let Some(ref on_reconnect) = inner.on_reconnect {
                 on_reconnect();
             }
+            slow_log!(
+                start_refresh.elapsed(),
+                "PD client refresh region heartbeat",
+            );
         }
-        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        info!("updating PD client done"; "spend" => ?start_connect.elapsed());
         Ok(())
     }
 }

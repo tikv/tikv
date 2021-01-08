@@ -103,7 +103,7 @@ fn test_pd_client_deadlock() {
 // RPC in the same gRPC Environment.
 #[test]
 fn test_slow_periodical_update() {
-    let leader_client_update = "on_pd_client_update";
+    let leader_client_reconnect_fp = "leader_client_reconnect";
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
 
@@ -119,8 +119,9 @@ fn test_slow_periodical_update() {
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
     let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
-    fail::cfg(leader_client_update, "pause").unwrap();
+    fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
+    // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 
     let (tx, rx) = mpsc::channel();
@@ -135,6 +136,6 @@ fn test_slow_periodical_update() {
     }
 
     // Clean up the fail point.
-    fail::remove(leader_client_update);
+    fail::remove(leader_client_reconnect_fp);
     handle.join().unwrap();
 }

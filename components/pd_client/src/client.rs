@@ -95,7 +95,6 @@ impl RpcClient {
                                 .await
                                 .is_ok();
 
-                            fail_point!("on_pd_client_update");
                             if !ok {
                                 warn!("failed to delay with global timer");
                                 continue;
