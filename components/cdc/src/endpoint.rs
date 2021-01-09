@@ -105,7 +105,7 @@ pub(crate) type OldValueCallback =
     Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
+    pub cache: LruCache<Key, (OldValue, MutationType)>,
     pub miss_count: usize,
     pub access_count: usize,
 }
@@ -1245,7 +1245,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
             .old_value_cache
             .cache
             .iter()
-            .map(|(k, v)| k.as_encoded().len() + v.0.as_ref().map_or(0, |v| v.size()))
+            .map(|(k, v)| k.as_encoded().len() + v.0.size())
             .sum();
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
