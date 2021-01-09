@@ -1,9 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use futures::future::Future;
 use futures_cpupool::Builder;
+=======
+use grpcio::EnvBuilder;
+>>>>>>> f288b5569... pd_client: prevent RPC being blocked by PD client update leader (#9467)
 use kvproto::metapb::*;
 use pd_client::{PdClient, RegionInfo, RegionStat, RpcClient};
+use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
 
@@ -83,7 +88,17 @@ fn test_pd_client_deadlock() {
         });
         // Remove the fail point to let the PD client thread go on.
         fail::remove(leader_client_reconnect_fp);
+<<<<<<< HEAD
         if rx.recv_timeout(Duration::from_millis(500)).is_err() {
+=======
+
+        let mut timeout = Duration::from_millis(500);
+        if name == "region_heartbeat" {
+            // region_heartbeat may need to retry a few times due to reconnection so increases its timeout.
+            timeout = Duration::from_secs(30);
+        }
+        if rx.recv_timeout(timeout).is_err() {
+>>>>>>> f288b5569... pd_client: prevent RPC being blocked by PD client update leader (#9467)
             panic!("PdClient::{}() hangs", name);
         }
         handle.join().unwrap();
@@ -109,4 +124,45 @@ fn test_pd_client_deadlock() {
         ))
         .forget();
     rx.recv_timeout(Duration::from_millis(3000)).unwrap();
+}
+
+// Updating pd leader may be slow, we need to make sure it does not block other
+// RPC in the same gRPC Environment.
+#[test]
+fn test_slow_periodical_update() {
+    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let server = MockServer::new(1);
+    let eps = server.bind_addrs();
+
+    let mut cfg = new_config(eps);
+    let env = Arc::new(EnvBuilder::new().cq_count(1).build());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+    // client1 updates leader frequently (100ms).
+    cfg.update_interval = ReadableDuration(Duration::from_millis(100));
+    let _client1 = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+
+    // client2 never updates leader in the test.
+    cfg.update_interval = ReadableDuration(Duration::from_secs(100));
+    let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
+
+    fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
+    // Wait for the PD client thread blocking on the fail point.
+    // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
+    thread::sleep(Duration::from_secs(2));
+
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        client2.alloc_id().unwrap();
+        tx.send(()).unwrap();
+    });
+
+    let timeout = Duration::from_millis(500);
+    if rx.recv_timeout(timeout).is_err() {
+        panic!("pd client2 is blocked");
+    }
+
+    // Clean up the fail point.
+    fail::remove(leader_client_reconnect_fp);
+    handle.join().unwrap();
 }

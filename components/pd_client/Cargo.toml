@@ -37,4 +37,8 @@ tikv_util = { path = "../tikv_util" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types" }
 fail = "0.4"
+<<<<<<< HEAD
 log_wrappers = { path = "../log_wrappers" }
+=======
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+>>>>>>> f288b5569... pd_client: prevent RPC being blocked by PD client update leader (#9467)
