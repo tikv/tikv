@@ -2,6 +2,8 @@
 
 use regex::{bytes::Regex as BytesRegex, Regex};
 
+use tipb::{Expr, ExprType};
+
 use tidb_query_codegen::rpn_fn;
 
 use tidb_query_common::Result;
@@ -68,38 +70,84 @@ pub fn like<C: Collator>(target: BytesRef, pattern: BytesRef, escape: &i64) -> R
     Ok(Some(true as i64))
 }
 
-#[rpn_fn]
+#[rpn_fn(capture = [metadata], metadata_mapper = init_regexp_utf8_data)]
 #[inline]
-pub fn regexp_utf8(target: BytesRef, pattern: BytesRef) -> Result<Option<i64>> {
+pub fn regexp_utf8(
+    metadata: &Option<Regex>,
+    target: BytesRef,
+    pattern: BytesRef,
+) -> Result<Option<i64>> {
     let target = match String::from_utf8(target.to_vec()) {
         Ok(target) => target,
         Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
     };
-    let pattern = match String::from_utf8(pattern.to_vec()) {
-        Ok(pattern) => pattern,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let pattern = format!("(?i){}", pattern);
 
-    // TODO: cache compiled result
-    match Regex::new(&pattern) {
-        Ok(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
-        Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+    match metadata {
+        Some(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
+        None => {
+            let pattern = match String::from_utf8(pattern.to_vec()) {
+                Ok(pattern) => pattern,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            let pattern = format!("(?i){}", pattern);
+
+            match BytesRegex::new(&pattern) {
+                Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
+                Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+            }
+        }
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(capture = [metadata], metadata_mapper = init_regexp_data)]
 #[inline]
-pub fn regexp(target: BytesRef, pattern: BytesRef) -> Result<Option<i64>> {
-    let pattern = match String::from_utf8(pattern.to_vec()) {
-        Ok(pattern) => pattern,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
+pub fn regexp(
+    metadata: &Option<BytesRegex>,
+    target: BytesRef,
+    pattern: BytesRef,
+) -> Result<Option<i64>> {
+    match metadata {
+        Some(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
+        None => {
+            let pattern = match String::from_utf8(pattern.to_vec()) {
+                Ok(pattern) => pattern,
+                Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
+            };
+            match BytesRegex::new(&pattern) {
+                Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
+                Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+            }
+        }
+    }
+}
 
-    // TODO: cache compiled result
-    match BytesRegex::new(&pattern) {
-        Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
-        Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
+fn init_regexp_utf8_data(expr: &mut Expr) -> Result<Option<Regex>> {
+    let children = expr.mut_children();
+    let n = children.len();
+    assert!(n > 1);
+
+    let tree_node = &mut children[1];
+    match tree_node.get_tp() {
+        ExprType::ScalarFunc | ExprType::ColumnRef | ExprType::Null => Ok(None),
+        _ => match Regex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+            Ok(regex) => Ok(Some(regex)),
+            Err(_) => Ok(None),
+        },
+    }
+}
+
+fn init_regexp_data(expr: &mut Expr) -> Result<Option<BytesRegex>> {
+    let children = expr.mut_children();
+    let n = children.len();
+    assert!(n > 1);
+
+    let tree_node = &mut children[1];
+    match tree_node.get_tp() {
+        ExprType::ScalarFunc | ExprType::ColumnRef | ExprType::Null => Ok(None),
+        _ => match BytesRegex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+            Ok(regex) => Ok(Some(regex)),
+            Err(_) => Ok(None),
+        },
     }
 }
 
