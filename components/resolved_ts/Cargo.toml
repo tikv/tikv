@@ -5,13 +5,20 @@ edition = "2018"
 publish = false
 
 [features]
-protobuf-codec = ["txn_types/protobuf-codec"]
-prost-codec = ["txn_types/prost-codec"]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "txn_types/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "txn_types/prost-codec",
+  "tikv_util/prost-codec",
+]
 
 [dependencies]
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
-txn_types = { path = "../txn_types" }
+txn_types = { path = "../txn_types", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 log_wrappers = { path = "../log_wrappers" }

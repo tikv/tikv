@@ -6,20 +6,27 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 protobuf-codec = [
-  "raft/protobuf-codec",
+  "engine_traits/protobuf-codec",
   "kvproto/protobuf-codec",
+  "raft/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "txn_types/protobuf-codec",
 ]
 prost-codec = [
-  "raft/prost-codec",
+  "engine_traits/prost-codec",
   "kvproto/prost-codec",
+  "raft/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
 ]
 
 [dependencies]
-engine_traits = { path = "../engine_traits" }
+engine_traits = { path = "../engine_traits", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
-txn_types = { path = "../txn_types" }
+txn_types = { path = "../txn_types", default-features = false }

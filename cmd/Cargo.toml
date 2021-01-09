@@ -7,6 +7,7 @@ publish = false
 default-run = "tikv-server"
 
 [features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -16,32 +17,50 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 protobuf-codec = [
   "backup/protobuf-codec",
+  "cdc/protobuf-codec",
+  "concurrency_manager/protobuf-codec",
+  "encryption/protobuf-codec",
+  "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
   "kvproto/protobuf-codec",
   "pd_client/protobuf-codec",
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
+  "raft_log_engine/protobuf-codec",
+  "security/protobuf-codec",
   "tikv/protobuf-codec",
+  "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
-  "cdc/protobuf-codec",
-  "raft_log_engine/protobuf-codec"
 ]
 prost-codec = [
   "backup/prost-codec",
+  "cdc/prost-codec",
+  "concurrency_manager/prost-codec",
+  "encryption/prost-codec",
+  "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
+  "error_code/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
   "kvproto/prost-codec",
   "pd_client/prost-codec",
   "raft/prost-codec",
   "raftstore/prost-codec",
+  "raft_log_engine/prost-codec",
+  "security/prost-codec",
   "tikv/prost-codec",
+  "tikv_util/prost-codec",
   "txn_types/prost-codec",
-  "cdc/prost-codec",
-  "raft_log_engine/prost-codec"
 ]
-test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
-test-engines-panic = ["tikv/test-engines-panic"]
+test-engines-rocksdb = [
+  "tikv/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "tikv/test-engines-panic",
+]
 
 [lib]
 name = "cmd"
@@ -54,46 +73,46 @@ name = "tikv-ctl"
 
 [dependencies]
 backup = { path = "../components/backup", default-features = false }
-cdc = { path = "../components/cdc" }
+cdc = { path = "../components/cdc", default-features = false }
 chrono = "0.4"
 crossbeam = "0.7"
 tempfile = "3.0"
 clap = "2.32"
-concurrency_manager = { path = "../components/concurrency_manager" }
-encryption = { path = "../components/encryption" }
-engine_rocks = { path = "../components/engine_rocks" }
-engine_traits = { path = "../components/engine_traits" }
-error_code = { path = "../components/error_code" }
+concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
+encryption = { path = "../components/encryption", default-features = false }
+engine_rocks = { path = "../components/engine_rocks", default-features = false }
+engine_traits = { path = "../components/engine_traits", default-features = false }
+error_code = { path = "../components/error_code", default-features = false }
 file_system = { path = "../components/file_system" }
 fs2 = "0.4"
 futures = "0.3"
 tokio = { version = "0.2", features = ["rt-threaded"] }
 grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
-keys = { path = "../components/keys" }
+keys = { path = "../components/keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../components/log_wrappers" }
 nix = "0.11"
-pd_client = { path = "../components/pd_client" }
+pd_client = { path = "../components/pd_client", default-features = false }
 prometheus = { version = "0.10", features = ["nightly"] }
 promptly = "0.3.0"
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
-raft_log_engine = { path = "../components/raft_log_engine" }
-raftstore = { path = "../components/raftstore" }
+raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
+raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.7"
-security = { path = "../components/security" }
+security = { path = "../components/security", default-features = false }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv = { path = "../", default-features = false }
 tikv_alloc = { path = "../components/tikv_alloc" }
-tikv_util = { path = "../components/tikv_util" }
+tikv_util = { path = "../components/tikv_util", default-features = false }
 collections = { path = "../components/collections" }
 toml = "0.5"
-txn_types = { path = "../components/txn_types" }
+txn_types = { path = "../components/txn_types", default-features = false }
 vlog = "0.1.4"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
