@@ -56,6 +56,12 @@ fn engine_cfs(cfs: &[&str]) -> TempDirEnginePair {
     }
 }
 
+fn assert_engine_error<T>(r: engine_traits::Result<T>) {
+    match r {
+        Err(engine_traits::Error::Engine(_)) => { },
+        _ => panic!("expected Error::Engine"),
+    }
+}
 
 mod ctor {
     //! Constructor tests
@@ -945,7 +951,7 @@ mod read_consistency {
 }
 
 mod write_batch {
-    use super::{default_engine};
+    use super::{default_engine, assert_engine_error};
     use engine_test::kv::KvTestEngine;
     use engine_traits::{Mutable, Peekable, WriteBatchExt, SyncMutable, WriteBatch};
     use engine_traits::CF_DEFAULT;
@@ -1437,6 +1443,181 @@ mod write_batch {
         assert_eq!(size8, size1);
     }
 
+    #[test]
+    fn save_point_rollback_none() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        let err = wb.rollback_to_save_point();
+        assert_engine_error(err);
+    }
+
+    #[test]
+    fn save_point_pop_none() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        let err = wb.rollback_to_save_point();
+        assert_engine_error(err);
+    }
+
+    #[test]
+    fn save_point_rollback_one() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+
+        let err = wb.rollback_to_save_point();
+        assert_engine_error(err);
+        let err = wb.pop_save_point();
+        assert_engine_error(err);
+        wb.write().unwrap();
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn save_point_rollback_two() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+        wb.set_save_point();
+        wb.put(b"b", b"").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+        wb.rollback_to_save_point().unwrap();
+
+        let err = wb.rollback_to_save_point();
+        assert_engine_error(err);
+        let err = wb.pop_save_point();
+        assert_engine_error(err);
+        wb.write().unwrap();
+        let a = db.engine.get_value(b"a").unwrap();
+        assert!(a.is_none());
+        let b = db.engine.get_value(b"b").unwrap();
+        assert!(b.is_none());
+    }
+
+    #[test]
+    fn save_point_rollback_partial() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"").unwrap();
+        wb.set_save_point();
+        wb.put(b"b", b"").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+        wb.write().unwrap();
+        let a = db.engine.get_value(b"a").unwrap();
+        assert!(a.is_some());
+        let b = db.engine.get_value(b"b").unwrap();
+        assert!(b.is_none());
+    }
+
+    #[test]
+    fn save_point_pop_rollback() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+
+        wb.pop_save_point().unwrap();
+        wb.rollback_to_save_point().unwrap();
+
+        let err = wb.rollback_to_save_point();
+        assert_engine_error(err);
+        let err = wb.pop_save_point();
+        assert_engine_error(err);
+        wb.write().unwrap();
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_none());
+        let val = db.engine.get_value(b"b").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn save_point_rollback_after_write() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+
+        wb.write().unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_some());
+
+        db.engine.delete(b"a").unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_none());
+
+        wb.rollback_to_save_point().unwrap();
+        wb.write().unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn save_point_pop_after_write() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.set_save_point();
+        wb.put(b"a", b"").unwrap();
+
+        wb.write().unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_some());
+
+        db.engine.delete(b"a").unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_none());
+
+        wb.pop_save_point().unwrap();
+        wb.write().unwrap();
+
+        let val = db.engine.get_value(b"a").unwrap();
+        assert!(val.is_some());
+    }
+
+    #[test]
+    fn save_point_all_commands() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        db.engine.put(b"a", b"").unwrap();
+        db.engine.put(b"d", b"").unwrap();
+
+        wb.set_save_point();
+        wb.delete(b"a").unwrap();
+        wb.put(b"b", b"").unwrap();
+        wb.delete_range_cf(CF_DEFAULT, b"c", b"e").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+        wb.write().unwrap();
+
+        let a = db.engine.get_value(b"a").unwrap();
+        let b = db.engine.get_value(b"b").unwrap();
+        let d = db.engine.get_value(b"d").unwrap();
+        assert!(a.is_some());
+        assert!(b.is_none());
+        assert!(d.is_some());
+    }
 }
 
 mod misc {
