@@ -17,14 +17,16 @@ use kvproto::pdpb::{self, Member};
 use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
 use security::SecurityManager;
 use tikv_util::time::duration_to_sec;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use txn_types::TimeStamp;
+use yatp::task::future::TaskCell;
+use yatp::ThreadPool;
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, LeaderClient};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -32,6 +34,7 @@ const CLIENT_PREFIX: &str = "pd";
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: Arc<LeaderClient>,
+    monitor: Arc<ThreadPool<TaskCell>>,
 }
 
 impl RpcClient {
@@ -62,6 +65,11 @@ impl RpcClient {
             -1 => std::isize::MAX,
             v => v.checked_add(1).unwrap_or(std::isize::MAX),
         };
+        let monitor = Arc::new(
+            yatp::Builder::new(thd_name!("pdmonitor"))
+                .max_thread_count(1)
+                .build_future_pool(),
+        );
         for i in 0..retries {
             match validate_endpoints(Arc::clone(&env), cfg, security_mgr.clone()).await {
                 Ok((client, members)) => {
@@ -73,6 +81,7 @@ impl RpcClient {
                             client,
                             members,
                         )),
+                        monitor: monitor.clone(),
                     };
 
                     // spawn a background future to update PD information periodically
@@ -105,13 +114,10 @@ impl RpcClient {
                         }
                     };
 
-                    // FIXME: RwLock may block the async executor.
-                    rpc_client
-                        .leader_client
-                        .inner
-                        .rl()
-                        .client_stub
-                        .spawn(update_loop);
+                    // `update_loop` contains RwLock that may block the monitor.
+                    // Since the monitor does not have other critical task, it
+                    // is not a major issue.
+                    rpc_client.monitor.spawn(update_loop);
 
                     return Ok(rpc_client);
                 }
