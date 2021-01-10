@@ -1031,7 +1031,7 @@ mod tests {
             let datetime = DateTime::parse_datetime(&mut ctx, datetime, 6, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(datetime)
-                .evaluate(ScalarFuncSig::YearWeekWithMode)
+                .evaluate(ScalarFuncSig::YearWeekWithoutMode)
                 .unwrap();
             assert_eq!(output, exp);
         }
