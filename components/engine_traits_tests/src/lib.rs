@@ -27,7 +27,6 @@ fn tempdir() -> tempfile::TempDir {
 struct TempDirEnginePair {
     // NB engine must drop before tempdir
     engine: engine_test::kv::KvTestEngine,
-    #[allow(unused)]
     tempdir: tempfile::TempDir,
 }
 
@@ -1675,7 +1674,7 @@ mod write_batch {
 
 mod misc {
     use super::{default_engine};
-    use engine_traits::{KvEngine, SyncMutable, Peekable};
+    use engine_traits::{KvEngine, SyncMutable, Peekable, MiscExt};
 
     #[test]
     fn sync_basic() {
@@ -1685,6 +1684,13 @@ mod misc {
         let value = db.engine.get_value(b"foo").unwrap();
         let value = value.expect("value");
         assert_eq!(b"bar", &*value);
+    }
+
+    #[test]
+    fn path() {
+        let db = default_engine();
+        let path = db.tempdir.path().to_str().unwrap();
+        assert_eq!(db.engine.path(), path);
     }
 }
 
