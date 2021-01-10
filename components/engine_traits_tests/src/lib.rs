@@ -1571,6 +1571,59 @@ mod write_batch {
     }
 
     #[test]
+    fn save_point_same_rollback_one() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"").unwrap();
+
+        wb.set_save_point();
+        wb.set_save_point();
+        wb.set_save_point();
+
+        wb.put(b"b", b"").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+
+        wb.write().unwrap();
+
+        let a = db.engine.get_value(b"a").unwrap();
+        let b = db.engine.get_value(b"b").unwrap();
+
+        assert!(a.is_some());
+        assert!(b.is_none());
+    }
+
+    #[test]
+    fn save_point_same_rollback_all() {
+        let db = default_engine();
+        let mut wb = db.engine.write_batch();
+
+        wb.put(b"a", b"").unwrap();
+
+        wb.set_save_point();
+        wb.set_save_point();
+        wb.set_save_point();
+
+        wb.put(b"b", b"").unwrap();
+
+        wb.rollback_to_save_point().unwrap();
+        wb.rollback_to_save_point().unwrap();
+        wb.rollback_to_save_point().unwrap();
+
+        assert_engine_error(wb.pop_save_point());
+        assert_engine_error(wb.rollback_to_save_point());
+
+        wb.write().unwrap();
+
+        let a = db.engine.get_value(b"a").unwrap();
+        let b = db.engine.get_value(b"b").unwrap();
+
+        assert!(a.is_some());
+        assert!(b.is_none());
+    }
+
+    #[test]
     fn save_point_pop_after_write() {
         let db = default_engine();
         let mut wb = db.engine.write_batch();
