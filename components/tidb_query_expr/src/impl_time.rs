@@ -162,7 +162,7 @@ pub fn year_week_with_mode(
     if result < 0 {
         return Ok(Some(i64::from(u32::max_value())));
     }
-    Ok(Some(i64::from(result)))
+    Ok(Some(result))
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -179,7 +179,7 @@ pub fn year_week_without_mode(ctx: &mut EvalContext, t: &DateTime) -> Result<Opt
     if result < 0 {
         return Ok(Some(i64::from(u32::max_value())));
     }
-    Ok(Some(i64::from(result)))
+    Ok(Some(result))
 }
 
 #[rpn_fn(nullable, capture = [ctx])]
