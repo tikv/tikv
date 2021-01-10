@@ -140,17 +140,9 @@ pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     Ok(Some(Int::from(week)))
 }
 
-#[rpn_fn(nullable, capture = [ctx])]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn year_week_with_mode(
-    ctx: &mut EvalContext,
-    t: Option<&DateTime>,
-    mode: Option<&Int>,
-) -> Result<Option<Int>> {
-    if t.is_none() || mode.is_none() {
-        return Ok(None);
-    }
-    let (t, mode) = (t.unwrap(), mode.unwrap());
+pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> Result<Option<Int>> {
     if t.invalid_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(t))
@@ -985,22 +977,22 @@ mod tests {
     #[test]
     fn test_year_week_with_mode() {
         let cases = vec![
-            ("1987-01-01", Some(0), Some(198652i64)),
-            ("2000-01-01", Some(0), Some(199952i64)),
-            ("0000-01-01", Some(0), Some(1i64)),
-            ("0000-01-01", Some(1), Some(4294967295i64)),
-            ("0000-01-01", Some(2), Some(1i64)),
-            ("0000-01-01", Some(3), Some(4294967295i64)),
-            ("0000-01-01", Some(4), Some(1i64)),
-            ("0000-01-01", Some(5), Some(4294967295i64)),
-            ("0000-01-01", Some(6), Some(1i64)),
-            ("0000-01-01", Some(7), Some(4294967295i64)),
-            ("0000-01-01", Some(15), Some(4294967295i64)),
-            ("0000-00-00", Some(0), None),
+            ("1987-01-01", 0, Some(198652i64)),
+            ("2000-01-01", 0, Some(199952i64)),
+            ("0000-01-01", 0, Some(1i64)),
+            ("0000-01-01", 1, Some(4294967295i64)),
+            ("0000-01-01", 2, Some(1i64)),
+            ("0000-01-01", 3, Some(4294967295i64)),
+            ("0000-01-01", 4, Some(1i64)),
+            ("0000-01-01", 5, Some(4294967295i64)),
+            ("0000-01-01", 6, Some(1i64)),
+            ("0000-01-01", 7, Some(4294967295i64)),
+            ("0000-01-01", 15, Some(4294967295i64)),
+            ("0000-00-00", 0, None),
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
-            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg1, 6, true).unwrap());
+            let datetime = DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(datetime)
                 .push_param(arg2)
@@ -1008,13 +1000,6 @@ mod tests {
                 .unwrap();
             assert_eq!(output, exp);
         }
-
-        let output = RpnFnScalarEvaluator::new()
-            .push_param(None::<DateTime>)
-            .push_param(Some(0))
-            .evaluate::<Int>(ScalarFuncSig::YearWeekWithMode)
-            .unwrap();
-        assert_eq!(output, None);
     }
 
     #[test]
@@ -1027,7 +1012,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (datetime, exp) in cases {
-            let datetime = DateTime::parse_datetime(&mut ctx, datetime, 6, true).unwrap();
+            let datetime = DateTime::parse_datetime(&mut ctx, datetime, MAX_FSP, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(datetime)
                 .evaluate(ScalarFuncSig::YearWeekWithoutMode)
