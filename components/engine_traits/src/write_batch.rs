@@ -57,8 +57,17 @@ pub trait Mutable: Send {
     /// It may be reused afterward as an empty batch.
     fn clear(&mut self);
 
+    /// Push a save point onto the save point stack
     fn set_save_point(&mut self);
+
+    /// Pop a save point from the save point stack
+    ///
+    /// This has no effect on the commands already issued to the write batch
     fn pop_save_point(&mut self) -> Result<()>;
+
+    /// Revert all commands issued since the last save point
+    ///
+    /// Additionally pops the last save point from the save point stack.
     fn rollback_to_save_point(&mut self) -> Result<()>;
 
     /// Write a key/value in the default column family
@@ -103,6 +112,12 @@ pub trait Mutable: Send {
 /// Write batches may be reused after being written. In that case they write
 /// exactly the same data as previously, Replacing any keys that may have
 /// changed in between the two batch writes.
+///
+/// Commands issued to write batches can be rolled back prior to being committed
+/// by use of _save points_. At any point in the life of a write batch a save
+/// point can be recorded. Any number of save points can be recorded to a stack.
+/// Calling `rollback_to_save_point` reverts all commands issued since the last
+/// save point, and pops the save point from the stack.
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
 
     /// Create a write batch with a given command capacity
