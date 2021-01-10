@@ -12,13 +12,11 @@ sig/engine:
   - "components/sst_importer/*"
   - "components/test_raftstore/*"
   - "components/test_sst_importer/*"
-  - "components/test_storage/*"
   - "components/tikv_util/*"
   - "etc/*"
   - "metrics/*"
   - "src/import/*"
   - "src/server/*"
-  - "src/storage/*"
   - "src/config.rs"
   - "src/lib.rs"
   - "src/read_pool.rs"
@@ -36,7 +34,6 @@ sig/raft:
   - "components/tests/*"
 
 sig/coprocessor:
-  - "components/codec/*"
   - "components/log_wrappers/*"
   - "components/match_template/*"
   - "components/panic_hook/*"
@@ -48,8 +45,11 @@ sig/coprocessor:
   - "src/coprocessor/*"
 
 sig/transaction:
+  - "components/codec/*"
   - "components/concurrency_manager/*"
+  - "components/test_storage/*"
   - "components/txn_types/*"
+  - "src/storage/*"
 
 sig/scheduling:
   - "components/pd_client/*"
