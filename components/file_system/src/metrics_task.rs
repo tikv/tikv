@@ -46,21 +46,15 @@ impl IntervalRunnable for MetricsTask {
             );
             flush_io_bytes!(
                 recorder,
-                read,
-                IOType::Read,
-                self.last_fetch[IOType::Read as usize]
+                foreground_read,
+                IOType::ForegroundRead,
+                self.last_fetch[IOType::ForegroundRead as usize]
             );
             flush_io_bytes!(
                 recorder,
-                write,
-                IOType::Write,
-                self.last_fetch[IOType::Write as usize]
-            );
-            flush_io_bytes!(
-                recorder,
-                coprocessor,
-                IOType::Coprocessor,
-                self.last_fetch[IOType::Coprocessor as usize]
+                foreground_write,
+                IOType::ForegroundWrite,
+                self.last_fetch[IOType::ForegroundWrite as usize]
             );
             flush_io_bytes!(
                 recorder,
