@@ -5,13 +5,14 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 prost-codec = [
-  "kvproto/prost-codec",
   "grpcio/prost-codec",
+  "kvproto/prost-codec",
 ]
 protobuf-codec = [
-  "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
+  "kvproto/protobuf-codec",
 ]
 
 [lib]
