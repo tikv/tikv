@@ -78,7 +78,7 @@ use tikv_util::{
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, Worker},
-    IntervalRunner,
+    IntervalDriver,
 };
 use tokio::runtime::Builder;
 
@@ -825,7 +825,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_metrics_flusher(&mut self, recorder: Option<Arc<BytesRecorder>>) {
-        let mut metrics_flusher = Box::new(IntervalRunner::new("metrics-flusher"));
+        let mut metrics_flusher = Box::new(IntervalDriver::new("metrics-flusher"));
         metrics_flusher.add_task(IOMetricsTask::new(recorder));
         metrics_flusher.add_task(EngineMetricsTask::new(
             self.engines.as_ref().unwrap().engines.clone(),
@@ -1136,8 +1136,8 @@ where
     }
 }
 
-impl Stop for IntervalRunner {
-    fn stop(mut self: Box<IntervalRunner>) {
+impl Stop for IntervalDriver {
+    fn stop(mut self: Box<IntervalDriver>) {
         (*self).stop();
     }
 }

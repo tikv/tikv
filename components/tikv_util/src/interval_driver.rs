@@ -8,7 +8,7 @@ use std::time::Duration;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 
-pub struct IntervalRunner {
+pub struct IntervalDriver {
     name: String,
     interval: Duration,
     handle: Option<JoinHandle<()>>,
@@ -16,9 +16,9 @@ pub struct IntervalRunner {
     tasks: Vec<Box<dyn IntervalRunnable>>,
 }
 
-impl IntervalRunner {
+impl IntervalDriver {
     pub fn new(name: &str) -> Self {
-        IntervalRunner {
+        IntervalDriver {
             name: name.to_owned(),
             interval: DEFAULT_FLUSH_INTERVAL,
             handle: None,

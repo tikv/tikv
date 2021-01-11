@@ -11,7 +11,7 @@ use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
 use engine_traits::{
     ColumnFamilyOptions, DBOptions, Engines, MetricsTask, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use tikv_util::IntervalRunner;
+use tikv_util::IntervalDriver;
 
 #[test]
 fn test_metrics_task() {
@@ -39,7 +39,7 @@ fn test_metrics_task() {
             .unwrap();
 
     let engines = Engines::new(engine, raft_engine);
-    let mut metrics_flusher = IntervalRunner::new("metrics-flusher");
+    let mut metrics_flusher = IntervalDriver::new("metrics-flusher");
     metrics_flusher.set_flush_interval(Duration::from_millis(100));
     metrics_flusher.add_task(MetricsTask::new(engines));
 
