@@ -499,9 +499,9 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    match decode_write(write.0, &write.1, &mut row) {
-                        HandleWritePolicy::Skip => continue,
-                        HandleWritePolicy::Accept | HandleWritePolicy::AcceptOnScan => {}
+                    let skip = decode_write(write.0, &write.1, &mut row, false);
+                    if skip {
+                        continue;
                     }
                     decode_default(default.1, &mut row);
 
@@ -598,9 +598,9 @@ impl Delegate {
             match put.cf.as_str() {
                 "write" => {
                     let mut row = EventRow::default();
-                    match decode_write(put.take_key(), put.get_value(), &mut row) {
-                        HandleWritePolicy::Skip | HandleWritePolicy::AcceptOnScan => continue,
-                        HandleWritePolicy::Accept => {}
+                    let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
+                    if skip {
+                        continue;
                     }
 
                     if is_one_pc {
@@ -747,19 +747,32 @@ fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     }
 }
 
-enum HandleWritePolicy {
-    Skip,
-    Accept,
-    AcceptOnScan,
+fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
+    // The current record's commit_ts is the rolled-back transaction's start_ts.
+    row.start_ts = key.decode_ts().unwrap().into_inner();
+    row.commit_ts = 0;
+    row.key = key.truncate_ts().unwrap().into_raw().unwrap();
+    row.op_type = EventRowOpType::Unknown;
+    set_event_row_type(row, EventLogType::Rollback);
 }
 
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePolicy {
-    let mut result = HandleWritePolicy::Accept;
-
+/// Decodes the write record and store its information in `row`. This may be called both when
+/// doing incremental scan of observing apply events. There's different behavior for the two
+/// case, distinguished by the `is_apply` parameter.
+fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) -> bool {
+    let key = Key::from_encoded(key);
     let write = WriteRef::parse(value).unwrap().to_owned();
-    if write.gc_fence.is_some() {
-        debug!("write record with gc fence found"; "write" => ?write, "key" => &log_wrappers::Value::key(&key));
-        result = HandleWritePolicy::AcceptOnScan;
+
+    // For scanning, ignore the GC fence and read the old data;
+    // For observed apply, drop the record it self but keep only the overlapped rollback information
+    // if gc_fence exists.
+    if is_apply && write.gc_fence.is_some() {
+        // `gc_fence` is set means the write record has been rewritten.
+        // Currently the only case is writing overlapped_rollback. And in this case
+        assert!(write.has_overlapped_rollback);
+        assert_ne!(write.write_type, WriteType::Rollback);
+        make_overlapped_rollback(key, row);
+        return false;
     }
 
     let (op_type, r_type) = match write.write_type {
@@ -767,11 +780,10 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePo
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other, "key" => &log_wrappers::Value::key(&key));
-            return HandleWritePolicy::Skip;
+            debug!("skip write record"; "write" => ?other, "key" => %key);
+            return true;
         }
     };
-    let key = Key::from_encoded(key);
     let commit_ts = if write.write_type == WriteType::Rollback {
         0
     } else {
@@ -786,7 +798,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> HandleWritePo
         row.value = value;
     }
 
-    result
+    false
 }
 
 fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
