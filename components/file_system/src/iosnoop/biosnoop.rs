@@ -1,11 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::IOStats;
-
 use crate::metrics::*;
+use crate::IOBytes;
 use crate::IOType;
 
-use collections::HashMap;
 use std::collections::VecDeque;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -147,28 +145,16 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-// unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
-//     if let Some(ctx) = BPF_CONTEXT.as_mut() {
-//         let mut map = HashMap::default();
-//         for e in ctx.stats_table.iter() {
-//             let io_type = ptr::read(e.key.as_ptr() as *const IOType);
-//             let read = std::intrinsics::atomic_load(e.value.as_ptr() as *const u64);
-//             let write = std::intrinsics::atomic_load((e.value.as_ptr() as *const u64).add(1));
-//             map.insert(io_type, IOStats { read, write });
-//         }
-//         Some(map)
-//     } else {
-//         None
-//     }
-// }
-
 pub(crate) fn fetch_io_bytes(io_type: IOType) -> IOBytes {
-    if let Some(ctx) = BPF_CONTEXT.as_mut() {
-        if let Ok(e) = ctx.stats_table.get(&mut io_type) {
-            let read = std::intrinsics::atomic_load(e.value.as_ptr() as *const u64) as i64;
-            let write =
-                std::intrinsics::atomic_load((e.value.as_ptr() as *const u64).add(1)) as i64;
-            return IOBytes { read, write };
+    unsafe {
+        if let Some(ctx) = BPF_CONTEXT.as_mut() {
+            let mut buf = [0 as u8; std::mem::size_of::<IOType>()];
+            std::ptr::write(buf.as_mut_ptr() as *mut IOType, io_type);
+            if let Ok(e) = ctx.stats_table.get(&mut buf) {
+                let read = std::intrinsics::atomic_load(e.as_ptr() as *const u64) as i64;
+                let write = std::intrinsics::atomic_load((e.as_ptr() as *const u64).add(1)) as i64;
+                return IOBytes { read, write };
+            }
         }
     }
     IOBytes::default()
@@ -275,9 +261,10 @@ pub fn flush_io_latency_metrics() {
 
 #[cfg(test)]
 mod tests {
+    use super::{fetch_io_bytes, flush_io_latency_metrics};
     use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
-    use crate::iosnoop::metrics::*;
-    use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
+    use crate::metrics::*;
+    use crate::{get_io_type, init_io_snooper, set_io_type, IOType};
     use rand::Rng;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{
@@ -321,7 +308,7 @@ mod tests {
         let compaction_bytes = fetch_io_bytes(IOType::Compaction);
         assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
-        compaction_bytes_before = bytes;
+        compaction_bytes_before = compaction_bytes;
         drop(f);
 
         let other_bytes_before = fetch_io_bytes(IOType::Other);
@@ -340,6 +327,7 @@ mod tests {
         .unwrap();
 
         let compaction_bytes = fetch_io_bytes(IOType::Compaction);
+        let other_bytes = fetch_io_bytes(IOType::Other);
         assert_eq!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         assert_eq!((other_bytes - other_bytes_before).write, 0);
