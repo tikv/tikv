@@ -16,8 +16,8 @@ mod metrics_task;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{get_io_type, init_io_snooper, set_io_type, IOContext};
-pub use metrics_task::MetricsTask;
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use metrics_task::{BytesFetcher, MetricsTask};
 pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 
 pub use std::fs::{
@@ -73,6 +73,29 @@ impl WithIOType {
 impl Drop for WithIOType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct IOBytes {
+    read: i64,
+    write: i64,
+}
+
+impl Default for IOBytes {
+    fn default() -> Self {
+        IOBytes { read: 0, write: 0 }
+    }
+}
+
+impl std::ops::Sub for IOBytes {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            read: self.read - other.read,
+            write: self.write - other.write,
+        }
     }
 }
 

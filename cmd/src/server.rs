@@ -28,7 +28,7 @@ use engine_traits::{
     MetricsTask as EngineMetricsTask, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{
-    set_io_rate_limiter, BytesRecorder, IORateLimiter, MetricsTask as IOMetricsTask,
+    set_io_rate_limiter, BytesFetcher, BytesRecorder, IORateLimiter, MetricsTask as IOMetricsTask,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -110,13 +110,14 @@ pub fn run_tikv(config: TiKvConfig) {
         ($ER: ty) => {{
             let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let recorder = if enable_io_snoop {
+            let fetcher = if enable_io_snoop {
                 tikv.init_io_snooper();
-                None
+                tikv.init_io_rate_limit(None);
+                BytesFetcher::ByIOSnooper()
             } else {
                 let recorder = Arc::new(BytesRecorder::new());
                 tikv.init_io_rate_limit(Some(recorder.clone()));
-                Some(recorder)
+                BytesFetcher::ByRateLimiter(recorder)
             };
             tikv.check_conflict_addr();
             tikv.init_fs();
@@ -127,7 +128,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let gc_worker = tikv.init_gc_worker();
             let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
-            tikv.init_metrics_flusher(recorder);
+            tikv.init_metrics_flusher(fetcher);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -824,9 +825,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_metrics_flusher(&mut self, recorder: Option<Arc<BytesRecorder>>) {
+    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
         let mut metrics_flusher = Box::new(IntervalDriver::new("metrics-flusher"));
-        metrics_flusher.add_task(IOMetricsTask::new(recorder));
+        metrics_flusher.add_task(IOMetricsTask::new(fetcher));
         metrics_flusher.add_task(EngineMetricsTask::new(
             self.engines.as_ref().unwrap().engines.clone(),
         ));
