@@ -18,9 +18,9 @@ pub enum BytesFetcher {
 impl BytesFetcher {
     fn fetch(&self, io_type: IOType) -> IOBytes {
         match *self {
-            BytesFetcher::ByRateLimiter(ref fetcher) => IOBytes {
-                read: fetcher.fetch(io_type, IOOp::Read) as i64,
-                write: fetcher.fetch(io_type, IOOp::Write) as i64,
+            BytesFetcher::ByRateLimiter(ref recorder) => IOBytes {
+                read: recorder.fetch(io_type, IOOp::Read) as i64,
+                write: recorder.fetch(io_type, IOOp::Write) as i64,
             },
             BytesFetcher::ByIOSnooper() => fetch_io_bytes(io_type),
         }

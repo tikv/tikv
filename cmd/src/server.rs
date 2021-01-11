@@ -110,8 +110,7 @@ pub fn run_tikv(config: TiKvConfig) {
         ($ER: ty) => {{
             let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let fetcher = if enable_io_snoop {
-                tikv.init_io_snooper();
+            let fetcher = if enable_io_snoop && tikv.init_io_snooper() {
                 tikv.init_io_rate_limit(None);
                 BytesFetcher::ByIOSnooper()
             } else {
@@ -840,11 +839,13 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.to_stop.push(metrics_flusher);
     }
 
-    fn init_io_snooper(&mut self) {
+    fn init_io_snooper(&mut self) -> bool {
         if let Err(e) = file_system::init_io_snooper() {
             error!(%e; "failed to init io snooper");
+            false
         } else {
             info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
+            true
         }
     }
 

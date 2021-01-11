@@ -70,7 +70,6 @@ impl IntervalDriver {
         drop(self.sender.take().unwrap());
         if let Err(e) = h.unwrap().join() {
             error!("join thread failed"; "err" => ?e, "name" => self.name.as_str());
-            return;
         }
     }
 }
