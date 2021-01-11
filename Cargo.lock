@@ -217,6 +217,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "raft",
  "raftstore",
@@ -450,13 +451,13 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1077,7 +1078,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
- "fail 0.4.0",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1118,6 +1119,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prost",
  "protobuf",
@@ -1154,7 +1156,7 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -1252,17 +1254,6 @@ dependencies = [
  "tikv_alloc",
  "tokio 0.2.13",
  "url",
-]
-
-[[package]]
-name = "fail"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63eec71a3013ee912a0ecb339ff0c5fa5ed9660df04bfefa10c250b885d018c"
-dependencies = [
- "lazy_static",
- "log",
- "rand 0.6.5",
 ]
 
 [[package]]
@@ -1949,10 +1940,11 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2678,14 +2670,14 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -3115,12 +3107,11 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3476,7 +3467,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4346,7 +4337,7 @@ dependencies = [
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "grpcio",
  "kvproto",
@@ -4368,9 +4359,9 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raftstore",
@@ -4418,7 +4409,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "fail 0.3.0",
+ "fail",
  "grpcio",
  "kvproto",
  "rand 0.7.3",
@@ -4449,8 +4440,9 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
@@ -4459,6 +4451,7 @@ dependencies = [
  "hyper",
  "keys",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "profiler",
@@ -4552,6 +4545,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4604,6 +4598,7 @@ dependencies = [
  "bstr",
  "error_code",
  "failure",
+ "log_wrappers",
  "tikv_alloc",
  "tipb",
 ]
@@ -4632,7 +4627,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "failure",
  "fs2",
  "futures 0.1.29",
@@ -4776,17 +4771,17 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -5214,8 +5209,8 @@ dependencies = [
  "derive-new",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",
@@ -5571,7 +5566,7 @@ dependencies = [
  "const-random-macro",
  "crossbeam-deque 0.7.1",
  "dashmap",
- "fail 0.4.0",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.8.0",
