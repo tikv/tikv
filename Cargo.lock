@@ -2744,6 +2744,7 @@ dependencies = [
  "tikv_util",
  "tokio-timer",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
@@ -4713,7 +4714,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.1.0-alpha"
+version = "5.0.0-alpha"
 dependencies = [
  "async-stream",
  "async-trait",
