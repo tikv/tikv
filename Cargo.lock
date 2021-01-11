@@ -1160,7 +1160,6 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
- "test_util",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1287,6 +1286,7 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
+ "grpcio",
  "http",
  "hyper",
  "hyper-tls",
@@ -2806,6 +2806,7 @@ dependencies = [
  "tikv_util",
  "tokio-timer",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
