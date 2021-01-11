@@ -572,7 +572,7 @@ impl IndexScanExecutorImpl {
             if restored_v5 {
                 // Extract the data from key, then use the restore data to get the original data.
                 Self::extract_columns_from_datum_format(
-                    &mut <&[u8]>::clone((&key_payload)),
+                    &mut <&[u8]>::clone(&key_payload),
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
                 self.restore_original_data(restore_values, columns, false)?;
@@ -583,7 +583,7 @@ impl IndexScanExecutorImpl {
         } else {
             // No restored data, we should extract the index columns from the key.
             Self::extract_columns_from_datum_format(
-                &mut <&[u8]>::clone((&key_payload)),
+                &mut <&[u8]>::clone(&key_payload),
                 &mut columns[..self.columns_id_without_handle.len()],
             )?;
         }
