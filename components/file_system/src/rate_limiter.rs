@@ -4,7 +4,7 @@ use super::{IOOp, IOType};
 
 use std::future::{self, Future};
 use std::sync::{
-    atomic::{self, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
