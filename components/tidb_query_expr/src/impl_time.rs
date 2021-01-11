@@ -140,6 +140,10 @@ pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
     Ok(Some(Int::from(week)))
 }
 
+// year_week_with_mode implements `YEARWEEK` in MySQL.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/date-and-time-functions.html#function_yearweek
+//
+// e.g.: SELECT YEARWEEK('1987-01-01');  -- -> 198652, here the first 4 digits represents year, and the last 2 digits represents week.
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> Result<Option<Int>> {
@@ -157,6 +161,8 @@ pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> R
     Ok(Some(result))
 }
 
+// year_week_without_mode implements `YEARWEEK` in MySQL.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/date-and-time-functions.html#function_yearweek
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn year_week_without_mode(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<Int>> {
