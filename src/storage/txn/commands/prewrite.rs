@@ -21,8 +21,9 @@ use crate::storage::{
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
 use engine_traits::CF_WRITE;
+use kvproto::kvrpcpb::ExtraOp;
 use std::mem;
-use txn_types::{Key, Mutation, TimeStamp, Write, WriteType};
+use txn_types::{Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
@@ -162,6 +163,7 @@ impl Prewrite {
             secondary_keys: self.secondary_keys,
 
             ctx: self.ctx,
+            old_values: OldValues::default(),
         }
     }
 }
@@ -292,6 +294,7 @@ impl PrewritePessimistic {
             max_commit_ts: self.max_commit_ts,
 
             ctx: self.ctx,
+            old_values: OldValues::default(),
         }
     }
 }
@@ -338,6 +341,7 @@ struct Prewriter<K: PrewriteKind> {
     min_commit_ts: TimeStamp,
     max_commit_ts: TimeStamp,
     secondary_keys: Option<Vec<Vec<u8>>>,
+    old_values: OldValues,
     try_one_pc: bool,
 
     ctx: Context,
@@ -361,10 +365,9 @@ impl<K: PrewriteKind> Prewriter<K> {
             context.concurrency_manager,
         );
         // Set extra op here for getting the write record when check write conflict in prewrite.
-        txn.extra_op = context.extra_op;
 
         let rows = self.mutations.len();
-        let (locks, final_min_commit_ts) = self.prewrite(&mut txn)?;
+        let (locks, final_min_commit_ts) = self.prewrite(&mut txn, context.extra_op)?;
 
         context.statistics.add(&txn.take_statistics());
 
@@ -399,6 +402,7 @@ impl<K: PrewriteKind> Prewriter<K> {
     fn prewrite(
         &mut self,
         txn: &mut MvccTxn<impl Snapshot>,
+        extra_op: ExtraOp,
     ) -> Result<(Vec<std::result::Result<(), StorageError>>, TimeStamp)> {
         let commit_kind = match (&self.secondary_keys, self.try_one_pc) {
             (_, true) => CommitKind::OnePc(self.max_commit_ts),
@@ -414,6 +418,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             txn_size: self.txn_size,
             lock_ttl: self.lock_ttl,
             min_commit_ts: self.min_commit_ts,
+            need_old_value: extra_op == ExtraOp::ReadOldValue,
         };
 
         let async_commit_pk = self
@@ -429,7 +434,8 @@ impl<K: PrewriteKind> Prewriter<K> {
         for m in mem::take(&mut self.mutations) {
             let is_pessimistic_lock = m.is_pessimistic_lock();
             let m = m.into_mutation();
-
+            let key = m.key().clone();
+            let mutation_type = m.mutation_type();
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
                 secondaries = &self.secondary_keys;
@@ -437,9 +443,12 @@ impl<K: PrewriteKind> Prewriter<K> {
 
             let prewrite_result = prewrite(txn, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
-                Ok(ts) => {
+                Ok((ts, old_value)) => {
                     if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
+                    }
+                    if old_value.specified() {
+                        self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
                 Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
@@ -496,11 +505,14 @@ impl<K: PrewriteKind> Prewriter<K> {
                     ),
                 },
             };
-
+            let extra = TxnExtra {
+                old_values: self.old_values,
+                // Set one_pc flag in TxnExtra to let CDC skip handling the resolver.
+                one_pc: self.try_one_pc,
+            };
             // Here the lock guards are taken and will be released after the write finishes.
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
-            let extra = txn.take_extra();
             let lock_guards = txn.take_guards();
             WriteResult {
                 ctx: self.ctx,

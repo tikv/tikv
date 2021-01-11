@@ -27,6 +27,7 @@ use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
 use tikv::storage::SnapshotStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
+use tikv_util::config::ReadableSize;
 use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -62,7 +63,7 @@ macro_rules! retry_req {
 }
 
 impl TestSuite {
-    pub fn new(count: usize) -> TestSuite {
+    pub fn new(count: usize, sst_max_size: u64) -> TestSuite {
         let mut cluster = new_server_cluster(1, count);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
@@ -78,7 +79,11 @@ impl TestSuite {
                 sim.storages[&id].clone(),
                 sim.region_info_accessors[&id].clone(),
                 engines.kv.as_inner().clone(),
-                BackupConfig { num_threads: 4 },
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                    sst_max_size: ReadableSize(sst_max_size),
+                },
                 sim.get_concurrency_manager(*id),
             );
             let mut worker = bg_worker.lazy_build(format!("backup-{}", id));

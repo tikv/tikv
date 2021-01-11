@@ -1476,8 +1476,8 @@ where
                     "{} failed to delete {:?} in ranges [{}, {}): {:?}",
                     self.tag,
                     strategy,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    &log_wrappers::Value::key(&start_key),
+                    &log_wrappers::Value::key(&end_key),
                     e
                 )
             };
@@ -2756,6 +2756,8 @@ pub struct CatchUpLogs {
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
     snap_notifier: SyncSender<RaftSnapshot>,
+    // indicates whether the snapshot is triggered due to load balance
+    for_balance: bool,
 }
 
 impl GenSnapTask {
@@ -2763,7 +2765,12 @@ impl GenSnapTask {
         GenSnapTask {
             region_id,
             snap_notifier,
+            for_balance: false,
         }
+    }
+
+    pub fn set_for_balance(&mut self) {
+        self.for_balance = true;
     }
 
     pub fn generate_and_schedule_snapshot<EK>(
@@ -2779,6 +2786,7 @@ impl GenSnapTask {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
             notifier: self.snap_notifier,
+            for_balance: self.for_balance,
             last_applied_index_term,
             last_applied_state,
             // This snapshot may be held for a long time, which may cause too many

@@ -366,6 +366,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
 
+            if !write.check_gc_fence_as_latest_version(cfg.ts) {
+                break None;
+            }
+
             match write.write_type {
                 WriteType::Put => {
                     if cfg.omit_value {
@@ -465,6 +469,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             }
             let write_value = cursors.write.value(&mut statistics.write);
             let write = WriteRef::parse(write_value)?;
+
+            if !write.check_gc_fence_as_latest_version(cfg.ts) {
+                break None;
+            }
 
             match write.write_type {
                 WriteType::Put => {
@@ -616,6 +624,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     std::cmp::max(lock.ts, lock.for_update_ts),
+                    self.from_ts,
                     statistics,
                 )?
             } else {
@@ -655,6 +664,9 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             }
 
             let (write_type, start_ts, short_value) = {
+                // DeltaEntryScanner only returns commit records between `from_ts` and `cfg.ts`.
+                // We can assume that it must ensure GC safepoint doesn't exceed `from_ts`, so GC
+                // fence checking can be skipped. But it's still needed when loading the old value.
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,
@@ -708,6 +720,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     cursors.default.as_mut().unwrap(),
                     &current_user_key,
                     commit_ts,
+                    self.from_ts,
                     statistics,
                 )?
             } else {
@@ -756,6 +769,11 @@ where
 pub mod test_util {
     use super::*;
     use crate::storage::mvcc::Write;
+    use crate::storage::txn::tests::{
+        must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put,
+    };
+    use crate::storage::Engine;
 
     #[derive(Default)]
     pub struct EntryBuilder {
@@ -868,11 +886,111 @@ pub mod test_util {
             }
         }
     }
+
+    #[allow(clippy::type_complexity)]
+    pub fn prepare_test_data_for_check_gc_fence(
+        engine: &impl Engine,
+    ) -> (TimeStamp, Vec<(Vec<u8>, Option<Vec<u8>>)>) {
+        // Generates test data that is consistent after timestamp 40.
+
+        // PUT,   Read,  PUT
+        //  `-------------^
+        must_prewrite_put(engine, b"k1", b"v1", b"k1", 10);
+        must_commit(engine, b"k1", 10, 20);
+        // Put a record to be pointed by GC fence 50.
+        must_prewrite_put(engine, b"k1", b"v1x", b"k1", 49);
+        must_commit(engine, b"k1", 49, 50);
+        must_cleanup_with_gc_fence(engine, b"k1", 20, 0, 50, false);
+
+        // PUT,      Read
+        //  `---------^
+        must_prewrite_put(engine, b"k2", b"v2", b"k2", 11);
+        must_commit(engine, b"k2", 11, 20);
+        must_cleanup_with_gc_fence(engine, b"k2", 20, 0, 40, true);
+
+        // PUT,      Read
+        //  `-----^
+        must_prewrite_put(engine, b"k3", b"v3", b"k3", 12);
+        must_commit(engine, b"k3", 12, 20);
+        must_cleanup_with_gc_fence(engine, b"k3", 20, 0, 30, true);
+
+        // PUT,   PUT,       Read
+        //  `-----^ `----^
+        must_prewrite_put(engine, b"k4", b"v4", b"k4", 13);
+        must_commit(engine, b"k4", 13, 14);
+        must_prewrite_put(engine, b"k4", b"v4x", b"k4", 15);
+        must_commit(engine, b"k4", 15, 20);
+        must_cleanup_with_gc_fence(engine, b"k4", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(engine, b"k4", 20, 0, 30, true);
+
+        // PUT,   DEL,       Read
+        //  `-----^ `----^
+        must_prewrite_put(engine, b"k5", b"v5", b"k5", 13);
+        must_commit(engine, b"k5", 13, 14);
+        must_prewrite_delete(engine, b"k5", b"v5", 15);
+        must_commit(engine, b"k5", 15, 20);
+        must_cleanup_with_gc_fence(engine, b"k5", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(engine, b"k5", 20, 0, 30, true);
+
+        // PUT, LOCK, LOCK,   Read,  PUT
+        //  `-------------------------^
+        must_prewrite_put(engine, b"k6", b"v6", b"k6", 16);
+        must_commit(engine, b"k6", 16, 20);
+        must_prewrite_lock(engine, b"k6", b"k6", 25);
+        must_commit(engine, b"k6", 25, 26);
+        must_prewrite_lock(engine, b"k6", b"k6", 28);
+        must_commit(engine, b"k6", 28, 29);
+        // Put a record to be pointed by GC fence 50.
+        must_prewrite_put(engine, b"k6", b"v6x", b"k6", 49);
+        must_commit(engine, b"k6", 49, 50);
+        must_cleanup_with_gc_fence(engine, b"k6", 20, 0, 50, false);
+
+        // PUT, LOCK,   LOCK,   Read
+        //  `---------^
+        must_prewrite_put(engine, b"k7", b"v7", b"k7", 16);
+        must_commit(engine, b"k7", 16, 20);
+        must_prewrite_lock(engine, b"k7", b"k7", 25);
+        must_commit(engine, b"k7", 25, 26);
+        must_cleanup_with_gc_fence(engine, b"k7", 20, 0, 27, true);
+        must_prewrite_lock(engine, b"k7", b"k7", 28);
+        must_commit(engine, b"k7", 28, 29);
+
+        // PUT,  Read
+        //  * (GC fence ts is 0)
+        must_prewrite_put(engine, b"k8", b"v8", b"k8", 17);
+        must_commit(engine, b"k8", 17, 30);
+        must_cleanup_with_gc_fence(engine, b"k8", 30, 0, 0, true);
+
+        // PUT, LOCK,     Read
+        // `-----------^
+        must_prewrite_put(engine, b"k9", b"v9", b"k9", 18);
+        must_commit(engine, b"k9", 18, 20);
+        must_prewrite_lock(engine, b"k9", b"k9", 25);
+        must_commit(engine, b"k9", 25, 26);
+        must_cleanup_with_gc_fence(engine, b"k9", 20, 0, 27, true);
+
+        // Returns the read ts to be checked and the expected result.
+        (
+            40.into(),
+            vec![
+                (b"k1".to_vec(), Some(b"v1".to_vec())),
+                (b"k2".to_vec(), None),
+                (b"k3".to_vec(), None),
+                (b"k4".to_vec(), None),
+                (b"k5".to_vec(), None),
+                (b"k6".to_vec(), Some(b"v6".to_vec())),
+                (b"k7".to_vec(), None),
+                (b"k8".to_vec(), Some(b"v8".to_vec())),
+                (b"k9".to_vec(), None),
+            ],
+        )
+    }
 }
 
 #[cfg(test)]
 mod latest_kv_tests {
     use super::super::ScannerBuilder;
+    use super::test_util::prepare_test_data_for_check_gc_fence;
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::Scanner;
@@ -1155,6 +1273,30 @@ mod latest_kv_tests {
         );
         assert_eq!(scanner.next().unwrap(), None);
     }
+
+    #[test]
+    fn test_latest_kv_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+            .range(None, None)
+            .build()
+            .unwrap();
+        let result: Vec<_> = scanner
+            .scan(100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect();
+        assert_eq!(result, expected_result);
+    }
 }
 
 #[cfg(test)]
@@ -1166,7 +1308,8 @@ mod latest_entry_tests {
     };
     use crate::storage::{Engine, TestEngineBuilder};
 
-    use super::test_util::EntryBuilder;
+    use super::test_util::*;
+    use crate::storage::txn::EntryBatch;
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
     #[test]
@@ -1510,6 +1653,31 @@ mod latest_entry_tests {
         // Scanning entries without delete in (0, 10] should get a_7
         check(10, 0, false, vec![&entry_a_7]);
     }
+
+    #[test]
+    fn test_latest_entry_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+        let mut result = EntryBatch::with_capacity(20);
+        scanner.scan_entries(&mut result).unwrap();
+        let result: Vec<_> = result
+            .drain()
+            .map(|entry| entry.into_kvpair().unwrap())
+            .collect();
+
+        assert_eq!(result, expected_result);
+    }
 }
 
 #[cfg(test)]
@@ -1521,7 +1689,7 @@ mod delta_entry_tests {
 
     use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
 
-    use super::test_util::EntryBuilder;
+    use super::test_util::*;
 
     /// Check whether everything works as usual when `Delta::get()` goes out of bound.
     #[test]
@@ -2139,5 +2307,114 @@ mod delta_entry_tests {
                 &entry_b_2,
             ],
         );
+    }
+
+    #[test]
+    fn test_old_value_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        prepare_test_data_for_check_gc_fence(&engine);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+            .range(None, None)
+            .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
+            .unwrap();
+        let entries: Vec<_> = std::iter::from_fn(|| scanner.next_entry().unwrap()).collect();
+        let expected_entries_1 = vec![
+            EntryBuilder::default()
+                .key(b"k1")
+                .value(b"v1x")
+                .primary(b"k1")
+                .start_ts(49.into())
+                .commit_ts(50.into())
+                .old_value(b"v1")
+                .build_commit(WriteType::Put, true),
+            EntryBuilder::default()
+                .key(b"k6")
+                .value(b"v6x")
+                .primary(b"k6")
+                .start_ts(49.into())
+                .commit_ts(50.into())
+                .old_value(b"v6")
+                .build_commit(WriteType::Put, true),
+        ];
+        assert_eq!(entries, expected_entries_1);
+
+        // Lock all the keys at 55 and check again.
+        for i in b'1'..=b'8' {
+            let key = &[b'k', i];
+            let value = &[b'v', i, b'x', b'x'];
+            must_prewrite_put(&engine, key, value, b"k1", 55);
+        }
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+            .range(None, None)
+            .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
+            .unwrap();
+        let entries: Vec<_> = std::iter::from_fn(|| scanner.next_entry().unwrap()).collect();
+
+        // Shortcut for generating the expected result at current time.
+        let build_entry = |k, v, old_value| {
+            let mut b = EntryBuilder::default();
+            b.key(k).value(v).primary(b"k1").start_ts(55.into());
+            if let Some(ov) = old_value {
+                b.old_value(ov);
+            }
+            b.build_prewrite(LockType::Put, true)
+        };
+
+        let expected_entries_2 = vec![
+            build_entry(b"k1", b"v1xx", Some(b"v1x")),
+            expected_entries_1[0].clone(),
+            build_entry(b"k2", b"v2xx", None),
+            build_entry(b"k3", b"v3xx", None),
+            build_entry(b"k4", b"v4xx", None),
+            build_entry(b"k5", b"v5xx", None),
+            build_entry(b"k6", b"v6xx", Some(b"v6x")),
+            expected_entries_1[1].clone(),
+            build_entry(b"k7", b"v7xx", None),
+            build_entry(b"k8", b"v8xx", Some(b"v8")),
+        ];
+        assert_eq!(entries, expected_entries_2);
+
+        // Commit all the locks and check again.
+        for i in b'1'..=b'8' {
+            let key = &[b'k', i];
+            must_commit(&engine, key, 55, 56);
+        }
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max(), false)
+            .range(None, None)
+            .build_delta_scanner(40.into(), ExtraOp::ReadOldValue)
+            .unwrap();
+        let entries: Vec<_> = std::iter::from_fn(|| scanner.next_entry().unwrap()).collect();
+
+        // Shortcut for generating the expected result at current time.
+        let build_entry = |k, v, old_value| {
+            let mut b = EntryBuilder::default();
+            b.key(k)
+                .value(v)
+                .primary(b"k1")
+                .start_ts(55.into())
+                .commit_ts(56.into());
+            if let Some(ov) = old_value {
+                b.old_value(ov);
+            }
+            b.build_commit(WriteType::Put, true)
+        };
+
+        let expected_entries_2 = vec![
+            build_entry(b"k1", b"v1xx", Some(b"v1x")),
+            expected_entries_1[0].clone(),
+            build_entry(b"k2", b"v2xx", None),
+            build_entry(b"k3", b"v3xx", None),
+            build_entry(b"k4", b"v4xx", None),
+            build_entry(b"k5", b"v5xx", None),
+            build_entry(b"k6", b"v6xx", Some(b"v6x")),
+            expected_entries_1[1].clone(),
+            build_entry(b"k7", b"v7xx", None),
+            build_entry(b"k8", b"v8xx", Some(b"v8")),
+        ];
+        assert_eq!(entries, expected_entries_2);
     }
 }

@@ -19,6 +19,7 @@ use crate::coprocessor::{get_region_approximate_keys, get_region_approximate_siz
 use crate::store::{Callback, CasualMessage, CasualRouter};
 use crate::Result;
 use configuration::{ConfigChange, Configuration};
+use file_system::{IOType, WithIOType};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 
@@ -337,8 +338,8 @@ where
     S: CasualRouter<E>,
 {
     type Task = Task;
-
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,
