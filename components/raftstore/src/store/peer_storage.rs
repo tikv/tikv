@@ -1002,6 +1002,14 @@ where
         ))
     }
 
+    pub fn has_gen_snap_task(&self) -> bool {
+        self.gen_snap_task.borrow().is_some()
+    }
+
+    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
+        self.gen_snap_task.get_mut()
+    }
+
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
     }
@@ -1519,6 +1527,7 @@ pub fn do_snapshot<E>(
     region_id: u64,
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
+    for_balance: bool,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1587,6 +1596,7 @@ where
         &mut snap_data,
         &mut stat,
     )?;
+    snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 

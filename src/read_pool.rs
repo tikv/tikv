@@ -3,6 +3,7 @@
 use self::metrics::*;
 use crate::config::UnifiedReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use file_system::{set_io_type, IOType};
 use futures::channel::oneshot;
 use futures::future::TryFutureExt;
 use kvproto::kvrpcpb::CommandPri;
@@ -194,6 +195,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
+            set_io_type(IOType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();

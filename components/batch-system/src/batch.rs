@@ -410,7 +410,7 @@ where
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
                 .spawn(move || {
-                    set_io_type(IOType::Write);
+                    set_io_type(IOType::ForegroundWrite);
                     poller.poll()
                 })
                 .unwrap();
