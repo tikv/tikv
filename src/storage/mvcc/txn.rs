@@ -1525,6 +1525,8 @@ pub(crate) mod tests {
         must_commit(&engine, k, 10, 15);
         let w = must_written(&engine, k, 10, 15, WriteType::Put);
         assert!(w.has_overlapped_rollback);
+        // GC fence shouldn't be set in this case.
+        assert!(w.gc_fence.is_none());
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
         check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, false, false, |s| {
@@ -1533,6 +1535,7 @@ pub(crate) mod tests {
         must_commit(&engine, k, 20, 25);
         let w = must_written(&engine, k, 20, 25, WriteType::Put);
         assert!(w.has_overlapped_rollback);
+        assert!(w.gc_fence.is_none());
 
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 30, 0);
         check_secondary_locks::tests::must_success(
@@ -1544,6 +1547,7 @@ pub(crate) mod tests {
         must_commit(&engine, k, 30, 35);
         let w = must_written(&engine, k, 30, 35, WriteType::Put);
         assert!(w.has_overlapped_rollback);
+        assert!(w.gc_fence.is_none());
 
         // Do not commit with overlapped_rollback if the rollback ts doesn't equal to commit_ts.
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 40, 0);
