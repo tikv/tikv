@@ -850,7 +850,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_rate_limit(&mut self, recorder: Option<Arc<BytesRecorder>>) {
-        let limiter = Arc::new(IORateLimiter::new(1, recorder));
+        let limiter = Arc::new(IORateLimiter::new(0, recorder));
         set_io_rate_limiter(Some(limiter));
     }
 

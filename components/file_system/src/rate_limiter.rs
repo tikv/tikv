@@ -57,14 +57,14 @@ impl BytesRecorder {
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    refill_bytes: AtomicUsize,
+    refill_bytes: usize,
     recorder: Option<Arc<BytesRecorder>>,
 }
 
 impl IORateLimiter {
     pub fn new(refill_bytes: usize, recorder: Option<Arc<BytesRecorder>>) -> IORateLimiter {
         IORateLimiter {
-            refill_bytes: AtomicUsize::new(refill_bytes),
+            refill_bytes,
             recorder,
         }
     }
@@ -73,7 +73,11 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
-        let bytes = std::cmp::min(self.refill_bytes.load(atomic::Ordering::Relaxed), bytes);
+        let bytes = if self.refill_bytes > 0 {
+            std::cmp::min(self.refill_bytes, bytes)
+        } else {
+            bytes
+        };
         if let Some(recorder) = &self.recorder {
             recorder.add(io_type, io_op, bytes);
         }
@@ -88,10 +92,6 @@ impl IORateLimiter {
     ) -> impl Future<Output = usize> {
         future::ready(self.request(io_type, io_op, bytes))
     }
-
-    pub fn disable_rate_limit(&self, _io_type: IOType) {}
-
-    pub fn enable_rate_limit(&self, _io_type: IOType) {}
 }
 
 lazy_static! {
