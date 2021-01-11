@@ -4,10 +4,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[[test]]
-name = "integrations"
-path = "tests/integrations/mod.rs"
-
 [features]
 default = ["protobuf-codec", "test-engines-rocksdb"]
 protobuf-codec = [
@@ -97,9 +93,5 @@ txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-futures-executor = "0.3"
 rand = "0.7"
 tempfile = "3.0"
-test_util = { path = "../test_util", default-features = false }
-test_raftstore = { path = "../test_raftstore", default-features = false }
-uuid = { version = "0.8.1", features = ["serde", "v4"] }
