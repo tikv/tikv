@@ -138,6 +138,7 @@ tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 collections = { path = "../components/collections" }
+file_system = { path = "../components/file_system" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 toml = "0.5"
 txn_types = { path = "../components/txn_types", default-features = false }
