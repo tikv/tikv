@@ -47,7 +47,7 @@ fn test_node_merge_rollback() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     // The call is finished when prepare_merge is applied.
-    cluster.try_merge(region.get_id(), target_region.get_id());
+    cluster.must_try_merge(region.get_id(), target_region.get_id());
 
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
@@ -81,8 +81,8 @@ fn test_node_merge_rollback() {
     pd_client.must_remove_peer(right.get_id(), new_peer(3, 5));
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    let target_region = pd_client.get_region(b"k1").unwrap();
-    cluster.try_merge(region.get_id(), target_region.get_id());
+    let target_region = pd_client.get_region(b"k3").unwrap();
+    cluster.must_try_merge(region.get_id(), target_region.get_id());
     let mut region = pd_client.get_region(b"k1").unwrap();
 
     // Split to trigger rollback.
@@ -91,8 +91,9 @@ fn test_node_merge_rollback() {
     // Wait till rollback.
     cluster.must_put(b"k12", b"v12");
 
-    // After premerge and rollback, version becomes 4 + 2 = 6;
-    region.mut_region_epoch().set_version(4);
+    // After premerge and rollback, conf_ver becomes 3 + 1 = 4, version becomes 4 + 2 = 6;
+    region.mut_region_epoch().set_conf_ver(4);
+    region.mut_region_epoch().set_version(6);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
         let state_key = keys::region_state_key(region.get_id());
@@ -126,7 +127,7 @@ fn test_node_merge_restart() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    cluster.try_merge(left.get_id(), right.get_id());
+    cluster.must_try_merge(left.get_id(), right.get_id());
     let leader = cluster.leader_of_region(left.get_id()).unwrap();
 
     cluster.shutdown();
@@ -388,7 +389,7 @@ fn test_node_merge_recover_snapshot() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    cluster.try_merge(region.get_id(), target_region.get_id());
+    cluster.must_try_merge(region.get_id(), target_region.get_id());
 
     // Remove a peer to trigger rollback.
     pd_client.must_remove_peer(left.get_id(), left.get_peers()[0].to_owned());
@@ -552,17 +553,32 @@ fn prepare_request_snapshot_cluster() -> (Cluster<NodeCluster>, Region, Region) 
 fn test_node_merge_reject_request_snapshot() {
     let (mut cluster, region, target_region) = prepare_request_snapshot_cluster();
 
+    let k = b"k3_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), k, b"value");
+    }
+
     let apply_prepare_merge_fp = "apply_before_prepare_merge";
     fail::cfg(apply_prepare_merge_fp, "pause").unwrap();
     let prepare_merge = new_prepare_merge(target_region);
     let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
     req.mut_header().set_peer(new_peer(1, 1));
+    let (tx, rx) = mpsc::sync_channel(1);
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, req, Callback::None)
+        .async_command_on_node(
+            1,
+            req,
+            Callback::Write {
+                cb: Box::new(|_: WriteResponse| {}),
+                proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
+            },
+        )
         .unwrap();
-    sleep_ms(200);
+    // Proposing merge shouldn't fail.
+    assert!(rx.recv_timeout(Duration::from_millis(200)).is_ok());
 
     // Install snapshot filter before requesting snapshot.
     let (tx, rx) = mpsc::channel();
@@ -665,7 +681,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let on_apply_res_fp = "on_apply_res";
     fail::cfg(on_apply_res_fp, "return()").unwrap();
 
-    cluster.try_merge(left.get_id(), right.get_id());
+    cluster.must_try_merge(left.get_id(), right.get_id());
 
     cluster.clear_send_filters();
     // Prevent apply fsm to apply compact log
@@ -743,7 +759,7 @@ fn test_node_failed_merge_before_succeed_merge() {
     // Make peer 1003 can't receive PrepareMerge and RollbackMerge log
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
-    cluster.try_merge(left.get_id(), right.get_id());
+    cluster.must_try_merge(left.get_id(), right.get_id());
 
     // Change right region's epoch to make this merge failed
     cluster.must_split(&right, b"k8");
@@ -804,7 +820,15 @@ fn test_node_merge_transfer_leader() {
 
     cluster.run();
 
+    // To ensure the region has applied to its current term so that later `split` can success
+    // without any retries. Then, `left_peer_3` will must be `1003`.
     let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+    let k = b"k1_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    must_get_equal(&cluster.get_engine(1), k, b"value");
+
     cluster.must_split(&region, b"k2");
 
     cluster.must_put(b"k1", b"v1");
@@ -816,13 +840,14 @@ fn test_node_merge_transfer_leader() {
     let left_peer_1 = find_peer(&left, 1).unwrap().to_owned();
     cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
 
+    let left_peer_3 = find_peer(&left, 3).unwrap().to_owned();
+    assert_eq!(left_peer_3.get_id(), 1003);
+
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    cluster.try_merge(left.get_id(), right.get_id());
+    cluster.must_try_merge(left.get_id(), right.get_id());
 
-    let left_peer_3 = find_peer(&left, 3).unwrap().to_owned();
-    assert_eq!(left_peer_3.get_id(), 1003);
     // Prevent peer 1003 to handle ready when it's leader
     let before_handle_raft_ready_1003 = "before_handle_raft_ready_1003";
     fail::cfg(before_handle_raft_ready_1003, "pause").unwrap();
@@ -886,7 +911,7 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
 
 // Test if the rollback merge proposal is proposed before the majority of peers want to rollback
 #[test]
-fn test_node_mutiple_rollback_merge() {
+fn test_node_multiple_rollback_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -917,7 +942,7 @@ fn test_node_mutiple_rollback_merge() {
 
     for i in 0..3 {
         fail::cfg(on_schedule_merge_fp, "return()").unwrap();
-        cluster.try_merge(left.get_id(), right.get_id());
+        cluster.must_try_merge(left.get_id(), right.get_id());
         // Change the epoch of target region and the merge will fail
         pd_client.must_remove_peer(right.get_id(), new_peer(1, right_peer_1_id));
         right_peer_1_id += 100;
@@ -943,11 +968,14 @@ fn test_node_mutiple_rollback_merge() {
         let resp = cluster
             .call_command_on_leader(req, Duration::from_millis(100))
             .unwrap();
-        assert!(resp
+        if !resp
             .get_header()
             .get_error()
             .get_message()
-            .contains("merging mode"));
+            .contains("merging mode")
+        {
+            panic!("resp {:?} does not contain merging mode error", resp);
+        }
 
         fail::remove(on_check_merge_not_1001_fp);
         // Write data for waiting the merge to rollback easily
@@ -1009,7 +1037,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    cluster.try_merge(left.get_id(), right.get_id());
+    cluster.must_try_merge(left.get_id(), right.get_id());
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
