@@ -1,4 +1,5 @@
 use super::timestamp::TimeStamp;
+use crate::Write;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb;
@@ -244,6 +245,12 @@ pub enum MutationType {
     Other,
 }
 
+impl MutationType {
+    pub fn may_have_old_value(&self) -> bool {
+        matches!(self, MutationType::Put | MutationType::Delete)
+    }
+}
+
 /// A row mutation.
 #[derive(Debug, Clone)]
 pub enum Mutation {
@@ -316,17 +323,57 @@ impl From<kvrpcpb::Mutation> for Mutation {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
-pub struct OldValue {
-    pub short_value: Option<Value>,
-    pub start_ts: TimeStamp,
+/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+#[derive(Debug, Clone, PartialEq)]
+pub enum OldValue {
+    /// A real `OldValue`
+    Value {
+        short_value: Option<Value>,
+        start_ts: TimeStamp,
+    },
+    /// `None` means we don't found a previous value
+    None,
+    /// `Unspecified` means the user doesn't care about the previous value
+    Unspecified,
+}
+
+impl Default for OldValue {
+    fn default() -> Self {
+        OldValue::Unspecified
+    }
+}
+
+impl From<Option<Write>> for OldValue {
+    fn from(write: Option<Write>) -> Self {
+        match write {
+            Some(w) => OldValue::Value {
+                short_value: w.short_value,
+                start_ts: w.start_ts,
+            },
+            None => OldValue::None,
+        }
+    }
 }
 
 impl OldValue {
+    pub fn specified(&self) -> bool {
+        !matches!(self, OldValue::Unspecified)
+    }
+
+    pub fn exists(&self) -> bool {
+        matches!(
+            self,
+            OldValue::Value {..}
+        )
+    }
+
     pub fn size(&self) -> usize {
-        let value_size = match self.short_value {
-            Some(ref v) => v.len(),
-            None => 0,
+        let value_size = match self {
+            OldValue::Value {
+                short_value: Some(v),
+                ..
+            } => v.len(),
+            _ => 0,
         };
         value_size + std::mem::size_of::<TimeStamp>()
     }
@@ -336,7 +383,7 @@ impl OldValue {
 // key with current ts -> (short value of the prev txn, start ts of the prev txn).
 // The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (Option<OldValue>, MutationType)>;
+pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -348,22 +395,8 @@ pub struct TxnExtra {
 }
 
 impl TxnExtra {
-    pub fn add_old_value(
-        &mut self,
-        key: Key,
-        value: Option<OldValue>,
-        mutation_type: MutationType,
-    ) {
-        self.old_values.insert(key, (value, mutation_type));
-    }
-
     pub fn is_empty(&self) -> bool {
         self.old_values.is_empty()
-    }
-
-    pub fn extend(&mut self, other: &mut Self) {
-        self.old_values
-            .extend(std::mem::take(&mut other.old_values))
     }
 }
 
