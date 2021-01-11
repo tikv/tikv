@@ -361,6 +361,7 @@ impl RegionCollector {
     }
 
     pub fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
+        info!("******* seek_region executing"; "regions" => ?self.region_ranges);
         let from_key = data_key(&from_key);
         let mut iter = self
             .region_ranges

@@ -562,12 +562,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     fn get_next_gc_context(&mut self, key: Key) -> (Option<(u64, Vec<u8>, Vec<u8>)>, Option<Key>) {
         let (tx, rx) = mpsc::channel();
         let store_id = self.cfg.self_store_id;
+        info!("****** invoking seek_region"; "key" => %key);
 
         let res = self.cfg.region_info_provider.seek_region(
             key.as_encoded(),
             Box::new(move |iter| {
                 let mut scanned_regions = 0;
+                info!("****** seek_region cb invoked");
                 for info in iter {
+                    info!("****** seek_region found region"; "region" => ?info);
                     scanned_regions += 1;
                     if find_peer(&info.region, store_id).is_some() {
                         let _ = tx.send((Some(info.region.clone()), scanned_regions));
