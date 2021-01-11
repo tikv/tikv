@@ -6,9 +6,8 @@ use prometheus_static_metric::*;
 make_static_metric! {
     pub label_enum IOType {
         other,
-        read,
-        write,
-        coprocessor,
+        foreground_read,
+        foreground_write,
         flush,
         compaction,
         replication,

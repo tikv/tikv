@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tikv_util::time::Duration;
 
 use collections::HashMap;
+use file_system::{set_io_type, IOType};
 use prometheus::local::*;
 use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
 
@@ -51,7 +52,10 @@ impl SchedPool {
             .name_prefix(name_prefix)
             // Safety: by setting `after_start` and `before_stop`, `FuturePool` ensures
             // the tls_engine invariants.
-            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .after_start(move || {
+                set_tls_engine(engine.lock().unwrap().clone());
+                set_io_type(IOType::ForegroundWrite);
+            })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
                 destroy_tls_engine::<E>();

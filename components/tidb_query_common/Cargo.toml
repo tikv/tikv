@@ -5,12 +5,23 @@ edition = "2018"
 publish = false
 description = "Common utility of a query engine to run TiDB pushed down executors"
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "error_code/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "error_code/prost-codec",
+  "tikv_util/prost-codec",
+]
+
 [dependencies]
 time = "0.1"
 failure = "0.1"
 derive_more = "0.99.3"
-error_code = { path = "../error_code" }
-tikv_util = { path = "../tikv_util" }
+error_code = { path = "../error_code", default-features = false }
+tikv_util = { path = "../tikv_util", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
