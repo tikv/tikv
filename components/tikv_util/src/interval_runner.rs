@@ -53,6 +53,9 @@ impl IntervalRunner {
                         task.on_tick();
                     }
                 }
+                for task in &mut tasks {
+                    task.stop();
+                }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
         self.handle = Some(h);
