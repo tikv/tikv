@@ -45,15 +45,18 @@ pub enum IOOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
 pub enum IOType {
     Other = 0,
-    Read = 1,
-    Write = 2,
-    Coprocessor = 3,
-    Flush = 4,
-    Compaction = 5,
-    Replication = 6,
-    LoadBalance = 7,
-    Import = 8,
-    Export = 9,
+    // Including coprocessor and storage read.
+    ForegroundRead = 1,
+    // Including scheduler worker, raftstore and apply. Scheduler worker only
+    // does read related works, but it's on the path of foreground write, so
+    // account it as foreground-write instead of foreground-read.
+    ForegroundWrite = 2,
+    Flush = 3,
+    Compaction = 4,
+    Replication = 5,
+    LoadBalance = 6,
+    Import = 7,
+    Export = 8,
 }
 
 pub struct WithIOType {
