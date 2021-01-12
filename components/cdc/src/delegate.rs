@@ -30,8 +30,8 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
-use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
+use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
@@ -433,11 +433,15 @@ impl Delegate {
             } = cmd;
             if !response.get_header().has_error() {
                 if !request.has_admin_request() {
+                    let flags =
+                        WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+                    let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
                     self.sink_data(
                         index,
                         request.requests.into(),
                         old_value_cb.clone(),
                         old_value_cache,
+                        is_one_pc,
                     )?;
                 } else {
                     self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
@@ -475,7 +479,7 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_lock(lock.0, &lock.1, &mut row);
+                    let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
                     if skip {
                         continue;
                     }
@@ -495,7 +499,7 @@ impl Delegate {
                     old_value,
                 }) => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(write.0, &write.1, &mut row);
+                    let skip = decode_write(write.0, &write.1, &mut row, false);
                     if skip {
                         continue;
                     }
@@ -550,8 +554,32 @@ impl Delegate {
         requests: Vec<Request>,
         old_value_cb: Rc<RefCell<OldValueCallback>>,
         old_value_cache: &mut OldValueCache,
+        is_one_pc: bool,
     ) -> Result<()> {
-        let mut rows = HashMap::default();
+        let txn_extra_op = self.txn_extra_op;
+        let mut read_old_value = |row: &mut EventRow, read_old_ts| {
+            if txn_extra_op == TxnExtraOp::ReadOldValue {
+                let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+                let start = Instant::now();
+
+                let mut statistics = Statistics::default();
+                row.old_value =
+                    old_value_cb.borrow_mut()(key, read_old_ts, old_value_cache, &mut statistics)
+                        .unwrap_or_default();
+                CDC_OLD_VALUE_DURATION_HISTOGRAM
+                    .with_label_values(&["all"])
+                    .observe(start.elapsed().as_secs_f64());
+                for (cf, cf_details) in statistics.details().iter() {
+                    for (tag, count) in cf_details.iter() {
+                        CDC_OLD_VALUE_SCAN_DETAILS
+                            .with_label_values(&[*cf, *tag])
+                            .inc_by(*count as i64);
+                    }
+                }
+            }
+        };
+
+        let mut rows: HashMap<Vec<u8>, EventRow> = HashMap::default();
         for mut req in requests {
             // CDC cares about put requests only.
             if req.get_cmd_type() != CmdType::Put {
@@ -570,67 +598,67 @@ impl Delegate {
             match put.cf.as_str() {
                 "write" => {
                     let mut row = EventRow::default();
-                    let skip = decode_write(put.take_key(), put.get_value(), &mut row);
+                    let skip = decode_write(put.take_key(), put.get_value(), &mut row, true);
                     if skip {
                         continue;
                     }
 
-                    // In order to advance resolved ts,
-                    // we must untrack inflight txns if they are committed.
-                    let commit_ts = if row.commit_ts == 0 {
-                        None
-                    } else {
-                        Some(row.commit_ts)
-                    };
-                    match self.resolver {
-                        Some(ref mut resolver) => resolver.untrack_lock(
-                            row.start_ts.into(),
-                            commit_ts.map(Into::into),
-                            row.key.clone(),
-                        ),
-                        None => {
-                            assert!(self.pending.is_some(), "region resolver not ready");
-                            let pending = self.pending.as_mut().unwrap();
-                            pending.locks.push(PendingLock::Untrack {
-                                key: row.key.clone(),
-                                start_ts: row.start_ts.into(),
-                                commit_ts: commit_ts.map(Into::into),
-                            });
-                            pending.pending_bytes += row.key.len();
-                            CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
+                    if is_one_pc {
+                        set_event_row_type(&mut row, EventLogType::Committed);
+                        let commit_ts = TimeStamp::from(row.commit_ts);
+                        read_old_value(&mut row, commit_ts.prev());
+                        if let Some(resolver) = &self.resolver {
+                            assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
                         }
-                    }
-
-                    let r = rows.insert(row.key.clone(), row);
-                    assert!(r.is_none());
-                }
-                "lock" => {
-                    let mut row = EventRow::default();
-                    let skip = decode_lock(put.take_key(), put.get_value(), &mut row);
-                    if skip {
-                        continue;
-                    }
-
-                    if self.txn_extra_op == TxnExtraOp::ReadOldValue {
-                        let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-                        let start = Instant::now();
-
-                        let mut statistics = Statistics::default();
-                        row.old_value =
-                            old_value_cb.borrow_mut()(key, old_value_cache, &mut statistics)
-                                .unwrap_or_default();
-                        CDC_OLD_VALUE_DURATION_HISTOGRAM
-                            .with_label_values(&["all"])
-                            .observe(start.elapsed().as_secs_f64());
-                        for (cf, cf_details) in statistics.details().iter() {
-                            for (tag, count) in cf_details.iter() {
-                                CDC_OLD_VALUE_SCAN_DETAILS
-                                    .with_label_values(&[*cf, *tag])
-                                    .inc_by(*count as i64);
+                    } else {
+                        // In order to advance resolved ts,
+                        // we must untrack inflight txns if they are committed.
+                        let commit_ts = if row.commit_ts == 0 {
+                            None
+                        } else {
+                            Some(row.commit_ts)
+                        };
+                        match self.resolver {
+                            Some(ref mut resolver) => resolver.untrack_lock(
+                                row.start_ts.into(),
+                                commit_ts.map(Into::into),
+                                row.key.clone(),
+                            ),
+                            None => {
+                                assert!(self.pending.is_some(), "region resolver not ready");
+                                let pending = self.pending.as_mut().unwrap();
+                                pending.locks.push(PendingLock::Untrack {
+                                    key: row.key.clone(),
+                                    start_ts: row.start_ts.into(),
+                                    commit_ts: commit_ts.map(Into::into),
+                                });
+                                pending.pending_bytes += row.key.len();
+                                CDC_PENDING_BYTES_GAUGE.add(row.key.len() as i64);
                             }
                         }
                     }
 
+                    match rows.get_mut(&row.key) {
+                        Some(row_with_value) => {
+                            row.value = mem::take(&mut row_with_value.value);
+                            *row_with_value = row;
+                        }
+                        None => {
+                            rows.insert(row.key.clone(), row);
+                        }
+                    }
+                }
+                "lock" => {
+                    let mut row = EventRow::default();
+                    let lock = Lock::parse(put.get_value()).unwrap();
+                    let for_update_ts = lock.for_update_ts;
+                    let skip = decode_lock(put.take_key(), lock, &mut row);
+                    if skip {
+                        continue;
+                    }
+
+                    let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
+                    read_old_value(&mut row, read_old_ts);
                     let occupied = rows.entry(row.key.clone()).or_default();
                     if !occupied.value.is_empty() {
                         assert!(row.value.is_empty());
@@ -719,18 +747,43 @@ fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     }
 }
 
-fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
+fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
+    // The current record's commit_ts is the rolled-back transaction's start_ts.
+    row.start_ts = key.decode_ts().unwrap().into_inner();
+    row.commit_ts = 0;
+    row.key = key.truncate_ts().unwrap().into_raw().unwrap();
+    row.op_type = EventRowOpType::Unknown;
+    set_event_row_type(row, EventLogType::Rollback);
+}
+
+/// Decodes the write record and store its information in `row`. This may be called both when
+/// doing incremental scan of observing apply events. There's different behavior for the two
+/// case, distinguished by the `is_apply` parameter.
+fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow, is_apply: bool) -> bool {
+    let key = Key::from_encoded(key);
     let write = WriteRef::parse(value).unwrap().to_owned();
+
+    // For scanning, ignore the GC fence and read the old data;
+    // For observed apply, drop the record it self but keep only the overlapped rollback information
+    // if gc_fence exists.
+    if is_apply && write.gc_fence.is_some() {
+        // `gc_fence` is set means the write record has been rewritten.
+        // Currently the only case is writing overlapped_rollback. And in this case
+        assert!(write.has_overlapped_rollback);
+        assert_ne!(write.write_type, WriteType::Rollback);
+        make_overlapped_rollback(key, row);
+        return false;
+    }
+
     let (op_type, r_type) = match write.write_type {
         WriteType::Put => (EventRowOpType::Put, EventLogType::Commit),
         WriteType::Delete => (EventRowOpType::Delete, EventLogType::Commit),
         WriteType::Rollback => (EventRowOpType::Unknown, EventLogType::Rollback),
         other => {
-            debug!("skip write record"; "write" => ?other, "key" => hex::encode_upper(key));
+            debug!("skip write record"; "write" => ?other, "key" => %key);
             return true;
         }
     };
-    let key = Key::from_encoded(key);
     let commit_ts = if write.write_type == WriteType::Rollback {
         0
     } else {
@@ -739,7 +792,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     row.start_ts = write.start_ts.into_inner();
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
@@ -748,8 +801,7 @@ fn decode_write(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     false
 }
 
-fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
-    let lock = Lock::parse(value).unwrap();
+fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow) -> bool {
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
@@ -757,7 +809,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
             debug!("skip lock record";
                 "type" => ?other,
                 "start_ts" => ?lock.ts,
-                "key" => hex::encode_upper(key),
+                "key" => &log_wrappers::Value::key(&key),
                 "for_update_ts" => ?lock.for_update_ts);
             return true;
         }
@@ -765,7 +817,7 @@ fn decode_lock(key: Vec<u8>, value: &[u8], row: &mut EventRow) -> bool {
     let key = Key::from_encoded(key);
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
-    row.op_type = op_type;
+    row.op_type = op_type as _;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
@@ -1007,14 +1059,14 @@ mod tests {
         row1.start_ts = 1;
         row1.commit_ts = 0;
         row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put;
+        row1.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row1, EventLogType::Prewrite);
         row1.value = b"b".to_vec();
         let mut row2 = EventRow::default();
         row2.start_ts = 1;
         row2.commit_ts = 2;
         row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put;
+        row2.op_type = EventRowOpType::Put as _;
         set_event_row_type(&mut row2, EventLogType::Committed);
         row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();

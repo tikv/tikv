@@ -273,7 +273,6 @@ impl Simulator for ServerCluster {
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
-        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -284,11 +283,10 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
-            security_mgr.clone(),
         );
 
         // Create deadlock service.
-        let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
+        let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
         let (resolver, state) =
@@ -297,6 +295,7 @@ impl Simulator for ServerCluster {
             .encryption_key_manager(key_manager)
             .build(tmp_str);
         let server_cfg = Arc::new(cfg.server.clone());
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
@@ -323,7 +322,6 @@ impl Simulator for ServerCluster {
             debug_thread_handle,
             raft_router,
             ConfigController::default(),
-            security_mgr.clone(),
         );
 
         for _ in 0..100 {

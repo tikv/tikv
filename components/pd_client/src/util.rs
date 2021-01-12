@@ -9,8 +9,7 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future;
-use futures::future::TryFutureExt;
+use futures::future::{self, TryFutureExt};
 use futures::stream::Stream;
 use futures::stream::TryStreamExt;
 use futures::task::Context;
@@ -31,7 +30,7 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-use super::{ClusterVersion, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -46,13 +45,11 @@ pub struct Inner {
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
-
-    pub cluster_version: ClusterVersion,
 }
 
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
-    inner: Arc<RwLock<Inner>>,
+    inner: Arc<LeaderClient>,
 }
 
 impl Stream for HeartbeatReceiver {
@@ -71,7 +68,7 @@ impl Stream for HeartbeatReceiver {
 
             self.receiver.take();
 
-            let mut inner = self.inner.wl();
+            let mut inner = self.inner.inner.wl();
             let mut receiver = None;
             if let Either::Left(ref mut recv) = inner.hb_receiver {
                 receiver = recv.take();
@@ -91,7 +88,8 @@ impl Stream for HeartbeatReceiver {
 /// A leader client doing requests asynchronous.
 pub struct LeaderClient {
     timer: Handle,
-    pub(crate) inner: Arc<RwLock<Inner>>,
+    pub(crate) inner: RwLock<Inner>,
+    pub feature_gate: FeatureGate,
 }
 
 impl LeaderClient {
@@ -107,7 +105,7 @@ impl LeaderClient {
 
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
-            inner: Arc::new(RwLock::new(Inner {
+            inner: RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
                 hb_receiver: Either::Left(Some(rx)),
@@ -117,18 +115,18 @@ impl LeaderClient {
                 on_reconnect: None,
 
                 last_update: Instant::now(),
-                cluster_version: ClusterVersion::default(),
-            })),
+            }),
+            feature_gate: FeatureGate::default(),
         }
     }
 
-    pub fn handle_region_heartbeat_response<F>(&self, f: F) -> PdFuture<()>
+    pub fn handle_region_heartbeat_response<F>(self: &Arc<Self>, f: F) -> PdFuture<()>
     where
         F: Fn(RegionHeartbeatResponse) + Send + 'static,
     {
         let recv = HeartbeatReceiver {
             receiver: None,
-            inner: Arc::clone(&self.inner),
+            inner: self.clone(),
         };
         Box::pin(
             recv.try_for_each(move |resp| {
@@ -144,18 +142,20 @@ impl LeaderClient {
         inner.on_reconnect = Some(f);
     }
 
-    pub fn request<Req, Resp, F>(&self, req: Req, func: F, retry: usize) -> Request<Req, F>
+    pub fn request<Req, Resp, F>(
+        self: &Arc<Self>,
+        req: Req,
+        func: F,
+        retry: usize,
+    ) -> Request<Req, F>
     where
         Req: Clone + 'static,
-        F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
+        F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
             reconnect_count: retry,
             request_sent: 0,
-            client: LeaderClient {
-                timer: self.timer.clone(),
-                inner: Arc::clone(&self.inner),
-            },
+            client: self.clone(),
             req,
             func,
         }
@@ -175,21 +175,20 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-
-            (
-                try_connect_leader(
-                    Arc::clone(&inner.env),
-                    Arc::clone(&inner.security_mgr),
-                    inner.members.clone(),
-                ),
-                start,
-            )
+            let fut = try_connect_leader(
+                Arc::clone(&inner.env),
+                Arc::clone(&inner.security_mgr),
+                inner.members.clone(),
+            );
+            slow_log!(start.elapsed(), "PD client try connect leader");
+            (fut, start)
         };
 
         let (client, members) = future.await?;
         fail_point!("leader_client_reconnect");
 
         {
+            let start_refresh = Instant::now();
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
                 panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
@@ -210,8 +209,12 @@ impl LeaderClient {
             if let Some(ref on_reconnect) = inner.on_reconnect {
                 on_reconnect();
             }
+            slow_log!(
+                start_refresh.elapsed(),
+                "PD client refresh region heartbeat",
+            );
         }
-        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        info!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
@@ -222,7 +225,7 @@ pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, F> {
     reconnect_count: usize,
     request_sent: usize,
-    client: LeaderClient,
+    client: Arc<LeaderClient>,
     req: Req,
     func: F,
 }
@@ -232,7 +235,7 @@ const MAX_REQUEST_COUNT: usize = 3;
 impl<Req, Resp, F> Request<Req, F>
 where
     Req: Clone + Send + 'static,
-    F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
+    F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
@@ -268,7 +271,7 @@ where
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
 
-        (self.func)(&self.client.inner, r).await
+        (self.func)(&self.client, r).await
     }
 
     fn should_not_retry(resp: &Result<Resp>) -> bool {
@@ -323,15 +326,15 @@ where
                 if let Err(e) = block_on(client.reconnect()) {
                     error!(?e; "reconnect failed");
                 }
-                err.replace(e);
+                err = Some(e);
             }
         }
     }
 
-    Err(err.unwrap_or(box_err!("fail to request")))
+    Err(err.unwrap_or_else(|| box_err!("fail to request")))
 }
 
-pub fn validate_endpoints(
+pub async fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
     security_mgr: Arc<SecurityManager>,
@@ -346,7 +349,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
+        let (_, resp) = match connect(Arc::clone(&env), &security_mgr, ep).await {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -378,7 +381,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) =
-                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
+                try_connect_leader(Arc::clone(&env), security_mgr, members).await?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }

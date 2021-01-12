@@ -136,7 +136,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     return Err(box_err!(
                         "{}th column is missing in datum buffer: {}",
                         i,
-                        hex::encode_upper(key)
+                        log_wrappers::Value::key(key)
                     ));
                 }
                 let (column, remaining) = split_datum(datums, false)?;
