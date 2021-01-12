@@ -23,10 +23,10 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
     + [9077](https://github.com/tikv/tikv/pull/9077) [9114](https://github.com/tikv/tikv/pull/9114) [9120](https://github.com/tikv/tikv/pull/9120) [9172](https://github.com/tikv/tikv/pull/9172) [9183](https://github.com/tikv/tikv/pull/9183)
     + [9196](https://github.com/tikv/tikv/pull/9196) [9207](https://github.com/tikv/tikv/pull/9207) [9214](https://github.com/tikv/tikv/pull/9214) [9254](https://github.com/tikv/tikv/pull/9254) [9284](https://github.com/tikv/tikv/pull/9284)
 + Engine
-  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter.
-    + [9149](https://github.com/tikv/tikv/pull/9149) [9269](https://github.com/tikv/tikv/pull/9269)
-  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO.
-    + [8115](https://github.com/tikv/tikv/pull/8115) [9270](https://github.com/tikv/tikv/pull/9270)
+  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter. [9149](https://github.com/tikv/tikv/pull/9149) [9269](https://github.com/tikv/tikv/pull/9269)
+  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO. [8115](https://github.com/tikv/tikv/pull/8115) [9270](https://github.com/tikv/tikv/pull/9270)
++ RaftStore
+  + Support using joint consensus [8401](https://github.com/tikv/tikv/pull/8401)
 
 ## [4.0.0-beta] - 2020-01-17
 + Upgrade the RocksDB version to 6.4.6
