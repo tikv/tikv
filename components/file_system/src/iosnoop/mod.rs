@@ -8,14 +8,6 @@ mod imp;
 #[path = "null.rs"]
 mod imp;
 
-mod metrics;
-
-pub use imp::{flush_io_metrics, init_io_snooper, IOContext};
+pub(crate) use imp::fetch_io_bytes;
+pub use imp::{flush_io_latency_metrics, init_io_snooper};
 pub use imp::{get_io_type, set_io_type};
-
-#[repr(C)]
-#[derive(Default, Clone)]
-pub struct IOStats {
-    read: u64,
-    write: u64,
-}

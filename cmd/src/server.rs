@@ -24,10 +24,13 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, MetricsFlusher,
-    RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines,
+    MetricsTask as EngineMetricsTask, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
+use file_system::{
+    set_io_rate_limiter, BytesFetcher, BytesRecorder, IORateLimiter, MetricsTask as IOMetricsTask,
+};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -70,13 +73,13 @@ use tikv::{
     },
     storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
 };
-use tikv_util::config::VersionTrack;
 use tikv_util::{
     check_environment_variables,
-    config::ensure_dir_exist,
+    config::{ensure_dir_exist, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, Worker},
+    IntervalDriver,
 };
 use tokio::runtime::Builder;
 
@@ -108,10 +111,14 @@ pub fn run_tikv(config: TiKvConfig) {
         ($ER: ty) => {{
             let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
-            if enable_io_snoop {
-                tikv.init_io_snooper();
-            }
-            tikv.init_io_rate_limit();
+            let fetcher = if enable_io_snoop && tikv.init_io_snooper() {
+                tikv.init_io_rate_limit(None);
+                BytesFetcher::ByIOSnooper()
+            } else {
+                let recorder = Arc::new(BytesRecorder::new());
+                tikv.init_io_rate_limit(Some(recorder.clone()));
+                BytesFetcher::ByRateLimiter(recorder)
+            };
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -121,7 +128,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let gc_worker = tikv.init_gc_worker();
             let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
-            tikv.init_metrics_flusher();
+            tikv.init_metrics_flusher(fetcher);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -820,8 +827,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(
+    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
+        let mut metrics_flusher = Box::new(IntervalDriver::new("metrics-flusher"));
+        metrics_flusher.add_task(IOMetricsTask::new(fetcher));
+        metrics_flusher.add_task(EngineMetricsTask::new(
             self.engines.as_ref().unwrap().engines.clone(),
         ));
 
@@ -833,21 +842,20 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.to_stop.push(metrics_flusher);
     }
 
-    fn init_io_snooper(&mut self) {
+    fn init_io_snooper(&mut self) -> bool {
         if let Err(e) = file_system::init_io_snooper() {
             error!(%e; "failed to init io snooper");
+            false
         } else {
             info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
+            true
         }
     }
 
-    fn init_io_rate_limit(&mut self) {
-        let limiter = get_io_rate_limiter().unwrap_or_else(|| {
-            let limiter = Arc::new(IORateLimiter::new(None));
-            set_io_rate_limiter(Some(limiter.clone()));
-            limiter
-        });
+    fn init_io_rate_limit(&mut self, recorder: Option<Arc<BytesRecorder>>) {
+        let limiter = Arc::new(IORateLimiter::new(recorder));
         self.config.storage.io_rate_limit.apply(&limiter);
+        set_io_rate_limiter(Some(limiter));
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
@@ -1134,9 +1142,9 @@ where
     }
 }
 
-impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
-    fn stop(mut self: Box<Self>) {
-        (*self).stop()
+impl Stop for IntervalDriver {
+    fn stop(mut self: Box<IntervalDriver>) {
+        (*self).stop();
     }
 }
 

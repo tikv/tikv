@@ -4,23 +4,23 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use rocksdb::{DBOptions, TitanDBOptions};
 use tempfile::Builder;
 
 use engine_rocks::util::{self as rocks_util, RocksCFOptions};
 use engine_rocks::{RocksColumnFamilyOptions, RocksDBOptions};
-use engine_traits::{ColumnFamilyOptions, Engines, MetricsFlusher, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    ColumnFamilyOptions, DBOptions, Engines, MetricsTask, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
+use tikv_util::IntervalDriver;
 
 #[test]
-fn test_metrics_flusher() {
+fn test_metrics_task() {
     let path = Builder::new()
-        .prefix("_test_metrics_flusher")
+        .prefix("_test_metrics_task")
         .tempdir()
         .unwrap();
     let raft_path = path.path().join(Path::new("raft"));
-    let mut db_opt = DBOptions::new();
-    db_opt.set_titandb_options(&TitanDBOptions::new());
-    let db_opt = RocksDBOptions::from_raw(db_opt);
+    let db_opt = RocksDBOptions::new();
     let cf_opts = RocksColumnFamilyOptions::new();
     let cfs_opts = vec![
         RocksCFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
@@ -34,16 +34,14 @@ fn test_metrics_flusher() {
         CF_DEFAULT,
         RocksColumnFamilyOptions::new(),
     )];
-    let raft_engine = rocks_util::new_engine_opt(
-        raft_path.to_str().unwrap(),
-        RocksDBOptions::from_raw(DBOptions::new()),
-        cfs_opts,
-    )
-    .unwrap();
+    let raft_engine =
+        rocks_util::new_engine_opt(raft_path.to_str().unwrap(), RocksDBOptions::new(), cfs_opts)
+            .unwrap();
 
     let engines = Engines::new(engine, raft_engine);
-    let mut metrics_flusher = MetricsFlusher::new(engines);
+    let mut metrics_flusher = IntervalDriver::new("metrics-flusher");
     metrics_flusher.set_flush_interval(Duration::from_millis(100));
+    metrics_flusher.add_task(MetricsTask::new(engines));
 
     if let Err(e) = metrics_flusher.start() {
         error!("failed to start metrics flusher, error = {:?}", e);

@@ -486,7 +486,7 @@ fn test_request_snapshot_apply_repeatedly() {
 #[test]
 fn test_inspected_snapshot() {
     let recorder = Arc::new(BytesRecorder::new());
-    set_io_rate_limiter(IORateLimiter::new(10000, Some(recorder.clone())));
+    set_io_rate_limiter(Some(Arc::new(IORateLimiter::new(Some(recorder.clone())))));
 
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);

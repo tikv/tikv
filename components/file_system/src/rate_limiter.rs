@@ -381,11 +381,7 @@ lazy_static! {
 }
 
 pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
-    if let Some(limiter) = limiter {
-        *IO_RATE_LIMITER.lock() = Some(limiter);
-    } else {
-        *IO_RATE_LIMITER.lock() = None;
-    }
+    *IO_RATE_LIMITER.lock() = limiter;
 }
 
 pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {

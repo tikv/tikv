@@ -4488,6 +4488,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "tikv_util",
 ]
 
 [[package]]

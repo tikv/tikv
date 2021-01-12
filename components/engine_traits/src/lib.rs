@@ -256,10 +256,9 @@
 
 #[macro_use]
 extern crate quick_error;
+extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -332,8 +331,8 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftLogBatch};
 
 // These modules need further scrutiny
 
-pub mod metrics_flusher;
-pub use crate::metrics_flusher::*;
+pub mod metrics_task;
+pub use crate::metrics_task::*;
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;

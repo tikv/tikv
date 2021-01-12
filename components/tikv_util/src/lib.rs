@@ -41,6 +41,7 @@ pub mod future;
 pub mod macros;
 pub mod callback;
 pub mod deadline;
+mod interval_driver;
 pub mod keybuilder;
 pub mod logger;
 pub mod lru;
@@ -52,6 +53,7 @@ pub mod timer;
 pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
+pub use interval_driver::{IntervalDriver, IntervalRunnable};
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
