@@ -15,6 +15,7 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+bcc-iosnoop = ["tikv/bcc-iosnoop"]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
