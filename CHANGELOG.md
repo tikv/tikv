@@ -9,9 +9,6 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add `enable-compaction-filter` option in `gc` section in config file. (https://github.com/tikv/tikv/pull/6728)
 
 ## [5.0.0-rc] - 2021-01-12
-+ Security
-  + Support desensitization of error messages and log files.
-    + [#8670](https://github.com/tikv/tikv/pull/8670) [#9247](https://github.com/tikv/tikv/pull/9247) [#9250](https://github.com/tikv/tikv/pull/9250)
 + Transaction
   + Support async commit feature to significantly reduce the latency of transactions.
     + [8154](https://github.com/tikv/tikv/pull/8154) [8258](https://github.com/tikv/tikv/pull/8258) [8337](https://github.com/tikv/tikv/pull/8337) [8405](https://github.com/tikv/tikv、pull/8405) [8349](https://github.com/tikv/tikv/pull/8349)
