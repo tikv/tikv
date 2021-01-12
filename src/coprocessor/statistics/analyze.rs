@@ -151,7 +151,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
             if stats_version == ANALYZE_VERSION_V2 {
-                hist.append_v2(&data);
+                hist.append(&data, true);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
                 } else {
@@ -164,7 +164,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cur_val = (1, data);
                 }
             } else {
-                hist.append(&data);
+                hist.append(&data, false);
             }
         }
 
@@ -343,7 +343,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut EvalContext::default(),
                         &mut data,
                     )?;
-                    pk_builder.append(&data);
+                    pk_builder.append(&data, false);
                 }
                 columns_slice = &columns_slice[1..];
                 columns_info = &columns_info[1..];
