@@ -885,6 +885,15 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             has_incoming_majority && has_demoting_majority
         };
 
+        let find_store_id = |region: &Region, peer_id| {
+            for peer in region.get_peers() {
+                if peer.id == peer_id {
+                    return Some(peer.store_id);
+                }
+            }
+            None
+        };
+
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -899,12 +908,16 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             };
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader)) = meta.leaders.get(&region_id) {
-                        if leader.store_id != meta.store_id.unwrap() {
+                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
+                        let leader_store_id = find_store_id(&region, *leader_id);
+                        if leader_store_id.is_none() {
+                            continue;
+                        }
+                        if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
                         for peer in region.get_peers() {
-                            if peer.store_id == store_id && peer.id == leader.id {
+                            if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
                                 continue;
                             }
@@ -912,7 +925,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 continue;
                             }
                             let mut leader_info = LeaderInfo::default();
-                            leader_info.set_peer_id(leader.id);
+                            leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());

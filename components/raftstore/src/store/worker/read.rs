@@ -472,6 +472,12 @@ where
                             let read_ts = req.get_header().get_read_ts();
                             let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
                             assert!(read_ts > 0);
+                            debug!(
+                                "handle stale read reqeust";
+                                "region id" => region_id,
+                                "read_ts" => read_ts,
+                                "safe_ts" => safe_ts
+                            );
                             if safe_ts >= read_ts {
                                 let mut response =
                                     self.execute(&req, &delegate.region, None, read_id);
@@ -485,6 +491,12 @@ where
                                 self.delegates.insert(region_id, Some(delegate));
                                 return;
                             }
+                            debug!(
+                                "rejected by safe timestamp";
+                                "region_id" => region_id,
+                                "read_ts" => read_ts,
+                                "safe_ts" => safe_ts
+                            );
                             self.metrics.rejected_by_safe_timestamp += 1;
                             break;
                         }

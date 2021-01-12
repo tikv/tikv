@@ -522,6 +522,9 @@ where
             ..Default::default()
         };
 
+        let read_progress =
+            RegionReadProgress::new(peer.get_id(), applied_index, REGION_READ_PROGRESS_CAP);
+
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
         let mut peer = Peer {
@@ -575,7 +578,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
-            read_progress: RegionReadProgress::new(applied_index, REGION_READ_PROGRESS_CAP),
+            read_progress,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1301,6 +1304,12 @@ where
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
             self.cmd_epoch_checker.maybe_update_term(self.term());
+        } else if ready.must_sync() {
+            if let Some(hs) = ready.hs() {
+                if hs.get_term() != self.get_store().hard_state().get_term() {
+                    self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
+                }
+            }
         }
     }
 
@@ -1366,12 +1375,14 @@ where
         leader_id: u64,
         term: u64,
     ) {
-        for peer in self.region().get_peers() {
-            if peer.id == leader_id {
-                let mut meta = ctx.store_meta.lock().unwrap();
-                meta.leaders.insert(self.region_id, (term, peer.clone()));
-            }
-        }
+        debug!(
+            "insert leader info to meta";
+            "region_id" => self.region_id,
+            "leader_id" => leader_id,
+            "term" => term,
+        );
+        let mut meta = ctx.store_meta.lock().unwrap();
+        meta.leaders.insert(self.region_id, (term, leader_id));
     }
 
     #[inline]
@@ -2108,7 +2119,11 @@ where
 
         let policy = self.inspect(&req);
         let res = match policy {
-            Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
+            Ok(RequestPolicy::ReadLocal) => {
+                self.read_local(ctx, req, cb);
+                return false;
+            }
+            Ok(RequestPolicy::StaleRead) => {
                 self.read_local(ctx, req, cb);
                 return false;
             }
@@ -3288,7 +3303,7 @@ where
             && msg.get_msg_type() == MessageType::MsgHeartbeat
             && self.has_applied_to_current_term()
         {
-            send_msg.set_read_ts(self.read_progress.applied_index());
+            send_msg.set_applied_index(self.read_progress.applied_index());
             send_msg.set_read_ts(self.read_progress.safe_ts());
         }
 

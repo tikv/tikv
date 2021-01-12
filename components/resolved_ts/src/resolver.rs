@@ -124,6 +124,14 @@ impl Resolver {
             .resolved_ts
             .fetch_max(new_resolved_ts.into_inner(), Ordering::Relaxed);
 
+        if prev_ts < new_resolved_ts.into_inner() {
+            debug!(
+                "resolved ts by resolver";
+                "region id" => self.region_id,
+                "new resolved ts" => new_resolved_ts.into_inner()
+            );
+        }
+
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than

@@ -233,6 +233,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             has_incoming_majority && has_demoting_majority
         };
 
+        let find_store_id = |region: &Region, peer_id| {
+            for peer in region.get_peers() {
+                if peer.id == peer_id {
+                    return Some(peer.store_id);
+                }
+            }
+            None
+        };
+
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -245,14 +254,19 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 Some(id) => id,
                 None => return vec![],
             };
-            for region_id in regions {
+            for region_id in regions.clone() {
                 if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader)) = meta.leaders.get(&region_id) {
-                        if leader.store_id != meta.store_id.unwrap() {
-                            continue;
+                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
+                        match find_store_id(&region, *leader_id) {
+                            None => continue,
+                            Some(id) => {
+                                if id != meta.store_id.unwrap() {
+                                    continue;
+                                }
+                            }
                         }
                         for peer in region.get_peers() {
-                            if peer.store_id == store_id && peer.id == leader.id {
+                            if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
                                 continue;
                             }
@@ -265,7 +279,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                                 read_state.set_safe_ts(rp.safe_ts());
                             }
                             let mut leader_info = LeaderInfo::default();
-                            leader_info.set_peer_id(leader.id);
+                            leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
@@ -307,7 +321,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         let resps = futures::future::join_all(stores).await;
         resps
             .into_iter()
-            .filter_map(Result::ok)
+            .filter_map(|res| {
+                if res.is_err() {
+                    debug!("region_resolved_ts_store meet error"; "res" => ?res);
+                }
+                Result::ok(res)
+            })
             .map(|(store_id, resp)| {
                 resp.regions
                     .into_iter()

@@ -209,7 +209,7 @@ where
             cfg.min_ts_interval.0,
             cfg.hibernate_regions_compatible,
         );
-        let scanner_pool = ScannerPool::new(1, raft_router.clone());
+        let scanner_pool = ScannerPool::new(2, raft_router.clone());
         let ep = Self {
             scheduler,
             raft_router,
@@ -230,6 +230,11 @@ where
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
             let reader = store_meta.readers.get(&region_id).expect("");
+            debug!(
+                "register observe region";
+                "store id" => ?store_meta.store_id.clone(),
+                "region" => ?region
+            );
             ObserveRegion::new(region.clone(), reader.safe_ts.clone())
         };
         let observe_id = observe_region.observe_id;
@@ -237,10 +242,12 @@ where
             ResolverStatus::Pending { ref cancelled, .. } => cancelled.clone(),
             ResolverStatus::Ready => panic!("illeagal created observe region"),
         };
+        self.regions.insert(region_id, observe_region);
+
         let scheduler = self.scheduler.clone();
         let scheduler1 = self.scheduler.clone();
         let scan_task = ScanTask {
-            id: observe_region.observe_id,
+            id: observe_id,
             tag: String::new(),
             mode: ScanMode::LockOnly,
             region,
@@ -267,7 +274,6 @@ where
             })),
         };
         self.scanner_pool.spawn_task(scan_task);
-        self.regions.insert(region_id, observe_region);
     }
 
     fn deregister_region(&mut self, region: &Region) {
@@ -278,6 +284,7 @@ where
                 resolver_status,
                 ..
             } = observe_region;
+            debug!("deregister observe region"; "store id" => ?self.store_meta.lock().unwrap().store_id, "region" => ?region);
             let region_id = region.id;
             if let Err(e) = self.raft_router.significant_send(
                 region_id,
@@ -298,6 +305,8 @@ where
             if let ResolverStatus::Pending { cancelled, .. } = resolver_status {
                 cancelled.store(true, Ordering::Release);
             }
+        } else {
+            warn!("deregister unregister region"; "region" => ?region);
         }
     }
 
@@ -330,7 +339,8 @@ where
                 return;
             }
             info!("region met error, recreate it"; "region_id" => region.id, "error" => ?error);
-            return self.region_updated(region);
+            self.deregister_region(&region);
+            self.register_region(region);
         }
     }
 
@@ -357,23 +367,21 @@ where
             .map(|mut batch| {
                 batch.filter_admin();
                 if !batch.is_empty() {
-                    let observe_region = self
-                        .regions
-                        .get_mut(&batch.region_id)
-                        .expect("cannot find region to handle change log");
-                    if observe_region.observe_id == batch.observe_id {
-                        let change_logs: Vec<_> = batch
-                            .into_iter(observe_region.meta.id)
-                            .map(ChangeLog::encode_change_log)
-                            .collect();
-                        observe_region.track_change_log(&change_logs);
-                        return Some((observe_region.observe_id, change_logs));
-                    } else {
-                        debug!("resolved ts CmdBatch discarded";
-                            "region_id" => batch.region_id,
-                            "observe_id" => ?batch.observe_id,
-                            "current" => ?observe_region.observe_id,
-                        );
+                    if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                        if observe_region.observe_id == batch.observe_id {
+                            let change_logs: Vec<_> = batch
+                                .into_iter(observe_region.meta.id)
+                                .map(ChangeLog::encode_change_log)
+                                .collect();
+                            observe_region.track_change_log(&change_logs);
+                            return Some((observe_region.observe_id, change_logs));
+                        } else {
+                            debug!("resolved ts CmdBatch discarded";
+                                "region_id" => batch.region_id,
+                                "observe_id" => ?batch.observe_id,
+                                "current" => ?observe_region.observe_id,
+                            );
+                        }
                     }
                 }
                 None
@@ -505,7 +513,7 @@ where
     type Task = Task<E::Snapshot>;
 
     fn run(&mut self, task: Task<E::Snapshot>) {
-        debug!("run cdc task"; "task" => ?task);
+        debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(ref region) => self.region_destroyed(region),
             Task::RegionUpdated(region) => self.region_updated(region),

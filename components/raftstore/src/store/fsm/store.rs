@@ -95,8 +95,8 @@ pub struct StoreMeta {
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
-    /// region_id -> (term, leader)
-    pub leaders: HashMap<u64, (u64, metapb::Peer)>,
+    /// region_id -> (term, leader_peer_id)
+    pub leaders: HashMap<u64, (u64, u64)>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -1778,6 +1778,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
+        meta.region_read_progress
+            .insert(region_id, peer.peer.read_progress.clone());
 
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);
@@ -2368,10 +2370,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let regions = leaders
             .into_iter()
             .map(|leader_info| {
-                if let Some((term, leader)) = meta.leaders.get(&leader_info.region_id) {
+                if let Some((term, leader_id)) = meta.leaders.get(&leader_info.region_id) {
                     if let Some(region) = meta.regions.get(&leader_info.region_id) {
                         if *term == leader_info.term
-                            && leader.id == leader_info.peer_id
+                            && *leader_id == leader_info.peer_id
                             && util::compare_region_epoch(
                                 leader_info.get_region_epoch(),
                                 region,
@@ -2407,6 +2409,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 #[derive(Clone)]
 pub struct RegionReadProgress {
+    pub peer_id: u64,
     applied_index: Arc<AtomicU64>,
     safe_ts: Arc<AtomicU64>,
     // `pending_ts` should not be accessed outside to avoid dead lock
@@ -2415,8 +2418,9 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(applied_index: u64, cap: usize) -> RegionReadProgress {
+    pub fn new(peer_id: u64, applied_index: u64, cap: usize) -> RegionReadProgress {
         RegionReadProgress {
+            peer_id,
             applied_index: Arc::new(AtomicU64::from(applied_index)),
             safe_ts: Arc::new(AtomicU64::from(0)),
             pending_ts: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
@@ -2449,13 +2453,17 @@ impl RegionReadProgress {
             }
         }
         self.applied_index.fetch_max(applied, Ordering::Relaxed);
-        self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed);
+        if ts_to_update > self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed) {
+            debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts_to_update);
+        }
     }
 
     pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
         // Fast path
         if self.applied_index.load(Ordering::Relaxed) >= apply_index {
-            self.safe_ts.fetch_max(ts, Ordering::Relaxed);
+            if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
+                debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts);
+            }
             return;
         }
 
@@ -2472,7 +2480,9 @@ impl RegionReadProgress {
             }
             self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
-            self.safe_ts.fetch_max(ts, Ordering::Relaxed);
+            if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
+                debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts);
+            }
         }
     }
 

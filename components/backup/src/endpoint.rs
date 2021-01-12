@@ -179,6 +179,7 @@ impl BackupRange {
         // Currently backup always happens on the leader, so we don't need
         // to set key ranges and start ts to check.
         assert!(!ctx.get_replica_read());
+        assert!(!ctx.get_stale_read());
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()

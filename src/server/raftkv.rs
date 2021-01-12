@@ -223,8 +223,9 @@ where
         req: Request,
         cb: Callback<CmdRes>,
     ) -> Result<()> {
-        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() {
+            assert!(!ctx.start_ts.is_zero());
             header.set_read_ts(ctx.start_ts.into_inner());
         }
         let mut cmd = RaftCmdRequest::default();
