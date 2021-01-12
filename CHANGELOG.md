@@ -6,7 +6,18 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
 - `make docker` now builds the `pingcap/tikv` image, instead of the previous Dockerfile. (https://github.com/tikv/tikv/pull/5776)
 - `make dist_artifacts` now creates compressed archives of TiKV binaries and Docker images. (https://github.com/tikv/tikv/pull/5777)
-- Add `enable-compaction-filter` option in `gc` section in config file. (https://github.com/tikv/tikv/pull/6728)
+
+## [5.0.0-rc] - 2021-01-12
++ Security
+  + Support desensitizing error messages and log files to avoid leaking sensitive information, such as ID information and credit card number. Users can enable the desensitization feature by setting the `security.redact-info-log = true` in the configuration.
++ Transaction
+  + Support async commit feature to significantly reduce the latency of transactions. Previously without the async commit feature, the statements being written were only returned to the client after the two-phase transaction commit finished. Now the async commit feature supports returning the result to the client after the first phase of the two-phase commit finishes. The second phase is then performed asynchronously in the background, thus reducing the latency of transaction commit. Note that this feature is only used with tidb-server.
++ Engine
+  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter. The system automatically adjusts the compaction rate to balance the contention for I/O resources between background tasks and foreground data reads and writes. After enabling this feature via the `rate-limiter-auto-tuned` configuration item, the delay jitter is greatly reduced than that when this feature is disabled.
+  + Support GC Compaction Filter feature. When TiKV performs garbage collection (GC) and data compaction, partitions occupy CPU and I/O resources. Overlapping data exists during the execution of these two tasks. To reduce I/O usage, the GC Compaction Filter feature combines these two tasks into one and executes them in the same task. This feature is still experimental and you can enable it via `gc.enable-compaction-filter = ture`.
+  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO.
++ RaftStore
+  + Support using joint consensus improving the availability during region membership change. "adding a member” and "deleting a member” operations during the membership change are combined into one operation and sent to all members. During the change process, Regions are in an intermediate state. If any modified member fails, the system is still available. Users can enable this feature by modifying the membership variable by executing `pd-ctl config set enable-joint-consensus true`. [#7587](https://github.com/tikv/tikv/issues/7587) [#2860](https://github.com/tikv/pd/issues/2860)
 
 ## [4.0.0-beta] - 2020-01-17
 + Upgrade the RocksDB version to 6.4.6
