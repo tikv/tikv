@@ -8,6 +8,26 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - `make dist_artifacts` now creates compressed archives of TiKV binaries and Docker images. (https://github.com/tikv/tikv/pull/5777)
 - Add `enable-compaction-filter` option in `gc` section in config file. (https://github.com/tikv/tikv/pull/6728)
 
+## [5.0.0-rc] - 2021-01-12
++ Security
+  + Support desensitization of error messages and log files.
+    + [#8670](https://github.com/tikv/tikv/pull/8670) [#9247](https://github.com/tikv/tikv/pull/9247) [#9250](https://github.com/tikv/tikv/pull/9250)
++ Transaction
+  + Support async commit feature to significantly reduce the latency of transactions.
+    + [8154](https://github.com/tikv/tikv/pull/8154) [8258](https://github.com/tikv/tikv/pull/8258) [8337](https://github.com/tikv/tikv/pull/8337) [8405](https://github.com/tikv/tikv、pull/8405) [8349](https://github.com/tikv/tikv/pull/8349)
+    + [8363](https://github.com/tikv/tikv/pull/8363) [8395](https://github.com/tikv/tikv/pull/8395) [8468](https://github.com/tikv/tikv/pull/8468) [8508](https://github.com/tikv/tikv/pull/8508) [8520](https://github.com/tikv/tikv/pull/8520)
+    + [8561](https://github.com/tikv/tikv/pull/8561) [8598](https://github.com/tikv/tikv/pull/8598) [8571](https://github.com/tikv/tikv/pull/8571) [8898](https://github.com/tikv/tikv/pull/8898) [8439](https://github.com/tikv/tikv/pull/8439)
+    + [8608](https://github.com/tikv/tikv/pull/8608) [8584](https://github.com/tikv/tikv/pull/8584) [8613](https://github.com/tikv/tikv/pull/8613) [8630](https://github.com/tikv/tikv/pull/8630) [8643](https://github.com/tikv/tikv/pull/8643)
+    + [8657](https://github.com/tikv/tikv/pull/8657) [8669](https://github.com/tikv/tikv/pull/8669) [8672](https://github.com/tikv/tikv/pull/8672) [8679](https://github.com/tikv/tikv/pull/8679) [8751](https://github.com/tikv/tikv/pull/8751)
+    + [8753](https://github.com/tikv/tikv/pull/8753) [8851](https://github.com/tikv/tikv/pull/8851) [8926](https://github.com/tikv/tikv/pull/8926) [9034](https://github.com/tikv/tikv/pull/9034) [9035](https://github.com/tikv/tikv/pull/9035)
+    + [9077](https://github.com/tikv/tikv/pull/9077) [9114](https://github.com/tikv/tikv/pull/9114) [9120](https://github.com/tikv/tikv/pull/9120) [9172](https://github.com/tikv/tikv/pull/9172) [9183](https://github.com/tikv/tikv/pull/9183)
+    + [9196](https://github.com/tikv/tikv/pull/9196) [9207](https://github.com/tikv/tikv/pull/9207) [9214](https://github.com/tikv/tikv/pull/9214) [9254](https://github.com/tikv/tikv/pull/9254) [9284](https://github.com/tikv/tikv/pull/9284)
++ Engine
+  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter.
+    + [9149](https://github.com/tikv/tikv/pull/9149) [9269](https://github.com/tikv/tikv/pull/9269)
+  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO.
+    + [8115](https://github.com/tikv/tikv/pull/8115) [9270](https://github.com/tikv/tikv/pull/9270)
+
 ## [4.0.0-beta] - 2020-01-17
 + Upgrade the RocksDB version to 6.4.6
 + Fix the issue that the system cannot perform the compaction task normally when the disk space is used up by automatically creating a 2GB empty file when TiKV is started [#6321](https://github.com/tikv/tikv/pull/6321)
