@@ -9,21 +9,16 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add `enable-compaction-filter` option in `gc` section in config file. (https://github.com/tikv/tikv/pull/6728)
 
 ## [5.0.0-rc] - 2021-01-12
++ Security
+  + Support desensitizing error messages and log files to avoid leaking sensitive information, such as ID information and credit card number. Users can enable the desensitization feature by setting the `security.redact-info-log = true` in the configuration.
 + Transaction
-  + Support async commit feature to significantly reduce the latency of transactions.
-    + [8154](https://github.com/tikv/tikv/pull/8154) [8258](https://github.com/tikv/tikv/pull/8258) [8337](https://github.com/tikv/tikv/pull/8337) [8405](https://github.com/tikv/tikv、pull/8405) [8349](https://github.com/tikv/tikv/pull/8349)
-    + [8363](https://github.com/tikv/tikv/pull/8363) [8395](https://github.com/tikv/tikv/pull/8395) [8468](https://github.com/tikv/tikv/pull/8468) [8508](https://github.com/tikv/tikv/pull/8508) [8520](https://github.com/tikv/tikv/pull/8520)
-    + [8561](https://github.com/tikv/tikv/pull/8561) [8598](https://github.com/tikv/tikv/pull/8598) [8571](https://github.com/tikv/tikv/pull/8571) [8898](https://github.com/tikv/tikv/pull/8898) [8439](https://github.com/tikv/tikv/pull/8439)
-    + [8608](https://github.com/tikv/tikv/pull/8608) [8584](https://github.com/tikv/tikv/pull/8584) [8613](https://github.com/tikv/tikv/pull/8613) [8630](https://github.com/tikv/tikv/pull/8630) [8643](https://github.com/tikv/tikv/pull/8643)
-    + [8657](https://github.com/tikv/tikv/pull/8657) [8669](https://github.com/tikv/tikv/pull/8669) [8672](https://github.com/tikv/tikv/pull/8672) [8679](https://github.com/tikv/tikv/pull/8679) [8751](https://github.com/tikv/tikv/pull/8751)
-    + [8753](https://github.com/tikv/tikv/pull/8753) [8851](https://github.com/tikv/tikv/pull/8851) [8926](https://github.com/tikv/tikv/pull/8926) [9034](https://github.com/tikv/tikv/pull/9034) [9035](https://github.com/tikv/tikv/pull/9035)
-    + [9077](https://github.com/tikv/tikv/pull/9077) [9114](https://github.com/tikv/tikv/pull/9114) [9120](https://github.com/tikv/tikv/pull/9120) [9172](https://github.com/tikv/tikv/pull/9172) [9183](https://github.com/tikv/tikv/pull/9183)
-    + [9196](https://github.com/tikv/tikv/pull/9196) [9207](https://github.com/tikv/tikv/pull/9207) [9214](https://github.com/tikv/tikv/pull/9214) [9254](https://github.com/tikv/tikv/pull/9254) [9284](https://github.com/tikv/tikv/pull/9284)
+  + Support async commit feature to significantly reduce the latency of transactions. Previously without the async commit feature, the statements being written were only returned to the client after the two-phase transaction commit finished. Now the async commit feature supports returning the result to the client after the first phase of the two-phase commit finishes. The second phase is then performed asynchronously in the background, thus reducing the latency of transaction commit. Note that this feature is only used with tidb-server.
 + Engine
-  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter. [9149](https://github.com/tikv/tikv/pull/9149) [9269](https://github.com/tikv/tikv/pull/9269)
-  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO. [8115](https://github.com/tikv/tikv/pull/8115) [9270](https://github.com/tikv/tikv/pull/9270)
+  + Introduce IO rate limiter and support dynamically changing auto-tuned mode of rate limiter. The system automatically adjusts the compaction rate to balance the contention for I/O resources between background tasks and foreground data reads and writes. After enabling this feature via the `rate-limiter-auto-tuned` configuration item, the delay jitter is greatly reduced than that when this feature is disabled.
+  + Support GC Compaction Filter feature. When TiKV performs garbage collection (GC) and data compaction, partitions occupy CPU and I/O resources. Overlapping data exists during the execution of these two tasks. To reduce I/O usage, the GC Compaction Filter feature combines these two tasks into one and executes them in the same task. This feature is still experimental and you can enable it via `gc.enable-compaction-filter = ture`.
+  + Enable compaction guard by default, to split rocksdb SST files at TiKV region boundaries, to reduce overall compaction IO.
 + RaftStore
-  + Support using joint consensus [8401](https://github.com/tikv/tikv/pull/8401)
+  + Support using joint consensus improving the availability during region membership change. "adding a member” and "deleting a member” operations during the membership change are combined into one operation and sent to all members. During the change process, Regions are in an intermediate state. If any modified member fails, the system is still available. Users can enable this feature by modifying the membership variable by executing `pd-ctl config set enable-joint-consensus true`. [#7587](https://github.com/tikv/tikv/issues/7587) [#2860](https://github.com/tikv/pd/issues/2860)
 
 ## [4.0.0-beta] - 2020-01-17
 + Upgrade the RocksDB version to 6.4.6
