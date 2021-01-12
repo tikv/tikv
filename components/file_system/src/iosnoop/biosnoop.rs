@@ -243,7 +243,7 @@ macro_rules! flush_io_latency {
     };
 }
 
-pub fn flush_io_latency_metrics() {
+pub(crate) fn flush_io_latency_metrics() {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             flush_io_latency!(ctx.bpf, other);
