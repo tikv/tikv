@@ -186,7 +186,13 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// Return:
+    ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
+    /// Post Condition:
+    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
+        // Get the cursor for write record
+        //
         // When it switches to another key in prefix seek mode, creates a new cursor for it
         // because the current position of the cursor is seldom around `key`.
         if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
@@ -195,15 +201,18 @@ impl<S: Snapshot> MvccReader<S> {
         }
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
-        if !ok {
+        // find a `ts` encoded key which is less than the `ts` encoded version of the `key`
+        let found = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
+        if !found {
             return Ok(None);
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
+        // check whether the found written_key's "real key" part equals the `key` we want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
+        // parse out the write record
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
         Ok(Some((commit_ts, write)))
     }
@@ -596,6 +605,7 @@ mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
+                need_old_value: false,
             }
         }
 
