@@ -49,21 +49,6 @@ pub struct FileConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
     pub key_id: String,
-
-    // It is preferable to use the cloud provider SDK to automatically rotate credentials
-    // Using access_key and secret_access_key creates a security risk.
-    // These fields are required by the macro new_client! that is currently in use
-    #[doc(hidden)]
-    // We don't want to write access_key and secret_access_key to config file
-    // accidentally.
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub access_key: String,
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub secret_access_key: String,
-
     pub region: String,
     pub endpoint: String,
 }
@@ -167,8 +152,6 @@ mod tests {
             master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
                     key_id: "key_id".to_owned(),
-                    access_key: "access_key".to_owned(),
-                    secret_access_key: "secret_access_key".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
                 },
@@ -187,8 +170,6 @@ mod tests {
         [master-key]
         type = "kms"
         key-id = "key_id"
-        access-key = "access_key"
-        secret-access-key = "secret_access_key"
         region = "region"
         endpoint = "endpoint"
         "#;

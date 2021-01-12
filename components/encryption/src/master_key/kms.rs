@@ -9,6 +9,7 @@ use kvproto::encryptionpb::EncryptedContent;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
 use rusoto_core::RusotoError;
+use rusoto_credential::ProvideAwsCredentials;
 use rusoto_kms::DecryptError;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tokio::runtime::{Builder, Runtime};
@@ -17,7 +18,6 @@ use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::config::KmsConfig;
 use crate::crypter::{Iv, PlainKey};
 use crate::{Error, Result};
-use rusoto_util::new_client;
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
@@ -73,17 +73,31 @@ impl std::fmt::Debug for AwsKms {
 }
 
 impl AwsKms {
-    fn new_with_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
+    fn new_creds_dispatcher<Creds, Dispatcher>(
+        config: KmsConfig,
+        dispatcher: Dispatcher,
+        credentials_provider: Creds,
+    ) -> Result<AwsKms>
     where
-        D: DispatchSignedRequest + Send + Sync + 'static,
+        Creds: ProvideAwsCredentials + Send + Sync + 'static,
+        Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
-        let client = new_client!(KmsClient, config, dispatcher);
+        let region = rusoto_util::get_region(config.region.as_ref(), config.endpoint.as_ref())?;
+        let client = KmsClient::new_with(dispatcher, credentials_provider, region);
         Ok(AwsKms {
             client,
             current_key_id: KeyId::new(config.key_id)?,
             region: config.region,
             endpoint: config.endpoint,
         })
+    }
+
+    fn new_with_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
+    where
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        let credentials_provider = rusoto_util::CredentialsProvider::new()?;
+        Self::new_creds_dispatcher(config, dispatcher, credentials_provider)
     }
 
     pub fn new(config: KmsConfig) -> Result<AwsKms> {
@@ -366,6 +380,7 @@ mod tests {
     use super::*;
     use hex::FromHex;
     use matches::assert_matches;
+    use rusoto_credential::StaticProvider;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
 
@@ -442,8 +457,6 @@ mod tests {
         let config = KmsConfig {
             key_id: "test_key_id".to_string(),
             region: "ap-southeast-2".to_string(),
-            access_key: "abc".to_string(),
-            secret_access_key: "xyz".to_string(),
             endpoint: String::new(),
         };
         let mut runtime = runtime();
@@ -454,7 +467,11 @@ mod tests {
                 key_id: Some("test_key_id".to_string()),
                 plaintext: Some(key_contents.clone().into()),
             });
-        let aws_kms = AwsKms::new_with_dispatcher(config.clone(), dispatcher).unwrap();
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let aws_kms =
+            AwsKms::new_creds_dispatcher(config.clone(), dispatcher, credentials_provider.clone())
+                .unwrap();
         let data_key = aws_kms.generate_data_key(&mut runtime).unwrap();
         assert_eq!(
             data_key.encrypted,
@@ -467,7 +484,8 @@ mod tests {
             key_id: Some("test_key_id".to_string()),
             encryption_algorithm: None,
         });
-        let aws_kms = AwsKms::new_with_dispatcher(config, dispatcher).unwrap();
+        let aws_kms =
+            AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         let plaintext = aws_kms
             .decrypt_data_key(&mut runtime, &data_key.encrypted)
             .unwrap();
@@ -533,8 +551,6 @@ mod tests {
         let config = KmsConfig {
             key_id: "test_key_id".to_string(),
             region: "ap-southeast-2".to_string(),
-            access_key: "abc".to_string(),
-            secret_access_key: "xyz".to_string(),
             endpoint: String::new(),
         };
 
@@ -551,7 +567,10 @@ mod tests {
                 "Message": "mock"
             }"#,
         );
-        let aws_kms = AwsKms::new_with_dispatcher(config, dispatcher).unwrap();
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let aws_kms =
+            AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         match aws_kms.decrypt_data_key(
             &mut runtime(),
             &EncryptedKey::new(b"invalid".to_vec()).unwrap(),

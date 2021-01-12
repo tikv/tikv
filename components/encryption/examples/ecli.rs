@@ -69,17 +69,9 @@ fn create_kms_backend(cmd: &KmsCommand, credential_file: Option<&String>) -> Res
     if let Some(credential_file) = credential_file {
         let ini = Ini::load_from_file(credential_file)
             .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
-        let props = ini
+        let _props = ini
             .section(Some("default"))
             .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
-        config.access_key = props
-            .get("aws_access_key_id")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
-        config.secret_access_key = props
-            .get("aws_secret_access_key")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
     }
     if let Some(ref region) = cmd.region {
         config.region = region.to_string();

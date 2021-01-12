@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use rusoto_core::request::HttpClient;
+use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use std::io;
 use std::marker::PhantomData;
 
@@ -15,7 +16,6 @@ use rusoto_core::{
     {ByteStream, RusotoError},
 };
 use rusoto_s3::*;
-use rusoto_util::new_client;
 
 use super::{
     util::{block_on_external_io, error_stream, retry, RetryError},
@@ -43,17 +43,42 @@ impl S3Storage {
         Self::with_request_dispatcher(&config, dispatcher)
     }
 
-    pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>
+    fn new_creds_dispatcher<Creds, Dispatcher>(
+        config: &Config,
+        dispatcher: Dispatcher,
+        credentials_provider: Creds,
+    ) -> io::Result<S3Storage>
     where
-        D: DispatchSignedRequest + Send + Sync + 'static,
+        Creds: ProvideAwsCredentials + Send + Sync + 'static,
+        Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
         Self::check_config(config)?;
-        let client = new_client!(S3Client, config, dispatcher);
+        let region = rusoto_util::get_region(config.region.as_ref(), config.endpoint.as_ref())?;
+        let client = S3Client::new_with(dispatcher, credentials_provider, region);
         Ok(S3Storage {
             config: config.clone(),
             client,
             _not_send: PhantomData::default(),
         })
+    }
+
+    pub fn with_request_dispatcher<D>(config: &Config, dispatcher: D) -> io::Result<S3Storage>
+    where
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        Self::check_config(config)?;
+        // TODO: this should not be supported.
+        // It implies static AWS credentials.
+        if !config.access_key.is_empty() && !config.secret_access_key.is_empty() {
+            let cred_provider = StaticProvider::new_minimal(
+                config.access_key.to_owned(),
+                config.secret_access_key.to_owned(),
+            );
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        } else {
+            let cred_provider = rusoto_util::CredentialsProvider::new()?;
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        }
     }
 
     fn check_config(config: &Config) -> io::Result<()> {
@@ -355,8 +380,6 @@ mod tests {
             region: "ap-southeast-2".to_string(),
             bucket: "mybucket".to_string(),
             prefix: "myprefix".to_string(),
-            access_key: "abc".to_string(),
-            secret_access_key: "xyz".to_string(),
             ..Default::default()
         };
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
@@ -367,7 +390,9 @@ mod tests {
                 assert_eq!(req.payload.is_some(), req.method() == "PUT");
             },
         );
-        let s = S3Storage::with_request_dispatcher(&config, dispatcher).unwrap();
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let s = S3Storage::new_creds_dispatcher(&config, dispatcher, credentials_provider).unwrap();
         s.write(
             "mykey",
             Box::new(magic_contents.as_bytes()),

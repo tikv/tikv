@@ -1292,6 +1292,7 @@ dependencies = [
  "prometheus",
  "rand",
  "rusoto_core",
+ "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
  "rusoto_util",
