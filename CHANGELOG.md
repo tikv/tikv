@@ -6,7 +6,6 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
 - `make docker` now builds the `pingcap/tikv` image, instead of the previous Dockerfile. (https://github.com/tikv/tikv/pull/5776)
 - `make dist_artifacts` now creates compressed archives of TiKV binaries and Docker images. (https://github.com/tikv/tikv/pull/5777)
-- Add `enable-compaction-filter` option in `gc` section in config file. (https://github.com/tikv/tikv/pull/6728)
 
 ## [5.0.0-rc] - 2021-01-12
 + Security
