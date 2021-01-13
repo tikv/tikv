@@ -268,13 +268,11 @@ const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
     let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
     let f = OpenOptions::new().create(true).write(true).open(&path)?;
-    let len = f.metadata()?.len();
-    if len >= file_size {
-        return Ok(());
+    if f.metadata()?.len() < file_size {
+        f.allocate(file_size)?;
+        f.sync_all()?;
+        sync_dir(data_dir)?;
     }
-    f.allocate(file_size - len)?;
-    f.sync_all()?;
-    sync_dir(data_dir)?;
     Ok(())
 }
 
