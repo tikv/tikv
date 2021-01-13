@@ -385,6 +385,8 @@ fn test_split_not_to_split_existed_tombstone_region() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 }
 
+// Test if a peer can be created from splitting when another uninitialied peer with the same
+// peer id has been created on this store.
 #[test]
 fn test_split_should_split_existed_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
@@ -398,12 +400,14 @@ fn test_split_should_split_existed_same_uninitialied_peer() {
     pd_client.disable_default_operator();
 
     fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    fail::cfg("peer_check_stale_state", "return()").unwrap();
+
     let r1 = cluster.run_conf_change();
 
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     assert_eq!(r1, 1);
-    
+
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
 
@@ -417,53 +421,25 @@ fn test_split_should_split_existed_same_uninitialied_peer() {
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    assert_eq!(left.get_id(), 1000);
+
     cluster.must_put(b"k11", b"v11");
 
     // Wait for region 1000 sending heartbeat and snapshot to store 2
-    sleep_ms(100);
+    sleep_ms(200);
 
-    fail::remove(before_check_snapshot_1_2_fp).unwrap();
+    fail::remove(before_check_snapshot_1_2_fp);
     // peer 2 applied snapshot
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     fail::remove(before_check_snapshot_1000_2_fp);
 
-
-
-    let left = pd_client.get_region(b"k1").unwrap();
-    let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
-    pd_client.must_remove_peer(left.get_id(), left_peer_2);
-    must_get_none(&cluster.get_engine(2), b"k1");
-
-    let on_handle_apply_2_fp = "on_handle_apply_2";
-    fail::cfg("on_handle_apply_2", "pause").unwrap();
-
-    fail::remove(before_check_snapshot_1_2_fp);
-
-    // Wait for the logs
-    sleep_ms(100);
-
-    // If left_peer_2 can be created, dropping all msg to make it exist.
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
-    // Also don't send check stale msg to PD
-    let peer_check_stale_state_fp = "peer_check_stale_state";
-    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
-
-    fail::remove(on_handle_apply_2_fp);
-
-    // If value of `k22` is equal to `v22`, the previous split log must be applied.
-    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
-
-    // If left_peer_2 is created, `must_get_none` will fail.
-    must_get_none(&cluster.get_engine(2), b"k1");
-
-    cluster.clear_send_filters();
-
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
-
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
 }
 
+// Test if a peer can be created from splitting when another uninitialied peer with different
+// peer id has been created on this store.
 #[test]
 fn test_split_not_to_split_existed_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
@@ -482,7 +458,7 @@ fn test_split_not_to_split_existed_different_uninitialied_peer() {
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     assert_eq!(r1, 1);
-    
+
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
 
@@ -491,50 +467,36 @@ fn test_split_not_to_split_existed_different_uninitialied_peer() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
 
-    let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
-    fail::cfg(before_check_snapshot_1000_2_fp, "pause").unwrap();
+    // Wait for region 1 sending heartbeat and snapshot to store 2
+    sleep_ms(200);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
-    cluster.must_put(b"k22", b"v22");
-
-    fail::remove(before_check_snapshot_1_2_fp).unwrap();
-    // peer 2 applied snapshot
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-
-    
-
     let left = pd_client.get_region(b"k1").unwrap();
+    assert_eq!(left.get_id(), 1000);
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
+
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
-    must_get_none(&cluster.get_engine(2), b"k1");
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
 
-    let on_handle_apply_2_fp = "on_handle_apply_2";
-    fail::cfg("on_handle_apply_2", "pause").unwrap();
-
-    fail::remove(before_check_snapshot_1_2_fp);
-
-    // Wait for the logs
-    sleep_ms(100);
-
-    // If left_peer_2 can be created, dropping all msg to make it exist.
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
-    // Also don't send check stale msg to PD
-    let peer_check_stale_state_fp = "peer_check_stale_state";
-    fail::cfg(peer_check_stale_state_fp, "return()").unwrap();
-
-    fail::remove(on_handle_apply_2_fp);
-
-    // If value of `k22` is equal to `v22`, the previous split log must be applied.
-    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
-
-    // If left_peer_2 is created, `must_get_none` will fail.
-    must_get_none(&cluster.get_engine(2), b"k1");
+    let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
+    fail::cfg(before_check_snapshot_1000_2_fp, "pause").unwrap();
 
     cluster.clear_send_filters();
 
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
+    // Wait for region 1000 sending heartbeat and snapshot to store 2
+    sleep_ms(200);
 
+    fail::remove(before_check_snapshot_1_2_fp);
+
+    // peer 2 applied snapshot
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    // But only the right part because there is a peer 4 of region 1000 on local store
+    must_get_none(&cluster.get_engine(2), b"k1");
+
+    fail::remove(before_check_snapshot_1000_2_fp);
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 }
 

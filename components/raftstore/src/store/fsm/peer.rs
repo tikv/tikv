@@ -1609,18 +1609,25 @@ where
         let snap_enc_start_key = enc_start_key(&snap_region);
         let snap_enc_end_key = enc_end_key(&snap_region);
 
-        fail_point!(
-            "before_check_snapshot_1_2",
-            self.fsm.region_id() == 1 && self.store_id() == 2,
-            |_| Ok(Either::Left(key))
-        );
-    };
-
-    fail_point!(
-        "before_check_snapshot_1000_2",
-        self.fsm.region_id() == 1000 && self.store_id() == 2,
-        |_| Ok(Either::Left(key))
-    );
+        let before_check_snapshot_1_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        let before_check_snapshot_1000_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1000_2",
+                self.fsm.region_id() == 1000 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        if before_check_snapshot_1_2_fp() || before_check_snapshot_1000_2_fp() {
+            return Ok(Either::Left(key));
+        }
 
         if snap_region
             .get_peers()
