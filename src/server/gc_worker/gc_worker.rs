@@ -277,7 +277,7 @@ where
             self.gc_keys(keys, safe_point)?;
         }
 
-        self.stats.add(reader.get_statistics());
+        self.stats.add(&reader.statistics);
         debug!(
             "gc has finished";
             "start_key" => log_wrappers::Value::key(start_key),

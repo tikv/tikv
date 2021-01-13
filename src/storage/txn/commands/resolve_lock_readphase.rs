@@ -48,7 +48,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
             |lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
-        statistics.add(reader.get_statistics());
+        statistics.add(&reader.statistics);
         let (kv_pairs, has_remain) = result?;
         tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 

@@ -193,9 +193,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn take_statistics(&mut self) -> Statistics {
-        let mut statistics = Statistics::default();
-        self.reader.collect_statistics_into(&mut statistics);
-        statistics
+        std::mem::take(&mut self.reader.statistics)
     }
 
     pub fn write_size(&self) -> usize {

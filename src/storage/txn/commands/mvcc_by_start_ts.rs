@@ -43,7 +43,7 @@ impl<S: Snapshot> ReadCommand<S> for MvccByStartTs {
         match reader.seek_ts(self.start_ts)? {
             Some(key) => {
                 let result = find_mvcc_infos_by_key(&mut reader, &key, TimeStamp::max());
-                statistics.add(reader.get_statistics());
+                statistics.add(&reader.statistics);
                 let (lock, writes, values) = result?;
                 Ok(ProcessResult::MvccStartTs {
                     mvcc: Some((

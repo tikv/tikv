@@ -115,15 +115,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn get_statistics(&self) -> &Statistics {
-        &self.statistics
-    }
-
-    pub fn collect_statistics_into(&mut self, stats: &mut Statistics) {
-        stats.add(&self.statistics);
-        self.statistics = Statistics::default();
-    }
-
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         assert_eq!(write.write_type, WriteType::Put);
         if self.key_only {
@@ -1151,14 +1142,14 @@ mod tests {
         assert_eq!(commit_ts, 5.into());
         assert_eq!(write_type, WriteType::Rollback);
 
-        let seek_old = reader.get_statistics().write.seek;
-        let next_old = reader.get_statistics().write.next;
+        let seek_old = reader.statistics.write.seek;
+        let next_old = reader.statistics.write.next;
         assert!(!reader
             .get_txn_commit_record(&key, 30.into())
             .unwrap()
             .exist());
-        let seek_new = reader.get_statistics().write.seek;
-        let next_new = reader.get_statistics().write.next;
+        let seek_new = reader.statistics.write.seek;
+        let next_new = reader.statistics.write.next;
 
         // `get_txn_commit_record(&key, 30)` stopped at `30_25 PUT`.
         assert_eq!(seek_new - seek_old, 1);
@@ -1250,8 +1241,8 @@ mod tests {
             write,
             Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
         );
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
 
         let (commit_ts, write) = reader.seek_write(&k, 25.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 25.into());
@@ -1259,14 +1250,14 @@ mod tests {
             write,
             Write::new(WriteType::Put, 23.into(), Some(v.to_vec()))
         );
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
 
         let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 20.into());
         assert_eq!(write, Write::new(WriteType::Lock, 10.into(), None));
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 1);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 1);
 
         let (commit_ts, write) = reader.seek_write(&k, 19.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 17.into());
@@ -1274,21 +1265,21 @@ mod tests {
             write,
             Write::new(WriteType::Put, 15.into(), Some(v.to_vec()))
         );
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 2);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 2);
 
         let (commit_ts, write) = reader.seek_write(&k, 3.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
         assert_eq!(write, Write::new_rollback(3.into(), false));
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 5);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 5);
 
         let (commit_ts, write) = reader.seek_write(&k, 16.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 7.into());
         assert_eq!(write, Write::new_rollback(7.into(), false));
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 6);
-        assert_eq!(reader.get_statistics().write.prev, 3);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 6);
+        assert_eq!(reader.statistics.write.prev, 3);
 
         let (commit_ts, write) = reader.seek_write(&k, 6.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 5.into());
@@ -1296,14 +1287,14 @@ mod tests {
             write,
             Write::new(WriteType::Put, 1.into(), Some(v.to_vec()))
         );
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 7);
-        assert_eq!(reader.get_statistics().write.prev, 3);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 7);
+        assert_eq!(reader.statistics.write.prev, 3);
 
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 9);
-        assert_eq!(reader.get_statistics().write.prev, 3);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 9);
+        assert_eq!(reader.statistics.write.prev, 3);
 
         // Test seek_write should not see the next key.
         let (k2, v2) = (b"k2", b"v2");
@@ -1323,13 +1314,13 @@ mod tests {
             write,
             Write::new(WriteType::Put, 1.into(), Some(v2.to_vec()))
         );
-        assert_eq!(reader.get_statistics().write.seek, 1);
-        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
 
         // Should seek for another key.
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
-        assert_eq!(reader.get_statistics().write.seek, 2);
-        assert_eq!(reader.get_statistics().write.next, 0);
+        assert_eq!(reader.statistics.write.seek, 2);
+        assert_eq!(reader.statistics.write.next, 0);
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
