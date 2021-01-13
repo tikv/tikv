@@ -17,12 +17,17 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
-const DEFAULT_RESERVER_SPACE_SIZE: u64 = 2;
+
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
 // on average, in that situation the writing bytes estimated 10MB,
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
+
+const DEFAULT_RESERVED_SPACE_SIZE: u64 = 5;
+// 20GB for reserved space is enough because size of one compaction is limited,
+// generally less than 2GB.
+pub const MAX_RESERVED_SPACE_SIZE: u64 = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -43,6 +48,8 @@ pub struct Config {
     pub scheduler_pending_write_threshold: ReadableSize,
     #[config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
+    // Values less than `5GB` will be sanitized to `5GB` (2GB for `max_compaction_bytes`, and
+    // the rest for Raft logs and snapshots used in region migration).
     pub reserve_space: ReadableSize,
     #[config(skip)]
     pub enable_async_apply_prewrite: bool,
@@ -60,7 +67,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
-            reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
+            reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_SIZE),
             enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
         }

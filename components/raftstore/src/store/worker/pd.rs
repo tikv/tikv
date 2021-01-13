@@ -682,8 +682,8 @@ where
         };
 
         // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
+        if available > disk_stats.available_space() {
+            available = disk_stats.available_space();
         }
 
         stats.set_available(available);

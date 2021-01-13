@@ -209,6 +209,13 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
+## Reserve some space to ensure recovering the store from `no space left` must success. The
+## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## `max(reserve-space, capacity * 5%)` will be reserved exactly.
+##
+## Generally it's not necessary to change it. This configuration could be deprecated in future.
+# reserve-space = "5GB"
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##
