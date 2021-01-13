@@ -630,6 +630,8 @@
 # target-file-size-base = "8MB"
 
 ## Max bytes for `compaction.max_compaction_bytes`.
+## If it's necessary to enlarge value of this entry, it's better to also enlarge `reserve-space`
+## in `storage` to ensure that a restarted TiKV instance can perform compactions successfully.
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.

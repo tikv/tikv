@@ -264,11 +264,17 @@ impl<R: Read> Read for Sha256Reader<R> {
 
 const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
-// Create a file with hole, to reserve space for TiKV.
+/// Create a file with hole, to reserve space for TiKV.
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
     let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
-    let f = OpenOptions::new().create(true).write(true).open(&path)?;
-    if f.metadata()?.len() < file_size {
+    if file_exists(&path) {
+        if get_file_size(&path)? == file_size {
+            return Ok(());
+        }
+        delete_file_if_exist(&path)?;
+    }
+    if file_size > 0 {
+        let f = File::create(&path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
         sync_dir(data_dir)?;
