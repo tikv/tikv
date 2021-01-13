@@ -248,7 +248,7 @@ impl Filter for PrevoteRangeFilter {
 // region id has already existed. In previous implementation, it can be created and panic
 // will happen because there are two initialized peer with the same region id.
 #[test]
-fn test_split_not_to_split_existed_region() {
+fn test_split_not_to_split_existing_region() {
     let mut cluster = new_node_cluster(0, 4);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -321,7 +321,7 @@ fn test_split_not_to_split_existed_region() {
 // Test if a peer is created from splitting when another initialized peer with the same
 // region id existed before and has been destroyed now.
 #[test]
-fn test_split_not_to_split_existed_tombstone_region() {
+fn test_split_not_to_split_existing_tombstone_region() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -388,7 +388,7 @@ fn test_split_not_to_split_existed_tombstone_region() {
 // Test if a peer can be created from splitting when another uninitialied peer with the same
 // peer id has been created on this store.
 #[test]
-fn test_split_should_split_existed_same_uninitialied_peer() {
+fn test_split_should_split_existing_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
@@ -441,7 +441,7 @@ fn test_split_should_split_existed_same_uninitialied_peer() {
 // Test if a peer can be created from splitting when another uninitialied peer with different
 // peer id has been created on this store.
 #[test]
-fn test_split_not_to_split_existed_different_uninitialied_peer() {
+fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
