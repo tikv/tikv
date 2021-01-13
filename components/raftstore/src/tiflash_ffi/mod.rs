@@ -273,38 +273,6 @@ pub extern "C" fn ffi_handle_link_file(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn ffi_handle_rename_file(
-    proxy_ptr: TiFlashRaftProxyPtr,
-    src: BaseBuffView,
-    dst: BaseBuffView,
-) -> FileEncryptionInfoRes {
-    unsafe {
-        (*proxy_ptr).key_manager.as_ref().map_or(
-            FileEncryptionInfoRes::new(FileEncryptionRes::Disabled),
-            |key_manager| {
-                key_manager
-                    .link_file(
-                        std::str::from_utf8_unchecked(src.to_slice()),
-                        std::str::from_utf8_unchecked(dst.to_slice()),
-                    )
-                    .map(|_| key_manager.delete_file(std::str::from_utf8_unchecked(src.to_slice())))
-                    .map_or_else(
-                        |e| {
-                            FileEncryptionInfoRes::error(
-                                get_tiflash_server_helper().gen_cpp_string(
-                                    format!("Encryption key manager rename file failure: {}", e)
-                                        .as_ref(),
-                                ),
-                            )
-                        },
-                        |_| FileEncryptionInfoRes::new(FileEncryptionRes::Ok),
-                    )
-            },
-        )
-    }
-}
-
 #[repr(C)]
 pub struct TiFlashRaftProxyHelper {
     proxy_ptr: TiFlashRaftProxyPtr,
@@ -315,8 +283,6 @@ pub struct TiFlashRaftProxyHelper {
     handle_new_file: extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView) -> FileEncryptionInfoRes,
     handle_delete_file: extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView) -> FileEncryptionInfoRes,
     handle_link_file:
-        extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView, BaseBuffView) -> FileEncryptionInfoRes,
-    handle_rename_file:
         extern "C" fn(TiFlashRaftProxyPtr, BaseBuffView, BaseBuffView) -> FileEncryptionInfoRes,
     handle_batch_read_index: extern "C" fn(TiFlashRaftProxyPtr, CppStrVecView) -> *const u8,
 }
@@ -332,7 +298,6 @@ impl TiFlashRaftProxyHelper {
             handle_new_file: ffi_handle_new_file,
             handle_delete_file: ffi_handle_delete_file,
             handle_link_file: ffi_handle_link_file,
-            handle_rename_file: ffi_handle_rename_file,
             handle_batch_read_index: ffi_batch_read_index,
         }
     }
@@ -726,7 +691,7 @@ impl TiFlashServerHelper {
     pub fn check(&self) {
         assert_eq!(std::mem::align_of::<Self>(), std::mem::align_of::<u64>());
         const MAGIC_NUMBER: u32 = 0x13579BDF;
-        const VERSION: u32 = 401003;
+        const VERSION: u32 = 401004;
 
         if self.magic_number != MAGIC_NUMBER {
             eprintln!(
