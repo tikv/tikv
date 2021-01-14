@@ -100,16 +100,13 @@ For the production environment, use [TiDB Ansible](https://github.com/pingcap/ti
 
 ## Client drivers
 
-Currently, the interfaces to TiKV are the [TiDB Go client](https://github.com/pingcap/tidb/tree/master/store/tikv) and the [TiSpark Java client](https://github.com/pingcap/tispark/tree/master/tikv-client/src/main/java/com/pingcap/tikv).
-
 These are the clients for TiKV:
 
-- [Go](https://github.com/tikv/client-go) (The most stable and widely used)
+- [Go](https://tikv.org/docs/4.0/reference/clients/go/) (The most stable and widely used)
 - [Java](https://github.com/tikv/client-java)
 - [Rust](https://github.com/tikv/client-rust)
-- [C](https://github.com/tikv/client-c)
-
-If you want to try the Go client, see [Go Client](https://tikv.org/docs/4.0/reference/clients/go/).
+- [Python](https://github.com/tikv/client-py)
+- [C++](https://github.com/tikv/client-cpp)
 
 ## Community meeting
 
