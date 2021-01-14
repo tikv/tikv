@@ -2,13 +2,9 @@ use std::{
     fs::{self, File},
     io::{Error, ErrorKind, Result},
     path::Path,
-    sync::Arc,
 };
 
-use external_storage::{
-    create_storage, make_gcs_backend, make_local_backend, make_noop_backend, make_s3_backend,
-    ExternalStorage,
-};
+use external_storage_export::{ExternalStorage, GCSStorage, LocalStorage, NoopStorage, S3Storage};
 use futures::executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
@@ -70,7 +66,7 @@ enum Command {
     Load,
 }
 
-fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
+fn create_s3_storage(opt: &Opt) -> Result<Box<dyn ExternalStorage>> {
     let mut config = S3::default();
 
     if let Some(credential_file) = &opt.credential_file {
@@ -109,10 +105,10 @@ fn create_s3_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    create_storage(&make_s3_backend(config))
+    Ok(Box::new(S3Storage::from_input(config)?) as Box<dyn ExternalStorage>)
 }
 
-fn create_gcs_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
+fn create_gcs_storage(opt: &Opt) -> Result<Box<dyn ExternalStorage>> {
     let mut config = Gcs::default();
 
     if let Some(credential_file) = &opt.credential_file {
@@ -129,14 +125,16 @@ fn create_gcs_storage(opt: &Opt) -> Result<Arc<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    create_storage(&make_gcs_backend(config))
+    Ok(Box::new(GCSStorage::from_input(config)?) as Box<dyn ExternalStorage>)
 }
 
 fn process() -> Result<()> {
     let opt = Opt::from_args();
-    let storage = match opt.storage {
-        StorageType::Noop => create_storage(&make_noop_backend())?,
-        StorageType::Local => create_storage(&make_local_backend(Path::new(&opt.path)))?,
+    let storage: Box<dyn ExternalStorage> = match opt.storage {
+        StorageType::Noop => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
+        StorageType::Local => {
+            Box::new(LocalStorage::new(Path::new(&opt.path))?) as Box<dyn ExternalStorage>
+        }
         StorageType::S3 => create_s3_storage(&opt)?,
         StorageType::GCS => create_gcs_storage(&opt)?,
     };

@@ -14,7 +14,7 @@ use backup::Task;
 use collections::HashMap;
 use engine_traits::IterOptions;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
-use external_storage::*;
+use external_storage_export::make_local_backend;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;

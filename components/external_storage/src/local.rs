@@ -45,7 +45,23 @@ impl LocalStorage {
     }
 }
 
+fn url_for(base: &Path) -> url::Url {
+    let mut u = url::Url::parse("local:///").unwrap();
+    u.set_path(base.to_str().unwrap());
+    u
+}
+
+const STORAGE_NAME: &str = "local";
+
 impl ExternalStorage for LocalStorage {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> url::Url {
+        url_for(&self.base.as_path())
+    }
+
     fn write(
         &self,
         name: &str,
@@ -130,5 +146,10 @@ mod tests {
         // root is not allowed.
         ls.write("/", Box::new(magic_contents), content_length)
             .unwrap_err();
+    }
+
+    #[test]
+    fn test_url_of_backend() {
+        assert_eq!(url_for(Path::new("/tmp/a")).to_string(), "local:///tmp/a");
     }
 }

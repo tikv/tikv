@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
-use super::ExternalStorage;
+use external_storage::{ empty_to_none, BucketConf, ExternalStorage; };
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -10,7 +9,7 @@ use futures_util::{
 };
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-use kvproto::backup::Gcs as Config;
+pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},
@@ -25,6 +24,59 @@ const HARDCODED_ENDPOINTS: &[&str] = &[
     "https://www.googleapis.com/upload/storage/v1",
     "https://www.googleapis.com/storage/v1",
 ];
+
+#[derive(Clone, Debug, Default)]
+pub struct Config {
+    pub bucket: BucketConf,
+    pub predefined_acl: Option<String>,
+    pub credentials_blob: String,
+}
+
+impl Config {
+    pub fn validate(&self) -> io::Result<()> {
+        self.bucket.validate()
+    }
+
+    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
+        let bucket = cloud_dynamic.bucket.clone().into_option().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "Required field bucket is missing")
+        })?;
+        let attrs = &cloud_dynamic.attrs;
+        let def = &String::new();
+        let config_bucket = BucketConf {
+            bucket: bucket.bucket,
+            endpoint: empty_to_none(bucket.endpoint),
+            prefix: empty_to_none(bucket.prefix),
+            storage_class: empty_to_none(bucket.storage_class),
+            region: None,
+        };
+        config_bucket.validate()?;
+        Ok(Config {
+            bucket: config_bucket,
+            predefined_acl: empty_to_none(attrs.get("predefined_acl").unwrap_or(def).clone()),
+            credentials_blob: attrs.get("credentials_blob").unwrap_or(def).clone(),
+        })
+    }
+
+    pub fn from_input(input: InputConfig) -> io::Result<Config> {
+        let bucket = input
+            .bucket_info
+            .into_option()
+            .unwrap_or_else(InputBucket::default);
+        let config_bucket = BucketConf {
+            bucket: bucket.bucket,
+            endpoint: empty_to_none(bucket.endpoint),
+            prefix: empty_to_none(bucket.prefix),
+            storage_class: empty_to_none(bucket.storage_class),
+            region: None,
+        };
+        Ok(Config {
+            bucket: config_bucket,
+            predefined_acl: empty_to_none(input.predefined_acl),
+            credentials_blob: input.credentials_blob,
+        })
+    }
+}
 
 // GCS compatible storage
 #[derive(Clone)]
@@ -142,14 +194,17 @@ impl RetryError for RequestError {
 }
 
 impl GCSStorage {
+    pub fn from_input(input: InputConfig) -> io::Result<Self> {
+        Self::new(Config::from_input(input)?)
+    }
+
+    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
+        Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
+    }
+
     /// Create a new GCS storage for the given config.
-    pub fn new(config: &Config) -> io::Result<GCSStorage> {
-        if config.bucket.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing bucket name",
-            ));
-        }
+    pub fn new(config: Config) -> io::Result<GCSStorage> {
+        config.bucket.validate()?;
         if config.credentials_blob.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -162,15 +217,15 @@ impl GCSStorage {
             ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
         let client = Client::builder().build(HttpsConnector::new());
         Ok(GCSStorage {
-            config: config.clone(),
+            config,
             svc_access: Arc::new(svc_access),
             client,
         })
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
-        if !self.config.prefix.is_empty() {
-            return format!("{}/{}", self.config.prefix, key);
+        if let Some(prefix) = &self.config.bucket.prefix {
+            return format!("{}/{}", prefix, key);
         }
         key.to_owned()
     }
@@ -210,8 +265,8 @@ impl GCSStorage {
         scope: tame_gcs::Scopes,
     ) -> Result<Response<Body>, RequestError> {
         // replace the hard-coded GCS endpoint by the custom one.
-        let endpoint = self.config.get_endpoint();
-        if !endpoint.is_empty() {
+
+        if let Some(endpoint) = &self.config.bucket.endpoint {
             let url = req.uri().to_string();
             for hardcoded in HARDCODED_ENDPOINTS {
                 if let Some(res) = url.strip_prefix(hardcoded) {
@@ -264,7 +319,21 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
+fn url_for(config: &Config) -> url::Url {
+    config.bucket.url("gcs://")
+}
+
+const STORAGE_NAME: &str = "gcs";
+
 impl ExternalStorage for GCSStorage {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> url::Url {
+        url_for(&self.config)
+    }
+
     fn write(
         &self,
         name: &str,
@@ -275,13 +344,24 @@ impl ExternalStorage for GCSStorage {
 
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.clone())
-            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket))?;
+        let bucket = BucketName::try_from(self.config.bucket.bucket.clone())
+            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
 
-        let storage_class = parse_storage_class(&self.config.storage_class)
-            .or_invalid_input("invalid storage_class")?;
-        let predefined_acl = parse_predefined_acl(&self.config.predefined_acl)
-            .or_invalid_input("invalid predefined_acl")?;
+        let storage_class = parse_storage_class(
+            self.config
+                .bucket
+                .storage_class
+                .as_ref()
+                .unwrap_or(&String::new()),
+        )
+        .or_invalid_input("invalid storage_class")?;
+        let predefined_acl = parse_predefined_acl(
+            self.config
+                .predefined_acl
+                .as_ref()
+                .unwrap_or(&String::new()),
+        )
+        .or_invalid_input("invalid predefined_acl")?;
 
         let metadata = Metadata {
             name: Some(key),
@@ -316,7 +396,7 @@ impl ExternalStorage for GCSStorage {
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let bucket = self.config.bucket.clone();
+        let bucket = self.config.bucket.bucket.clone();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);
         let oid = match ObjectId::new(bucket, name) {
@@ -376,5 +456,23 @@ mod tests {
         ));
         assert!(matches!(parse_predefined_acl(""), Ok(None)));
         assert!(matches!(parse_predefined_acl("notAnACL"), Err("notAnACL")));
+    }
+
+    #[test]
+    fn test_url_of_backend() {
+        let gcs = Config {
+            bucket: BucketConf {
+                bucket: "bucket".to_owned(),
+                prefix: Some("/backup 02/prefix/".to_owned()),
+                endpoint: Some("http://endpoint.com".to_owned()),
+                // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
+                ..BucketConf::default()
+            },
+            ..Config::default()
+        };
+        assert_eq!(
+            url_for(&gcs).to_string(),
+            "gcs://bucket/backup%2002/prefix/"
+        );
     }
 }

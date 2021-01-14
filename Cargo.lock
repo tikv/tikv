@@ -169,6 +169,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "aws"
+version = "0.0.1"
+dependencies = [
+ "external_storage",
+ "futures 0.3.7",
+ "futures-util",
+ "grpcio",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "matches",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_mock",
+ "rusoto_s3",
+ "rusoto_util",
+ "slog",
+ "slog-global",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -201,7 +225,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "failure",
  "file_system",
  "futures 0.3.7",
@@ -1277,30 +1301,39 @@ dependencies = [
  "futures-executor",
  "futures-io",
  "futures-util",
- "grpcio",
- "http",
- "hyper",
- "hyper-tls",
  "kvproto",
  "lazy_static",
  "matches",
  "prometheus",
  "rand",
  "rusoto_core",
- "rusoto_credential",
- "rusoto_mock",
- "rusoto_s3",
- "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
  "structopt",
- "tame-gcs",
  "tame-oauth",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "url",
+]
+
+[[package]]
+name = "external_storage_export"
+version = "0.0.1"
+dependencies = [
+ "aws",
+ "external_storage",
+ "futures 0.3.7",
+ "futures-util",
+ "gcp",
+ "kvproto",
+ "libloading",
+ "matches",
+ "rust-ini",
+ "structopt",
+ "tempfile",
  "url",
 ]
 
@@ -1598,6 +1631,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "gcp"
+version = "0.0.1"
+dependencies = [
+ "external_storage",
+ "futures-util",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "matches",
+ "slog",
+ "slog-global",
+ "tame-gcs",
+ "tame-oauth",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2010,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4fb47d0584f214a47ac623e8cc571f1afcd51688"
+source = "git+https://github.com/gregwebs/kvproto.git?branch=backup-cloud-dynamic#fe94fdf8607a55e4506a6ad52f4c46cf1367e35a"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -4120,7 +4172,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.7",
  "futures-util",
@@ -4350,9 +4402,9 @@ checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 
 [[package]]
 name = "tame-gcs"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1c46b9e9c457a023b1dd47bb136f74472140eb33cb6550eaad24ec272221011"
+checksum = "e8f6c7809bcbf067ea22b1ee015590e7297733eaea51448e4b84015656279744"
 dependencies = [
  "base64 0.12.0",
  "bytes 0.5.3",
@@ -4443,7 +4495,7 @@ dependencies = [
  "concurrency_manager",
  "crc64fast",
  "engine_traits",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.7",
  "futures-executor",
@@ -4593,7 +4645,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "fail",
  "file_system",
  "futures 0.3.7",

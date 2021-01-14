@@ -14,7 +14,23 @@ use super::ExternalStorage;
 #[derive(Clone, Default)]
 pub struct NoopStorage {}
 
+impl NoopStorage {}
+
+fn url_for() -> url::Url {
+    url::Url::parse("noop:///").unwrap()
+}
+
+const STORAGE_NAME: &str = "noop";
+
 impl ExternalStorage for NoopStorage {
+    fn name(&self) -> &'static str {
+        &STORAGE_NAME
+    }
+
+    fn url(&self) -> url::Url {
+        url_for()
+    }
+
     fn write(
         &self,
         _name: &str,
@@ -51,5 +67,10 @@ mod tests {
         let mut buf = vec![];
         block_on(reader.read_to_end(&mut buf)).unwrap();
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_url_of_backend() {
+        assert_eq!(url_for().to_string(), "noop:///");
     }
 }

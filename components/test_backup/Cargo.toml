@@ -18,7 +18,7 @@ collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager" }
 crc64fast = "0.1"
 engine_traits = { path = "../engine_traits" }
-external_storage = { path = "../external_storage" }
+external_storage_export = { path = "../external_storage/export" }
 file_system = { path = "../file_system" }
 futures = "0.3"
 futures-executor = "0.3"

@@ -154,7 +154,7 @@ arrow = "0.10"
 rand_xorshift = "0.2"
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
-external_storage = { path = "../components/external_storage", default-features = false }
+external_storage_export = { path = "../components/external_storage/export", default-features = false }
 hyper = { version = "0.13", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys", default-features = false }
 profiler = { path = "../components/profiler" }

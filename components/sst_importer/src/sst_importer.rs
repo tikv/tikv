@@ -28,7 +28,7 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage::{create_storage, url_of_backend};
+use external_storage_export::{block_on_external_io, create_storage, READ_BUF_SIZE};
 use file_system::{sync_dir, File, OpenOptions};
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
@@ -198,9 +198,8 @@ impl SSTImporter {
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-        let url = url_of_backend(backend);
 
-        {
+        let url = {
             let start_read = Instant::now();
 
             // prepare to download the file from the external_storage
@@ -223,6 +222,8 @@ impl SSTImporter {
             // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
             const MINIMUM_READ_SPEED: usize = 8192;
 
+            let url = ext_storage.url().to_string();
+
             block_on_external_io(Self::read_external_storage_into_file(
                 &mut ext_reader,
                 file_writer,
@@ -232,7 +233,7 @@ impl SSTImporter {
             ))
             .map_err(|e| {
                 Error::CannotReadExternalStorage(
-                    url.to_string(),
+                    url.clone(),
                     name.to_owned(),
                     path.temp.to_owned(),
                     e,
@@ -247,7 +248,9 @@ impl SSTImporter {
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["read"])
                 .observe(start_read.elapsed().as_secs_f64());
-        }
+
+            url
+        };
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
@@ -1144,7 +1147,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1224,7 +1227,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1270,7 +1273,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1689,7 +1692,7 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir, None).unwrap();
         let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
 
         let result = importer.download::<TestEngine>(
             &meta,
