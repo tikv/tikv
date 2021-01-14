@@ -291,9 +291,8 @@ pub fn flush_io_metrics() {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
             flush_io_latency_and_bytes!(ctx.bpf, delta, other, IOType::Other);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, read, IOType::Read);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, write, IOType::Write);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, coprocessor, IOType::Coprocessor);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, foreground_read, IOType::ForegroundRead);
+            flush_io_latency_and_bytes!(ctx.bpf, delta, foreground_write, IOType::ForegroundWrite);
             flush_io_latency_and_bytes!(ctx.bpf, delta, flush, IOType::Flush);
             flush_io_latency_and_bytes!(ctx.bpf, delta, compaction, IOType::Compaction);
             flush_io_latency_and_bytes!(ctx.bpf, delta, replication, IOType::Replication);
@@ -471,7 +470,7 @@ mod tests {
     #[ignore]
     fn bench_flush_io_metrics(b: &mut Bencher) {
         init_io_snooper().unwrap();
-        set_io_type(IOType::Write);
+        set_io_type(IOType::ForegroundWrite);
 
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("bench_flush_io_metrics");
@@ -508,7 +507,7 @@ mod tests {
         w.as_bytes_mut()[64] = 42;
 
         b.iter(|| {
-            set_io_type(IOType::Write);
+            set_io_type(IOType::ForegroundWrite);
             f.write(w.as_bytes()).unwrap();
             f.sync_all().unwrap();
         });
@@ -541,7 +540,7 @@ mod tests {
             .unwrap();
         let mut r = vec![A512::default(); 2];
         b.iter(|| {
-            set_io_type(IOType::Read);
+            set_io_type(IOType::ForegroundRead);
             f.seek(SeekFrom::Start(rng.gen_range(0, 100) * 512))
                 .unwrap();
             assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
