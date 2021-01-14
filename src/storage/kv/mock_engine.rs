@@ -175,7 +175,6 @@ impl Engine for MockEngine {
                 proposed_cb.is_some(),
                 committed_cb.is_some(),
             );
-            drop(expected_writes);
         }
         let mut last_modifies = self.last_modifies.lock().unwrap();
         last_modifies.push(batch.modifies.clone());
