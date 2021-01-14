@@ -18,7 +18,7 @@ pub struct GcInfo {
     pub is_completed: bool,
 }
 
-/// Generate the Write record that should be written that means to to perform a specified rollback
+/// Generate the Write record that should be written that means to perform a specified rollback
 /// operation.
 pub(crate) fn make_rollback(
     start_ts: TimeStamp,
@@ -107,7 +107,7 @@ pub struct MvccTxn<S: Snapshot> {
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
-    pub(crate) collapse_rollback: bool,
+    collapse_rollback: bool,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -242,43 +242,24 @@ impl<S: Snapshot> MvccTxn<S> {
         self.modifies.push(write);
     }
 
-    pub(crate) fn key_exist(
-        &mut self,
-        key: &Key,
-        ts: TimeStamp,
-        gc_fence_limit: Option<TimeStamp>,
-    ) -> Result<bool> {
-        Ok(self.reader.get_write(&key, ts, gc_fence_limit)?.is_some())
-    }
-
     // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
     // to do the rollback differs according to whether there's an overlapped write record.
-    pub(crate) fn check_write_and_rollback_lock(
+    pub(crate) fn rollback_lock(
         &mut self,
         key: Key,
         lock: &Lock,
         is_pessimistic_txn: bool,
     ) -> Result<Option<ReleasedLock>> {
         match self.reader.get_txn_commit_record(&key, self.start_ts)? {
-            TxnCommitRecord::None { overlapped_write } => {
-                self.rollback_lock(key, lock, is_pessimistic_txn, overlapped_write)
-            }
+            TxnCommitRecord::None { overlapped_write } => {}
             TxnCommitRecord::SingleRecord { write, .. }
                 if write.write_type != WriteType::Rollback =>
             {
                 panic!("txn record found but not expected: {:?}", self)
             }
-            _ => Ok(self.unlock_key(key, is_pessimistic_txn)),
+            _ => return Ok(self.unlock_key(key, is_pessimistic_txn)),
         }
-    }
 
-    fn rollback_lock(
-        &mut self,
-        key: Key,
-        lock: &Lock,
-        is_pessimistic_txn: bool,
-        overlapped_write: Option<OverlappedWrite>,
-    ) -> Result<Option<ReleasedLock>> {
         // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
         if lock.short_value.is_none() && lock.lock_type == LockType::Put {
             self.delete_value(key.clone(), lock.ts);
@@ -289,9 +270,9 @@ impl<S: Snapshot> MvccTxn<S> {
         if let Some(write) = make_rollback(self.start_ts, protected, overlapped_write) {
             self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         }
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key.clone())?;
-        }
+
+        self.collapse_prev_rollback(key.clone())?;
+
         Ok(self.unlock_key(key, is_pessimistic_txn))
     }
 
@@ -332,6 +313,10 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
+        if !self.collapse_rollback {
+            return Ok(());
+        }
+
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
                 self.delete_write(key, commit_ts);

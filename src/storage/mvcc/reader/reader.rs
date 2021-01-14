@@ -284,6 +284,15 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    pub fn key_exist(
+        &mut self,
+        key: &Key,
+        ts: TimeStamp,
+        gc_fence_limit: Option<TimeStamp>,
+    ) -> Result<bool> {
+        Ok(self.get_write(&key, ts, gc_fence_limit)?.is_some())
+    }
+
     pub fn get_txn_commit_record(
         &mut self,
         key: &Key,

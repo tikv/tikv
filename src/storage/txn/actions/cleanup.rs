@@ -34,7 +34,7 @@ pub fn cleanup<S: Snapshot>(
             }
 
             let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-            txn.check_write_and_rollback_lock(key, lock, is_pessimistic_txn)
+            txn.rollback_lock(key, lock, is_pessimistic_txn)
         }
         l => match check_txn_status_missing_lock(
             txn,

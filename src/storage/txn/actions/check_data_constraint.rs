@@ -24,7 +24,9 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
     // 1.The current write type is `PUT`
     // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
     if write.write_type == WriteType::Put
-        || txn.key_exist(&key, write_commit_ts.prev(), Some(txn.start_ts))?
+        || txn
+            .reader
+            .key_exist(&key, write_commit_ts.prev(), Some(txn.start_ts))?
     {
         return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
     }

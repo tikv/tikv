@@ -118,9 +118,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // acquire_pessimistic_lock and prewrite succeed again.
                 if let Some(write) = make_rollback(self.start_ts, true, rollback_overlapped_write) {
                     txn.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-                    if txn.collapse_rollback {
-                        txn.collapse_prev_rollback(key.clone())?;
-                    }
+                    txn.collapse_prev_rollback(key.clone())?;
                 }
             }
             released_locks.push(released_lock);

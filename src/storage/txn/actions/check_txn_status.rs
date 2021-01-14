@@ -44,8 +44,7 @@ pub fn check_txn_status_lock_exists<S: Snapshot>(
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
             Ok((TxnStatus::PessimisticRollBack, released))
         } else {
-            let released =
-                txn.check_write_and_rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
+            let released = txn.rollback_lock(primary_key, &lock, is_pessimistic_txn)?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
             Ok((TxnStatus::TtlExpire, released))
         };
@@ -116,9 +115,7 @@ pub fn check_txn_status_missing_lock<S: Snapshot>(
             let ts = txn.start_ts;
 
             // collapse previous rollback if exist.
-            if txn.collapse_rollback {
-                txn.collapse_prev_rollback(primary_key.clone())?;
-            }
+            txn.collapse_prev_rollback(primary_key.clone())?;
 
             if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
                 txn.mark_rollback_on_mismatching_lock(
