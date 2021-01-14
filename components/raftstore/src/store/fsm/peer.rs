@@ -1599,15 +1599,6 @@ where
             return Ok(Either::Right(vec![]));
         }
 
-        let before_check_snapshot_1_2 = || {
-            fail_point!(
-                "before_check_snapshot_1_2",
-                self.fsm.region_id() == 1 && self.fsm.peer_id() == 2,
-                |_| {}
-            );
-        };
-        before_check_snapshot_1_2();
-
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);
@@ -1617,6 +1608,26 @@ where
         let peer_id = msg.get_to_peer().get_id();
         let snap_enc_start_key = enc_start_key(&snap_region);
         let snap_enc_end_key = enc_end_key(&snap_region);
+
+        let before_check_snapshot_1_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        let before_check_snapshot_1000_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1000_2",
+                self.fsm.region_id() == 1000 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        if before_check_snapshot_1_2_fp() || before_check_snapshot_1000_2_fp() {
+            return Ok(Either::Left(key));
+        }
 
         if snap_region
             .get_peers()
@@ -2209,23 +2220,22 @@ where
 
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{} original region should exists", self.fsm.peer.tag);
+            panic!("{} original region should exist", self.fsm.peer.tag);
         }
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
-            let not_exist = meta
-                .region_ranges
-                .insert(enc_end_key(&new_region), new_region_id)
-                .is_none();
-            assert!(not_exist, "[region {}] should not exists", new_region_id);
-
             if new_region_id == region_id {
+                let not_exist = meta
+                    .region_ranges
+                    .insert(enc_end_key(&new_region), new_region_id)
+                    .is_none();
+                assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
 
-            // Create new region
+            // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
                 if let Err(e) = self
@@ -2242,6 +2252,7 @@ where
                 continue;
             }
 
+            // Now all checking passed.
             {
                 let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
                 assert_eq!(
@@ -2313,6 +2324,11 @@ where
 
             new_peer.peer.activate(self.ctx);
             meta.regions.insert(new_region_id, new_region.clone());
+            let not_exist = meta
+                .region_ranges
+                .insert(enc_end_key(&new_region), new_region_id)
+                .is_none();
+            assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
