@@ -316,6 +316,7 @@ impl<'a> PrewriteMutation<'a> {
                 self.txn_props.max_commit_ts(),
                 txn,
             );
+            fail_point!("after_calculate_min_commit_ts");
             if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
                 try_one_pc = false;
                 lock.use_async_commit = false;
@@ -385,7 +386,14 @@ fn async_commit_timestamps<S: Snapshot>(
         let min_commit_ts = cmp::max(lock.min_commit_ts, min_commit_ts);
 
         let max_commit_ts = max_commit_ts;
-        if !max_commit_ts.is_zero() && min_commit_ts > max_commit_ts {
+        let injected_fallback = (|| {
+            fail_point!("async_commit_1pc_force_fallback", || {
+                info!("[failpoint] injected fallback for async commit/1pc transaction"; "start_ts" => start_ts);
+                true
+            });
+            false
+        })();
+        if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "start_ts" => start_ts,
                 "min_commit_ts" => min_commit_ts,

@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use std::thread::{Builder, JoinHandle};
+use std::thread::{spawn, Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
@@ -36,11 +36,13 @@ use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
+use futures::FutureExt;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::metrics::ThreadInfoStatistics;
 use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tokio::time::delay_for;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -997,7 +999,18 @@ where
                 );
             }
         };
-        spawn_local(f);
+
+        let delay = (|| {
+            fail_point!("delay_update_max_ts", |_| true);
+            false
+        })();
+
+        if delay {
+            info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
+            spawn_local(delay_for(Duration::from_secs(1)).then(|_| f));
+        } else {
+            spawn_local(f);
+        }
     }
 
     fn handle_query_region_leader(&self, region_id: u64) {
