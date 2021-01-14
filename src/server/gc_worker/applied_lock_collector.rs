@@ -131,21 +131,20 @@ impl LockObserver {
     }
 
     fn send(&self, locks: Vec<(Key, Lock)>) {
-        let res = &mut self
-            .sender
-            .schedule(LockCollectorTask::ObservedLocks(locks));
-        // Wrap the fail point in a closure, so we can modify local variables without return.
-        #[cfg(feature = "failpoints")]
-        {
-            let mut send_fp = || {
-                fail_point!("lock_observer_send", |_| {
-                    *res = Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(
-                        vec![],
-                    )));
-                })
-            };
-            send_fp();
-        }
+        let injected_full = (|| {
+            fail_point!("lock_observer_send_full", |_| {
+                info!("[failpoint] injected lock observer channel full"; "locks" => ?locks);
+                true
+            });
+            false
+        })();
+
+        let res = if injected_full {
+            Err(ScheduleError::Full(LockCollectorTask::ObservedLocks(locks)))
+        } else {
+            self.sender
+                .schedule(LockCollectorTask::ObservedLocks(locks))
+        };
 
         match res {
             Ok(()) => (),
@@ -153,6 +152,7 @@ impl LockObserver {
                 error!("lock observer failed to send locks because collector is stopped");
             }
             Err(ScheduleError::Full(_)) => {
+                fail_point!("lock_observer_before_mark_dirty_on_full");
                 self.state.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full");
             }

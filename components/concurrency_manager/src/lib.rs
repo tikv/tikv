@@ -10,6 +10,9 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
+#[macro_use(fail_point)]
+extern crate fail;
+
 mod key_handle;
 mod lock_table;
 
@@ -93,7 +96,7 @@ impl ConcurrencyManager {
         check_fn: impl FnOnce(&Lock) -> Result<(), E>,
     ) -> Result<(), E> {
         let res = self.lock_table.check_key(key, check_fn);
-        fail_point!("after_read_key_check");
+        fail_point!("cm_after_read_key_check");
         res
     }
 
@@ -107,7 +110,7 @@ impl ConcurrencyManager {
         check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
         let res = self.lock_table.check_range(start_key, end_key, check_fn);
-        fail_point!("after_read_range_check");
+        fail_point!("cm_after_read_range_check");
         res
     }
 

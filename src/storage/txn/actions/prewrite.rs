@@ -387,7 +387,7 @@ fn async_commit_timestamps<S: Snapshot>(
 
         let max_commit_ts = max_commit_ts;
         let injected_fallback = (|| {
-            fail_point!("async_commit_1pc_force_fallback", || {
+            fail_point!("async_commit_1pc_force_fallback", |_| {
                 info!("[failpoint] injected fallback for async commit/1pc transaction"; "start_ts" => start_ts);
                 true
             });

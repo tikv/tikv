@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use std::thread::{spawn, Builder, JoinHandle};
+use std::thread::{Builder, JoinHandle};
 use std::time::Duration;
 use std::{cmp, io};
 
