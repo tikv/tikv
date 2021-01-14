@@ -327,7 +327,7 @@ pub mod tests {
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
     use txn_types::Key;
 
     pub fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
@@ -342,24 +342,10 @@ pub mod tests {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         assert_eq!(
             reader
-                .get(&Key::from_raw(key), ts, Some(ts), false)
-                .unwrap()
-                .unwrap(),
-            expect
-        );
-    }
-
-    pub fn must_get_rc<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
-        let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Rc);
-        assert_eq!(
-            reader
-                .get(&Key::from_raw(key), ts, Some(ts), false)
+                .get(&Key::from_raw(key), ts, Some(ts))
                 .unwrap()
                 .unwrap(),
             expect
@@ -370,9 +356,9 @@ pub mod tests {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         assert!(reader
-            .get(&Key::from_raw(key), ts, Some(ts), false)
+            .get(&Key::from_raw(key), ts, Some(ts))
             .unwrap()
             .is_none());
     }
@@ -381,15 +367,13 @@ pub mod tests {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
-        assert!(reader
-            .get(&Key::from_raw(key), ts, Some(ts), false)
-            .is_err());
+        let mut reader = MvccReader::new(snapshot, None, true);
+        assert!(reader.get(&Key::from_raw(key), ts, Some(ts)).is_err());
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
@@ -403,7 +387,7 @@ pub mod tests {
         ttl: u64,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_ne!(lock.lock_type, LockType::Pessimistic);
@@ -419,7 +403,7 @@ pub mod tests {
         is_pessimistic: bool,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.ttl, ttl);
@@ -433,7 +417,7 @@ pub mod tests {
 
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         assert!(reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
     }
 
@@ -474,7 +458,7 @@ pub mod tests {
 
     pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         assert!(reader
             .seek_write(&Key::from_raw(key), ts.into())
             .unwrap()
@@ -490,7 +474,7 @@ pub mod tests {
         write_type: WriteType,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let (t, write) = reader
             .seek_write(&Key::from_raw(key), ts.into())
             .unwrap()
@@ -507,7 +491,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let (ts, write_type) = reader
             .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
             .unwrap()
@@ -523,7 +507,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let ret = reader.get_txn_commit_record(&Key::from_raw(key), start_ts.into());
         assert!(ret.is_ok());
@@ -537,7 +521,7 @@ pub mod tests {
 
     pub fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let start_ts = start_ts.into();
         let (ts, write_type) = reader
@@ -555,7 +539,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let ret = reader
             .get_txn_commit_record(&Key::from_raw(key), start_ts.into())
@@ -571,7 +555,7 @@ pub mod tests {
         protected: bool,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let start_ts = start_ts.into();
         let (ts, write) = reader
@@ -592,7 +576,7 @@ pub mod tests {
         gc_fence: Option<T>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
 
         let start_ts = start_ts.into();
         let overlapped_start_ts = overlapped_start_ts.into();
@@ -619,8 +603,7 @@ pub mod tests {
             next_start.map(|x| Key::from_raw(x).append_ts(TimeStamp::zero())),
         );
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader =
-            MvccReader::new(snapshot, Some(ScanMode::Mixed), false, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Mixed), false);
         assert_eq!(
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect

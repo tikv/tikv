@@ -5,7 +5,6 @@ use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite, TxnCommitRecord}
 use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteType};
 
@@ -132,10 +131,8 @@ impl<S: Snapshot> MvccTxn<S> {
         // ScanMode is `None`, since in prewrite and other operations, keys are not given in
         // order and we use prefix seek for each key. An exception is GC, which uses forward
         // scan only.
-        // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
-        // isolation level, so it can be any value.
         Self::from_reader(
-            MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
+            MvccReader::new(snapshot, None, fill_cache),
             start_ts,
             concurrency_manager,
         )
@@ -152,7 +149,7 @@ impl<S: Snapshot> MvccTxn<S> {
         concurrency_manager: ConcurrencyManager,
     ) -> MvccTxn<S> {
         Self::from_reader(
-            MvccReader::new(snapshot, scan_mode, fill_cache, IsolationLevel::Si),
+            MvccReader::new(snapshot, scan_mode, fill_cache),
             start_ts,
             concurrency_manager,
         )
@@ -955,8 +952,8 @@ pub(crate) mod tests {
         must_commit(&engine, key, 5, 10);
         must_prewrite_put(&engine, key, v2, key, 15);
         must_get_err(&engine, key, 20);
-        must_get_rc(&engine, key, 12, v1);
-        must_get_rc(&engine, key, 20, v1);
+        must_get(&engine, key, 12, v1);
+        must_get(&engine, key, 20, v1);
     }
 
     #[test]
@@ -1026,8 +1023,7 @@ pub(crate) mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader =
-            MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
 
         let v = reader.scan_values_in_default(&Key::from_raw(&[3])).unwrap();
         assert_eq!(v.len(), 2);
@@ -1070,8 +1066,7 @@ pub(crate) mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader =
-            MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
 
         assert_eq!(
             reader.seek_ts(3.into()).unwrap().unwrap(),
@@ -1355,7 +1350,7 @@ pub(crate) mod tests {
         assert_eq!(do_prewrite(), 43.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);
@@ -1410,7 +1405,7 @@ pub(crate) mod tests {
         assert_eq!(do_pessimistic_prewrite(), 43.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(b"key")).unwrap().unwrap();
         assert_eq!(lock.ts, TimeStamp::new(2));
         assert_eq!(lock.use_async_commit, true);

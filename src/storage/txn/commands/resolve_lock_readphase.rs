@@ -36,12 +36,8 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag();
         let (ctx, txn_status) = (self.ctx, self.txn_status);
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            !ctx.get_not_fill_cache(),
-            ctx.get_isolation_level(),
-        );
+        let mut reader =
+            MvccReader::new(snapshot, Some(ScanMode::Forward), !ctx.get_not_fill_cache());
         let result = reader.scan_locks(
             self.scan_key.as_ref(),
             None,

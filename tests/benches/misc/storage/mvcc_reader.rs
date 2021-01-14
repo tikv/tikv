@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use kvproto::kvrpcpb::Context;
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query_datatype::codec::table;
 use tikv::storage::{kv::RocksEngine, mvcc::MvccReader, Engine};
@@ -38,7 +38,6 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, n: u64) {
             store.get_engine().snapshot(Default::default()).unwrap(),
             None,
             true,
-            IsolationLevel::Si,
         );
         mvcc_reader
             .get_txn_commit_record(&key, 1.into())

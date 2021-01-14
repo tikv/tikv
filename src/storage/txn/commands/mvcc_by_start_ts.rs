@@ -38,7 +38,6 @@ impl<S: Snapshot> ReadCommand<S> for MvccByStartTs {
             snapshot,
             Some(ScanMode::Forward),
             !self.ctx.get_not_fill_cache(),
-            self.ctx.get_isolation_level(),
         );
         match reader.seek_ts(self.start_ts)? {
             Some(key) => {

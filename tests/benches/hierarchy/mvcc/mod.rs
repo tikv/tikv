@@ -179,7 +179,6 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
 
 fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
     let test_keys: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
         config.value_length,
@@ -197,8 +196,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         },
         |(snapshot, test_kvs)| {
             for key in test_kvs {
-                let mut reader =
-                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
+                let mut reader = MvccReader::new(snapshot.clone(), None, true);
                 black_box(reader.load_lock(&key).unwrap());
             }
         },
@@ -211,7 +209,6 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
     b.iter_batched(
         || {
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -228,8 +225,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, test_keys)| {
             for key in &test_keys {
-                let mut reader =
-                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
+                let mut reader = MvccReader::new(snapshot.clone(), None, true);
                 black_box(reader.seek_write(&key, TimeStamp::max()).unwrap());
             }
         },

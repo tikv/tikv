@@ -53,9 +53,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             .into());
         }
         if need_value {
-            val = txn
-                .reader
-                .get(&key, for_update_ts, Some(txn.start_ts), true)?;
+            val = txn.reader.get(&key, for_update_ts, Some(txn.start_ts))?;
         }
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
@@ -140,8 +138,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
                 WriteType::Delete | WriteType::Put => None,
                 WriteType::Lock | WriteType::Rollback => {
-                    txn.reader
-                        .get(&key, commit_ts.prev(), Some(txn.start_ts), true)?
+                    txn.reader.get(&key, commit_ts.prev(), Some(txn.start_ts))?
                 }
             };
         }
@@ -166,7 +163,6 @@ pub mod tests {
     use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use kvproto::kvrpcpb::IsolationLevel;
     use txn_types::TimeStamp;
 
     #[cfg(test)]
@@ -357,7 +353,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
     ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
