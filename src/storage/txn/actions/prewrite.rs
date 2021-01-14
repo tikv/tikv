@@ -1,5 +1,4 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::storage::txn::actions::get_old_value::get_old_value;
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -79,7 +78,11 @@ pub fn prewrite<S: Snapshot>(
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        get_old_value(txn, &mutation.key, prev_write)?
+        if let Some(w) = prev_write {
+            txn.reader.get_old_value(&mutation.key, txn.start_ts, w)?
+        } else {
+            OldValue::None
+        }
     } else {
         OldValue::Unspecified
     };

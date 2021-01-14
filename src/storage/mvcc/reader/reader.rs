@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_traits::MvccProperties;
+use crate::storage::mvcc::{default_not_found_error, seek_for_valid_write, Result};
+use engine_traits::{IterOptions, MvccProperties};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
-use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 /// The result of `get_txn_commit_record`, which is used to get the status of a specified
 /// transaction from write cf.
@@ -79,7 +79,7 @@ pub struct MvccReader<S: Snapshot> {
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,
     lock_cursor: Option<Cursor<S::Iter>>,
-    pub write_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
 
     /// None means following operations are performed on a single user key, i.e.,
     /// different versions of the same key. It can use prefix seek to speed up reads
@@ -235,18 +235,15 @@ impl<S: Snapshot> MvccReader<S> {
         gc_fence_limit: Option<TimeStamp>,
         skip_lock_check: bool,
     ) -> Result<Option<Value>> {
-        if !skip_lock_check {
-            // Check for locks that signal concurrent writes.
-            match self.isolation_level {
-                IsolationLevel::Si => self.check_lock(key, ts)?,
-                IsolationLevel::Rc => {}
-            }
+        // Check for locks that signal concurrent writes.
+        if !skip_lock_check && self.isolation_level == IsolationLevel::Si {
+            self.check_lock(key, ts)?;
         }
-        if let Some(write) = self.get_write(key, ts, gc_fence_limit)? {
-            Ok(Some(self.load_data(key, write)?))
-        } else {
-            Ok(None)
-        }
+
+        Ok(match self.get_write(key, ts, gc_fence_limit)? {
+            Some(write) => Some(self.load_data(key, write)?),
+            None => None,
+        })
     }
 
     /// Gets the write record of the specified key's latest version before specified `ts`.
@@ -476,6 +473,49 @@ impl<S: Snapshot> MvccReader<S> {
         }
         Ok(v)
     }
+
+    /// Read the old value for key for CDC.
+    /// `prev_write` stands for the previous write record of the key
+    /// it must be read in the caller and be passed in for optimization
+    pub fn get_old_value(
+        &mut self,
+        key: &Key,
+        start_ts: TimeStamp,
+        prev_write: Write,
+    ) -> Result<OldValue> {
+        // Precondition:
+        debug_assert!({
+            let cursor = self.write_cursor.as_ref().unwrap();
+            let key_under_cursor =
+                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
+                    .truncate_ts()
+                    .unwrap();
+            let write_under_cursor =
+                txn_types::WriteRef::parse(cursor.value(&mut self.statistics.write))
+                    .unwrap()
+                    .to_owned();
+            key == &key_under_cursor && prev_write == write_under_cursor
+        });
+
+        if !prev_write.may_have_old_value() {
+            let write_cursor = self.write_cursor.as_mut().unwrap();
+            // Skip the current write record.
+            write_cursor.next(&mut self.statistics.write);
+            let write =
+                seek_for_valid_write(write_cursor, key, start_ts, start_ts, &mut self.statistics)?;
+            Ok(write.into())
+        } else if prev_write
+            .as_ref()
+            .check_gc_fence_as_latest_version(start_ts)
+        {
+            Ok(OldValue::Value {
+                short_value: prev_write.short_value,
+                start_ts: prev_write.start_ts,
+            })
+        } else {
+            Ok(OldValue::None)
+        }
+    }
 }
 
 // Returns true if it needs gc.
@@ -509,14 +549,13 @@ pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccPr
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::{MvccReader, MvccTxn};
-
+    use crate::storage::mvcc::{tests::write, MvccReader, MvccTxn};
     use crate::storage::txn::{
         acquire_pessimistic_lock, cleanup, commit, gc, prewrite, CommitKind, TransactionKind,
         TransactionProperties,
     };
+    use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::properties::MvccPropertiesCollectorFactory;
     use engine_rocks::raw::DB;
@@ -525,7 +564,7 @@ mod tests {
     use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::{IterOptions, Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::IsolationLevel;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     use kvproto::metapb::{Peer, Region};
     use raftstore::store::RegionSnapshot;
     use std::ops::Bound;
@@ -1702,6 +1741,128 @@ mod tests {
                 reader.get(&key, 11.into(), None, skip_lock_check).unwrap(),
                 Some(long_value.to_vec())
             );
+        }
+    }
+
+    #[test]
+    fn test_get_old_value() {
+        struct Case {
+            expected: OldValue,
+
+            // (write_record, put_ts)
+            // all data to write to the engine
+            // current write_cursor will be on the last record in `written`
+            // which also means prev_write is `Write` in the record
+            written: Vec<(Write, TimeStamp)>,
+        }
+        let cases = vec![
+            // prev_write is None
+            Case {
+                expected: OldValue::None,
+                written: vec![],
+            },
+            // prev_write is Rollback, and there exists a more previous valid write
+            Case {
+                expected: OldValue::Value {
+                    short_value: None,
+                    start_ts: TimeStamp::new(4),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(4), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
+            // prev_write is Rollback, and there isn't a more previous valid write
+            Case {
+                expected: OldValue::None,
+
+                written: vec![(
+                    Write::new(WriteType::Rollback, TimeStamp::new(5), None),
+                    TimeStamp::new(6),
+                )],
+            },
+            // prev_write is Lock, and there exists a more previous valid write
+            Case {
+                expected: OldValue::Value {
+                    short_value: None,
+                    start_ts: TimeStamp::new(3),
+                },
+
+                written: vec![
+                    (
+                        Write::new(WriteType::Put, TimeStamp::new(3), None),
+                        TimeStamp::new(6),
+                    ),
+                    (
+                        Write::new(WriteType::Lock, TimeStamp::new(5), None),
+                        TimeStamp::new(7),
+                    ),
+                ],
+            },
+            // prev_write is Lock, and there isn't a more previous valid write
+            Case {
+                expected: OldValue::None,
+
+                written: vec![(
+                    Write::new(WriteType::Lock, TimeStamp::new(5), None),
+                    TimeStamp::new(6),
+                )],
+            },
+            // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is true
+            Case {
+                expected: OldValue::Value {
+                    short_value: None,
+                    start_ts: TimeStamp::new(7),
+                },
+                written: vec![(
+                    Write::new(WriteType::Put, TimeStamp::new(7), None)
+                        .set_overlapped_rollback(true, Some(27.into())),
+                    TimeStamp::new(5),
+                )],
+            },
+            // prev_write is not Rollback or Lock, check_gc_fence_as_latest_version is false
+            Case {
+                expected: OldValue::None,
+                written: vec![(
+                    Write::new(WriteType::Put, TimeStamp::new(4), None)
+                        .set_overlapped_rollback(true, Some(3.into())),
+                    TimeStamp::new(5),
+                )],
+            },
+        ];
+        for case in cases {
+            let engine = TestEngineBuilder::new().build().unwrap();
+            let cm = ConcurrencyManager::new(42.into());
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(10), true, cm.clone());
+            for (write_record, put_ts) in case.written.iter() {
+                txn.put_write(
+                    Key::from_raw(b"a"),
+                    *put_ts,
+                    write_record.as_ref().to_bytes(),
+                );
+            }
+            write(&engine, &Context::default(), txn.into_modifies());
+            let snapshot = engine.snapshot(Default::default()).unwrap();
+            let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
+            if !case.written.is_empty() {
+                let prev_write = reader
+                    .seek_write(&Key::from_raw(b"a"), case.written.last().unwrap().1)
+                    .unwrap()
+                    .unwrap()
+                    .1;
+                let result = reader
+                    .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
+                    .unwrap();
+                assert_eq!(result, case.expected);
+            }
         }
     }
 }
