@@ -14,12 +14,13 @@ use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::raft_serverpb::{Done, SnapshotChunk};
+use kvproto::raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
+use protobuf::Message;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use engine_rocks::RocksEngine;
+use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
@@ -183,6 +184,7 @@ struct RecvSnapContext {
     key: SnapKey,
     file: Option<Box<dyn GenericSnapshot>>,
     raft_msg: RaftMessage,
+    _with_io_type: WithIOType,
 }
 
 impl RecvSnapContext {
@@ -199,8 +201,16 @@ impl RecvSnapContext {
             Err(e) => return Err(box_err!("failed to create snap key: {:?}", e)),
         };
 
+        let data = meta.get_message().get_snapshot().get_data();
+        let mut snapshot = RaftSnapshotData::default();
+        snapshot.merge_from_bytes(data)?;
+        let with_io_type = WithIOType::new(if snapshot.get_meta().get_for_balance() {
+            IOType::LoadBalance
+        } else {
+            IOType::Replication
+        });
+
         let snap = {
-            let data = meta.get_message().get_snapshot().get_data();
             let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
                 Ok(s) => s,
                 Err(e) => return Err(box_err!("{} failed to create snapshot file: {:?}", key, e)),
@@ -219,6 +229,7 @@ impl RecvSnapContext {
             key,
             file: snap,
             raft_msg: meta,
+            _with_io_type: with_io_type,
         })
     }
 

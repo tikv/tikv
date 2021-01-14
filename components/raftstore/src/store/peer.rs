@@ -1110,7 +1110,27 @@ where
             return Ok(());
         }
 
+        let from_id = m.get_from();
+        let has_snap_task = self.get_store().has_gen_snap_task();
         self.raft_group.step(m)?;
+
+        let mut for_balance = false;
+        if !has_snap_task && self.get_store().has_gen_snap_task() {
+            if let Some(progress) = self.raft_group.status().progress {
+                if let Some(pr) = progress.get(from_id) {
+                    // When a peer is uninitialized (e.g. created by load balance),
+                    // the last index of the peer is 0 which makes the matched index to be 0.
+                    if pr.matched == 0 {
+                        for_balance = true;
+                    }
+                }
+            }
+        }
+        if for_balance {
+            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
+                gen_task.set_for_balance();
+            }
+        }
         Ok(())
     }
 

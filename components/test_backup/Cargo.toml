@@ -1,0 +1,34 @@
+[package]
+name = "test_backup"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+protobuf-codec = [
+  "backup/protobuf-codec",
+]
+prost-codec = [
+  "backup/prost-codec",
+]
+
+[dependencies]
+backup = { path = "../backup" }
+collections = { path = "../collections" }
+concurrency_manager = { path = "../concurrency_manager" }
+crc64fast = "0.1"
+engine_traits = { path = "../engine_traits" }
+external_storage = { path = "../external_storage" }
+file_system = { path = "../file_system" }
+futures = "0.3"
+futures-executor = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+rand = "0.7"
+tempfile = "3.0"
+test_raftstore = { path = "../test_raftstore" }
+tidb_query_common = { path = "../tidb_query_common" }
+tikv = { path = "../../", default-features = false }
+tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types" }
