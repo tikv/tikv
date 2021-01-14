@@ -462,6 +462,7 @@ pub fn must_one_pc<E: Engine>(
         txn_size: 0,
         lock_ttl: 0,
         min_commit_ts: start_ts,
+        need_old_value: false,
     };
     prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
     write(engine, &ctx, txn.into_modifies());
