@@ -1,3 +1,5 @@
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use rand::prelude::*;
@@ -8,7 +10,7 @@ use txn_types::{Key, Lock, LockType};
 // Run it with the following command (recommending release mode) and see the printed stats:
 //
 // ```
-// cargo test --package concurrency_manager --test memory_usage --features jemalloc --release -- test_memory_usage --exact --ignored --nocapture
+// cargo test --package concurrency_manager --test memory_usage --release -- test_memory_usage --exact --ignored --nocapture
 // ```
 #[test]
 #[ignore]

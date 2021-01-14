@@ -29,6 +29,7 @@ rand = "0.7.3"
 futures = "0.3"
 criterion = "0.3"
 tikv_alloc = { path = "../tikv_alloc", features = ["jemalloc"] }
+rayon = "1"
 
 [[bench]]
 name = "lock_table"
