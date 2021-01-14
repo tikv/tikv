@@ -1182,7 +1182,7 @@ fn test_region_created_replicate() {
 }
 
 #[test]
-fn test_cdc_scan_not_filter_gc_fence() {
+fn test_cdc_scan_ignore_gc_fence() {
     // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
     let mut suite = TestSuite::new(1);
 
@@ -1256,10 +1256,12 @@ fn test_cdc_scan_not_filter_gc_fence() {
         }
         other => panic!("unknown event {:?}", other),
     }
+
+    suite.stop();
 }
 
 #[test]
-fn test_cdc_filtering_gc_fence() {
+fn test_cdc_extract_rollback_if_gc_fence_set() {
     let mut suite = TestSuite::new(1);
 
     let req = suite.new_changedata_request(1);
@@ -1281,7 +1283,7 @@ fn test_cdc_filtering_gc_fence() {
     sleep_ms(1000);
 
     // Write two versions of a key
-    let (key, v1, v2) = (b"key", b"value1", b"value2");
+    let (key, v1, v2, v3) = (b"key", b"value1", b"value2", b"value3");
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1327,6 +1329,23 @@ fn test_cdc_filtering_gc_fence() {
         caller_start_ts,
         true,
     );
+
+    // Expects receiving rollback
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Rollback, "{:?}", es);
+                assert_eq!(e.get_start_ts(), commit_ts1.into_inner());
+                assert_eq!(e.get_commit_ts(), 0);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
     suite.must_check_txn_status(
         1,
         key.to_vec(),
@@ -1336,18 +1355,95 @@ fn test_cdc_filtering_gc_fence() {
         true,
     );
 
-    // Then nothing should be received by CDC.
-    let latest_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    loop {
-        let event = receive_event(true);
-
-        if let Some(r) = event.resolved_ts.as_ref() {
-            assert_ne!(r.ts, 0);
-            if r.ts > latest_ts.into_inner() {
-                break;
+    // Expects receiving rollback
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Rollback, "{:?}", es);
+                assert_eq!(e.get_start_ts(), commit_ts2.into_inner());
+                assert_eq!(e.get_commit_ts(), 0);
             }
-        }
-    }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    // In some special cases, a newly committed record may carry an overlapped rollback initially.
+    // In this case, gc_fence shouldn't be set, and CDC ignores the rollback and handles the
+    // committing normally.
+    let start_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = key.to_vec();
+    mutation.value = v3.to_vec();
+    suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts3);
+    // Consume the prewrite event.
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", es);
+                assert_eq!(e.get_start_ts(), start_ts3.into_inner());
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    // Again, assume the transaction is committed with async commit protocol, and the commit_ts is
+    // also another transaction's start_ts.
+    let commit_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    // Rollback another transaction before committing, then the rolling back information will be
+    // recorded in the lock.
+    let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_check_txn_status(
+        1,
+        key.to_vec(),
+        commit_ts3,
+        caller_start_ts,
+        caller_start_ts,
+        true,
+    );
+    // Expects receiving rollback
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Rollback, "{:?}", es);
+                assert_eq!(e.get_start_ts(), commit_ts3.into_inner());
+                assert_eq!(e.get_commit_ts(), 0);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+    // Commit the transaction, then it will have overlapped rollback initially.
+    suite.must_kv_commit(1, vec![key.to_vec()], start_ts3, commit_ts3);
+    // Expects receiving a normal committing event.
+    let event = receive_event(false);
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Commit, "{:?}", es);
+                assert_eq!(e.get_start_ts(), start_ts3.into_inner());
+                assert_eq!(e.get_commit_ts(), commit_ts3.into_inner());
+                assert_eq!(e.get_value(), v3);
+            }
+            other => panic!("unknown event {:?}", other),
+        });
+
+    suite.stop();
 }
 
 // This test is created for covering the case that term was increased without leader change.
