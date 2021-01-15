@@ -2121,6 +2121,9 @@ where
                 // Don't ping to speed up leader election
                 need_ping = false;
             }
+        } else if !self.fsm.peer.has_valid_leader() {
+            self.fsm.hibernate_state.reset(GroupState::Chaos);
+            self.register_raft_base_tick();
         }
         if need_ping {
             // Speed up snapshot instead of waiting another heartbeat.
