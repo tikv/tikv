@@ -1,7 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::AtomicU64;
+
+use crossbeam::utils::CachePadded;
+use collections::HashMap;
 
 use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
@@ -21,15 +25,75 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::Callback;
+use raftstore::store::WriteCallback;
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
+use crate::storage::{Latches, LatchLock};
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
 use sst_importer::{error_inc, Config, Error, SSTImporter};
+
+const DEFAULT_LATCH_CAPACITY: usize = 1024 * 8;
+
+// It stores context of a task.
+struct TaskContext {
+    task: Option<IngestRequest>,
+    lock: LatchLock,
+    cb: Option<WriteCallback>,
+}
+
+impl TaskContext {
+    fn new(task: IngestRequest, latches: &Latches, cb: WriteCallback) -> TaskContext {
+        let lock = cmd.gen_lock(latches);
+        TaskContext {
+            task: Some(task),
+            lock,
+            cb: Some(cb),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Scheduler<Router> {
+    router: Router,
+    latches: Latches,
+    task_slots: Mutex<HashMap<u64, TaskContext>>,
+    id_alloc: CachePadded<AtomicU64>,
+}
+
+impl<E, Router> Scheduler<E>
+    where
+        E: KvEngine,
+        Router: RaftStoreRouter<E>
+{
+    /// Generates the next command ID.
+    #[inline]
+    fn gen_id(&self) -> u64 {
+        let id = self.id_alloc.fetch_add(1, Ordering::Relaxed);
+        id + 1
+    }
+
+    /// Tries to acquire all the required latches for a command.
+    ///
+    /// Returns the `Task` if successful; returns `None` otherwise.
+    fn acquire_lock(&self, cid: u64)  {
+        let mut task_slots = self.task_slots.lock().unwrap();
+        let tctx = task_slots.get_mut(&cid).unwrap();
+        if self.latches.acquire(&mut tctx.lock, cid) {
+            if let Some(t) = tctx.task.take() {
+                let cb = tctx.cb.take();
+                drop(task_slots);
+                self.execute(t, cb);
+                return;
+            }
+        }
+    }
+}
+
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -41,12 +105,12 @@ where
     E: KvEngine,
 {
     cfg: Config,
-    router: Router,
     engine: E,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
     switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
+    scheduler: Arc<Scheduler<Router>>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
@@ -70,12 +134,17 @@ where
         let switcher = ImportModeSwitcher::new(&cfg, &threads, engine.clone());
         ImportSSTService {
             cfg,
-            router,
             engine,
             threads,
             importer,
             switcher,
             limiter: Limiter::new(INFINITY),
+            scheduler: Arc::new(Scheduler {
+                latches: Latches::new(DEFAULT_LATCH_CAPACITY),
+                task_slots: Mutex::new(HashMap::default()),
+                id_alloc: AtomicU64::new(0).into(),
+                router,
+            }),
         }
     }
 }

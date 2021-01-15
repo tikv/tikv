@@ -36,6 +36,7 @@ pub use self::store::{
     EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
     TxnEntryScanner, TxnEntryStore,
 };
+pub use self::latch::{Latches, Lock};
 
 /// Process result of a command.
 #[derive(Debug)]

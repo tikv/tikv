@@ -54,7 +54,7 @@ pub use self::{
         TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{ProcessResult, Scanner, SnapshotStore, Store, Latches, Lock as LatchLock},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
