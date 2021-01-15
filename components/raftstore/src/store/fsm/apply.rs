@@ -229,6 +229,7 @@ pub enum ExecResult<S> {
         state: MergeState,
     },
     CommitMerge {
+        index: u64,
         region: Region,
         source: Region,
     },
@@ -2419,6 +2420,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
+                index: ctx.exec_ctx.as_ref().unwrap().index,
                 region,
                 source: source_region.to_owned(),
             }),

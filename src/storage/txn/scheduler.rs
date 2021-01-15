@@ -400,6 +400,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
 
         let f = |engine: &E| {
+            assert!(!ctx.get_stale_read());
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..Default::default()

@@ -228,6 +228,9 @@ where
             assert!(!ctx.start_ts.is_zero());
             header.set_read_ts(ctx.start_ts.into_inner());
         }
+        if !ctx.start_ts.is_zero() {
+            debug!("exec_snapshot"; "start_ts" => ctx.start_ts.into_inner(), "req" => ?req)
+        }
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());

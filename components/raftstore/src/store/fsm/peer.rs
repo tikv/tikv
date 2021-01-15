@@ -1211,7 +1211,13 @@ where
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
 
-        if msg_type == MessageType::MsgHeartbeat && msg_term == self.fsm.peer.term() {
+        if msg_type == MessageType::MsgHeartbeat
+            && msg_term == self.fsm.peer.term()
+            && !util::is_epoch_stale(
+                msg.get_region_epoch(),
+                self.fsm.peer.region().get_region_epoch(),
+            )
+        {
             self.fsm
                 .peer
                 .read_progress
@@ -2663,7 +2669,29 @@ where
         self.fsm.peer.catch_up_logs = Some(catch_up_logs);
     }
 
-    fn on_ready_commit_merge(&mut self, region: metapb::Region, source: metapb::Region) {
+    fn reset_read_progress_when_commit_merge(
+        &self,
+        applied_index: u64,
+        source_region_id: u64,
+        meta: &StoreMeta,
+    ) {
+        let source_safe_ts = meta
+            .region_read_progress
+            .get(&source_region_id)
+            .map(|rp| rp.safe_ts())
+            .unwrap_or(0);
+        self.fsm
+            .peer
+            .read_progress
+            .merge_safe_ts(source_safe_ts, applied_index);
+    }
+
+    fn on_ready_commit_merge(
+        &mut self,
+        index: u64,
+        region: metapb::Region,
+        source: metapb::Region,
+    ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -2686,6 +2714,8 @@ where
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         let reader = meta.readers.remove(&source.get_id()).unwrap();
         reader.mark_invalid();
+
+        self.reset_read_progress_when_commit_merge(index, source.get_id(), &meta);
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -2992,9 +3022,11 @@ where
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
-                ExecResult::CommitMerge { region, source } => {
-                    self.on_ready_commit_merge(region.clone(), source.clone())
-                }
+                ExecResult::CommitMerge {
+                    index,
+                    region,
+                    source,
+                } => self.on_ready_commit_merge(index, region.clone(), source.clone()),
                 ExecResult::RollbackMerge { region, commit } => {
                     self.on_ready_rollback_merge(commit, Some(region))
                 }

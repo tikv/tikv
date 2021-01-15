@@ -475,6 +475,7 @@ where
                             debug!(
                                 "handle stale read reqeust";
                                 "region id" => region_id,
+                                "peer id" => delegate.peer_id,
                                 "read_ts" => read_ts,
                                 "safe_ts" => safe_ts
                             );
@@ -494,6 +495,7 @@ where
                             debug!(
                                 "rejected by safe timestamp";
                                 "region_id" => region_id,
+                                "peer id" => delegate.peer_id,
                                 "read_ts" => read_ts,
                                 "safe_ts" => safe_ts
                             );

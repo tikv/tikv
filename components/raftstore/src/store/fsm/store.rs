@@ -2411,6 +2411,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 pub struct RegionReadProgress {
     pub peer_id: u64,
     applied_index: Arc<AtomicU64>,
+    last_merge_index: Arc<AtomicU64>,
     safe_ts: Arc<AtomicU64>,
     // `pending_ts` should not be accessed outside to avoid dead lock
     pending_ts: Arc<Mutex<VecDeque<(u64, u64)>>>,
@@ -2422,6 +2423,8 @@ impl RegionReadProgress {
         RegionReadProgress {
             peer_id,
             applied_index: Arc::new(AtomicU64::from(applied_index)),
+            // It is okey to inti `last_merge_index` with `applied_index`
+            last_merge_index: Arc::new(AtomicU64::from(applied_index)),
             safe_ts: Arc::new(AtomicU64::from(0)),
             pending_ts: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
             cap,
@@ -2459,15 +2462,19 @@ impl RegionReadProgress {
     }
 
     pub fn forward_safe_ts(&self, apply_index: u64, ts: u64) {
-        // Fast path
-        if self.applied_index.load(Ordering::Relaxed) >= apply_index {
-            if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
-                debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts);
-            }
+        let mut pending_ts = self.pending_ts.lock().unwrap();
+
+        let last_merge_index = self.last_merge_index.load(Ordering::Relaxed);
+        if last_merge_index > apply_index {
+            debug!(
+                "ignore item less than `last_merge_index`";
+                "peer id" => self.peer_id,
+                "item" => ?(apply_index, ts),
+                "last_merge_index" => last_merge_index,
+            );
             return;
         }
 
-        let mut pending_ts = self.pending_ts.lock().unwrap();
         if self.applied_index.load(Ordering::Relaxed) < apply_index {
             if let Some(item) = pending_ts.back_mut() {
                 if item.0 >= apply_index && item.1 < ts {
@@ -2483,6 +2490,23 @@ impl RegionReadProgress {
             if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
                 debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts);
             }
+        }
+    }
+
+    // Reset `safe_ts` to min(`source_safe_ts`, `safe_ts`)
+    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
+        let _guard = self.pending_ts.lock().unwrap();
+        // Clear all pending ts before `merge_index`
+        self.update_applied(merge_index - 1);
+        // Update `last_merge_index` to `merge_index`
+        self.last_merge_index.store(merge_index, Ordering::Relaxed);
+        // Reset target region's `safe_ts`
+        if source_safe_ts < self.safe_ts.fetch_min(source_safe_ts, Ordering::Relaxed) {
+            debug!(
+                "safe ts decrease due to merge";
+                "peer id" => self.peer_id,
+                "safe ts" => source_safe_ts
+            );
         }
     }
 

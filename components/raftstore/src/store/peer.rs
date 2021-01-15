@@ -3047,12 +3047,18 @@ where
         if req.get_header().get_read_ts() > 0 {
             let read_ts = req.get_header().get_read_ts();
             let safe_ts = self.read_progress.safe_ts();
+            debug!(
+                "handle stale read reqeust";
+                "tag" => &self.tag,
+                "read_ts" => read_ts,
+                "safe_ts" => safe_ts
+            );
             if safe_ts < read_ts {
                 debug!(
                     "read rejected by safe timestamp";
-                    "safe ts" => safe_ts,
+                    "tag" => &self.tag,
                     "read ts" => read_ts,
-                    "tag" => &self.tag
+                    "safe ts" => safe_ts,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady(
                     region.get_id(),

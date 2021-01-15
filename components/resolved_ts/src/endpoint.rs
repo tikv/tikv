@@ -9,14 +9,14 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Region, RegionEpoch};
 use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange, StoreMeta};
 use raftstore::store::msg::{Callback, SignificantMsg};
-use raftstore::store::util::RemoteLease;
+use raftstore::store::util::{self, RemoteLease};
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::CdcConfig;
@@ -344,12 +344,46 @@ where
         }
     }
 
-    fn advance_resolved_ts(&mut self, regions: Vec<u64>, ts: TimeStamp) {
+    fn advance_resolved_ts(&mut self, regions: Vec<(u64, RegionEpoch)>, ts: TimeStamp) {
         if regions.is_empty() {
             return;
         }
-        for region_id in regions {
+        let meta = self.store_meta.lock().unwrap();
+        for (region_id, req_epoch) in regions {
             if let Some(observe_region) = self.regions.get_mut(&region_id) {
+                if meta
+                    .regions
+                    .get(&region_id)
+                    .map(|meta_region| {
+                        util::compare_region_epoch(
+                            // the epoch before sending request
+                            &req_epoch,
+                            // current epoch
+                            &meta_region,
+                            false,
+                            true,
+                            false,
+                        )
+                        .is_err()
+                            || util::compare_region_epoch(
+                                // observed epoch
+                                observe_region.meta.get_region_epoch(),
+                                // current epoch
+                                &meta_region,
+                                false,
+                                true,
+                                false,
+                            )
+                            .is_err()
+                    })
+                    .unwrap_or(true)
+                {
+                    debug!(
+                        "skip advance resolved ts due to epoch not match";
+                        "region id" => region_id,
+                    );
+                    continue;
+                }
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     observe_region.resolver.resolve(ts);
                 }
@@ -431,7 +465,7 @@ pub enum Task<S: Snapshot> {
     },
     RegisterAdvanceEvent,
     AdvanceResolvedTs {
-        regions: Vec<u64>,
+        regions: Vec<(u64, RegionEpoch)>,
         ts: TimeStamp,
     },
     ChangeLog {

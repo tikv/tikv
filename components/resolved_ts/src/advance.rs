@@ -7,7 +7,7 @@ use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
-use kvproto::metapb::{PeerRole, Region};
+use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
@@ -120,7 +120,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 )
                 .await
             } else {
-                Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
+                Self::region_resolved_ts_raft(regions, store_meta, raft_router, min_ts).await
             };
 
             if !regions.is_empty() {
@@ -137,15 +137,26 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
 
     async fn region_resolved_ts_raft(
         regions: Vec<u64>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         raft_router: T,
         min_ts: TimeStamp,
-    ) -> Vec<u64> {
+    ) -> Vec<(u64, RegionEpoch)> {
+        let regions: Vec<_> = {
+            let meta = store_meta.lock().unwrap();
+            regions
+                .into_iter()
+                .filter_map(|region_id| {
+                    meta.regions
+                        .get(&region_id)
+                        .map(|region| (region_id, region.get_region_epoch().clone()))
+                })
+                .collect()
+        };
         // TODO: send a message to raftstore would consume too much cpu time,
         // try to handle it outside raftstore.
         let regions: Vec<_> = regions
-            .iter()
-            .copied()
-            .map(|region_id| {
+            .into_iter()
+            .map(|(region_id, epoch)| {
                 let raft_router_clone = raft_router.clone();
                 async move {
                     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -155,7 +166,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             let resp = if resp.response.get_header().has_error() {
                                 None
                             } else {
-                                Some(region_id)
+                                Some((region_id, epoch))
                             };
                             if tx.send(resp).is_err() {
                                 error!("cdc send tso response failed"; "region_id" => region_id);
@@ -173,7 +184,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         resps
             .into_iter()
             .filter_map(|resp| resp)
-            .collect::<Vec<u64>>()
+            .collect::<Vec<(u64, RegionEpoch)>>()
     }
 
     async fn region_resolved_ts_store(
@@ -184,7 +195,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         env: Arc<Environment>,
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
-    ) -> Vec<u64> {
+    ) -> Vec<(u64, RegionEpoch)> {
         let region_has_quorum = |region: &Region, stores: Vec<u64>| {
             let mut voters = 0;
             let mut incoming_voters = 0;
@@ -248,6 +259,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         let mut region_map: HashMap<u64, Region> = HashMap::default();
         // region_id -> peers id, record the responses
         let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
+        // region_id -> region epoch
+        let mut epochs = HashMap::default();
         {
             let meta = store_meta.lock().unwrap();
             let store_id = match meta.store_id {
@@ -256,6 +269,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             };
             for region_id in regions.clone() {
                 if let Some(region) = meta.regions.get(&region_id) {
+                    epochs.insert(region_id, region.get_region_epoch().clone());
                     if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
                         match find_store_id(&region, *leader_id) {
                             None => continue,
@@ -340,7 +354,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             .into_iter()
             .filter_map(|(region_id, stores)| {
                 if region_has_quorum(&region_map[&region_id], stores) {
-                    Some(region_id)
+                    Some((region_id, epochs.remove(&region_id).unwrap()))
                 } else {
                     None
                 }
