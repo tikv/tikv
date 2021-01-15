@@ -9,10 +9,11 @@ use slog::Level;
 use batch_system::Config as BatchSystemConfig;
 use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_traits::config::PerfLevel;
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
