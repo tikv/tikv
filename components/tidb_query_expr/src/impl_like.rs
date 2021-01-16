@@ -91,8 +91,8 @@ pub fn regexp_utf8(
             };
             let pattern = format!("(?i){}", pattern);
 
-            match BytesRegex::new(&pattern) {
-                Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
+            match Regex::new(&pattern) {
+                Ok(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
                 Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
             }
         }
@@ -123,41 +123,52 @@ pub fn regexp(
 
 fn init_regexp_utf8_data(expr: &mut Expr) -> Result<Option<Regex>> {
     let children = expr.mut_children();
-    let n = children.len();
-    assert!(n > 1);
+    if children.len() <= 1 {
+        return Ok(None);
+    }
 
     let tree_node = &mut children[1];
     match tree_node.get_tp() {
-        ExprType::ScalarFunc | ExprType::ColumnRef | ExprType::Null => Ok(None),
-        _ => match Regex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
-            Ok(regex) => Ok(Some(regex)),
-            Err(_) => Ok(None),
-        },
+        ExprType::Bytes | ExprType::String => {
+            match Regex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+                Ok(regex) => Ok(Some(regex)),
+                Err(_) => Ok(None),
+            }
+        }
+        _ => Ok(None),
     }
 }
 
 fn init_regexp_data(expr: &mut Expr) -> Result<Option<BytesRegex>> {
     let children = expr.mut_children();
-    let n = children.len();
-    assert!(n > 1);
+    if children.len() <= 1 {
+        return Ok(None);
+    }
 
     let tree_node = &mut children[1];
     match tree_node.get_tp() {
-        ExprType::ScalarFunc | ExprType::ColumnRef | ExprType::Null => Ok(None),
-        _ => match BytesRegex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
-            Ok(regex) => Ok(Some(regex)),
-            Err(_) => Ok(None),
-        },
+        ExprType::Bytes | ExprType::String => {
+            match BytesRegex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+                Ok(regex) => Ok(Some(regex)),
+                Err(_) => Ok(None),
+            }
+        }
+        _ => Ok(None),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
-    use crate::test_util::RpnFnScalarEvaluator;
+    use crate::{test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
+
+    use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
+    use tidb_query_datatype::expr::EvalContext;
+    use tidb_query_datatype::Collation;
+    use tidb_query_datatype::FieldTypeTp;
+    use tipb_helper::ExprDefBuilder;
 
     #[test]
     fn test_like() {
@@ -333,7 +344,7 @@ mod tests {
             ("a", r"^$", Some(0)),
             ("a", r"a", Some(1)),
             ("b", r"a", Some(0)),
-            ("aA", r"Aa", Some(1)),
+            ("aA", r"Aa", Some(0)),
             ("aaa", r".", Some(1)),
             ("ab", r"^.$", Some(0)),
             ("b", r"..", Some(0)),
@@ -346,34 +357,46 @@ mod tests {
         ];
 
         for (target, pattern, expected) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(target.to_owned().into_bytes())
-                .push_param(pattern.to_owned().into_bytes())
-                .evaluate(ScalarFuncSig::RegexpUtf8Sig)
-                .unwrap();
-            assert_eq!(output, expected);
+            let mut ctx = EvalContext::default();
+
+            let builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpUtf8Sig, FieldTypeTp::LongLong);
+            let node = builder
+                .push_child(ExprDefBuilder::constant_bytes(target.as_bytes().to_vec()))
+                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
+                .build();
+
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
+
+            assert!(val.is_vector());
+            let v = val.vector_value().unwrap().as_ref().to_int_vec();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0], expected);
         }
     }
 
     #[test]
     fn test_regexp() {
         let cases = vec![
-            ("a".to_owned().into_bytes(), r"^$", Some(0)),
-            ("a".to_owned().into_bytes(), r"a", Some(1)),
-            ("b".to_owned().into_bytes(), r"a", Some(0)),
-            ("aA".to_owned().into_bytes(), r"Aa", Some(0)),
-            ("aaa".to_owned().into_bytes(), r".", Some(1)),
-            ("ab".to_owned().into_bytes(), r"^.$", Some(0)),
-            ("b".to_owned().into_bytes(), r"..", Some(0)),
-            ("aab".to_owned().into_bytes(), r".ab", Some(1)),
-            ("abcd".to_owned().into_bytes(), r".*", Some(1)),
+            ("a".as_bytes().to_vec(), r"^$", Some(0)),
+            ("a".as_bytes().to_vec(), r"a", Some(1)),
+            ("b".as_bytes().to_vec(), r"a", Some(0)),
+            ("aA".as_bytes().to_vec(), r"Aa", Some(0)),
+            ("aaa".as_bytes().to_vec(), r".", Some(1)),
+            ("ab".as_bytes().to_vec(), r"^.$", Some(0)),
+            ("b".as_bytes().to_vec(), r"..", Some(0)),
+            ("aab".as_bytes().to_vec(), r".ab", Some(1)),
+            ("abcd".as_bytes().to_vec(), r".*", Some(1)),
             (vec![0x7f], r"^.$", Some(1)), // dot should match one byte which is less than 128
             (vec![0xf0], r"^.$", Some(0)), // dot can't match one byte greater than 128
             // dot should match "你" even if the char has 3 bytes.
-            ("你".to_owned().into_bytes(), r"^.$", Some(1)),
-            ("你好".to_owned().into_bytes(), r"你好", Some(1)),
-            ("你好".to_owned().into_bytes(), r"^你好$", Some(1)),
-            ("你好".to_owned().into_bytes(), r"^您好$", Some(0)),
+            ("你".as_bytes().to_vec(), r"^.$", Some(1)),
+            ("你好".as_bytes().to_vec(), r"你好", Some(1)),
+            ("你好".as_bytes().to_vec(), r"^你好$", Some(1)),
+            ("你好".as_bytes().to_vec(), r"^您好$", Some(0)),
             (
                 vec![255, 255, 0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD],
                 r"你好",
@@ -382,12 +405,24 @@ mod tests {
         ];
 
         for (target, pattern, expected) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(target)
-                .push_param(pattern.to_owned().into_bytes())
-                .evaluate(ScalarFuncSig::RegexpSig)
-                .unwrap();
-            assert_eq!(output, expected);
+            let mut ctx = EvalContext::default();
+
+            let builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpSig, FieldTypeTp::LongLong);
+            let node = builder
+                .push_child(ExprDefBuilder::constant_bytes(target))
+                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
+                .build();
+
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
+
+            assert!(val.is_vector());
+            let v = val.vector_value().unwrap().as_ref().to_int_vec();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0], expected);
         }
     }
 }
