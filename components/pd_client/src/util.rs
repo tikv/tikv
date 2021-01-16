@@ -175,21 +175,20 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-
-            (
-                try_connect_leader(
-                    Arc::clone(&inner.env),
-                    Arc::clone(&inner.security_mgr),
-                    inner.members.clone(),
-                ),
-                start,
-            )
+            let fut = try_connect_leader(
+                Arc::clone(&inner.env),
+                Arc::clone(&inner.security_mgr),
+                inner.members.clone(),
+            );
+            slow_log!(start.elapsed(), "PD client try connect leader");
+            (fut, start)
         };
 
         let (client, members) = future.await?;
         fail_point!("leader_client_reconnect");
 
         {
+            let start_refresh = Instant::now();
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
                 panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
@@ -210,8 +209,12 @@ impl LeaderClient {
             if let Some(ref on_reconnect) = inner.on_reconnect {
                 on_reconnect();
             }
+            slow_log!(
+                start_refresh.elapsed(),
+                "PD client refresh region heartbeat",
+            );
         }
-        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        info!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }

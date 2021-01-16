@@ -205,7 +205,6 @@ dependencies = [
  "failure",
  "file_system",
  "futures 0.3.7",
- "futures-executor",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
@@ -224,14 +223,11 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_raftstore",
- "test_util",
  "tidb_query_common",
  "tikv",
  "tikv_alloc",
  "tikv_util",
  "txn_types",
- "uuid",
  "yatp",
 ]
 
@@ -1234,10 +1230,13 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "toml",
  "txn_types",
 ]
 
@@ -2016,7 +2015,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#fc36d7869035ffd96810efdb9c1f053c6081a773"
+source = "git+https://github.com/pingcap/kvproto.git#1df45810a26df001620f9508b06588640847965e"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2805,6 +2804,7 @@ dependencies = [
  "tikv_util",
  "tokio-timer",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
@@ -3240,7 +3240,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
+source = "git+https://github.com/tikv/raft-rs?branch=master#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "lazy_static",
  "prost",
@@ -4078,9 +4078,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.4.2"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
+checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "snappy-sys"
@@ -4434,6 +4434,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_backup"
+version = "0.0.1"
+dependencies = [
+ "backup",
+ "collections",
+ "concurrency_manager",
+ "crc64fast",
+ "engine_traits",
+ "external_storage",
+ "file_system",
+ "futures 0.3.7",
+ "futures-executor",
+ "futures-util",
+ "grpcio",
+ "kvproto",
+ "rand",
+ "tempfile",
+ "test_raftstore",
+ "tidb_query_common",
+ "tikv",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
@@ -4580,6 +4605,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "fail",
+ "file_system",
  "futures 0.3.7",
  "grpcio",
  "hyper",
@@ -4601,6 +4627,7 @@ dependencies = [
  "slog-global",
  "sst_importer",
  "tempfile",
+ "test_backup",
  "test_coprocessor",
  "test_pd",
  "test_raftstore",
@@ -5083,7 +5110,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#aa39b1b8621730e9d4fcdd3b1b6d70cc144d6ed9"
+source = "git+https://github.com/pingcap/tipb.git#bd0cb2b314a4a05b2dc0fda32b744e0ecf847cd8"
 dependencies = [
  "lazy_static",
  "prost",
