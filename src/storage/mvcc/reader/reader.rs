@@ -771,26 +771,6 @@ mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
-            txn.collapse_rollback(false);
-            cleanup(
-                &mut txn,
-                &mut reader,
-                Key::from_raw(pk),
-                TimeStamp::zero(),
-                false,
-            )
-            .unwrap();
-            self.write(txn.into_modifies());
-        }
-
-        fn rollback_protected(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap =
-                RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
-            let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(start_ts, cm);
-            let mut reader = SnapshotReader::new(start_ts, snap, true);
-            txn.collapse_rollback(false);
             cleanup(
                 &mut txn,
                 &mut reader,
@@ -1158,7 +1138,7 @@ mod tests {
         engine.commit(k, 35, 40);
 
         // Overlapped rollback on the commit record at 40.
-        engine.rollback_protected(k, 40);
+        engine.rollback(k, 40);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);

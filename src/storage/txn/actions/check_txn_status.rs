@@ -50,6 +50,7 @@ pub fn check_txn_status_lock_exists(
                 primary_key,
                 &lock,
                 is_pessimistic_txn,
+                true,
                 overlapped_write,
             )?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -120,7 +121,9 @@ pub fn check_txn_status_missing_lock(
             let ts = reader.start_ts;
 
             // collapse previous rollback if exist.
-            collapse_prev_rollback(txn, reader, &primary_key)?;
+            if action.collapse_rollback() {
+                collapse_prev_rollback(txn, reader, &primary_key)?;
+            }
 
             if let (Some(l), None) = (mismatch_lock, overlapped_write.as_ref()) {
                 txn.mark_rollback_on_mismatching_lock(
@@ -150,6 +153,7 @@ pub fn rollback_lock(
     key: Key,
     lock: &Lock,
     is_pessimistic_txn: bool,
+    collapse_rollback: bool,
     overlapped_write: Option<OverlappedWrite>,
 ) -> Result<Option<ReleasedLock>> {
     // TODO caller should do this, but note we call txn.unlock_key now.
@@ -174,7 +178,9 @@ pub fn rollback_lock(
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
 
-    collapse_prev_rollback(txn, reader, &key)?;
+    if collapse_rollback {
+        collapse_prev_rollback(txn, reader, &key)?;
+    }
 
     Ok(txn.unlock_key(key, is_pessimistic_txn))
 }
@@ -184,10 +190,6 @@ pub fn collapse_prev_rollback(
     reader: &mut SnapshotReader<impl Snapshot>,
     key: &Key,
 ) -> Result<()> {
-    if !txn.collapse_rollback {
-        return Ok(());
-    }
-
     if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
         if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
             txn.delete_write(key.clone(), commit_ts);
@@ -241,16 +243,19 @@ impl MissingLockAction {
         }
     }
 
+    fn collapse_rollback(&self) -> bool {
+        match self {
+            MissingLockAction::Rollback => true,
+            MissingLockAction::ProtectedRollback => false,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn construct_write(
         &self,
         ts: TimeStamp,
         overlapped_write: Option<OverlappedWrite>,
     ) -> Option<Write> {
-        let protected = match self {
-            MissingLockAction::Rollback => false,
-            MissingLockAction::ProtectedRollback => true,
-            _ => unreachable!(),
-        };
-        make_rollback(ts, protected, overlapped_write)
+        make_rollback(ts, !self.collapse_rollback(), overlapped_write)
     }
 }

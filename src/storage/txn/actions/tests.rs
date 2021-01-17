@@ -429,7 +429,6 @@ pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<Time
     let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-    txn.collapse_rollback(false);
     txn::cleanup(
         &mut txn,
         &mut reader,

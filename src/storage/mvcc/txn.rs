@@ -43,8 +43,6 @@ pub struct MvccTxn {
     // so it can be further processed. The elements are tuples representing
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
-    // collapse continuous rollbacks.
-    pub(crate) collapse_rollback: bool,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -66,14 +64,9 @@ impl MvccTxn {
             write_size: 0,
             modifies: vec![],
             locks_for_1pc: Vec::new(),
-            collapse_rollback: true,
             concurrency_manager,
             guards: vec![],
         }
-    }
-
-    pub fn collapse_rollback(&mut self, collapse: bool) {
-        self.collapse_rollback = collapse;
     }
 
     pub fn set_start_ts(&mut self, start_ts: TimeStamp) {
