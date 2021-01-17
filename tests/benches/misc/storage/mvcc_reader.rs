@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb::Context;
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query_datatype::codec::table;
-use tikv::storage::{kv::RocksEngine, mvcc::MvccReader, Engine};
+use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
 use txn_types::{Key, Mutation};
 
 fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
@@ -34,13 +34,13 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, n: u64) {
     let key = Key::from_raw(&table::encode_row_key(1, 0));
     let store = prepare_mvcc_data(&key, n);
     b.iter(|| {
-        let mut mvcc_reader = MvccReader::new(
+        let mut mvcc_reader = SnapshotReader::new(
+            1.into(),
             store.get_engine().snapshot(Default::default()).unwrap(),
-            None,
             true,
         );
         mvcc_reader
-            .get_txn_commit_record(&key, 1.into())
+            .get_txn_commit_record(&key)
             .unwrap()
             .unwrap_single_record();
     });

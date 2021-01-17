@@ -84,14 +84,17 @@ impl<S: Snapshot> SnapshotReader<S> {
         }
     }
 
+    #[inline(always)]
     pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
         self.reader.get_txn_commit_record(key, self.start_ts)
     }
 
+    #[inline(always)]
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         self.reader.load_lock(key)
     }
 
+    #[inline(always)]
     pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
         Ok(self
             .reader
@@ -99,22 +102,27 @@ impl<S: Snapshot> SnapshotReader<S> {
             .is_some())
     }
 
+    #[inline(always)]
     pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
         self.reader.get(key, ts, Some(self.start_ts))
     }
 
+    #[inline(always)]
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         self.reader.seek_write(key, ts)
     }
 
+    #[inline(always)]
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         self.reader.load_data(key, write)
     }
 
+    #[inline(always)]
     pub fn get_old_value(&mut self, key: &Key, prev_write: Write) -> Result<OldValue> {
         self.reader.get_old_value(key, self.start_ts, prev_write)
     }
 
+    #[inline(always)]
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.reader.statistics)
     }
@@ -135,8 +143,6 @@ pub struct MvccReader<S: Snapshot> {
     // Records the current key for prefix seek. Will Reset the write cursor when switching to another key.
     current_key: Option<Key>,
 
-    key_only: bool,
-
     fill_cache: bool,
 }
 
@@ -150,16 +156,12 @@ impl<S: Snapshot> MvccReader<S> {
             write_cursor: None,
             scan_mode,
             current_key: None,
-            key_only: false,
             fill_cache,
         }
     }
 
-    pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
+    fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         assert_eq!(write.write_type, WriteType::Put);
-        if self.key_only {
-            return Ok(vec![]);
-        }
         if let Some(val) = write.short_value {
             return Ok(val);
         }
@@ -255,7 +257,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
     /// correct. Generally, it should be the read_ts of the current transaction, which might be
     /// different from the `ts` passed to this function.
-    pub fn get(
+    fn get(
         &mut self,
         key: &Key,
         ts: TimeStamp,
@@ -305,20 +307,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    pub fn key_exist(
-        &mut self,
-        key: &Key,
-        ts: TimeStamp,
-        gc_fence_limit: Option<TimeStamp>,
-    ) -> Result<bool> {
-        Ok(self.get_write(&key, ts, gc_fence_limit)?.is_some())
-    }
-
-    pub fn get_txn_commit_record(
-        &mut self,
-        key: &Key,
-        start_ts: TimeStamp,
-    ) -> Result<TxnCommitRecord> {
+    fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
         // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a txn with
         // a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
@@ -507,7 +496,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// Read the old value for key for CDC.
     /// `prev_write` stands for the previous write record of the key
     /// it must be read in the caller and be passed in for optimization
-    pub fn get_old_value(
+    fn get_old_value(
         &mut self,
         key: &Key,
         start_ts: TimeStamp,
