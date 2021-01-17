@@ -71,6 +71,55 @@ impl TxnCommitRecord {
     }
 }
 
+pub struct SnapshotReader<S: Snapshot> {
+    pub reader: MvccReader<S>,
+    pub start_ts: TimeStamp,
+}
+
+impl<S: Snapshot> SnapshotReader<S> {
+    pub fn new(start_ts: TimeStamp, snapshot: S, fill_cache: bool) -> Self {
+        SnapshotReader {
+            reader: MvccReader::new(snapshot, None, fill_cache),
+            start_ts,
+        }
+    }
+
+    pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
+        self.reader.get_txn_commit_record(key, self.start_ts)
+    }
+
+    pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        self.reader.load_lock(key)
+    }
+
+    pub fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
+        Ok(self
+            .reader
+            .get_write(&key, ts, Some(self.start_ts))?
+            .is_some())
+    }
+
+    pub fn get(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<Value>> {
+        self.reader.get(key, ts, Some(self.start_ts))
+    }
+
+    pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
+        self.reader.seek_write(key, ts)
+    }
+
+    pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
+        self.reader.load_data(key, write)
+    }
+
+    pub fn get_old_value(&mut self, key: &Key, prev_write: Write) -> Result<OldValue> {
+        self.reader.get_old_value(key, self.start_ts, prev_write)
+    }
+
+    pub fn take_statistics(&mut self) -> Statistics {
+        std::mem::take(&mut self.reader.statistics)
+    }
+}
+
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
     pub statistics: Statistics,
@@ -630,10 +679,12 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
 
             prewrite(
                 &mut txn,
+                &mut reader,
                 &Self::txn_props(start_ts, pk, false),
                 m,
                 &None,
@@ -653,10 +704,12 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
 
             prewrite(
                 &mut txn,
+                &mut reader,
                 &Self::txn_props(start_ts, pk, true),
                 m,
                 &None,
@@ -677,9 +730,12 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let for_update_ts = for_update_ts.into();
             let cm = ConcurrencyManager::new(for_update_ts);
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true, cm);
+            let start_ts = start_ts.into();
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
             acquire_pessimistic_lock(
                 &mut txn,
+                &mut reader,
                 k,
                 pk,
                 false,
@@ -702,8 +758,9 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
-            commit(&mut txn, Key::from_raw(pk), commit_ts.into()).unwrap();
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
+            commit(&mut txn, &mut reader, Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -712,9 +769,17 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
             txn.collapse_rollback(false);
-            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), false).unwrap();
+            cleanup(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(pk),
+                TimeStamp::zero(),
+                false,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -723,9 +788,17 @@ mod tests {
                 RegionSnapshot::<RocksSnapshot>::from_raw(self.db.c().clone(), self.region.clone());
             let start_ts = start_ts.into();
             let cm = ConcurrencyManager::new(start_ts);
-            let mut txn = MvccTxn::new(snap, start_ts, true, cm);
+            let mut txn = MvccTxn::new(start_ts, cm);
+            let mut reader = SnapshotReader::new(start_ts, snap, true);
             txn.collapse_rollback(false);
-            cleanup(&mut txn, Key::from_raw(pk), TimeStamp::zero(), true).unwrap();
+            cleanup(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(pk),
+                TimeStamp::zero(),
+                true,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -736,8 +809,9 @@ mod tests {
                     self.db.c().clone(),
                     self.region.clone(),
                 );
-                let mut txn = MvccTxn::new(snap, safe_point.into(), true, cm.clone());
-                gc(&mut txn, Key::from_raw(pk), safe_point.into()).unwrap();
+                let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
+                let mut reader = MvccReader::new(snap, None, true);
+                gc(&mut txn, &mut reader, Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
                     return;
@@ -1759,8 +1833,7 @@ mod tests {
         for case in cases {
             let engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
-            let snapshot = engine.snapshot(Default::default()).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(10), true, cm.clone());
+            let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
                 txn.put_write(
                     Key::from_raw(b"a"),

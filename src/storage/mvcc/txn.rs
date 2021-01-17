@@ -1,12 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite, TxnCommitRecord};
-use crate::storage::mvcc::Result;
+use crate::storage::kv::Modify;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use std::fmt;
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteType};
+use txn_types::{Key, Lock, TimeStamp, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -15,65 +13,6 @@ pub struct GcInfo {
     pub found_versions: usize,
     pub deleted_versions: usize,
     pub is_completed: bool,
-}
-
-/// Generate the Write record that should be written that means to perform a specified rollback
-/// operation.
-pub(crate) fn make_rollback(
-    start_ts: TimeStamp,
-    protected: bool,
-    overlapped_write: Option<OverlappedWrite>,
-) -> Option<Write> {
-    match overlapped_write {
-        Some(OverlappedWrite { write, gc_fence }) => {
-            assert!(start_ts > write.start_ts);
-            if protected {
-                Some(write.set_overlapped_rollback(true, Some(gc_fence)))
-            } else {
-                // No need to update the original write.
-                None
-            }
-        }
-        None => Some(Write::new_rollback(start_ts, protected)),
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum MissingLockAction {
-    Rollback,
-    ProtectedRollback,
-    ReturnError,
-}
-
-impl MissingLockAction {
-    pub fn rollback_protect(protect_rollback: bool) -> MissingLockAction {
-        if protect_rollback {
-            MissingLockAction::ProtectedRollback
-        } else {
-            MissingLockAction::Rollback
-        }
-    }
-
-    pub fn rollback(rollback_if_not_exist: bool) -> MissingLockAction {
-        if rollback_if_not_exist {
-            MissingLockAction::ProtectedRollback
-        } else {
-            MissingLockAction::ReturnError
-        }
-    }
-
-    pub fn construct_write(
-        &self,
-        ts: TimeStamp,
-        overlapped_write: Option<OverlappedWrite>,
-    ) -> Option<Write> {
-        let protected = match self {
-            MissingLockAction::Rollback => false,
-            MissingLockAction::ProtectedRollback => true,
-            _ => unreachable!(),
-        };
-        make_rollback(ts, protected, overlapped_write)
-    }
 }
 
 /// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
@@ -96,8 +35,7 @@ impl ReleasedLock {
 }
 
 /// An abstraction of a locally-transactional MVCC key-value store
-pub struct MvccTxn<S: Snapshot> {
-    pub(crate) reader: MvccReader<S>,
+pub struct MvccTxn {
     pub(crate) start_ts: TimeStamp,
     pub(crate) write_size: usize,
     pub(crate) modifies: Vec<Modify>,
@@ -106,7 +44,7 @@ pub struct MvccTxn<S: Snapshot> {
     // (key, lock, remove_pessimistic_lock)
     pub(crate) locks_for_1pc: Vec<(Key, Lock, bool)>,
     // collapse continuous rollbacks.
-    collapse_rollback: bool,
+    pub(crate) collapse_rollback: bool,
     // `concurrency_manager` is used to set memory locks for prewritten keys.
     // Prewritten locks of async commit transactions should be visible to
     // readers before they are written to the engine.
@@ -119,49 +57,11 @@ pub struct MvccTxn<S: Snapshot> {
     pub(crate) guards: Vec<KeyHandleGuard>,
 }
 
-impl<S: Snapshot> MvccTxn<S> {
-    pub fn new(
-        snapshot: S,
-        start_ts: TimeStamp,
-        fill_cache: bool,
-        concurrency_manager: ConcurrencyManager,
-    ) -> MvccTxn<S> {
+impl MvccTxn {
+    pub fn new(start_ts: TimeStamp, concurrency_manager: ConcurrencyManager) -> MvccTxn {
         // FIXME: use session variable to indicate fill cache or not.
 
-        // ScanMode is `None`, since in prewrite and other operations, keys are not given in
-        // order and we use prefix seek for each key. An exception is GC, which uses forward
-        // scan only.
-        Self::from_reader(
-            MvccReader::new(snapshot, None, fill_cache),
-            start_ts,
-            concurrency_manager,
-        )
-    }
-
-    // Use `ScanMode::Forward` when gc.
-    // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be written by
-    // in ascending order.
-    pub fn for_scan(
-        snapshot: S,
-        scan_mode: Option<ScanMode>,
-        start_ts: TimeStamp,
-        fill_cache: bool,
-        concurrency_manager: ConcurrencyManager,
-    ) -> MvccTxn<S> {
-        Self::from_reader(
-            MvccReader::new(snapshot, scan_mode, fill_cache),
-            start_ts,
-            concurrency_manager,
-        )
-    }
-
-    fn from_reader(
-        reader: MvccReader<S>,
-        start_ts: TimeStamp,
-        concurrency_manager: ConcurrencyManager,
-    ) -> MvccTxn<S> {
         MvccTxn {
-            reader,
             start_ts,
             write_size: 0,
             modifies: vec![],
@@ -187,10 +87,6 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn take_guards(&mut self) -> Vec<KeyHandleGuard> {
         std::mem::take(&mut self.guards)
-    }
-
-    pub fn take_statistics(&mut self) -> Statistics {
-        std::mem::take(&mut self.reader.statistics)
     }
 
     pub fn write_size(&self) -> usize {
@@ -239,40 +135,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.modifies.push(write);
     }
 
-    // Check whether there's an overlapped write record, and then perform rollback. The actual behavior
-    // to do the rollback differs according to whether there's an overlapped write record.
-    pub(crate) fn rollback_lock(
-        &mut self,
-        key: Key,
-        lock: &Lock,
-        is_pessimistic_txn: bool,
-    ) -> Result<Option<ReleasedLock>> {
-        match self.reader.get_txn_commit_record(&key, self.start_ts)? {
-            TxnCommitRecord::None { overlapped_write } => {}
-            TxnCommitRecord::SingleRecord { write, .. }
-                if write.write_type != WriteType::Rollback =>
-            {
-                panic!("txn record found but not expected: {:?}", self)
-            }
-            _ => return Ok(self.unlock_key(key, is_pessimistic_txn)),
-        }
-
-        // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
-        if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-            self.delete_value(key.clone(), lock.ts);
-        }
-
-        // Only the primary key of a pessimistic transaction needs to be protected.
-        let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-        if let Some(write) = make_rollback(self.start_ts, protected, overlapped_write) {
-            self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
-        }
-
-        self.collapse_prev_rollback(key.clone())?;
-
-        Ok(self.unlock_key(key, is_pessimistic_txn))
-    }
-
     /// Add the timestamp of the current rollback operation to another transaction's lock if
     /// necessary.
     ///
@@ -308,22 +170,9 @@ impl<S: Snapshot> MvccTxn<S> {
         lock.rollback_ts.push(self.start_ts);
         self.put_lock(key.clone(), &lock);
     }
-
-    pub(crate) fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
-        if !self.collapse_rollback {
-            return Ok(());
-        }
-
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
-                self.delete_write(key, commit_ts);
-            }
-        }
-        Ok(())
-    }
 }
 
-impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
+impl fmt::Debug for MvccTxn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
@@ -405,9 +254,9 @@ pub(crate) fn make_txn_error(
 pub(crate) mod tests {
     use super::*;
 
-    use crate::storage::kv::{RocksEngine, WriteData};
+    use crate::storage::kv::{RocksEngine, ScanMode, WriteData};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader};
+    use crate::storage::mvcc::{Error, ErrorInner, Mutation, MvccReader, SnapshotReader};
     use crate::storage::txn::commands::*;
     use crate::storage::txn::tests::*;
     use crate::storage::txn::{
@@ -419,7 +268,7 @@ pub(crate) mod tests {
         TxnStatus,
     };
     use kvproto::kvrpcpb::Context;
-    use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
+    use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -877,12 +726,14 @@ pub(crate) mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(10.into());
-        let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         let key = Key::from_raw(k);
         assert_eq!(txn.write_size(), 0);
 
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props(10.into(), pk, CommitKind::TwoPc, None, 0, false),
             Mutation::Put((key.clone(), v.to_vec())),
             &None,
@@ -895,8 +746,9 @@ pub(crate) mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 10.into(), true, cm);
-        commit(&mut txn, key, 15.into()).unwrap();
+        let mut txn = MvccTxn::new(10.into(), cm);
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
+        commit(&mut txn, &mut reader, key, 15.into()).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))
@@ -921,9 +773,11 @@ pub(crate) mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(10.into());
-        let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm.clone());
+        let mut txn = MvccTxn::new(5.into(), cm.clone());
+        let mut reader = SnapshotReader::new(5.into(), snapshot, true);
         assert!(prewrite(
             &mut txn,
+            &mut reader,
             &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             &None,
@@ -932,9 +786,11 @@ pub(crate) mod tests {
         .is_err());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, 5.into(), true, cm);
+        let mut txn = MvccTxn::new(5.into(), cm);
+        let mut reader = SnapshotReader::new(5.into(), snapshot, true);
         prewrite(
             &mut txn,
+            &mut reader,
             &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, true),
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             &None,
@@ -1321,10 +1177,12 @@ pub(crate) mod tests {
 
         let do_prewrite = || {
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+            let mut txn = MvccTxn::new(TimeStamp::new(2), cm.clone());
+            let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let (min_commit_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &txn_props(
                     TimeStamp::new(2),
                     b"key",
@@ -1376,10 +1234,12 @@ pub(crate) mod tests {
 
         let do_pessimistic_prewrite = || {
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm.clone());
+            let mut txn = MvccTxn::new(TimeStamp::new(2), cm.clone());
+            let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
             let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
             let (min_commit_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &txn_props(
                     TimeStamp::new(2),
                     b"key",
@@ -1430,10 +1290,12 @@ pub(crate) mod tests {
         must_acquire_pessimistic_lock_impl(&engine, b"key", b"key", 2, false, 20000, 2, false, 100);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::new(2), true, cm);
+        let mut txn = MvccTxn::new(TimeStamp::new(2), cm);
+        let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);
         let mutation = Mutation::Put((Key::from_raw(b"key"), b"value".to_vec()));
         let (min_commit_ts, _) = prewrite(
             &mut txn,
+            &mut reader,
             &txn_props(
                 TimeStamp::new(2),
                 b"key",

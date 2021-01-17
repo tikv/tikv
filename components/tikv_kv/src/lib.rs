@@ -225,6 +225,10 @@ pub trait Engine: Send + Clone + 'static {
     }
 }
 
+/// A Snapshot is a consistent view of the underlying engine at a given point in time.
+///
+/// Note that this is not an MVCC snapshot, that is a higher level abstraction of a view of TiKV
+/// at a specific timestamp. This snapshot is lower-level, a view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
