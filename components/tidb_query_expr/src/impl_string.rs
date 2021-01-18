@@ -980,21 +980,26 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
 
     match str::from_utf8(input) {
         Ok(s) => {
-            let s_len = s.chars().count();
+            let s_utf8_len = s.chars().count();
 
             let mut start = if positive_search {
-                (pos - 1).min(s_len)
+                (pos - 1).min(s_utf8_len)
             } else {
-                s_len.checked_sub(pos).unwrap_or(s_len)
+                s_utf8_len.checked_sub(pos).unwrap_or(s_utf8_len)
             };
-            let mut end = start.saturating_add(len).min(s_len);
+            let mut end = start.saturating_add(len).min(s_utf8_len);
 
+            // Convert chars indexes into bytes indexes
             start = s
                 .char_indices()
                 .nth(start)
                 .map(|(idx, _)| idx)
-                .unwrap_or(len);
-            end = s.char_indices().nth(end).map(|(idx, _)| idx).unwrap_or(len);
+                .unwrap_or(s.len());
+            end = s
+                .char_indices()
+                .nth(end)
+                .map(|(idx, _)| idx)
+                .unwrap_or(s.len());
 
             Ok(writer.write_ref(Some(s[start..end].as_bytes())))
         }
