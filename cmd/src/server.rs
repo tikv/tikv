@@ -10,6 +10,7 @@
 
 use std::thread;
 use std::{
+    cmp,
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
@@ -68,9 +69,13 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger},
+    storage::{
+        self,
+        config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
+        mvcc::MvccConsistencyCheckObserver,
+    },
 };
-use tikv_util::config::VersionTrack;
+use tikv_util::config::{ReadableSize, VersionTrack};
 use tikv_util::{
     check_environment_variables,
     config::ensure_dir_exist,
@@ -416,11 +421,23 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
-        // to compaction when TiKV recover. This file is created in data_dir rather than db_path,
-        // because we must not increase store size of db_path.
+        // to do compaction and region migration when TiKV recover. This file is created in
+        // data_dir rather than db_path, because we must not increase store size of db_path.
+        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
+        let mut capacity = disk_stats.total_space();
+        if self.config.raft_store.capacity.0 > 0 {
+            capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
+        }
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
-            self.config.storage.reserve_space.0,
+            cmp::min(
+                ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
+                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                cmp::max(
+                    (capacity as f64 * 0.05) as u64,
+                    self.config.storage.reserve_space.0,
+                ),
+            ),
         )
         .unwrap();
     }
