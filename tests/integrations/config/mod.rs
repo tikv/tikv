@@ -9,10 +9,11 @@ use slog::Level;
 use batch_system::Config as BatchSystemConfig;
 use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_traits::config::PerfLevel;
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -636,7 +637,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
-        reserve_space: ReadableSize::gb(2),
+        reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
