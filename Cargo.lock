@@ -1231,10 +1231,13 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
+ "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "tikv_alloc",
  "tikv_util",
+ "toml",
  "txn_types",
 ]
 
@@ -1293,6 +1296,7 @@ dependencies = [
  "prometheus",
  "rand",
  "rusoto_core",
+ "rusoto_credential",
  "rusoto_mock",
  "rusoto_s3",
  "rusoto_util",
