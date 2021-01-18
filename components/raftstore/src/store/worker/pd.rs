@@ -674,16 +674,11 @@ where
             stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("no available space");
-            0
-        };
-
+        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
+        available = cmp::min(available, disk_stats.available_space());
+        if available == 0 {
+            warn!("no available space");
         }
 
         stats.set_available(available);
