@@ -5,10 +5,10 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
+pub mod async_io;
 mod metrics;
 mod peer;
 pub mod store;
-pub mod sync_policy;
 
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,

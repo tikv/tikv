@@ -1685,17 +1685,19 @@ where
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
-        let invoke_ctx = match self
-            .mut_store()
-            .handle_raft_ready(ctx, &mut ready, destroy_regions)
-        {
-            Ok(r) => r,
-            Err(e) => {
-                // We may have written something to writebatch and it can't be reverted, so has
-                // to panic here.
-                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
-            }
-        };
+        let notifier = self.persisted_notifier.clone();
+        let invoke_ctx =
+            match self
+                .mut_store()
+                .handle_raft_ready(ctx, &mut ready, destroy_regions, notifier)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    // We may have written something to writebatch and it can't be reverted, so has
+                    // to panic here.
+                    panic!("{} failed to handle raft ready: {:?}", self.tag, e)
+                }
+            };
 
         Some((ready, invoke_ctx))
     }
@@ -1833,31 +1835,25 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         ready: Ready,
-        unsynced_version: Option<u64>,
     ) {
-        let is_synced = if let Some(version) = unsynced_version {
-            if ready.must_sync() {
-                ctx.sync_policy.mark_ready_unsynced(
-                    ready.number(),
-                    self.region_id,
-                    self.persisted_notifier.clone(),
-                    version,
-                );
-                self.unpersisted_numbers
-                    .push_back((ready.number(), ready.number()));
-                false
-            } else if let Some(last) = self.unpersisted_numbers.back_mut() {
-                // Attach to the last unpersisted ready so that it can be considered to be
-                // persisted with the last ready at the same time.
-                last.1 = ready.number();
-                false
-            } else {
-                // If this ready need not to be synced and there is no previous unpersisted ready,
-                // we can safely consider it is persisted and call `advance_append` latter.
-                // It's probably the case that the follower of a cold region receives a heartbeat.
-                true
-            }
+        let is_synced = if ready.must_sync() {
+            ctx.sync_ctx.mark_ready_unsynced(
+                ready.number(),
+                self.region_id,
+                self.persisted_notifier.clone(),
+            );
+            self.unpersisted_numbers
+                .push_back((ready.number(), ready.number()));
+            false
+        } else if let Some(last) = self.unpersisted_numbers.back_mut() {
+            // Attach to the last unpersisted ready so that it can be considered to be
+            // persisted with the last ready at the same time.
+            last.1 = ready.number();
+            false
         } else {
+            // If this ready need not to be synced and there is no previous unpersisted ready,
+            // we can safely consider it is persisted and call `advance_append` latter.
+            // It's probably the case that the follower of a cold region receives a heartbeat.
             true
         };
 

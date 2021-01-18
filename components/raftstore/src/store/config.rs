@@ -27,9 +27,22 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // delay time of raft db sync (us).
     #[config(skip)]
-    pub delay_sync_us: u64,
+    pub store_io_min_interval_us: u64,
+    #[config(skip)]
+    pub store_io_pool_size: u64,
+    #[config(skip)]
+    pub store_io_queue_size: u64,
+    #[config(skip)]
+    pub store_io_queue_init_bytes: u64,
+    #[config(skip)]
+    pub store_io_queue_bytes_step: f64,
+    #[config(skip)]
+    pub store_io_queue_sample_quantile: f64,
+    #[config(skip)]
+    pub store_io_queue_adaptive_gain: u64,
+    #[config(skip)]
+    pub apply_io_size: u64,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -195,7 +208,14 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            delay_sync_us: 0,
+            store_io_min_interval_us: 300,
+            store_io_pool_size: 2,
+            store_io_queue_size: 64,
+            store_io_queue_init_bytes: 256 * 1024,
+            store_io_queue_bytes_step: 1.414213562373095,
+            store_io_queue_adaptive_gain: 0,
+            store_io_queue_sample_quantile: 0.9,
+            apply_io_size: 0,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -413,14 +433,31 @@ impl Config {
         Ok(())
     }
 
-    pub fn delay_sync_enabled(&self) -> bool {
-        self.delay_sync_us != 0
-    }
-
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["delay_sync_us"])
-            .set((self.delay_sync_us as i32).into());
+            .with_label_values(&["store_io_min_interval_us"])
+            .set((self.store_io_min_interval_us as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_pool_size"])
+            .set((self.store_io_pool_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_size"])
+            .set((self.store_io_queue_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_init_bytes"])
+            .set((self.store_io_queue_init_bytes as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_bytes_step"])
+            .set((self.store_io_queue_bytes_step as f64).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_sample_quantile"])
+            .set((self.store_io_queue_sample_quantile as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_adaptive_gain"])
+            .set((self.store_io_queue_adaptive_gain as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_size"])
+            .set((self.apply_io_size as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])

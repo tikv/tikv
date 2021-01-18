@@ -6,6 +6,9 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
+#![feature(duration_saturating_ops)]
+#![feature(duration_zero)]
+#![recursion_limit = "256"]
 
 #[macro_use]
 extern crate bitflags;

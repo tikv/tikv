@@ -45,11 +45,11 @@ use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
 use crate::observe_perf_context_type;
 use crate::report_perf_context;
 use crate::store::config::Config;
+use crate::store::fsm::async_io::SyncContext;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
 };
-use crate::store::fsm::sync_policy::{new_sync_policy, SyncAction, SyncPolicy};
 use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
@@ -78,9 +78,11 @@ use tikv_util::future::poll_future_notify;
 type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
-const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
+
+use crate::store::fsm::async_io::AsyncWriter;
+use crate::store::fsm::async_io::AsyncWriterTasks;
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -329,7 +331,7 @@ where
     pub store_stat: LocalStoreStat,
     pub engines: Engines<EK, ER>,
     pub kv_wb: EK::WriteBatch,
-    pub raft_wb: ER::LogBatch,
+    pub raft_wb_is_empty: bool,
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
@@ -338,16 +340,19 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub sync_policy: SyncPolicy<SyncAction<EK, ER>>,
+    pub sync_ctx: SyncContext,
+    pub async_writer: Arc<Mutex<AsyncWriter<EK, ER>>>,
 }
 
-impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER::LogBatch> for PollContext<EK, ER, T>
+impl<EK, ER, T> HandleRaftReadyContext<EK::WriteBatch, ER> for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn wb_mut(&mut self) -> (&mut EK::WriteBatch, &mut ER::LogBatch) {
-        (&mut self.kv_wb, &mut self.raft_wb)
+    fn wb_mut(&mut self) -> (&mut EK::WriteBatch, Arc<Mutex<AsyncWriterTasks<ER>>>) {
+        self.raft_wb_is_empty = false;
+        let mut async_writer = self.async_writer.lock().unwrap();
+        (&mut self.kv_wb, async_writer.raft_wb_pool())
     }
 
     #[inline]
@@ -356,8 +361,10 @@ where
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut ER::LogBatch {
-        &mut self.raft_wb
+    fn raft_wb_pool(&mut self) -> Arc<Mutex<AsyncWriterTasks<ER>>> {
+        self.raft_wb_is_empty = false;
+        let mut async_writer = self.async_writer.lock().unwrap();
+        async_writer.raft_wb_pool()
     }
 
     #[inline]
@@ -620,6 +627,7 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     peer_msg_buf: Vec<PeerMsg<EK>>,
     previous_metrics: RaftMetrics,
     timer: TiInstant,
+    loop_timer: TiInstant,
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
@@ -631,13 +639,14 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if self.poll_ctx.trans.need_flush()
-            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb.is_empty())
+            && (!self.poll_ctx.kv_wb.is_empty() || !self.poll_ctx.raft_wb_is_empty)
         {
             self.poll_ctx.trans.flush();
         }
         let ready_cnt = self.poll_ctx.ready_res.len();
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
+        let now = TiInstant::now_coarse();
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
@@ -656,38 +665,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
         fail_point!("raft_between_save");
+        STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
 
-        let raft_wb_is_empty = self.poll_ctx.raft_wb.is_empty();
+        let raft_wb_is_empty = self.poll_ctx.raft_wb_is_empty;
         if !raft_wb_is_empty {
             fail_point!(
                 "raft_before_save_on_store_1",
                 self.poll_ctx.store_id() == 1,
                 |_| {}
             );
-            self.poll_ctx
-                .engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.poll_ctx.raft_wb,
-                    false,
-                    RAFT_WB_SHRINK_SIZE,
-                    4 * 1024,
-                )
-                .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
-                });
         }
-
-        let synced = if self.poll_ctx.sync_policy.delay_sync_enabled() {
-            self.poll_ctx.sync_policy.sync_if_needed(true)
-        } else {
-            if !raft_wb_is_empty {
-                self.poll_ctx.engines.raft.sync().unwrap_or_else(|e| {
-                    panic!("{} failed to sync raft engine: {:?}", self.tag, e);
-                });
-            }
-            true
-        };
 
         report_perf_context!(
             self.poll_ctx.perf_context_statistics,
@@ -696,11 +683,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         fail_point!("raft_after_save");
 
         if ready_cnt != 0 {
-            let unsynced_version = if synced {
-                None
-            } else {
-                Some(self.poll_ctx.sync_policy.new_unsynced_version())
-            };
             let mut batch_pos = 0;
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
             for (ready, invoke_ctx) in ready_res.drain(..) {
@@ -712,9 +694,19 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                     }
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx, unsynced_version);
+                    .post_raft_ready_append(ready, invoke_ctx);
             }
         }
+
+        let unsynced_readies = self.poll_ctx.sync_ctx.detach_unsynced_readies();
+        if !raft_wb_is_empty {
+            // Do nothing
+        } else {
+            let mut async_writer = self.poll_ctx.async_writer.lock().unwrap();
+            async_writer.drain_flush_unsynced_readies(unsynced_readies);
+        }
+        self.poll_ctx.raft_wb_is_empty = true;
+
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
             let election_timeout = Duration::from_millis(
@@ -775,6 +767,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
         self.timer = TiInstant::now_coarse();
+        STORE_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
+        self.loop_timer = TiInstant::now_coarse();
         // update config
         self.poll_ctx.perf_context_statistics.start();
         if let Some(incoming) = self.cfg_tracker.any_new() {
@@ -797,7 +791,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             self.poll_ctx.cfg = incoming.clone();
             self.poll_ctx.update_ticks_timeout();
         }
-        self.poll_ctx.sync_policy.try_flush_readies();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {
@@ -866,7 +859,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 
     fn end(&mut self, peers: &mut [Box<PeerFsm<EK, ER>>]) {
         self.flush_ticks();
-        self.poll_ctx.sync_policy.try_flush_readies();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -875,19 +867,20 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
+        STORE_LOOP_WORK_DURATION_HISTOGRAM
+            .observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
-        self.poll_ctx.sync_policy.metrics.flush();
         self.poll_ctx.store_stat.flush();
     }
 
     fn pause(&mut self) -> bool {
-        let all_synced_and_flushed = self.poll_ctx.sync_policy.try_sync_and_flush();
         if self.poll_ctx.trans.need_flush() {
             self.poll_ctx.trans.flush();
         }
         // If there are cached data and go into pause status, that will cause high latency or hunger
         // so it should return false(means pause failed) when there are still jobs to do
-        all_synced_and_flushed
+        //all_synced_and_flushed
+        true
     }
 }
 
@@ -912,7 +905,8 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    pub sync_policy: SyncPolicy<SyncAction<EK, ER>>,
+    sync_ctx: SyncContext,
+    async_writer: AsyncWriter<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1113,7 +1107,7 @@ where
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
             kv_wb: self.engines.kv.write_batch(),
-            raft_wb: self.engines.raft.log_batch(4 * 1024),
+            raft_wb_is_empty: true,
             pending_count: 0,
             sync_log: false,
             has_ready: false,
@@ -1122,7 +1116,8 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
-            sync_policy: self.sync_policy.clone(),
+            sync_ctx: self.sync_ctx.clone(),
+            async_writer: Arc::new(Mutex::new(self.async_writer.clone())),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1132,6 +1127,7 @@ where
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
             timer: TiInstant::now_coarse(),
+            loop_timer: TiInstant::now_coarse(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
@@ -1236,11 +1232,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
-        let sync_policy = new_sync_policy(
+        let async_writer_tasks = AsyncWriterTasks::new(
+            engines.raft.clone(),
+            (cfg.value().store_io_queue_size as usize) + 1,
+            cfg.value().store_io_queue_init_bytes as usize,
+            cfg.value().store_io_queue_bytes_step,
+            cfg.value().store_io_queue_adaptive_gain as usize,
+            cfg.value().store_io_queue_sample_quantile,
+        );
+        let async_writer = AsyncWriter::new(
             engines.raft.clone(),
             self.router.clone(),
-            cfg.value().delay_sync_enabled(),
-            cfg.value().delay_sync_us as i64,
+            "raftstore-async-writer".to_string(),
+            cfg.value().store_io_min_interval_us,
+            async_writer_tasks,
+            true,
         );
         let mut builder = RaftPollerBuilder {
             cfg,
@@ -1263,7 +1269,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            sync_policy,
+            sync_ctx: SyncContext::new(),
+            async_writer,
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();

@@ -59,6 +59,10 @@ impl RaftLogBatchTrait for RaftLogBatch {
         Ok(())
     }
 
+    fn persist_size(&self) -> usize {
+        panic!("not impl!")
+    }
+
     fn is_empty(&self) -> bool {
         self.0.items.is_empty()
     }
