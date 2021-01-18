@@ -924,15 +924,12 @@ fn test_old_value_multi_changefeeds() {
     suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
     let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1], ts3, ts4);
-    println!("test_old_value_multi_changefeeds: 2");
     let mut event_count = 0;
     loop {
         let events = receive_event_1(false).events.to_vec();
-        println!("test_old_value_multi_changefeeds: 3");
         for event in events.into_iter() {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    println!("event {:?}", es);
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
                             if row.get_start_ts() == ts3.into_inner() {
@@ -959,7 +956,6 @@ fn test_old_value_multi_changefeeds() {
         for event in events.into_iter() {
             match event.event.unwrap() {
                 Event_oneof_event::Entries(mut es) => {
-                    println!("event {:?}", es);
                     for row in es.take_entries().to_vec() {
                         if row.get_type() == EventLogType::Prewrite {
                             assert_eq!(row.get_old_value(), b"");
