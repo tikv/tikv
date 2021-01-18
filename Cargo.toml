@@ -211,9 +211,6 @@ test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 
-[patch.'https://github.com/pingcap/kvproto.git']
-kvproto = { git = "https://github.com/andylokandy/kvproto.git", branch = "not_found", default-features = false }
-
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
