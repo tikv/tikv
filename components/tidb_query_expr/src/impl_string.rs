@@ -994,12 +994,12 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
                 .char_indices()
                 .nth(start)
                 .map(|(idx, _)| idx)
-                .unwrap_or(s.len());
+                .unwrap_or_else(|| s.len());
             end = s
                 .char_indices()
                 .nth(end)
                 .map(|(idx, _)| idx)
-                .unwrap_or(s.len());
+                .unwrap_or_else(|| s.len());
 
             Ok(writer.write_ref(Some(s[start..end].as_bytes())))
         }
