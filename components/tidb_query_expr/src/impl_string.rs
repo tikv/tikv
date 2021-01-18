@@ -932,6 +932,27 @@ pub fn substring_3_args(
     substring(input, *pos, *len, writer)
 }
 
+#[rpn_fn(writer)]
+#[inline]
+pub fn substring_2_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    substring_utf8(input, *pos, input.len() as Int, writer)
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn substring_3_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    len: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    substring_utf8(input, *pos, *len, writer)
+}
+
 #[inline]
 fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
     let (len, len_positive) = i64_to_usize(len, len > 0);
@@ -947,6 +968,43 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
     };
     let end = start.saturating_add(len).min(input.len());
     Ok(writer.write_ref(Some(&input[start..end])))
+}
+
+#[inline]
+fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result<BytesGuard> {
+    let (len, len_positive) = i64_to_usize(len, len > 0);
+    let (pos, positive_search) = i64_to_usize(pos, pos > 0);
+    if pos == 0 || len == 0 || !len_positive {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+
+    match str::from_utf8(input) {
+        Ok(s) => {
+            let s_utf8_len = s.chars().count();
+
+            let mut start = if positive_search {
+                (pos - 1).min(s_utf8_len)
+            } else {
+                s_utf8_len.checked_sub(pos).unwrap_or(s_utf8_len)
+            };
+            let mut end = start.saturating_add(len).min(s_utf8_len);
+
+            // Convert chars indexes into bytes indexes
+            start = s
+                .char_indices()
+                .nth(start)
+                .map(|(idx, _)| idx)
+                .unwrap_or(s.len());
+            end = s
+                .char_indices()
+                .nth(end)
+                .map(|(idx, _)| idx)
+                .unwrap_or(s.len());
+
+            Ok(writer.write_ref(Some(s[start..end].as_bytes())))
+        }
+        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+    }
 }
 
 #[cfg(test)]
@@ -3800,6 +3858,174 @@ mod tests {
                 .push_param(pos)
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Substring3Args)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_2_args_utf8() {
+        let cases = vec![
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(1),
+                Some("中文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-5),
+                Some("a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(3),
+                Some("库测试".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(-2),
+                Some("测试".as_bytes().to_vec()),
+            ),
+            (
+                Some("hello world".as_bytes().to_vec()),
+                Some(7),
+                Some("world".as_bytes().to_vec()),
+            ),
+            (
+                Some("hello world".as_bytes().to_vec()),
+                Some(-6),
+                Some(" world".as_bytes().to_vec()),
+            ),
+            (
+                Some("长度为8的字符串".as_bytes().to_vec()),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("长度为8的字符串".as_bytes().to_vec()),
+                Some(100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("长度为8的字符串".as_bytes().to_vec()),
+                Some(-100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("长度为8的字符串".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("长度为8的字符串".as_bytes().to_vec()),
+                Some(i64::min_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::Substring2ArgsUtf8)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_3_args_utf8() {
+        let cases = vec![
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(2),
+                Some(3),
+                Some("文a测".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-5),
+                Some(3),
+                Some("a测试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(2),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(2),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(2),
+                Some(100),
+                Some("文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(100),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-100),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(0),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(4),
+                Some(100),
+                Some("测试".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(-1),
+                Some(2),
+                Some("试".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库测试".as_bytes().to_vec()),
+                Some(-2),
+                Some(2),
+                Some("测试".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, len, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .push_param(len)
+                .evaluate(ScalarFuncSig::Substring3ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }

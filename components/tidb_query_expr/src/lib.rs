@@ -597,6 +597,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Repeat => repeat_fn_meta(),
         ScalarFuncSig::Substring2Args => substring_2_args_fn_meta(),
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
+        ScalarFuncSig::Substring2ArgsUtf8 => substring_2_args_utf8_fn_meta(),
+        ScalarFuncSig::Substring3ArgsUtf8 => substring_3_args_utf8_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
