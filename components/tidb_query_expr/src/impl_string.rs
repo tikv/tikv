@@ -982,12 +982,24 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
         Ok(s) => {
             let s_len = s.chars().count();
 
-            let start = if positive_search {
+            let mut start = if positive_search {
                 (pos - 1).min(s_len)
             } else {
                 s_len.checked_sub(pos).unwrap_or(s_len)
             };
-            let end = start.saturating_add(len).min(s_len);
+
+            start = s
+                .char_indices()
+                .nth(start)
+                .map(|(idx,_)|idx)
+                .unwrap_or(len);
+
+            let mut end = start.saturating_add(len).min(s_len);
+            end = s
+                .char_indices()
+                .nth(end)
+                .map(|(idx,_)| idx)
+                .unwrap_or(len);
 
             Ok(writer.write_ref(Some(s[start..end].as_bytes())))
         }
