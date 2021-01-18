@@ -789,10 +789,9 @@ impl ImportFile {
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
-            manager.link_file(
-                self.path.temp.to_str().unwrap(),
-                self.path.save.to_str().unwrap(),
-            )?;
+            let tmp_str = self.path.temp.to_str().unwrap();
+            let save_str = self.path.save.to_str().unwrap();
+            manager.link_file(tmp_str, save_str)?;
             manager.delete_file(self.path.temp.to_str().unwrap())?;
         }
         Ok(())
@@ -1059,9 +1058,8 @@ mod tests {
         assert!(!path.exists());
         if let Some(manager) = key_manager {
             let info = manager.get_file(path.to_str().unwrap()).unwrap();
-            // the returned encryption info must be the default value
+            assert!(info.is_empty());
             assert_eq!(info.method, EncryptionMethod::Plaintext);
-            assert!(info.key.is_empty() && info.iv.is_empty());
         }
     }
 
@@ -1077,7 +1075,8 @@ mod tests {
 
     fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
         // test with tde
-        let (tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         assert!(key_manager.is_ok());
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }

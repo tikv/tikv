@@ -10,6 +10,7 @@ use super::{Backend, MemAesGcmBackend};
 use crate::AesGcmCrypter;
 use crate::{Error, Iv, Result};
 
+#[derive(Debug)]
 pub struct FileBackend {
     backend: MemAesGcmBackend,
 }

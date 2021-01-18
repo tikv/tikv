@@ -436,7 +436,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-        .unwrap()
+        .expect("Encryption failed to initialize")
         .map(Arc::new);
     }
 
