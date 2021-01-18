@@ -985,7 +985,7 @@ fn substring_utf8(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> R
             let start = if positive_search {
                 (pos - 1).min(s_len)
             } else {
-                s_len.checked_sub(pos).unwrap_or_else(|| s_len)
+                s_len.checked_sub(pos).unwrap_or(s_len)
             };
             let end = start.saturating_add(len).min(s_len);
 
