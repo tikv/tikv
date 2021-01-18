@@ -134,7 +134,7 @@ enum OperationLog {
 // Run it with the following command (recommending release mode) and see the printed stats:
 //
 // ```
-// cargo test --package concurrency_manager --test fuzzing --release -- test_memory_usage --exact --ignored --nocapture
+// cargo test --package concurrency_manager --test fuzzing --release -- --exact --ignored --nocapture
 // ```
 #[test]
 #[ignore]
