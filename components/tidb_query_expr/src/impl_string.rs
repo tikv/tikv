@@ -3925,7 +3925,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(str)
                 .push_param(pos)
-                .evaluate(ScalarFuncSig::Substring2ArgUtf8)
+                .evaluate(ScalarFuncSig::Substring2ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }
