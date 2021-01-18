@@ -28,13 +28,13 @@ use txn_types::{Key, TimeStamp};
 
 use crate::server::metrics::*;
 use crate::storage::kv::{Engine, ScanMode, Statistics};
-use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader, MvccTxn};
+use crate::storage::mvcc::{Error as MvccError, GcInfo, MvccReader, MvccTxn};
 
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{
-    Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+    check_need_gc, Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
     GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
 };
 use crate::storage::txn::gc;
