@@ -1,11 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 
-use crossbeam::utils::CachePadded;
-use collections::HashMap;
+use collections::HashSet;
 
 use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
 use futures::executor::{ThreadPool, ThreadPoolBuilder};
@@ -23,77 +21,17 @@ use kvproto::raft_cmdpb::*;
 
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_traits::{SstExt, SstWriterBuilder};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::Callback;
-use raftstore::store::WriteCallback;
+use raftstore::router::handle_send_error;
+use raftstore::store::{Callback, ProposalRouter, RaftCommand};
 use sst_importer::send_rpc_response;
 use tikv_util::future::create_stream_with_buffer;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::{Instant, Limiter};
-use crate::storage::{Latches, LatchLock};
 
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{error_inc, Config, Error, SSTImporter};
-
-const DEFAULT_LATCH_CAPACITY: usize = 1024 * 8;
-
-// It stores context of a task.
-struct TaskContext {
-    task: Option<IngestRequest>,
-    lock: LatchLock,
-    cb: Option<WriteCallback>,
-}
-
-impl TaskContext {
-    fn new(task: IngestRequest, latches: &Latches, cb: WriteCallback) -> TaskContext {
-        let lock = cmd.gen_lock(latches);
-        TaskContext {
-            task: Some(task),
-            lock,
-            cb: Some(cb),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct Scheduler<Router> {
-    router: Router,
-    latches: Latches,
-    task_slots: Mutex<HashMap<u64, TaskContext>>,
-    id_alloc: CachePadded<AtomicU64>,
-}
-
-impl<E, Router> Scheduler<E>
-    where
-        E: KvEngine,
-        Router: RaftStoreRouter<E>
-{
-    /// Generates the next command ID.
-    #[inline]
-    fn gen_id(&self) -> u64 {
-        let id = self.id_alloc.fetch_add(1, Ordering::Relaxed);
-        id + 1
-    }
-
-    /// Tries to acquire all the required latches for a command.
-    ///
-    /// Returns the `Task` if successful; returns `None` otherwise.
-    fn acquire_lock(&self, cid: u64)  {
-        let mut task_slots = self.task_slots.lock().unwrap();
-        let tctx = task_slots.get_mut(&cid).unwrap();
-        if self.latches.acquire(&mut tctx.lock, cid) {
-            if let Some(t) = tctx.task.take() {
-                let cb = tctx.cb.take();
-                drop(task_slots);
-                self.execute(t, cb);
-                return;
-            }
-        }
-    }
-}
-
+use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -106,17 +44,18 @@ where
 {
     cfg: Config,
     engine: E,
+    router: Router,
     threads: ThreadPool,
     importer: Arc<SSTImporter>,
     switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
-    scheduler: Arc<Scheduler<Router>>,
+    task_slots: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: ProposalRouter<E::Snapshot> + Clone,
 {
     pub fn new(
         cfg: Config,
@@ -136,23 +75,36 @@ where
             cfg,
             engine,
             threads,
+            router,
             importer,
             switcher,
             limiter: Limiter::new(INFINITY),
-            scheduler: Arc::new(Scheduler {
-                latches: Latches::new(DEFAULT_LATCH_CAPACITY),
-                task_slots: Mutex::new(HashMap::default()),
-                id_alloc: AtomicU64::new(0).into(),
-                router,
-            }),
+            task_slots: Arc::new(Mutex::new(HashSet::default())),
         }
+    }
+
+    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<String>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        let key = p.to_str().unwrap().to_string();
+        if slots.get(&key).is_some() {
+            return Ok(false);
+        }
+        slots.insert(key);
+        Ok(true)
+    }
+    fn release_lock(task_slots: &Arc<Mutex<HashSet<String>>>, meta: &SstMeta) -> Result<bool> {
+        let mut slots = task_slots.lock().unwrap();
+        let p = sst_meta_to_path(meta)?;
+        let key = p.to_str().unwrap().to_string();
+        Ok(slots.remove(&key))
     }
 }
 
 impl<E, Router> ImportSst for ImportSSTService<E, Router>
 where
     E: KvEngine,
-    Router: RaftStoreRouter<E>,
+    Router: 'static + ProposalRouter<E::Snapshot> + Clone + Send,
 {
     fn switch_mode(
         &mut self,
@@ -319,21 +271,31 @@ where
             );
             return;
         }
-        // Make ingest command.
-        let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
-        ingest.mut_ingest_sst().set_sst(req.take_sst());
-        let mut context = req.take_context();
-        let mut header = RaftRequestHeader::default();
-        header.set_peer(context.take_peer());
-        header.set_region_id(context.get_region_id());
-        header.set_region_epoch(context.take_region_epoch());
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.mut_requests().push(ingest);
 
+        if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
+            ctx.spawn(
+                sink.fail(make_rpc_error(Error::FileConflict))
+                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+            );
+            return;
+        }
+
+        let meta = req.take_sst();
+        let mut header = RaftRequestHeader::default();
+        let mut context = req.take_context();
+        let region_id = context.get_region_id();
+        header.set_peer(context.take_peer());
+        header.set_region_id(region_id);
+        header.set_region_epoch(context.take_region_epoch());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header.clone());
+        cmd.set_requests(vec![req].into());
         let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
+
+        if let Err(e) = self.router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
+            let e = handle_send_error(region_id, e);
             let mut resp = IngestResponse::default();
             resp.set_error(e.into());
             ctx.spawn(
@@ -343,20 +305,54 @@ where
             return;
         }
 
+        // Make ingest command.
+        let mut ingest = Request::default();
+        ingest.set_cmd_type(CmdType::IngestSst);
+        ingest.mut_ingest_sst().set_sst(meta.clone());
+
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.mut_requests().push(ingest);
+
+        let router = self.router.clone();
+        let task_slots = self.task_slots.clone();
+        let importer = self.importer.clone();
+
         let ctx_task = async move {
-            let res = future.await.map_err(Error::from);
-            let res = match res {
-                Ok(mut res) => {
-                    let mut resp = IngestResponse::default();
-                    let mut header = res.response.take_header();
-                    if header.has_error() {
-                        pb_error_inc(label, header.get_error());
-                        resp.set_error(header.take_error());
-                    }
-                    Ok(resp)
+            let m = meta.clone();
+            let res = async move {
+                let mut res = future.await.map_err(Error::from)?;
+                let mut header = res.response.take_header();
+                let mut resp = IngestResponse::default();
+                if header.has_error() {
+                    pb_error_inc(label, header.get_error());
+                    resp.set_error(header.take_error());
+                    return Ok(resp);
                 }
-                Err(e) => Err(e),
+                // Here we shall check whether the file has been ingested before. This operation
+                // must execute after geting a snapshot from raftstore to make sure that the
+                // current leader has applied to current term.
+                if !importer.exist(&m) {
+                    return Ok(resp);
+                }
+
+                let (cb, future) = paired_future_callback();
+                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
+                    let e = handle_send_error(region_id, e);
+                    resp.set_error(e.into());
+                    return Ok(resp);
+                }
+
+                let mut res = future.await.map_err(Error::from)?;
+                let mut header = res.response.take_header();
+                if header.has_error() {
+                    pb_error_inc(label, header.get_error());
+                    resp.set_error(header.take_error());
+                }
+                Ok(resp)
             };
+            let res = res.await;
+            Self::release_lock(&task_slots, &meta).unwrap();
             send_rpc_response!(res, sink, label, timer);
         };
         ctx.spawn(ctx_task);
