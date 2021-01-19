@@ -29,7 +29,7 @@ use engine_traits::{
 };
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
 use file_system::{
-    set_io_rate_limiter, BytesFetcher, BytesRecorder, IORateLimiter, MetricsTask as IOMetricsTask,
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, IOStats, MetricsTask as IOMetricsTask,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -115,7 +115,7 @@ pub fn run_tikv(config: TiKvConfig) {
                 tikv.init_io_rate_limit(None);
                 BytesFetcher::ByIOSnooper()
             } else {
-                let recorder = Arc::new(BytesRecorder::new());
+                let recorder = Arc::new(IOStats::new());
                 tikv.init_io_rate_limit(Some(recorder.clone()));
                 BytesFetcher::ByRateLimiter(recorder)
             };
@@ -852,7 +852,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_io_rate_limit(&mut self, recorder: Option<Arc<BytesRecorder>>) {
+    fn init_io_rate_limit(&mut self, recorder: Option<Arc<IOStats>>) {
         let limiter = Arc::new(IORateLimiter::new(recorder));
         self.config.storage.io_rate_limit.apply(&limiter);
         set_io_rate_limiter(Some(limiter));

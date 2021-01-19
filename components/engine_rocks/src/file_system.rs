@@ -43,15 +43,15 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
+    use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOStats, IOType};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<BytesRecorder>) {
-        let recorder = Arc::new(BytesRecorder::new());
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IOStats>) {
+        let recorder = Arc::new(IOStats::new());
         set_io_rate_limiter(Some(Arc::new(IORateLimiter::new(Some(recorder.clone())))));
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));

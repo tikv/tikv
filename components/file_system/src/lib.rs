@@ -21,7 +21,7 @@ pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_task::{BytesFetcher, MetricsTask};
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, BytesRecorder, IORateLimiter,
+    get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, IORateLimiter, IOStats,
 };
 
 pub use std::fs::{
@@ -101,6 +101,11 @@ impl std::ops::Sub for IOBytes {
             write: self.write - other.write,
         }
     }
+}
+
+pub enum IOMeasure {
+    Bytes,
+    Iops,
 }
 
 /// Indicates how large a buffer to pre-allocate before reading the entire file.

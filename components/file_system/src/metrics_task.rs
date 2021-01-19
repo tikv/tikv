@@ -6,12 +6,12 @@ use tikv_util::IntervalRunnable;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
-use crate::BytesRecorder;
 use crate::IOBytes;
-use crate::{IOOp, IOType};
+use crate::IOStats;
+use crate::{IOMeasure, IOOp, IOType};
 
 pub enum BytesFetcher {
-    ByRateLimiter(Arc<BytesRecorder>),
+    ByRateLimiter(Arc<IOStats>),
     ByIOSnooper(),
 }
 
@@ -19,8 +19,8 @@ impl BytesFetcher {
     fn fetch(&self, io_type: IOType) -> IOBytes {
         match *self {
             BytesFetcher::ByRateLimiter(ref recorder) => IOBytes {
-                read: recorder.fetch(io_type, IOOp::Read) as i64,
-                write: recorder.fetch(io_type, IOOp::Write) as i64,
+                read: recorder.fetch(io_type, IOOp::Read, IOMeasure::Bytes) as i64,
+                write: recorder.fetch(io_type, IOOp::Write, IOMeasure::Bytes) as i64,
             },
             BytesFetcher::ByIOSnooper() => fetch_io_bytes(io_type),
         }

@@ -11,7 +11,7 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
+use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOStats, IOType};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
@@ -485,7 +485,7 @@ fn test_request_snapshot_apply_repeatedly() {
 
 #[test]
 fn test_inspected_snapshot() {
-    let recorder = Arc::new(BytesRecorder::new());
+    let recorder = Arc::new(IOStats::new());
     set_io_rate_limiter(Some(Arc::new(IORateLimiter::new(Some(recorder.clone())))));
 
     let mut cluster = new_server_cluster(1, 3);

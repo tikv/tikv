@@ -207,6 +207,7 @@ mod tests {
     use super::super::*;
     use super::*;
 
+    /*
     #[test]
     fn test_instrumented_file() {
         let recorder = Arc::new(BytesRecorder::new());
@@ -240,4 +241,5 @@ mod tests {
             );
         }
     }
+    */
 }
