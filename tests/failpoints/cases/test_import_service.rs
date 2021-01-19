@@ -162,8 +162,8 @@ fn test_ingest_file_twice_and_conflict() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
+    ingest.set_context(ctx);
+    ingest.set_sst(meta);
 
     let latch_fp = "import::sst_service::ingest";
     let (tx1, rx1) = channel();
