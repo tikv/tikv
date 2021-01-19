@@ -261,7 +261,6 @@ extern crate tikv_alloc;
 #[cfg(test)]
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either

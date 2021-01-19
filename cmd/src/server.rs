@@ -79,7 +79,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, ReadableSize， VersionTrack},
+    config::{ensure_dir_exist, ReadableSize, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, Worker},
