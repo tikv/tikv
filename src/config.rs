@@ -2372,8 +2372,6 @@ impl TiKvConfig {
         self.readpool.validate()?;
         self.storage.validate()?;
 
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
                 .join(LAST_CONFIG_FILE)
@@ -3630,5 +3628,13 @@ mod tests {
                 cf_opts.get_target_file_size_base()
             );
         }
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        cfg.raft_store.region_split_check_diff = ReadableSize::mb(20);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.raft_store.region_split_check_diff, ReadableSize::mb(20));
     }
 }
