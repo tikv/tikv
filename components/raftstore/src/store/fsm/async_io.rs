@@ -168,72 +168,6 @@ impl SampleWindow {
     }
 }
 
-/*
-pub struct AsyncWriterFlipBufferTasks<ER>
-where
-    ER: RaftEngine,
-{
-    engine: ER,
-    wbs: VecDeque<AsyncWriterTask<ER::LogBatch>>,
-}
-
-impl<ER> AsyncWriterFlipBufferTasks<ER>
-where
-    ER: RaftEngine,
-{
-    pub fn new(
-        engine: ER,
-        queue_size: usize,
-        _queue_init_bytes: usize,
-        _queue_bytes_step: f64,
-        _queue_adaptive_gain: usize,
-        _queue_sample_quantile: f64,
-    ) -> Self {
-        let mut wbs = VecDeque::default();
-        for _ in 0..queue_size {
-            wbs.push_back(AsyncWriterTask {
-                wb: engine.log_batch(4 * 1024),
-                unsynced_readies: HashMap::default(),
-            });
-        }
-        Self {
-            engine,
-            wbs,
-        }
-    }
-
-    pub fn clone_new(&self) -> Self {
-        let mut wbs = VecDeque::default();
-        for _ in 0..self.wbs.len() {
-            wbs.push_back(AsyncWriterTask {
-                wb: self.engine.log_batch(4 * 1024),
-                unsynced_readies: HashMap::default(),
-            });
-        }
-        Self {
-            engine: self.engine.clone(),
-            wbs,
-        }
-    }
-
-    pub fn prepare_current_for_write(&mut self) -> &mut AsyncWriterTask<ER::LogBatch> {
-        self.wbs.front_mut().unwrap()
-    }
-
-    pub fn no_task(&self) -> bool {
-        self.wbs.front().unwrap().is_empty()
-    }
-
-    pub fn detach_task(&mut self) -> AsyncWriterTask<ER::LogBatch> {
-        self.wbs.pop_front().unwrap()
-    }
-
-    pub fn add(&mut self, task: AsyncWriterTask<ER::LogBatch>) {
-        self.wbs.push_back(task);
-    }
-}
-*/
-
 pub struct AsyncWriterAdaptiveTasks<ER>
 where
     ER: RaftEngine,
@@ -367,12 +301,8 @@ where
         task
     }
 
-    pub fn push_back_empty_task(&mut self, wb: ER::LogBatch) {
-        let task = AsyncWriterTask {
-            wb,
-            unsynced_readies: HashMap::default(),
-            notifier: self.data_arrive_event.clone(),
-        };
+    pub fn push_back_done_task(&mut self, mut task: AsyncWriterTask<ER::LogBatch>) {
+        task.unsynced_readies.clear();
         self.wbs.push_back(task);
     }
 
@@ -471,7 +401,7 @@ where
                 .spawn(move || {
                     let mut now_ts = Instant::now_coarse();
                     loop {
-                        let task = {
+                        let mut task = {
                             let mut tasks = x.tasks.lock().unwrap();
                             while tasks.no_task() ||
                                 (!tasks.have_big_enough_task() && now_ts.elapsed() < x.io_max_wait) {
@@ -481,12 +411,12 @@ where
                         };
 
                         assert!(!task.is_empty());
-                        let wb = x.sync_write(task.wb, task.unsynced_readies);
+                        x.sync_write(&mut task.wb, &task.unsynced_readies);
 
                         // TODO: block if too many tasks
                         {
                             let mut tasks = x.tasks.lock().unwrap();
-                            tasks.push_back_empty_task(wb);
+                            tasks.push_back_done_task(task);
                         }
 
                         STORE_WRITE_RAFTDB_TICK_DURATION_HISTOGRAM
@@ -519,19 +449,17 @@ where
 
     fn sync_write(
         &mut self,
-        mut wb: ER::LogBatch,
-        mut unsynced_readies: HashMap<u64, UnsyncedReady>,
-    ) -> ER::LogBatch {
-        //let now = Instant::now_coarse();
+        wb: &mut ER::LogBatch,
+        unsynced_readies: &HashMap<u64, UnsyncedReady>,
+    ) {
+        let now = Instant::now_coarse();
         self.engine
-            .consume_and_shrink(&mut wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
+            .consume_and_shrink(wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
             .unwrap_or_else(|e| {
                 panic!("{} failed to save raft append result: {:?}", self.tag, e);
             });
-        //STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
-        self.flush_unsynced_readies(&unsynced_readies);
-        unsynced_readies.clear();
-        wb
+        STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
+        self.flush_unsynced_readies(unsynced_readies);
     }
 
     fn flush_unsynced_readies(&mut self, unsynced_readies: &HashMap<u64, UnsyncedReady>) {
