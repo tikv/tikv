@@ -1603,6 +1603,11 @@ where
         let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
         region.mut_region_epoch().set_conf_ver(conf_ver);
 
+        let store_is_removed_by_unsafe_recover = |store_id: u64| -> bool {
+            let key = keys::unsafe_removed_store_key(store_id);
+            ctx.engine.get_value_cf(CF_RAFT, &key).unwrap().is_some()
+        };
+
         match change_type {
             ConfChangeType::AddNode => {
                 let add_ndoe_fp = || {
@@ -1638,21 +1643,33 @@ where
                         p.set_role(PeerRole::Voter);
                     }
                 }
-                if !exists {
-                    // TODO: Do we allow adding peer in same node?
-                    region.mut_peers().push(peer.clone());
+
+                if store_is_removed_by_unsafe_recover(peer.get_store_id()) {
+                    assert!(!exists);
+                    warn!(
+                        "skip to add peer removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                } else {
+                    if !exists {
+                        // TODO: Do we allow adding peer in same node?
+                        region.mut_peers().push(peer.clone());
+                    }
+                    info!(
+                        "add peer successfully";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "success"])
                     .inc();
-                info!(
-                    "add peer successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region
-                );
             }
             ConfChangeType::RemoveNode => {
                 PEER_ADMIN_CMD_COUNTER_VEC
@@ -1675,6 +1692,13 @@ where
                             p
                         ));
                     }
+                    info!(
+                        "remove peer successfully";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
                     if self.id == peer.get_id() {
                         // Remove ourself, we will destroy all region data later.
                         // So we need not to apply following logs.
@@ -1682,30 +1706,33 @@ where
                         self.pending_remove = true;
                     }
                 } else {
-                    error!(
-                        "remove missing peer";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "peer" => ?peer,
-                        "region" => ?&self.region
-                    );
-                    return Err(box_err!(
-                        "remove missing peer {:?} from region {:?}",
-                        peer,
-                        self.region
-                    ));
+                    if store_is_removed_by_unsafe_recover(peer.get_store_id()) {
+                        warn!(
+                            "skip to remove peer removed by unsafe recover but increase conf_ver";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                    } else {
+                        error!(
+                            "remove missing peer";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "remove missing peer {:?} from region {:?}",
+                            peer,
+                            self.region
+                        ));
+                    }
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
-                info!(
-                    "remove peer successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region
-                );
             }
             ConfChangeType::AddLearnerNode => {
                 PEER_ADMIN_CMD_COUNTER_VEC
@@ -1726,18 +1753,29 @@ where
                         self.region
                     ));
                 }
-                region.mut_peers().push(peer.clone());
+
+                if store_is_removed_by_unsafe_recover(peer.get_store_id()) {
+                    warn!(
+                        "skip to add learner removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                } else {
+                    region.mut_peers().push(peer.clone());
+                    info!(
+                        "add learner successfully";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_learner", "success"])
                     .inc();
-                info!(
-                    "add learner successfully";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "peer" => ?peer,
-                    "region" => ?&self.region
-                );
             }
         }
 
@@ -1782,7 +1820,7 @@ where
 
         let region = match ConfChangeKind::confchange_kind(changes.len()) {
             ConfChangeKind::LeaveJoint => self.apply_leave_joint()?,
-            kind => self.apply_conf_change(kind, changes.as_slice())?,
+            kind => self.apply_conf_change(kind, changes.as_slice(), ctx)?,
         };
 
         let state = if self.pending_remove {
@@ -1808,16 +1846,22 @@ where
         ))
     }
 
-    fn apply_conf_change(
+    fn apply_conf_change<W: WriteBatch<EK>>(
         &mut self,
         kind: ConfChangeKind,
         changes: &[ChangePeerRequest],
+        ctx: &mut ApplyContext<EK, W>,
     ) -> Result<Region> {
         let mut region = self.region.clone();
+        let store_is_removed_by_unsafe_recover = |store_id: u64| -> bool {
+            let key = keys::unsafe_removed_store_key(store_id);
+            ctx.engine.get_value_cf(CF_RAFT, &key).unwrap().is_some()
+        };
+
         for cp in changes.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
             let store_id = peer.get_store_id();
-
+            let unsafe_removed = store_is_removed_by_unsafe_recover(store_id);
             confchange_cmd_metric::inc_all(change_type);
 
             if let Some(exist_peer) = util::find_peer(&region, store_id) {
@@ -1829,8 +1873,12 @@ where
                     );
                 }
             }
-            match (util::find_peer_mut(&mut region, store_id), change_type) {
-                (None, ConfChangeType::AddNode) => {
+            match (
+                util::find_peer_mut(&mut region, store_id),
+                change_type,
+                unsafe_removed,
+            ) {
+                (None, ConfChangeType::AddNode, false) => {
                     let mut peer = peer.clone();
                     match kind {
                         ConfChangeKind::Simple => peer.set_role(PeerRole::Voter),
@@ -1839,12 +1887,30 @@ where
                     }
                     region.mut_peers().push(peer);
                 }
-                (None, ConfChangeType::AddLearnerNode) => {
+                (None, ConfChangeType::AddNode, true) => {
+                    warn!(
+                        "skip to add peer removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                }
+                (None, ConfChangeType::AddLearnerNode, false) => {
                     let mut peer = peer.clone();
                     peer.set_role(PeerRole::Learner);
                     region.mut_peers().push(peer);
                 }
-                (None, ConfChangeType::RemoveNode) => {
+                (None, ConfChangeType::AddLearnerNode, true) => {
+                    warn!(
+                        "skip to add learner removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                }
+                (None, ConfChangeType::RemoveNode, false) => {
                     error!(
                         "remove missing peer";
                         "region_id" => self.region_id(),
@@ -1858,9 +1924,19 @@ where
                         self.region
                     ));
                 }
+                (None, ConfChangeType::RemoveNode, true) => {
+                    warn!(
+                        "skip to remove peer removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                }
                 // Add node
-                (Some(exist_peer), ConfChangeType::AddNode)
-                | (Some(exist_peer), ConfChangeType::AddLearnerNode) => {
+                (Some(exist_peer), ConfChangeType::AddNode, unsafe_removed)
+                | (Some(exist_peer), ConfChangeType::AddLearnerNode, unsafe_removed) => {
+                    assert!(!unsafe_removed);
                     let (role, exist_id, incoming_id) =
                         (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
 
@@ -1904,7 +1980,8 @@ where
                     }
                 }
                 // Remove node
-                (Some(exist_peer), ConfChangeType::RemoveNode) => {
+                (Some(exist_peer), ConfChangeType::RemoveNode, unsafe_removed) => {
+                    assert!(!unsafe_removed);
                     if kind == ConfChangeKind::EnterJoint
                         && exist_peer.get_role() == PeerRole::Voter
                     {

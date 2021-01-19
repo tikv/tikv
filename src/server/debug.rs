@@ -57,6 +57,15 @@ quick_error! {
     }
 }
 
+pub fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
+    let key = keys::region_state_key(region_id);
+    engine
+        .c()
+        .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
+        .unwrap()
+        .unwrap()
+}
+
 /// Describes the meta information of a Region.
 #[derive(PartialEq, Debug, Default)]
 pub struct RegionInfo {
@@ -617,7 +626,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         for store_id in &store_ids {
             let key = keys::unsafe_removed_store_key(*store_id);
-            wb.put_cf(CF_RAFT, &key, b"");
+            wb.put_cf(CF_RAFT, &key, b"").unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
@@ -1251,15 +1260,6 @@ mod tests {
         let key = keys::region_state_key(region_id);
         engine.c().put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         region
-    }
-
-    fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
-        let key = keys::region_state_key(region_id);
-        engine
-            .c()
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
-            .unwrap()
-            .unwrap()
     }
 
     #[test]
