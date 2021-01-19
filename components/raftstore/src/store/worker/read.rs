@@ -147,7 +147,19 @@ pub struct ReadDelegate {
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
 
+    // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
+    // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
     track_ver: TrackVer,
+}
+
+impl Drop for ReadDelegate {
+    fn drop(&mut self) {
+        // `mark_invalid` if the source `ReadDelegate` is dropped
+        if self.track_ver.source {
+            self.mark_invalid();
+            self.track_ver.inc();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -213,7 +225,7 @@ impl ReadDelegate {
         }
     }
 
-    pub fn mark_invalid(&self) {
+    fn mark_invalid(&self) {
         self.invalid.store(true, Ordering::Release);
     }
 
@@ -1049,6 +1061,14 @@ mod tests {
         let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
+
+        let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
+        assert!(!reader_clone.invalid.load(Ordering::Relaxed));
+
+        // drop the source `reader`
+        store_meta.lock().unwrap().readers.remove(&1).unwrap();
+        // `reader_clone` shoulde be marked as invalid
+        assert!(reader_clone.invalid.load(Ordering::Relaxed));
     }
 
     #[test]
