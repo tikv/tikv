@@ -251,6 +251,8 @@ where
         let label = "ingest";
         let timer = Instant::now_coarse();
 
+        let mut resp = IngestResponse::default();
+        let mut errorpb = errorpb::Error::default();
         if self.switcher.get_mode() == SwitchMode::Normal
             && self
                 .engine
@@ -260,10 +262,8 @@ where
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(err.to_string());
-            let mut errorpb = errorpb::Error::default();
             errorpb.set_message(err.to_string());
             errorpb.set_server_is_busy(server_is_busy_err);
-            let mut resp = IngestResponse::default();
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -273,8 +273,10 @@ where
         }
 
         if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
+            errorpb.set_message(Error::FileConflict.to_string());
+            resp.set_error(errorpb);
             ctx.spawn(
-                sink.fail(make_rpc_error(Error::FileConflict))
+                sink.success(resp)
                     .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
             );
             return;
@@ -296,7 +298,6 @@ where
 
         if let Err(e) = self.router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
             let e = handle_send_error(region_id, e);
-            let mut resp = IngestResponse::default();
             resp.set_error(e.into());
             ctx.spawn(
                 sink.success(resp)
@@ -318,10 +319,11 @@ where
         let task_slots = self.task_slots.clone();
         let importer = self.importer.clone();
 
-        let ctx_task = async move {
+        let handle_task = async move {
             let m = meta.clone();
             let res = async move {
                 let mut res = future.await.map_err(Error::from)?;
+                fail_point!("import::sst_service::ingest");
                 let mut header = res.response.take_header();
                 let mut resp = IngestResponse::default();
                 if header.has_error() {
@@ -355,7 +357,7 @@ where
             Self::release_lock(&task_slots, &meta).unwrap();
             send_rpc_response!(res, sink, label, timer);
         };
-        ctx.spawn(ctx_task);
+        self.threads.spawn_ok(handle_task);
     }
 
     fn compact(
