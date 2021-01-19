@@ -1062,13 +1062,20 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
-        let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
-        assert!(!reader_clone.invalid.load(Ordering::Relaxed));
+        let (reader_clone1, reader_clone2) = {
+            let reader = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
+            (reader.clone(), reader)
+        };
+        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
+
+        // dropping the non-source `reader` will not make other readers invalid
+        drop(reader_clone2);
+        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
 
         // drop the source `reader`
         store_meta.lock().unwrap().readers.remove(&1).unwrap();
         // `reader_clone` shoulde be marked as invalid
-        assert!(reader_clone.invalid.load(Ordering::Relaxed));
+        assert!(reader_clone1.invalid.load(Ordering::Relaxed));
     }
 
     #[test]
