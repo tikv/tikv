@@ -30,6 +30,7 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{Engines, RaftEngine};
+use file_system::calc_crc32;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -45,7 +46,7 @@ use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, file::calc_crc32, unescape};
+use tikv_util::{escape, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -103,7 +104,7 @@ fn new_debug_executor(
             if !cfg.raft_engine.enable {
                 let mut raft_db_opts = cfg.raftdb.build_opt();
                 raft_db_opts.set_env(env);
-                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
                 let raft_db = engine_rocks::raw_util::new_engine_opt(
                     &raft_path,
                     raft_db_opts,
@@ -1859,7 +1860,7 @@ fn main() {
         v1!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        v1!("{}", hex::encode_upper(unescape(escaped)));
+        v1!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -2367,22 +2368,25 @@ fn compact_whole_cluster(
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
-        let h = thread::spawn(move || {
-            tikv_alloc::add_thread_memory_accessor();
-            let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
-            for cf in cfs {
-                debug_executor.compact(
-                    Some(&addr),
-                    db_type,
-                    cf.as_str(),
-                    from.clone(),
-                    to.clone(),
-                    threads,
-                    bottommost,
-                );
-            }
-            tikv_alloc::remove_thread_memory_accessor();
-        });
+        let h = thread::Builder::new()
+            .name(format!("compact-{}", addr))
+            .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
+                for cf in cfs {
+                    debug_executor.compact(
+                        Some(&addr),
+                        db_type,
+                        cf.as_str(),
+                        from.clone(),
+                        to.clone(),
+                        threads,
+                        bottommost,
+                    );
+                }
+                tikv_alloc::remove_thread_memory_accessor();
+            })
+            .unwrap();
         handles.push(h);
     }
 

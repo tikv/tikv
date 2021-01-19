@@ -2,6 +2,7 @@ use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, MvccTxn, Result as MvccResult,
 };
+use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
 use crate::storage::Snapshot;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, WriteType};
 
@@ -52,7 +53,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             .into());
         }
         if need_value {
-            val = txn.reader.get(&key, for_update_ts, true)?;
+            val = txn
+                .reader
+                .get(&key, for_update_ts, Some(txn.start_ts), true)?;
         }
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
@@ -92,7 +95,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Handle rollback.
-        // The rollack informathin may come from either a Rollback record or a record with
+        // The rollback information may come from either a Rollback record or a record with
         // `has_overlapped_rollback` flag.
         if commit_ts == txn.start_ts
             && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
@@ -106,9 +109,13 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
         // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
         if commit_ts > txn.start_ts {
-            if let Some((commit_ts, write)) = txn.reader.seek_write(&key, txn.start_ts)? {
-                if write.start_ts == txn.start_ts {
-                    assert!(commit_ts == txn.start_ts && write.write_type == WriteType::Rollback);
+            if let Some((older_commit_ts, older_write)) =
+                txn.reader.seek_write(&key, txn.start_ts)?
+            {
+                if older_commit_ts == txn.start_ts
+                    && (older_write.write_type == WriteType::Rollback
+                        || older_write.has_overlapped_rollback)
+                {
                     return Err(ErrorInner::PessimisticLockRolledBack {
                         start_ts: txn.start_ts,
                         key: key.into_raw()?,
@@ -119,15 +126,22 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Check data constraint when acquiring pessimistic lock.
-        txn.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
+        check_data_constraint(txn, should_not_exist, &write, commit_ts, &key)?;
 
         if need_value {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
-                WriteType::Put => Some(txn.reader.load_data(&key, write)?),
-                WriteType::Delete => None,
+                WriteType::Put
+                    if write
+                        .as_ref()
+                        .check_gc_fence_as_latest_version(txn.start_ts) =>
+                {
+                    Some(txn.reader.load_data(&key, write)?)
+                }
+                WriteType::Delete | WriteType::Put => None,
                 WriteType::Lock | WriteType::Rollback => {
-                    txn.reader.get(&key, commit_ts.prev(), true)?
+                    txn.reader
+                        .get(&key, commit_ts.prev(), Some(txn.start_ts), true)?
                 }
             };
         }
@@ -165,6 +179,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         lock_ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
@@ -179,7 +194,7 @@ pub mod tests {
             &mut txn,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             lock_ttl,
             for_update_ts.into(),
             need_value,
@@ -217,6 +232,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             0,
             for_update_ts.into(),
             true,
@@ -237,6 +253,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             ttl,
             for_update_ts.into(),
             false,
@@ -260,6 +277,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             lock_ttl,
             for_update_ts,
             false,
@@ -279,6 +297,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             false,
             TimeStamp::zero(),
@@ -297,6 +316,7 @@ pub mod tests {
             key,
             pk,
             start_ts,
+            false,
             for_update_ts,
             true,
             TimeStamp::zero(),
@@ -308,6 +328,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        should_not_exist: bool,
         for_update_ts: impl Into<TimeStamp>,
         need_value: bool,
         min_commit_ts: impl Into<TimeStamp>,
@@ -320,7 +341,7 @@ pub mod tests {
             &mut txn,
             Key::from_raw(key),
             pk,
-            false,
+            should_not_exist,
             0,
             for_update_ts.into(),
             need_value,
@@ -557,7 +578,7 @@ pub mod tests {
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
-        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put);
+        must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, Some(0));
 
         // start_ts and commit_ts interlacing
         for start_ts in &[140, 150, 160] {
@@ -656,5 +677,106 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 1, 2);
         must_succeed(&engine, k, k, 1, 3);
         must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
+    #[test]
+    fn test_pessimistic_lock_check_gc_fence() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // PUT,           Read
+        //  `------^
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 30);
+        must_cleanup_with_gc_fence(&engine, b"k1", 30, 0, 40, true);
+
+        // PUT,           Read
+        //  * (GC fence ts = 0)
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 30);
+        must_cleanup_with_gc_fence(&engine, b"k2", 30, 0, 0, true);
+
+        // PUT, LOCK,   LOCK, Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 30);
+        must_prewrite_lock(&engine, b"k3", b"k3", 37);
+        must_commit(&engine, b"k3", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k3", 30, 0, 40, true);
+        must_prewrite_lock(&engine, b"k3", b"k3", 42);
+        must_commit(&engine, b"k3", 42, 43);
+
+        // PUT, LOCK,   LOCK, Read
+        //  *
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 30);
+        must_prewrite_lock(&engine, b"k4", b"k4", 37);
+        must_commit(&engine, b"k4", 37, 38);
+        must_prewrite_lock(&engine, b"k4", b"k4", 42);
+        must_commit(&engine, b"k4", 42, 43);
+        must_cleanup_with_gc_fence(&engine, b"k4", 30, 0, 0, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ `------^
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 14);
+        must_commit(&engine, b"k5", 14, 20);
+        must_prewrite_put(&engine, b"k5", b"v5x", b"k5", 21);
+        must_commit(&engine, b"k5", 21, 30);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 30, 0, 40, true);
+
+        // PUT,   PUT,    READ
+        //  `-----^ *
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 15);
+        must_commit(&engine, b"k6", 15, 20);
+        must_prewrite_put(&engine, b"k6", b"v6x", b"k6", 22);
+        must_commit(&engine, b"k6", 22, 30);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 30, false);
+        must_cleanup_with_gc_fence(&engine, b"k6", 30, 0, 0, true);
+
+        // PUT,  LOCK,    READ
+        //  `----------^
+        // Note that this case is special because usually the `LOCK` is the first write already got
+        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
+        // from the `LOCK` record.
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 30);
+        must_prewrite_lock(&engine, b"k7", b"k7", 37);
+        must_commit(&engine, b"k7", 37, 38);
+        must_cleanup_with_gc_fence(&engine, b"k7", 30, 0, 40, true);
+
+        let cases = vec![
+            (b"k1" as &[u8], None),
+            (b"k2", Some(b"v2" as &[u8])),
+            (b"k3", None),
+            (b"k4", Some(b"v4")),
+            (b"k5", None),
+            (b"k6", Some(b"v6x")),
+            (b"k7", None),
+        ];
+
+        for (key, expected_value) in cases {
+            // Test constraint check with `should_not_exist`.
+            if expected_value.is_none() {
+                assert!(must_succeed_impl(&engine, key, key, 50, true, 0, 50, false, 51).is_none());
+                must_pessimistic_rollback(&engine, key, 50, 51);
+                must_unlocked(&engine, key);
+            } else {
+                must_err_impl(&engine, key, key, 50, true, 50, false, 51);
+                must_unlocked(&engine, key);
+            }
+
+            // Test getting value.
+            let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+
+            // Test getting value when already locked.
+            must_succeed(&engine, key, key, 50, 51);
+            let res2 = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, 51);
+            assert_eq!(res2, expected_value.map(|v| v.to_vec()));
+            must_pessimistic_rollback(&engine, key, 50, 51);
+        }
     }
 }

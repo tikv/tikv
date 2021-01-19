@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
+use file_system::{IOType, WithIOType};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -145,6 +146,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
         if self.tasks.len() < MAX_GC_REGION_BATCH {
             return;
@@ -175,7 +177,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_traits::{KvEngine, Mutable, WriteBatchExt, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{KvEngine, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT};
     use std::sync::mpsc;
     use std::time::Duration;
     use tempfile::Builder;
@@ -208,7 +210,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(&raft_wb).unwrap();
+        raft_wb.write().unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

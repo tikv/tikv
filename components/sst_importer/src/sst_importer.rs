@@ -27,7 +27,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
-use tikv_util::file::sync_dir;
+use file_system::sync_dir;
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -190,11 +190,12 @@ impl SSTImporter {
         speed_limiter: Limiter,
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
-        let start = Instant::now();
         let path = self.dir.join(meta)?;
         let url = url_of_backend(backend);
 
         {
+            let start_read = Instant::now();
+
             // prepare to download the file from the external_storage
             let ext_storage = create_storage(backend)?;
             let mut ext_reader = ext_storage.read(name);
@@ -235,6 +236,10 @@ impl SSTImporter {
                 .append(true)
                 .open(&path.temp)?
                 .sync_data()?;
+
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["read"])
+                .observe(start_read.elapsed().as_secs_f64());
         }
 
         // now validate the SST file.
@@ -279,6 +284,7 @@ impl SSTImporter {
                     Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
                 })?;
 
+        let start_rename_rewrite = Instant::now();
         // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter();
@@ -316,7 +322,6 @@ impl SSTImporter {
         })()?;
 
         if let Some(range) = direct_retval {
-            // TODO: what about encrypted SSTs?
             fs::rename(&path.temp, &path.save)?;
             if let Some(key_manager) = &self.key_manager {
                 let temp_str = path
@@ -327,12 +332,12 @@ impl SSTImporter {
                     .save
                     .to_str()
                     .ok_or_else(|| Error::InvalidSSTPath(path.save.clone()))?;
-                key_manager.rename_file(temp_str, save_str)?;
+                key_manager.link_file(temp_str, save_str)?;
+                key_manager.delete_file(temp_str)?;
             }
-            let duration = start.elapsed();
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
-                .observe(duration.as_secs_f64());
+                .observe(start_rename_rewrite.elapsed().as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -396,13 +401,17 @@ impl SSTImporter {
 
         let _ = fs::remove_file(&path.temp);
 
-        let duration = start.elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
-            .observe(duration.as_secs_f64());
+            .observe(start_rename_rewrite.elapsed().as_secs_f64());
 
         if let Some(start_key) = first_key {
+            let start_finish = Instant::now();
             sst_writer.finish()?;
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["finish"])
+                .observe(start_finish.elapsed().as_secs_f64());
+
             let mut final_range = Range::default();
             final_range.set_start(start_key);
             final_range.set_end(keys::origin_key(&key).to_vec());
@@ -545,7 +554,8 @@ impl<E: KvEngine> SSTWriter<E> {
                 .save
                 .to_str()
                 .ok_or_else(|| Error::InvalidSSTPath(import_path.save.clone()))?;
-            key_manager.rename_file(temp_str, save_str)?;
+            key_manager.link_file(temp_str, save_str)?;
+            key_manager.delete_file(temp_str)?;
         }
         // sync the directory after rename
         import_path.save.pop();
@@ -649,12 +659,12 @@ impl ImportDir {
         // FIXME perform validate_sst_for_ingestion after we can handle sst file size correctly.
         // currently we can not handle sst file size after rewrite,
         // we need re-compute length & crc32 and fill back to sstMeta.
-        if length != 0 && crc32 != 0 {
-            // we only validate if the length and CRC32 are explicitly provided.
-            engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
+        if length != 0 {
+            if crc32 != 0 {
+                // we only validate if the length and CRC32 are explicitly provided.
+                engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
+            }
             IMPORTER_INGEST_BYTES.observe(length as _)
-        } else {
-            debug!("skipping SST validation since length and crc32 are both 0");
         }
 
         let mut opts = E::IngestExternalFileOptions::new();
@@ -779,10 +789,10 @@ impl ImportFile {
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
-            manager.rename_file(
-                self.path.temp.to_str().unwrap(),
-                self.path.save.to_str().unwrap(),
-            )?;
+            let tmp_str = self.path.temp.to_str().unwrap();
+            let save_str = self.path.save.to_str().unwrap();
+            manager.link_file(tmp_str, save_str)?;
+            manager.delete_file(self.path.temp.to_str().unwrap())?;
         }
         Ok(())
     }
@@ -1048,9 +1058,8 @@ mod tests {
         assert!(!path.exists());
         if let Some(manager) = key_manager {
             let info = manager.get_file(path.to_str().unwrap()).unwrap();
-            // the returned encryption info must be the default value
+            assert!(info.is_empty());
             assert_eq!(info.method, EncryptionMethod::Plaintext);
-            assert!(info.key.is_empty() && info.iv.is_empty());
         }
     }
 
@@ -1066,7 +1075,8 @@ mod tests {
 
     fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
         // test with tde
-        let (tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         assert!(key_manager.is_ok());
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }

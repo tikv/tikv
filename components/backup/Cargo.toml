@@ -4,33 +4,49 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[[test]]
-name = "integrations"
-path = "tests/integrations/mod.rs"
-
 [features]
 default = ["protobuf-codec", "test-engines-rocksdb"]
 protobuf-codec = [
+  "concurrency_manager/protobuf-codec",
   "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "error_code/protobuf-codec",
   "external_storage/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
   "kvproto/protobuf-codec",
+  "pd_client/protobuf-codec",
   "raft/protobuf-codec",
   "raftstore/protobuf-codec",
+  "security/protobuf-codec",
+  "tidb_query_common/protobuf-codec",
   "tikv/protobuf-codec",
+  "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
+  "concurrency_manager/prost-codec",
   "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
+  "error_code/prost-codec",
   "external_storage/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
   "kvproto/prost-codec",
+  "pd_client/prost-codec",
   "raft/prost-codec",
   "raftstore/prost-codec",
+  "security/prost-codec",
+  "tidb_query_common/prost-codec",
   "tikv/prost-codec",
+  "tikv_util/prost-codec",
   "txn_types/prost-codec",
+]
+test-engines-rocksdb = [
+  "tikv/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "tikv/test-engines-panic",
 ]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
@@ -39,46 +55,43 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
-test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
-concurrency_manager = { path = "../concurrency_manager" }
+concurrency_manager = { path = "../concurrency_manager", default-features = false }
 configuration = { path = "../configuration" }
 crc64fast = "0.1"
-engine_rocks = { path = "../engine_rocks" }
-engine_traits = { path = "../engine_traits" }
-error_code = { path = "../error_code" }
-external_storage = { path = "../external_storage" }
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code", default-features = false }
+external_storage = { path = "../external_storage", default-features = false }
 failure = "0.1"
+file_system = { path = "../file_system" }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.6", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
-keys = { path = "../keys" }
+keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
-pd_client = { path = "../pd_client" }
+log_wrappers = { path = "../log_wrappers" }
+pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
 raft = { version = "0.6.0-alpha", default-features = false }
-raftstore = { path = "../raftstore" }
-security = { path = "../security" }
+raftstore = { path = "../raftstore", default-features = false }
+security = { path = "../security", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tidb_query_common = { path = "../tidb_query_common" }
+tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
-txn_types = { path = "../txn_types" }
+tikv_util = { path = "../tikv_util", default-features = false }
+collections = { path = "../collections" }
+txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-futures-executor = "0.3"
 rand = "0.7"
 tempfile = "3.0"
-test_util = { path = "../test_util" }
-test_raftstore = { path = "../test_raftstore" }
-uuid = { version = "0.8.1", features = ["serde", "v4"] }

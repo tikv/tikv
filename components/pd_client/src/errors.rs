@@ -32,7 +32,7 @@ quick_error! {
             display("unknown error {:?}", err)
         }
         RegionNotFound(key: Vec<u8>) {
-            display("region is not found for key {}", hex::encode_upper(key))
+            display("region is not found for key {}", &log_wrappers::Value::key(key))
         }
         StoreTombstone(msg: String) {
             display("store is tombstone {:?}", msg)

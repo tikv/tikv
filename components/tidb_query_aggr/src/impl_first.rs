@@ -3,14 +3,14 @@
 use std::marker::PhantomData;
 
 use tidb_query_codegen::AggrFunction;
-use tidb_query_datatype::EvalType;
-use tipb::{Expr, ExprType, FieldType};
-
-use super::*;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::EvalType;
 use tidb_query_expr::RpnExpression;
+use tipb::{Expr, ExprType, FieldType};
+
+use super::*;
 
 /// The parser for FIRST aggregate function.
 pub struct AggrFnDefinitionParserFirst;
@@ -55,11 +55,19 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_exp.push(exp);
 
         match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
+            TT = [
+                Int => &'static Int,
+                Real => &'static Real,
+                Duration => &'static Duration,
+                Decimal => &'static Decimal,
+                DateTime => &'static DateTime,
+                Json => JsonRef<'static>,
+                Bytes => BytesRef<'static>,
+                Enum => EnumRef<'static>,
+                Set => SetRef<'static>,
+            ],
             match eval_type {
-                EvalType::TT => Ok(Box::new(AggrFnFirst::<&'static TT>::new())),
-                EvalType::Json => Ok(Box::new(AggrFnFirst::<JsonRef<'static>>::new())),
-                EvalType::Bytes => Ok(Box::new(AggrFnFirst::<BytesRef<'static>>::new())),
+                EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new())),
             }
         }
     }
@@ -182,13 +190,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::AggrFunction;
-    use super::*;
+    use std::sync::Arc;
 
     use tidb_query_datatype::FieldTypeTp;
+    use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use crate::AggrDefinitionParser;
+
+    use super::super::AggrFunction;
+    use super::*;
 
     #[test]
     fn test_update() {
@@ -207,6 +218,62 @@ mod tests {
         update!(state, &mut ctx, Some(&2)).unwrap();
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].to_int_vec(), &[None, Some(1), Some(1)]);
+    }
+
+    #[test]
+    fn test_update_enum() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnFirst::<EnumRef<'static>>::new();
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Enum)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new(buf.clone(), 1))]
+        );
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new(buf.clone(), 1)), Some(Enum::new(buf, 1))]
+        );
+    }
+
+    #[test]
+    fn test_update_set() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnFirst::<SetRef<'static>>::new();
+        let mut state = function.create_state();
+
+        let mut result = [VectorValue::with_capacity(0, EvalType::Set)];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b11))).unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(
+            result[0].to_set_vec(),
+            vec![Some(Set::new(buf.clone(), 0b11))]
+        );
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(
+            result[0].to_set_vec(),
+            vec![Some(Set::new(buf.clone(), 0b11)), Some(Set::new(buf, 0b11))]
+        );
     }
 
     #[test]

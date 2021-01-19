@@ -21,6 +21,8 @@ pub enum VectorValue {
     DateTime(ChunkedVecSized<DateTime>),
     Duration(ChunkedVecSized<Duration>),
     Json(ChunkedVecJson),
+    Enum(ChunkedVecEnum),
+    Set(ChunkedVecSet),
 }
 
 impl VectorValue {
@@ -28,12 +30,9 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
-            match eval_tp {
-                EvalType::TT => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                EvalType::Json => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
-                EvalType::Bytes => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
+        match_template_evaluable! {
+            TT, match eval_tp {
+                EvalType::TT => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
         }
     }
@@ -41,12 +40,9 @@ impl VectorValue {
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template::match_template! {
-            TT = [Int, Real, Duration, Decimal, DateTime],
-            match self {
-                VectorValue::TT(_) => VectorValue::TT(ChunkedVecSized::with_capacity(capacity)),
-                VectorValue::Json(_) => VectorValue::Json(ChunkedVecJson::with_capacity(capacity)),
-                VectorValue::Bytes(_) => VectorValue::Bytes(ChunkedVecBytes::with_capacity(capacity))
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(_) => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
         }
     }
@@ -220,6 +216,9 @@ impl VectorValue {
                 }
                 size
             }
+            // TODO: implement here after we implement enum/set encoding
+            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Set(_) => unimplemented!(),
         }
     }
 
@@ -261,6 +260,9 @@ impl VectorValue {
                 }
                 size
             }
+            // TODO: implement here after we implement enum/set encoding
+            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Set(_) => unimplemented!(),
         }
     }
 
@@ -354,6 +356,9 @@ impl VectorValue {
                 }
                 Ok(())
             }
+            // TODO: implement enum/set encoding
+            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Set(_) => unimplemented!(),
         }
     }
 
@@ -420,6 +425,8 @@ impl_as_slice! { Bytes, to_bytes_vec }
 impl_as_slice! { DateTime, to_date_time_vec }
 impl_as_slice! { Duration, to_duration_vec }
 impl_as_slice! { Json, to_json_vec }
+impl_as_slice! { Enum, to_enum_vec }
+impl_as_slice! { Set, to_set_vec }
 
 /// Additional `VectorValue` methods available via generics. These methods support different
 /// concrete types but have same names and should be specified via the generic parameter type.
@@ -469,6 +476,8 @@ impl_ext! { Bytes, push_bytes }
 impl_ext! { DateTime, push_date_time }
 impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
+impl_ext! { Enum, push_enum }
+impl_ext! { Set, push_set }
 
 macro_rules! impl_from {
     ($ty:tt, $chunk:ty) => {
@@ -488,6 +497,8 @@ impl_from! { Bytes, ChunkedVecBytes }
 impl_from! { DateTime, ChunkedVecSized<DateTime> }
 impl_from! { Duration, ChunkedVecSized<Duration> }
 impl_from! { Json, ChunkedVecJson }
+impl_from! { Enum, ChunkedVecEnum }
+impl_from! { Set, ChunkedVecSet }
 
 #[cfg(test)]
 mod tests {
@@ -578,6 +589,22 @@ mod tests {
         assert!(column.is_empty());
         assert_eq!(column.to_date_time_vec(), &[]);
         assert_eq!(column.to_date_time_vec(), column.to_date_time_vec());
+
+        let column = VectorValue::with_capacity(10, EvalType::Enum);
+        assert_eq!(column.eval_type(), EvalType::Enum);
+        assert_eq!(column.len(), 0);
+        assert_eq!(column.capacity(), 10);
+        assert!(column.is_empty());
+        assert_eq!(column.to_enum_vec(), &[]);
+        assert_eq!(column.to_enum_vec(), column.to_enum_vec());
+
+        let column = VectorValue::with_capacity(10, EvalType::Set);
+        assert_eq!(column.eval_type(), EvalType::Set);
+        assert_eq!(column.len(), 0);
+        assert_eq!(column.capacity(), 10);
+        assert!(column.is_empty());
+        assert_eq!(column.to_set_vec(), &[]);
+        assert_eq!(column.to_set_vec(), column.to_set_vec());
     }
 
     #[test]

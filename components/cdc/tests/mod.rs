@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::*;
 use std::time::Duration;
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
@@ -15,10 +14,8 @@ use kvproto::cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, Chan
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use raftstore::coprocessor::CoprocessorHost;
-use security::*;
 use test_raftstore::*;
 use tikv::config::CdcConfig;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::LazyWorker;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
@@ -30,31 +27,64 @@ pub fn init() {
     INIT.call_once(test_util::setup_for_ci);
 }
 
+#[derive(Clone)]
+pub struct ClientReceiver {
+    receiver: Arc<Mutex<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
+}
+
+impl ClientReceiver {
+    pub fn replace(&self, rx: Option<ClientDuplexReceiver<ChangeDataEvent>>) {
+        let mut receiver = self.receiver.lock().unwrap();
+        *receiver = rx;
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
     client: &ChangeDataClient,
 ) -> (
     ClientDuplexSender<ChangeDataRequest>,
-    Rc<Cell<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
-    impl Fn(bool) -> ChangeDataEvent,
+    ClientReceiver,
+    Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
     let (req_tx, resp_rx) = client.event_feed().unwrap();
-    let event_feed_wrap = Rc::new(Cell::new(Some(resp_rx)));
+    let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
     let receive_event = move |keep_resolved_ts: bool| loop {
-        let event_feed = event_feed_wrap_clone.as_ref();
-        let mut events = event_feed.replace(None).unwrap();
-        let change_data = block_on(events.next());
-        event_feed.set(Some(events));
-        let change_data_event = change_data.unwrap().unwrap();
+        let mut events;
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            events = (*event_feed).take();
+        }
+        let events_rx = if let Some(events_rx) = events.as_mut() {
+            events_rx
+        } else {
+            return ChangeDataEvent::default();
+        };
+        let change_data = if let Some(event) = block_on(events_rx.next()) {
+            event
+        } else {
+            return ChangeDataEvent::default();
+        };
+        {
+            let mut event_feed = event_feed_wrap_clone.lock().unwrap();
+            *event_feed = events;
+        }
+        let change_data_event = change_data.unwrap_or_default();
         if !keep_resolved_ts && change_data_event.has_resolved_ts() {
             continue;
         }
         tikv_util::info!("receive event {:?}", change_data_event);
         break change_data_event;
     };
-    (req_tx, event_feed_wrap, receive_event)
+    (
+        req_tx,
+        ClientReceiver {
+            receiver: event_feed_wrap,
+        },
+        Box::new(receive_event),
+    )
 }
 
 pub struct TestSuite {
@@ -89,13 +119,12 @@ impl TestSuite {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
-            let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
             let scheduler = worker.scheduler();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), security_mgr.clone()))
+                    create_change_data(cdc::Service::new(scheduler.clone()))
                 }));
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
@@ -113,7 +142,8 @@ impl TestSuite {
             let sim = cluster.sim.wl();
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(&id).unwrap().clone();
-            let cm = ConcurrencyManager::new(1.into());
+            let cm = sim.get_concurrency_manager(*id);
+            let env = Arc::new(Environment::new(1));
             let mut cdc_endpoint = cdc::Endpoint::new(
                 &CdcConfig::default(),
                 pd_cli.clone(),
@@ -122,6 +152,8 @@ impl TestSuite {
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
+                env,
+                sim.security_mgr.clone(),
             );
             cdc_endpoint.set_min_ts_interval(Duration::from_millis(100));
             cdc_endpoint.set_scan_batch_size(2);
@@ -229,6 +261,93 @@ impl TestSuite {
             !rollback_resp.has_error(),
             "{:?}",
             rollback_resp.get_error()
+        );
+    }
+
+    pub fn must_check_txn_status(
+        &mut self,
+        region_id: u64,
+        primary_key: Vec<u8>,
+        lock_ts: TimeStamp,
+        caller_start_ts: TimeStamp,
+        current_ts: TimeStamp,
+        rollback_if_not_exist: bool,
+    ) -> Action {
+        let mut req = CheckTxnStatusRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.set_primary_key(primary_key);
+        req.set_lock_ts(lock_ts.into_inner());
+        req.set_caller_start_ts(caller_start_ts.into_inner());
+        req.set_current_ts(current_ts.into_inner());
+        req.set_rollback_if_not_exist(rollback_if_not_exist);
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_check_txn_status(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(!resp.has_error(), "{:?}", resp.get_error());
+        resp.get_action()
+    }
+
+    pub fn must_acquire_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut lock_req = PessimisticLockRequest::default();
+        lock_req.set_context(self.get_context(region_id));
+        lock_req.set_mutations(muts.into_iter().collect());
+        lock_req.start_version = start_ts.into_inner();
+        lock_req.for_update_ts = for_update_ts.into_inner();
+        lock_req.primary_lock = pk;
+        let lock_resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_lock(&lock_req)
+            .unwrap();
+        assert!(
+            !lock_resp.has_region_error(),
+            "{:?}",
+            lock_resp.get_region_error()
+        );
+        assert!(
+            lock_resp.get_errors().is_empty(),
+            "{:?}",
+            lock_resp.get_errors()
+        );
+    }
+
+    pub fn must_kv_pessimistic_prewrite(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut prewrite_req = PrewriteRequest::default();
+        prewrite_req.set_context(self.get_context(region_id));
+        prewrite_req.set_mutations(muts.into_iter().collect());
+        prewrite_req.primary_lock = pk;
+        prewrite_req.start_version = ts.into_inner();
+        prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        prewrite_req.for_update_ts = for_update_ts.into_inner();
+        prewrite_req.mut_is_pessimistic_lock().push(true);
+        let prewrite_resp = self
+            .get_tikv_client(region_id)
+            .kv_prewrite(&prewrite_req)
+            .unwrap();
+        assert!(
+            !prewrite_resp.has_region_error(),
+            "{:?}",
+            prewrite_resp.get_region_error()
+        );
+        assert!(
+            prewrite_resp.errors.is_empty(),
+            "{:?}",
+            prewrite_resp.get_errors()
         );
     }
 

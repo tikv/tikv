@@ -90,8 +90,6 @@ cargo fmt
 make clippy
 ```
 
-See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
-
 See the [style doc](https://github.com/rust-lang/rfcs/blob/master/style-guide/README.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
@@ -133,6 +131,8 @@ This is a rough outline of what a contributor's workflow looks like:
 - Our CI system automatically tests all pull requests.
 - Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
+See [Rustdoc of TiKV](https://tikv.github.io) for TiKV code documentation.
+
 Thanks for your contributions!
 
 ### Finding something to work on
@@ -149,7 +149,7 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [grpc-rs](https://github.com/tikv/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/tikv/fail-rs): Fail points for Rust
 
-See more on [TiKV Community](https://github.com/tikv/community).
+See more in [TiKV Community](https://github.com/tikv/community).
 
 ### Format of the commit message
 
@@ -186,3 +186,31 @@ The body of the commit message should describe why the change was made and at a 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
 Use option `git commit -s` to sign off your commits.
+
+
+### Testing AWS
+
+Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
+
+```
+git clone https://github.com/localstack/localstack.git
+cd localstack
+docker-compose up
+```
+
+For example, to test KMS, create a key:
+
+```
+pip install awscli-local
+awslocal kms create-key`
+```
+
+Then add then use the returned ID in key-id:
+
+```
+[security.encryption.master-key]
+type = "kms"
+region = "us-west-2"
+endpoint = "http://localhost:4566"
+key-id = "KMS key id"
+```

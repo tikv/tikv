@@ -26,12 +26,12 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
-use tikv_util::collections::HashSet;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
 
@@ -194,11 +194,10 @@ impl LockManager {
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
-    pub fn deadlock_service(&self, security_mgr: Arc<SecurityManager>) -> DeadlockService {
+    pub fn deadlock_service(&self) -> DeadlockService {
         DeadlockService::new(
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
-            security_mgr,
         )
     }
 

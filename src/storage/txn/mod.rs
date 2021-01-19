@@ -9,8 +9,11 @@ pub mod scheduler;
 mod actions;
 
 pub use actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock, cleanup::cleanup, commit::commit,
-    pessimistic_prewrite::pessimistic_prewrite, prewrite::prewrite,
+    acquire_pessimistic_lock::acquire_pessimistic_lock,
+    cleanup::cleanup,
+    commit::commit,
+    gc::gc,
+    prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
 };
 
 mod latch;
@@ -124,10 +127,10 @@ quick_error! {
                         lower_bound: Option<Vec<u8>>,
                         upper_bound: Option<Vec<u8>>} {
             display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
-                        start.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        end.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        lower_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()),
-                        upper_bound.as_ref().map(hex::encode_upper).unwrap_or_else(|| "(none)".to_owned()))
+                        start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+                        upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()))
         }
         MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
             display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",
@@ -245,9 +248,14 @@ pub mod tests {
         must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
         must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
     };
-    pub use actions::cleanup::tests::{must_err as must_cleanup_err, must_succeed as must_cleanup};
+    pub use actions::cleanup::tests::{
+        must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
+    };
     pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
-    pub use actions::pessimistic_prewrite::tests::try_pessimistic_prewrite_check_not_exists;
-    pub use actions::prewrite::tests::{try_prewrite_check_not_exists, try_prewrite_insert};
+    pub use actions::gc::tests::must_succeed as must_gc;
+    pub use actions::prewrite::tests::{
+        try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
+        try_prewrite_insert,
+    };
     pub use actions::tests::*;
 }

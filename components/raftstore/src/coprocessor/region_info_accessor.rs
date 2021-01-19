@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use super::metrics::*;
@@ -11,11 +11,11 @@ use super::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
+use collections::HashMap;
 use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
@@ -107,8 +107,8 @@ impl Display for RegionInfoQuery {
             } => write!(
                 f,
                 "GetRegionsInRange(start_key: {}, end_key: {})",
-                hex::encode_upper(start_key),
-                hex::encode_upper(end_key)
+                &log_wrappers::Value::key(start_key),
+                &log_wrappers::Value::key(end_key)
             ),
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -586,6 +586,27 @@ impl RegionInfoProvider for RegionInfoAccessor {
                     )
                 })
             })
+    }
+}
+
+// Use in tests only.
+pub struct MockRegionInfoProvider(Mutex<Vec<Region>>);
+
+impl MockRegionInfoProvider {
+    pub fn new(regions: Vec<Region>) -> Self {
+        MockRegionInfoProvider(Mutex::new(regions))
+    }
+}
+
+impl Clone for MockRegionInfoProvider {
+    fn clone(&self) -> Self {
+        MockRegionInfoProvider::new(self.0.lock().unwrap().clone())
+    }
+}
+
+impl RegionInfoProvider for MockRegionInfoProvider {
+    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+        Ok(self.0.lock().unwrap().clone())
     }
 }
 

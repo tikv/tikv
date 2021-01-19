@@ -1,19 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::raw::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, DB};
+use engine_rocks::raw::ColumnFamilyOptions;
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
-    WriteBatchExt,
+    WriteBatch, WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -212,9 +211,9 @@ impl TestEngineBuilder {
                 CF_DEFAULT => {
                     CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
                 }
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache, None)),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache, None)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
@@ -267,7 +266,7 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
             return Err(box_err!("{}", msg));
         }
     }
-    kv_engine.write(&wb)?;
+    wb.write()?;
     Ok(())
 }
 
@@ -410,44 +409,6 @@ impl EngineIterator for RocksEngineIterator {
 
     fn value(&self) -> &[u8] {
         Iterator::value(self)
-    }
-}
-
-impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> Result<bool> {
-        DBIterator::next(self).map_err(|e| box_err!(e))
-    }
-
-    fn prev(&mut self) -> Result<bool> {
-        DBIterator::prev(self).map_err(|e| box_err!(e))
-    }
-
-    fn seek(&mut self, key: &Key) -> Result<bool> {
-        DBIterator::seek(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
-    }
-
-    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        DBIterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
-    }
-
-    fn seek_to_first(&mut self) -> Result<bool> {
-        DBIterator::seek(self, DBSeekKey::Start).map_err(|e| box_err!(e))
-    }
-
-    fn seek_to_last(&mut self) -> Result<bool> {
-        DBIterator::seek(self, DBSeekKey::End).map_err(|e| box_err!(e))
-    }
-
-    fn valid(&self) -> Result<bool> {
-        DBIterator::valid(self).map_err(|e| box_err!(e))
-    }
-
-    fn key(&self) -> &[u8] {
-        DBIterator::key(self)
-    }
-
-    fn value(&self) -> &[u8] {
-        DBIterator::value(self)
     }
 }
 
