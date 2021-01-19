@@ -256,9 +256,13 @@
 
 #[macro_use]
 extern crate quick_error;
-extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
+extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -302,6 +306,8 @@ pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
+mod perf_context;
+pub use crate::perf_context::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -336,6 +342,8 @@ pub use crate::metrics_task::*;
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;
+
+pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
