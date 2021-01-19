@@ -1246,7 +1246,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             engines.raft.clone(),
             self.router.clone(),
             "raftstore-async-writer".to_string(),
-            cfg.value().store_io_min_interval_us,
+            cfg.value().store_io_max_wait_us,
             async_writer_tasks,
             true,
         );

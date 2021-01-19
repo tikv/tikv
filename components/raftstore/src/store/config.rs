@@ -28,7 +28,7 @@ with_prefix!(prefix_store "store-");
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[config(skip)]
-    pub store_io_min_interval_us: u64,
+    pub store_io_max_wait_us: u64,
     #[config(skip)]
     pub store_io_queue_size: u64,
     #[config(skip)]
@@ -206,12 +206,12 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            store_io_min_interval_us: 300,
+            store_io_max_wait_us: 300,
             store_io_queue_size: 64,
             store_io_queue_init_bytes: 256 * 1024,
             store_io_queue_bytes_step: 1.414213562373095,
-            store_io_queue_adaptive_gain: 0,
-            store_io_queue_sample_quantile: 0.9,
+            store_io_queue_adaptive_gain: 1,
+            store_io_queue_sample_quantile: 0.99,
             apply_io_size: 0,
             prevote: true,
             raftdb_path: String::new(),
@@ -432,8 +432,8 @@ impl Config {
 
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_min_interval_us"])
-            .set((self.store_io_min_interval_us as i32).into());
+            .with_label_values(&["store_io_max_wait_us"])
+            .set((self.store_io_max_wait_us as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_queue_size"])
             .set((self.store_io_queue_size as i32).into());
