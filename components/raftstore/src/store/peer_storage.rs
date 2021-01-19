@@ -32,8 +32,8 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::fsm::async_io::AsyncWriterTasks;
 use std::sync::atomic::AtomicU64;
+use crate::store::fsm::async_io::AsyncWriterTasks;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1377,7 +1377,6 @@ where
             let raft_wb_pool = ready_ctx.raft_wb_pool();
             let mut raft_wbs = raft_wb_pool.lock().unwrap();
             let current = raft_wbs.prepare_current_for_write();
-            let current_size = current.wb.persist_size();
 
             if !ready.snapshot().is_empty() {
                 fail_point!("raft_before_apply_snap");
@@ -1410,7 +1409,6 @@ where
             }
 
             if ready.must_sync() {
-                assert!(current_size != current.wb.persist_size());
                 current.on_wb_written(region_id, ready.number(), region_notifier.clone());
             }
         }

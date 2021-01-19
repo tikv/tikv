@@ -698,10 +698,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
 
-        let unsynced_readies = self.poll_ctx.sync_ctx.detach_unsynced_readies();
         if !raft_wb_is_empty {
             // Do nothing
         } else {
+            let unsynced_readies = self.poll_ctx.sync_ctx.detach_unsynced_readies();
             let mut async_writer = self.poll_ctx.async_writer.lock().unwrap();
             async_writer.drain_flush_unsynced_readies(unsynced_readies);
         }
@@ -871,6 +871,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+        let mut async_writer = self.poll_ctx.async_writer.lock().unwrap();
+        async_writer.flush_metrics();
     }
 
     fn pause(&mut self) -> bool {

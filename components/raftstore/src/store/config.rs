@@ -30,8 +30,6 @@ pub struct Config {
     #[config(skip)]
     pub store_io_min_interval_us: u64,
     #[config(skip)]
-    pub store_io_pool_size: u64,
-    #[config(skip)]
     pub store_io_queue_size: u64,
     #[config(skip)]
     pub store_io_queue_init_bytes: u64,
@@ -209,7 +207,6 @@ impl Default for Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             store_io_min_interval_us: 300,
-            store_io_pool_size: 2,
             store_io_queue_size: 64,
             store_io_queue_init_bytes: 256 * 1024,
             store_io_queue_bytes_step: 1.414213562373095,
@@ -437,9 +434,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_min_interval_us"])
             .set((self.store_io_min_interval_us as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_pool_size"])
-            .set((self.store_io_pool_size as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_io_queue_size"])
             .set((self.store_io_queue_size as i32).into());

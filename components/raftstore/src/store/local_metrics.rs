@@ -447,26 +447,33 @@ impl RaftMetrics {
     }
 }
 
-/// The buffered metrics counters for raft sync log event.
 #[derive(Clone)]
-pub struct SyncEvents {
-    pub sync_raftdb_count: u64,
-    pub sync_raftdb_reach_deadline: u64,
-    pub sync_raftdb_delay_cache_is_full: u64,
-    pub sync_raftdb_with_no_ready: u64,
-    pub sync_raftdb_skipped_count: u64,
-    pub sync_raftdb_peer_destroy: u64,
+pub struct AsyncWriterStoreMetrics {
+    pub queue_size: LocalHistogram,
+    pub adaptive_idx: LocalHistogram,
+    pub task_real_bytes: LocalHistogram,
+    pub task_suggest_bytes: LocalHistogram,
+    pub task_limit_bytes: LocalHistogram,
 }
 
-impl Default for SyncEvents {
-    fn default() -> SyncEvents {
-        SyncEvents {
-            sync_raftdb_count: 0,
-            sync_raftdb_reach_deadline: 0,
-            sync_raftdb_delay_cache_is_full: 0,
-            sync_raftdb_with_no_ready: 0,
-            sync_raftdb_skipped_count: 0,
-            sync_raftdb_peer_destroy: 0,
+impl Default for AsyncWriterStoreMetrics {
+    fn default() -> Self {
+        Self {
+            queue_size: RAFT_ASYNC_WRITER_STORE_QUEUE_SIZE.local(),
+            adaptive_idx: RAFT_ASYNC_WRITER_STORE_ADAPTIVE_IDX.local(),
+            task_real_bytes: RAFT_ASYNC_WRITER_STORE_TASK_BYTES.local(),
+            task_suggest_bytes: RAFT_ASYNC_WRITER_STORE_TASK_SUGGEST_BYTES.local(),
+            task_limit_bytes: RAFT_ASYNC_WRITER_STORE_TASK_LIMIT_BYTES.local(),
         }
+    }
+}
+
+impl AsyncWriterStoreMetrics {
+    pub fn flush(&mut self) {
+        self.queue_size.flush();
+        self.adaptive_idx.flush();
+        self.task_real_bytes.flush();
+        self.task_suggest_bytes.flush();
+        self.task_limit_bytes.flush();
     }
 }

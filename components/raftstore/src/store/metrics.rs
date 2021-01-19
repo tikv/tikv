@@ -210,31 +210,31 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_QUEUE_SIZE: Histogram =
+    pub static ref RAFT_ASYNC_WRITER_STORE_QUEUE_SIZE: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_queue_size",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_ADAPTIVE_IDX: Histogram =
+    pub static ref RAFT_ASYNC_WRITER_STORE_ADAPTIVE_IDX: Histogram =
         register_histogram!(
             "tikv_raftstore_store_adaptive_idx",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_TASK_BYTES: Histogram =
+    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_BYTES: Histogram =
         register_histogram!(
             "tikv_raftstore_store_task_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_TASK_LIMIT_BYTES: Histogram =
+    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_LIMIT_BYTES: Histogram =
         register_histogram!(
             "tikv_raftstore_store_task_limit_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_TASK_SUGGEST_BYTES: Histogram =
+    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_SUGGEST_BYTES: Histogram =
         register_histogram!(
             "tikv_raftstore_store_task_suggest_bytes",
             "TODO",
@@ -524,22 +524,6 @@ lazy_static! {
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
-        ).unwrap();
-
-    pub static ref SYNC_EVENTS: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_raftstore_sync_events",
-            "Counts of raftstore sync events.",
-            &["event"]
-        )
-        .unwrap();
-
-    pub static ref PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_thread_check_sync_delay_microseconds",
-            "Bucketed histogram of sync log in idle stat interval",
-            // 100us ~ 100s
-            exponential_buckets(100.0, 2.0, 21).unwrap()
         ).unwrap();
 
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
