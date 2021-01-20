@@ -2168,8 +2168,6 @@ impl TiKvConfig {
         self.readpool.validate()?;
         self.storage.validate()?;
 
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
                 .join(LAST_CONFIG_FILE)
@@ -3203,4 +3201,133 @@ mod tests {
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_unrecognized_config_keys() {
+        let mut temp_config_file = tempfile::NamedTempFile::new().unwrap();
+        let temp_config_writer = temp_config_file.as_file_mut();
+        temp_config_writer
+            .write_all(
+                br#"
+                    log-level = "debug"
+                    log-fmt = "json"
+                    [readpool.unified]
+                    min-threads-count = 5
+                    stack-size = "20MB"
+                    [import]
+                    num_threads = 4
+                    [gcc]
+                    batch-keys = 1024
+                    [[security.encryption.master-keys]]
+                    type = "file"
+                "#,
+            )
+            .unwrap();
+        temp_config_writer.sync_data().unwrap();
+
+        let mut unrecognized_keys = Vec::new();
+        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+
+        assert_eq!(
+            unrecognized_keys,
+            vec![
+                "log-fmt".to_owned(),
+                "readpool.unified.min-threads-count".to_owned(),
+                "import.num_threads".to_owned(),
+                "gcc".to_owned(),
+                "security.encryption.master-keys".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_raft_engine() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+            recovery_mode = "tolerate-corrupted-tail-records"
+            bytes-per-sync = "64KB"
+            purge-threshold = "1GB"
+        "#;
+        let cfg: TiKvConfig = toml::from_str(content).unwrap();
+        assert!(cfg.raft_engine.enable);
+        let config = &cfg.raft_engine.config;
+        assert_eq!(
+            config.recovery_mode,
+            RecoveryMode::TolerateCorruptedTailRecords
+        );
+        assert_eq!(config.bytes_per_sync.0, ReadableSize::kb(64).0);
+        assert_eq!(config.purge_threshold.0, ReadableSize::gb(1).0);
+    }
+
+    #[test]
+    fn test_raft_engine_dir() {
+        let content = r#"
+            [raft-engine]
+            enable = true
+        "#;
+        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.raft_engine.config.dir,
+            config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_compaction_guard() {
+        // Test comopaction guard disabled.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = false;
+            let provider = Some(MockRegionInfoProvider::new(vec![]));
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            assert_eq!(
+                config.target_file_size_base.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
+        // Test compaction guard enabled but region info provider is missing.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = true;
+            let provider: Option<MockRegionInfoProvider> = None;
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            assert_eq!(
+                config.target_file_size_base.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
+        // Test compaction guard enabled.
+        {
+            let mut config = DefaultCfConfig::default();
+            config.target_file_size_base = ReadableSize::mb(16);
+            config.enable_compaction_guard = true;
+            config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
+            config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
+            let provider = Some(MockRegionInfoProvider::new(vec![]));
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            assert_eq!(
+                config.compaction_guard_max_output_file_size.0,
+                cf_opts.get_target_file_size_base()
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
+    }
+>>>>>>> 9c6a08fe2... allow to custom region-split-check-diff (#9525)
 }
