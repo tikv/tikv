@@ -422,9 +422,10 @@ fn test_restart_in_joint_state() {
     pd_client.must_leave_joint(region_id);
 
     // Joint confchange finished
-    cluster.must_put(b"k3", b"v3");
-    must_get_none(&cluster.get_engine(2), b"k3");
-    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    let region = cluster.get_region(b"k2");
+    must_has_peer(&region, 1, PeerRole::Voter);
+    must_has_peer(&region, 2, PeerRole::Learner);
+    must_has_peer(&region, 3, PeerRole::Voter);
 }
 
 /// Tests when leader down in joint state, both peers in new configuration and
@@ -479,11 +480,12 @@ fn test_leader_down_in_joint_state() {
     pd_client.must_leave_joint(region_id);
 
     // Joint confchange finished
-    cluster.must_put(b"k10", b"v10");
-    must_get_none(&cluster.get_engine(2), b"k10");
-    must_get_none(&cluster.get_engine(3), b"k10");
-    must_get_equal(&cluster.get_engine(4), b"k10", b"v10");
-    must_get_equal(&cluster.get_engine(5), b"k10", b"v10");
+    let region = cluster.get_region(b"k1");
+    must_has_peer(&region, 1, PeerRole::Voter);
+    must_has_peer(&region, 2, PeerRole::Learner);
+    must_has_peer(&region, 3, PeerRole::Learner);
+    must_has_peer(&region, 4, PeerRole::Voter);
+    must_has_peer(&region, 5, PeerRole::Voter);
 }
 
 fn call_conf_change_v2<T>(
@@ -538,4 +540,11 @@ fn put_request(region: &Region, id: u64, key: &[u8], val: &[u8]) -> RaftCmdReque
     );
     request.mut_header().set_peer(new_peer(id, id));
     request
+}
+
+fn must_has_peer(region: &Region, peer_id: u64, role: PeerRole) {
+    assert!(region
+        .get_peers()
+        .iter()
+        .any(|p| p.get_id() == peer_id && p.get_role() == role));
 }
