@@ -1386,7 +1386,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -1399,7 +1399,10 @@ mod tests {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&engine, k, v, k, ts);
-            expected_locks.entry(ts).or_default().insert(k.to_vec());
+            expected_locks
+                .entry(ts)
+                .or_default()
+                .insert(k.to_vec().into());
         }
 
         let region = Region::default();
