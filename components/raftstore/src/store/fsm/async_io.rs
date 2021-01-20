@@ -16,6 +16,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant};
 
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const RAFT_WB_PERSIST_SIZE_BASE: usize = 12;
 
 #[derive(Default)]
 pub struct UnsyncedReady {
@@ -99,7 +100,7 @@ where
     }
 
     pub fn is_empty(&self) -> bool {
-        self.unsynced_readies.is_empty()
+        self.unsynced_readies.is_empty() && self.wb.persist_size() <= RAFT_WB_PERSIST_SIZE_BASE
     }
 }
 
