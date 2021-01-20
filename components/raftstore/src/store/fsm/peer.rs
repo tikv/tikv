@@ -3107,6 +3107,22 @@ where
         self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
     }
 
+    fn check_joint_state(&self, msg: &RaftCmdRequest) -> Result<()> {
+        if !self.fsm.peer.in_joint_state() {
+            return Ok(());
+        }
+        let cmd = msg.get_admin_request();
+        if cmd.has_prepare_merge() || cmd.has_commit_merge() || cmd.has_split() || cmd.has_splits()
+        {
+            return Err(box_err!(
+                "{} region in joint state, can not propose split or merge command, command: {:?}",
+                self.fsm.peer.tag,
+                cmd
+            ));
+        }
+        Ok(())
+    }
+
     /// Check if a request is valid if it has valid prepare_merge/commit_merge proposal.
     fn check_merge_proposal(&self, msg: &mut RaftCmdRequest) -> Result<()> {
         if !msg.get_admin_request().has_prepare_merge()
@@ -3283,17 +3299,32 @@ where
             return;
         }
 
-        if let Err(e) = self.check_merge_proposal(&mut msg) {
-            warn!(
-                "failed to propose merge";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "message" => ?msg,
-                "err" => %e,
-                "error_code" => %e.error_code(),
-            );
-            cb.invoke_with_response(new_error(e));
-            return;
+        if msg.has_admin_request() {
+            if let Err(e) = self.check_joint_state(&msg) {
+                warn!(
+                    "failed to propose merge or split while region in joint state";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "message" => ?msg,
+                    "err" => %e,
+                    "error_code" => %e.error_code(),
+                );
+                cb.invoke_with_response(new_error(e));
+                return;
+            }
+
+            if let Err(e) = self.check_merge_proposal(&mut msg) {
+                warn!(
+                    "failed to propose merge";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "message" => ?msg,
+                    "err" => %e,
+                    "error_code" => %e.error_code(),
+                );
+                cb.invoke_with_response(new_error(e));
+                return;
+            }
         }
 
         // Note:

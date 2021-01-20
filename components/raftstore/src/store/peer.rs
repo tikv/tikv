@@ -1008,6 +1008,13 @@ where
     }
 
     #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
+    }
+
+    #[inline]
     fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
@@ -2279,8 +2286,14 @@ where
         let current_progress = self.raft_group.status().progress.unwrap().clone();
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
-        // Leaving joint state, skip check
         if kind == ConfChangeKind::LeaveJoint {
+            if self.peer.get_role() == PeerRole::DemotingVoter {
+                return Err(box_err!(
+                    "{} ignore leave joint command that demoting leader",
+                    self.tag
+                ));
+            }
+            // Leaving joint state, skip check
             return Ok(());
         }
 

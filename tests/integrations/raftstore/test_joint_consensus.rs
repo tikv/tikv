@@ -5,6 +5,7 @@ use kvproto::raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use raftstore::store::util::find_peer;
+use raftstore::store::Callback;
 use raftstore::Result;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -275,6 +276,7 @@ fn test_invalid_confchange_request() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
+    let region = cluster.get_region(b"");
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -342,6 +344,40 @@ fn test_invalid_confchange_request() {
     // Can not leave a non-joint config
     let resp = leave_joint(&mut cluster, region_id).unwrap();
     must_contains_error(&resp, "leave a non-joint config");
+
+    // Split region
+    cluster.must_split(&region, b"k3");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k5").unwrap();
+    assert_eq!(region_id, right.get_id());
+    // Enter joint
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(2, 2)),
+            (ConfChangeType::AddNode, new_peer(3, 3)),
+        ],
+    );
+    assert!(pd_client.is_in_joint(region_id));
+
+    // Can not split or merge region while in jonit state
+    let (tx, rx) = mpsc::channel();
+    let region = cluster.get_region(b"k5");
+    cluster.split_region(
+        &region,
+        b"k1",
+        Callback::write(Box::new(move |resp| tx.send(resp.response).unwrap())),
+    );
+    let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    must_contains_error(&resp, "in joint state, can not propose split or merge");
+
+    let resp = cluster.try_merge(right.get_id(), left.get_id());
+    must_contains_error(&resp, "in joint state, can not propose split or merge");
+
+    // Can not leave joint if which will demote leader
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+    let resp = leave_joint(&mut cluster, region_id).unwrap();
+    must_contains_error(&resp, "ignore leave joint command that demoting leader");
 }
 
 /// Tests when leader restart in joint state, joint state should be the same
