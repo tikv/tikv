@@ -726,92 +726,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        let begin_instant = Instant::now_coarse();
-
-        let region_id = req.get_context().get_region_id();
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        let mut inner_req = RaftRequest::default();
-        inner_req.set_cmd_type(CmdType::ReadIndex);
-        inner_req.mut_read_index().set_start_ts(req.get_start_ts());
-        for r in req.get_ranges() {
-            let mut range = kvproto::kvrpcpb::KeyRange::default();
-            range.set_start_key(Key::from_raw(r.get_start_key()).into_encoded());
-            range.set_end_key(Key::from_raw(r.get_end_key()).into_encoded());
-            inner_req.mut_read_index().mut_key_ranges().push(range);
-        }
-        header.set_region_id(req.get_context().get_region_id());
-        header.set_peer(req.get_context().get_peer().clone());
-        header.set_region_epoch(req.get_context().get_region_epoch().clone());
-        if req.get_context().get_term() != 0 {
-            header.set_term(req.get_context().get_term());
-        }
-        header.set_sync_log(req.get_context().get_sync_log());
-        header.set_read_quorum(true);
-        cmd.set_header(header);
-        cmd.set_requests(vec![inner_req].into());
-
-        let (cb, f) = paired_future_callback();
-
-        // We must deal with all requests which acquire read-quorum in raftstore-thread,
-        // so just send it as an command.
-        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = ReadIndexResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
-
-        let task = async move {
-            let mut res = f.await?;
-            let mut resp = ReadIndexResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let mut raft_resps = res.response.take_responses();
-                if raft_resps.len() != 1 {
-                    error!(
-                        "invalid read index response";
-                        "region_id" => region_id,
-                        "response" => ?raft_resps
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        raft_resps
-                    ));
-                } else {
-                    let mut read_index_resp = raft_resps[0].take_read_index();
-                    if read_index_resp.has_locked() {
-                        resp.set_locked(read_index_resp.take_locked());
-                    } else {
-                        resp.set_read_index(read_index_resp.get_read_index());
-                    }
-                }
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .read_index
-                .observe(begin_instant.elapsed_secs());
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "read_index",
-                "err" => ?e
-            );
-            GRPC_MSG_FAIL_COUNTER.read_index.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        ctx.spawn(
+            sink.fail(RpcStatus::new(
+                RpcStatusCode::UNIMPLEMENTED,
+                Some("shouldn't use the deprecated API again".to_owned()),
+            ))
+            .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+        );
     }
 
     fn batch_commands(
