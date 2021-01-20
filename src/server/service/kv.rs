@@ -33,7 +33,6 @@ use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
@@ -723,7 +722,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        req: ReadIndexRequest,
+        _req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
         ctx.spawn(
