@@ -404,7 +404,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
 
     // trigger leader send snapshot to peer 3
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    for i in 0..100 {
+    for i in 0..12 {
         cluster.must_put(format!("k2{}", i).as_bytes(), b"v2");
     }
     cluster.clear_send_filters();
