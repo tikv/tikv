@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
@@ -49,7 +50,7 @@ where
     importer: Arc<SSTImporter>,
     switcher: ImportModeSwitcher<E>,
     limiter: Limiter,
-    task_slots: Arc<Mutex<HashSet<String>>>,
+    task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl<E, Router> ImportSSTService<E, Router>
@@ -83,21 +84,15 @@ where
         }
     }
 
-    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<String>>>, meta: &SstMeta) -> Result<bool> {
+    fn acquire_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        let key = p.to_str().unwrap().to_string();
-        if slots.get(&key).is_some() {
-            return Ok(false);
-        }
-        slots.insert(key);
-        Ok(true)
+        Ok(slots.insert(p))
     }
-    fn release_lock(task_slots: &Arc<Mutex<HashSet<String>>>, meta: &SstMeta) -> Result<bool> {
+    fn release_lock(task_slots: &Arc<Mutex<HashSet<PathBuf>>>, meta: &SstMeta) -> Result<bool> {
         let mut slots = task_slots.lock().unwrap();
         let p = sst_meta_to_path(meta)?;
-        let key = p.to_str().unwrap().to_string();
-        Ok(slots.remove(&key))
+        Ok(slots.remove(&p))
     }
 }
 
