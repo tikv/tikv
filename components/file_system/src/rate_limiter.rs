@@ -9,19 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tikv_util::time::Instant;
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-enum IOPriority {
-    Low,
-    High,
-}
-
-fn get_priority(io_type: IOType) -> IOPriority {
-    match io_type {
-        IOType::Compaction => IOPriority::Low,
-        _ => IOPriority::High,
-    }
-}
-
 /// Used to calibrate actual IO throughput.
 /// A naive implementation would be deducing disk IO based on empirical ratio
 /// with respect to hardware environment.
@@ -59,14 +46,11 @@ impl RawIOVec {
         self.inner[i].fetch_add(amount, Ordering::Relaxed)
     }
 
-    fn fetch_sub(&self, i: usize, amount: usize) -> usize {
-        self.inner[i].fetch_sub(amount, Ordering::Relaxed)
-    }
-
     fn load(&self, i: usize) -> usize {
         self.inner[i].load(Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     fn reset(&self) {
         for i in 0..IOType::VARIANT_COUNT {
             self.inner[i].store(0, Ordering::Relaxed);
@@ -87,14 +71,16 @@ struct RawIORateLimiterProtected {
     calibrator: Option<Box<dyn BytesCalibrator>>,
 }
 
-// TODO: add builder
+/// Limit total IO flow below provided threshold by applying backpressure to low-priority
+/// IO types proportional to their `backpressure-weight`. Rate limit is disabled when
+/// total IO threshold is set to zero.
+/// TODO: add builder
 struct RawIORateLimiter {
-    // configurations
     refill_period: Duration,
-    bytes_per_refill: AtomicUsize,
-    backpressure_percentage: [usize; IOType::VARIANT_COUNT],
-    first_bytes_per_refill: AtomicUsize,
-    second_bytes_per_refill: RawIOVec,
+    backpressure_weight: [usize; IOType::VARIANT_COUNT],
+    total_bytes_per_refill: CachePadded<AtomicUsize>,
+    low_priority_bytes_per_refill: RawIOVec,
+    high_priority_aggregated_consumed: CachePadded<AtomicUsize>,
     consumed: RawIOVec,
     stats: Arc<RawIOVec>,
     condv: Condvar,
@@ -106,13 +92,13 @@ impl RawIORateLimiter {
         assert!(IOType::Other as usize == 0);
         RawIORateLimiter {
             refill_period,
-            bytes_per_refill: AtomicUsize::new(calculate_bytes_per_refill(
+            backpressure_weight: [0; IOType::VARIANT_COUNT],
+            total_bytes_per_refill: CachePadded::new(AtomicUsize::new(calculate_bytes_per_refill(
                 bytes_per_sec,
                 refill_period,
-            )),
-            backpressure_percentage: [0; IOType::VARIANT_COUNT],
-            first_bytes_per_refill: AtomicUsize::new(0),
-            second_bytes_per_refill: RawIOVec::new(),
+            ))),
+            low_priority_bytes_per_refill: RawIOVec::new(),
+            high_priority_aggregated_consumed: CachePadded::new(AtomicUsize::new(0)),
             consumed: RawIOVec::new(),
             stats: Arc::new(RawIOVec::new()),
             condv: Condvar::new(),
@@ -123,8 +109,9 @@ impl RawIORateLimiter {
         }
     }
 
-    pub fn set_backpressure_percentage(&mut self, io_type: IOType, percentage: usize) {
-        self.backpressure_percentage[io_type as usize] = percentage;
+    #[allow(dead_code)]
+    pub fn set_backpressure_weight(&mut self, io_type: IOType, weight: usize) {
+        self.backpressure_weight[io_type as usize] = weight;
     }
 
     #[allow(dead_code)]
@@ -132,29 +119,31 @@ impl RawIORateLimiter {
         self.protected.get_mut().calibrator = Some(calibrator);
     }
 
+    #[allow(dead_code)]
     pub fn finalize(&mut self) -> Arc<RawIOVec> {
-        let bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        // sanitize backpressure weight to percentage
+        let total_weight: usize = self.backpressure_weight.iter().sum();
+        if total_weight > 0 && total_weight != 100 {
+            self.backpressure_weight.iter_mut().for_each(|w| {
+                *w = *w * 100 / total_weight;
+            });
+        }
+        let bytes_per_refill = self.total_bytes_per_refill.load(Ordering::Relaxed);
         if bytes_per_refill > 0 {
-            // assign half the quotas to second-class IO
-            let mut used = 0;
             for i in 0..IOType::VARIANT_COUNT {
-                if self.backpressure_percentage[i] > 0 {
-                    let quotas = std::cmp::max(
-                        MIN_IO_RATE_BYTES_LIMIT_FOR_TYPE,
-                        bytes_per_refill * self.backpressure_percentage[i] / 200,
-                    );
-                    self.second_bytes_per_refill.store(i, quotas);
-                    used += quotas;
+                if self.backpressure_weight[i] > 0 {
+                    self.low_priority_bytes_per_refill
+                        .store(i, bytes_per_refill);
                 }
             }
-            self.first_bytes_per_refill
-                .store(bytes_per_refill - used, Ordering::Relaxed);
         }
         self.stats.clone()
     }
 
+    /// Dynamically changes the total IO flow threshold, effective after at most `refill_period`.
+    #[allow(dead_code)]
     pub fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
-        self.bytes_per_refill.store(
+        self.total_bytes_per_refill.store(
             calculate_bytes_per_refill(bytes_per_sec, self.refill_period),
             Ordering::Relaxed,
         );
@@ -162,88 +151,103 @@ impl RawIORateLimiter {
 
     pub fn request(&self, io_type: IOType, amount: usize) -> usize {
         let io_type_idx = io_type as usize;
-        let backpressure_percent = self.backpressure_percentage[io_type_idx];
+        let backpressure_weight = self.backpressure_weight[io_type_idx];
         loop {
-            let cached_bytes_per_refill = self.first_bytes_per_refill.load(Ordering::Relaxed);
+            let cached_bytes_per_refill = self.total_bytes_per_refill.load(Ordering::Relaxed);
             if cached_bytes_per_refill == 0 {
                 return amount;
             }
-            if backpressure_percent == 0 {
-                // first-class IO: bypass and calculate debt
+            if backpressure_weight == 0 {
                 let amount = std::cmp::min(cached_bytes_per_refill, amount);
-                self.consumed.fetch_add(io_type_idx, amount);
-                return amount;
-            } else {
-                // second-class IO: limited by last_consumed - backpressure
-                let cached_bytes_per_refill = self.second_bytes_per_refill.load(io_type_idx);
-                let amount = std::cmp::min(cached_bytes_per_refill, amount);
-                let cached_consumed = self.consumed.fetch_add(io_type_idx, amount);
-                if cached_consumed + amount > cached_bytes_per_refill {
-                    let mut locked = self.protected.lock();
-                    // TODO: calibration
-                    let now = Instant::now_coarse();
-                    assert!(now >= locked.last_refill_time);
-                    let since_last_refill = now.duration_since(locked.last_refill_time);
-                    if since_last_refill < self.refill_period {
-                        let cached_last_refill_time = locked.last_refill_time;
-                        // use a slightly larger timeout so that they can react to notification
-                        // and preserve priority information
-                        let (mut locked, timed_out) = self.condv.wait_timeout(
-                            locked,
-                            self.refill_period.mul_f32(1.1) - since_last_refill,
-                        );
-                        if timed_out && locked.last_refill_time == cached_last_refill_time {
-                            self.refill(&mut locked, Instant::now_coarse());
-                        }
-                    } else {
-                        self.refill(&mut locked, now);
-                    }
+                if self
+                    .high_priority_aggregated_consumed
+                    .fetch_add(amount, Ordering::Relaxed)
+                    + amount
+                    <= cached_bytes_per_refill
+                {
+                    // only for bookkeeping
+                    self.consumed.fetch_add(io_type_idx, amount);
+                    return amount;
                 }
+            } else {
+                let cached_bytes_per_refill = self.low_priority_bytes_per_refill.load(io_type_idx);
+                let amount = std::cmp::min(cached_bytes_per_refill, amount);
+                if self.consumed.fetch_add(io_type_idx, amount) + amount <= cached_bytes_per_refill
+                {
+                    return amount;
+                }
+            }
+            let mut locked = self.protected.lock();
+            // TODO: calibration
+            let now = Instant::now_coarse();
+            assert!(now >= locked.last_refill_time);
+            let since_last_refill = now.duration_since(locked.last_refill_time);
+            if since_last_refill < self.refill_period {
+                let cached_last_refill_time = locked.last_refill_time;
+                // use a slightly larger timeout so that they can react to notification
+                // and preserve enqueue order
+                let (mut locked, timed_out) = self
+                    .condv
+                    .wait_timeout(locked, self.refill_period.mul_f32(1.1) - since_last_refill);
+                if timed_out && locked.last_refill_time == cached_last_refill_time {
+                    self.refill(&mut locked, Instant::now_coarse());
+                }
+            } else {
+                self.refill(&mut locked, now);
             }
         }
     }
 
     #[inline]
     fn refill(&self, locked: &mut RawIORateLimiterProtected, now: Instant) {
-        let mut total_consumed = 0;
+        let cached_bytes_per_refill = self.total_bytes_per_refill.load(Ordering::Relaxed);
+        // consumptions are capped below corresponding thresholds
+        let mut total_consumed = std::cmp::min(
+            cached_bytes_per_refill,
+            self.high_priority_aggregated_consumed
+                .load(Ordering::Relaxed),
+        );
         for i in 0..IOType::VARIANT_COUNT {
-            let consumed = self.consumed.load(i);
+            let mut consumed = self.consumed.load(i);
             self.consumed.store(i, 0);
+            if self.backpressure_weight[i] > 0 {
+                consumed = std::cmp::min(self.low_priority_bytes_per_refill.load(i), consumed);
+                total_consumed += consumed;
+            }
             self.stats.fetch_add(i, consumed);
-            total_consumed += consumed;
         }
-        let cached_bytes_per_refill = self.bytes_per_refill.load(Ordering::Relaxed);
+        // calculate backpressure
         let backpressure = cached_bytes_per_refill as i64 - total_consumed as i64;
-        let mut used = 0;
         for i in 0..IOType::VARIANT_COUNT {
-            if self.backpressure_percentage[i] > 0 {
-                let quotas = std::cmp::min(
+            if self.backpressure_weight[i] > 0 {
+                let updated = std::cmp::min(
                     MIN_IO_RATE_BYTES_LIMIT_FOR_TYPE,
-                    (self.second_bytes_per_refill.load(i) as i64
-                        + backpressure * self.backpressure_percentage[i] as i64 / 100)
+                    (self.low_priority_bytes_per_refill.load(i) as i64
+                        + backpressure * self.backpressure_weight[i] as i64 / 100)
                         .abs() as usize,
                 );
-                self.second_bytes_per_refill.store(i, quotas);
-                used += quotas;
+                self.low_priority_bytes_per_refill.store(i, updated);
             }
         }
-        self.first_bytes_per_refill
-            .store(cached_bytes_per_refill - used, Ordering::Relaxed);
 
+        self.high_priority_aggregated_consumed
+            .store(0, Ordering::Relaxed);
         if let Some(calibrator) = &mut locked.calibrator {
             calibrator.reset();
         }
         locked.last_refill_time = now;
+        self.condv.notify_all();
     }
 
     #[cfg(test)]
     pub fn is_drained(&self, io_type: IOType) -> bool {
-        if self.backpressure_percentage[io_type as usize] > 0 {
+        if self.backpressure_weight[io_type as usize] > 0 {
             self.consumed.load(io_type as usize)
-                >= self.second_bytes_per_refill.load(io_type as usize)
+                >= self.low_priority_bytes_per_refill.load(io_type as usize)
         } else {
-            self.consumed.load(io_type as usize)
-                >= self.first_bytes_per_refill.load(Ordering::Relaxed)
+            self.high_priority_aggregated_consumed
+                .load(Ordering::Relaxed)
+                >= self.total_bytes_per_refill.load(Ordering::Relaxed)
         }
     }
 }
@@ -448,8 +452,17 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
 
+    fn approximate_eq(left: f64, right: f64) {
+        assert!(left > right * 0.9);
+        assert!(left < right * 1.1);
+    }
+
+    fn approximate_eq_2(left: f64, right: f64, margin: f64) {
+        assert!(left > right * (1.0 - margin));
+        assert!(left < right * (1.0 + margin));
+    }
+
     #[test]
-    #[ignore]
     fn test_basic_rate_limit() {
         let refills_in_one_sec = 10;
         let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
@@ -482,7 +495,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_dynamic_relax_limit() {
         let refills_in_one_sec = 10;
         let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
@@ -511,8 +523,10 @@ mod tests {
         t1.join().unwrap();
         t2.join().unwrap();
         let end = Instant::now();
-        assert!(end.duration_since(begin).as_secs_f64() > refill_period.as_secs_f64() * 0.9);
-        assert!(end.duration_since(begin).as_secs_f64() < refill_period.as_secs_f64() * 1.1 * 1.1);
+        approximate_eq(
+            end.duration_since(begin).as_secs_f64(),
+            refill_period.as_secs_f64() * 1.1,
+        );
     }
 
     struct BackgroundContext {
@@ -563,7 +577,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_rate_limited_heavy_flow() {
         let bytes_per_sec = 10000;
         let mut limiter = RawIORateLimiter::new(DEFAULT_REFILL_PERIOD, bytes_per_sec);
@@ -589,18 +602,13 @@ mod tests {
             let end = Instant::now();
             end.duration_since(begin)
         };
-        assert!(
-            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes)
-                <= (bytes_per_sec as f64 * duration.as_secs_f64() * 1.1) as usize
-        );
-        assert!(
-            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes)
-                >= (bytes_per_sec as f64 * duration.as_secs_f64() * 0.9) as usize
+        approximate_eq(
+            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) as f64,
+            bytes_per_sec as f64 * duration.as_secs_f64(),
         );
     }
 
     #[test]
-    #[ignore]
     fn test_rate_limited_light_flow() {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
@@ -628,29 +636,21 @@ mod tests {
             let end = Instant::now();
             end.duration_since(begin)
         };
-        assert!(
-            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes)
-                <= (kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0) as usize
-        );
-        assert!(
-            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes)
-                >= (actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0 * 0.9) as usize
+        approximate_eq(
+            stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) as f64,
+            actual_kbytes_per_sec as f64 * duration.as_secs_f64() * 1000.0,
         );
     }
 
     #[test]
-    #[ignore]
     fn test_rate_limited_hybrid_flow() {
         let bytes_per_sec = 100000;
-        let (write_percent, write_pressure) = (30, 30);
-        let (import_percent, import_pressure) = (30, 10);
-        let (flush_percent, flush_perssure) = (20, 50);
-        let (compaction_percent, compaction_pressure) = (20, 50);
+        let write_work = 60;
+        let (import_weight, import_work) = (30, 50);
+        let (flush_weight, flush_work) = (10, 50);
         let mut limiter = RawIORateLimiter::new(DEFAULT_REFILL_PERIOD, bytes_per_sec);
-        // limiter.set_percentage(IOType::ForegroundWrite, write_percent);
-        // limiter.set_percentage(IOType::Import, import_percent);
-        // limiter.set_percentage(IOType::Flush, flush_percent);
-        // limiter.set_percentage(IOType::Compaction, compaction_percent);
+        limiter.set_backpressure_weight(IOType::Import, import_weight);
+        limiter.set_backpressure_weight(IOType::Flush, flush_weight);
         let raw_stats = limiter.finalize();
         let limiter = Arc::new(limiter);
         let stats = IOStats {
@@ -667,35 +667,20 @@ mod tests {
                     2, /*job_count*/
                     Request(
                         IOType::ForegroundWrite,
-                        write_pressure * bytes_per_sec / 100 / 1000 / 2,
+                        write_work * bytes_per_sec / 100 / 1000 / 2,
                     ),
                     Some(Duration::from_millis(1)),
                 );
                 let _import = start_background_jobs(
                     limiter.clone(),
                     2, /*job_count*/
-                    Request(
-                        IOType::Import,
-                        import_pressure * bytes_per_sec / 100 / 1000 / 2,
-                    ),
+                    Request(IOType::Import, import_work * bytes_per_sec / 100 / 1000 / 2),
                     Some(Duration::from_millis(1)),
                 );
                 let _flush = start_background_jobs(
                     limiter.clone(),
                     2, /*job_count*/
-                    Request(
-                        IOType::Flush,
-                        flush_perssure * bytes_per_sec / 100 / 1000 / 2,
-                    ),
-                    Some(Duration::from_millis(1)),
-                );
-                let _compaction = start_background_jobs(
-                    limiter.clone(),
-                    2, /*job_count*/
-                    Request(
-                        IOType::Compaction,
-                        compaction_pressure * bytes_per_sec / 100 / 1000 / 2,
-                    ),
+                    Request(IOType::Flush, flush_work * bytes_per_sec / 100 / 1000 / 2),
                     Some(Duration::from_millis(1)),
                 );
                 std::thread::sleep(Duration::from_secs(2));
@@ -704,21 +689,27 @@ mod tests {
             end.duration_since(begin)
         };
         let write_bytes = stats.fetch(IOType::ForegroundWrite, IOOp::Write, IOMeasure::Bytes);
+        approximate_eq(
+            write_bytes as f64,
+            (write_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
+        );
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write, IOMeasure::Bytes);
         let flush_bytes = stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes);
-        let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes);
-        let total_bytes = write_bytes + import_bytes + flush_bytes + compaction_bytes;
-        assert!(
-            write_bytes
-                > ((write_pressure * bytes_per_sec / 100) as f64 * duration.as_secs_f64() * 0.9)
-                    as usize
+        let total_bytes = write_bytes + import_bytes + flush_bytes;
+        approximate_eq(
+            total_bytes as f64,
+            bytes_per_sec as f64 * duration.as_secs_f64(),
         );
-        assert!(
-            import_bytes
-                > ((import_pressure * bytes_per_sec / 100) as f64 * duration.as_secs_f64() * 0.9)
-                    as usize
+        let unfulfiled_import = 1.0
+            - import_bytes as f64
+                / ((import_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64());
+        let unfulfiled_flush = 1.0
+            - flush_bytes as f64
+                / ((flush_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64());
+        approximate_eq_2(
+            unfulfiled_import * flush_weight as f64,
+            unfulfiled_flush * import_weight as f64,
+            0.2,
         );
-        assert!(total_bytes > (bytes_per_sec as f64 * duration.as_secs_f64() * 0.9) as usize);
-        assert!(total_bytes < (bytes_per_sec as f64 * duration.as_secs_f64() * 1.1) as usize);
     }
 }
