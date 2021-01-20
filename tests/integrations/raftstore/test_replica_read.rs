@@ -398,6 +398,8 @@ fn test_read_local_after_snapshpot_replace_peer() {
     // send read request to peer 3, so the local reader will cache the `ReadDelegate` of peer 3
     // it is okey only send one request because the read pool thread count is 1
     let r = cluster.get_region(b"k1");
+    // wait applying snapshot finish
+    sleep_ms(100);
     let resp = async_read_on_peer(&mut cluster, new_peer(3, 3), r, b"k1", true, true);
     let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
