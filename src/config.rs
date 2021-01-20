@@ -3633,8 +3633,8 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TiKvConfig::default();
-        cfg.raft_store.region_split_check_diff = ReadableSize::mb(20);
+        cfg.raft_store.region_split_check_diff.0 += ReadableSize::mb(1).0;
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.raft_store.region_split_check_diff, ReadableSize::mb(20));
+        assert_eq!(cfg.raft_store.region_split_check_diff, ReadableSize::mb(7));
     }
 }
