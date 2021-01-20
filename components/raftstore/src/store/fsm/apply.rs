@@ -1705,29 +1705,27 @@ where
                         self.stopped = true;
                         self.pending_remove = true;
                     }
+                } else if store_is_removed_by_unsafe_recover(peer.get_store_id()) {
+                    warn!(
+                        "skip to remove peer removed by unsafe recover but increase conf_ver";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
                 } else {
-                    if store_is_removed_by_unsafe_recover(peer.get_store_id()) {
-                        warn!(
-                            "skip to remove peer removed by unsafe recover but increase conf_ver";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                    } else {
-                        error!(
-                            "remove missing peer";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "remove missing peer {:?} from region {:?}",
-                            peer,
-                            self.region
-                        ));
-                    }
+                    error!(
+                        "remove missing peer";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
+                    );
+                    return Err(box_err!(
+                        "remove missing peer {:?} from region {:?}",
+                        peer,
+                        self.region
+                    ));
                 }
 
                 PEER_ADMIN_CMD_COUNTER_VEC
