@@ -401,7 +401,12 @@ impl AutoSplitController {
     pub fn clear(&mut self) {
         let interval = Duration::from_secs(self.cfg.detect_times * 2);
         self.recorders
-            .retain(|_, recorder| recorder.create_time.elapsed().unwrap() < interval);
+            .retain(|_, recorder| {
+                match recorder.create_time.elapsed() {
+                    Ok(life_time) => life_time < interval,
+                    Err(_) => true,
+                }
+            });
     }
 
     pub fn refresh_cfg(&mut self) {
