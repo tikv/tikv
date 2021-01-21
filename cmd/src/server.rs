@@ -432,11 +432,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.storage.data_dir,
             cmp::min(
                 ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                ),
+                if self.config.storage.reserve_space.0 == 0 {
+                    0
+                } else {
+                    // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                    cmp::max(
+                        (capacity as f64 * 0.05) as u64,
+                        self.config.storage.reserve_space.0,
+                    )
+                },
             ),
         )
         .unwrap();
