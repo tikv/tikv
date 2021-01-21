@@ -343,7 +343,7 @@ pub async fn validate_endpoints(
     security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());    
+    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
     let mut members = None;
     let mut cluster_id = None;
     for ep in &cfg.endpoints {
@@ -427,13 +427,10 @@ pub async fn try_connect_leader(
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
-    let mut shuffule_members: Vec<kvproto::pdpb::Member> = Vec::new();
-    for m in members {
-        shuffule_members.push(m.clone());
-    }
-    shuffule_members.shuffle(&mut thread_rng());
+    let mut shuffle_members: Vec<_> = members.iter().cloned().collect();
+    shuffle_members.shuffle(&mut thread_rng());
     // Try to connect to other members, then the previous leader.
-    'outer: for m in shuffule_members
+    'outer: for m in shuffle_members
         .iter()
         .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
