@@ -108,20 +108,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
             security_mgr,
         }
     }
-<<<<<<< HEAD
-
-    fn send_fail_status<M>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<M>,
-        err: Error,
-        code: RpcStatusCode,
-    ) {
-        let status = RpcStatus::new(code, Some(format!("{}", err)));
-        ctx.spawn(sink.fail(status).map_err(|_| ()));
-    }
-=======
->>>>>>> 45972a529... change error for split_region and read_index (#8765)
 }
 
 macro_rules! handle_request {
@@ -670,23 +656,11 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             source: ctx.peer().into(),
         };
 
-<<<<<<< HEAD
         if let Err(e) = self.ch.casual_send(region_id, req) {
-            self.send_fail_status(ctx, sink, Error::from(e), RpcStatusCode::RESOURCE_EXHAUSTED);
-=======
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
             // Retrun region error instead a gRPC error.
             let mut resp = SplitRegionResponse::default();
             resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
->>>>>>> 45972a529... change error for split_region and read_index (#8765)
+            ctx.spawn(sink.success(resp).map_err(|_| ()).map(|_| ()));
             return;
         }
 
@@ -761,23 +735,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
 
         let (cb, future) = paired_future_callback();
 
-<<<<<<< HEAD
-=======
         // We must deal with all requests which acquire read-quorum in raftstore-thread,
         // so just send it as an command.
->>>>>>> 45972a529... change error for split_region and read_index (#8765)
         if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
             resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
+            ctx.spawn(sink.success(resp).map_err(|_| ()).map(|_| ()));
             return;
         }
 
