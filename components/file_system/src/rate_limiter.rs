@@ -2,6 +2,7 @@
 
 use super::{IOOp, IOType};
 
+use crossbeam_utils::CachePadded;
 use std::future::{self, Future};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -12,8 +13,8 @@ use std::sync::{
 /// Used for testing and metrics.
 #[derive(Debug)]
 pub struct BytesRecorder {
-    read: [AtomicUsize; IOType::VARIANT_COUNT],
-    write: [AtomicUsize; IOType::VARIANT_COUNT],
+    read: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    write: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
 }
 
 impl BytesRecorder {
