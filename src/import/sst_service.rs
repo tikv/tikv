@@ -322,6 +322,7 @@ where
                     resp.set_error(header.take_error());
                     return Ok(resp);
                 }
+                cmd.mut_header().set_term(header.get_current_term());
                 // Here we shall check whether the file has been ingested before. This operation
                 // must execute after geting a snapshot from raftstore to make sure that the
                 // current leader has applied to current term.
