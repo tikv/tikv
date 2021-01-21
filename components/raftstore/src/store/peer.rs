@@ -1687,8 +1687,12 @@ where
         if apply_snap_result.is_some() {
             self.activate(ctx);
             let mut meta = ctx.store_meta.lock().unwrap();
-            meta.readers
-                .insert(self.region_id, ReadDelegate::from_peer(self));
+            if let Some(reader) = meta
+                .readers
+                .insert(self.region_id, ReadDelegate::from_peer(self))
+            {
+                reader.mark_invalid();
+            }
             if let Some(rp) = meta.region_read_progress.get(&self.region_id) {
                 rp.update_applied(self.get_store().applied_index());
             }

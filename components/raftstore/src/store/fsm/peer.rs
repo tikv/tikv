@@ -2247,8 +2247,12 @@ where
 
             new_peer.peer.activate(self.ctx);
             meta.regions.insert(new_region_id, new_region.clone());
-            meta.readers
-                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+            if let Some(reader) = meta
+                .readers
+                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()))
+            {
+                reader.mark_invalid();
+            }
             meta.region_read_progress
                 .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {
