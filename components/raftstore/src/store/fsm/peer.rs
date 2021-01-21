@@ -1892,9 +1892,7 @@ where
             .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Destroy read delegates.
-        if let Some(reader) = meta.readers.remove(&region_id) {
-            reader.mark_invalid();
-        }
+        meta.readers.remove(&region_id);
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
@@ -2774,8 +2772,7 @@ where
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        let reader = meta.readers.remove(&source.get_id()).unwrap();
-        reader.mark_invalid();
+        meta.readers.remove(&source.get_id());
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -2992,8 +2989,7 @@ where
             let prev = meta.region_ranges.remove(&enc_end_key(&r));
             assert_eq!(prev, Some(r.get_id()));
             assert!(meta.regions.remove(&r.get_id()).is_some());
-            let reader = meta.readers.remove(&r.get_id()).unwrap();
-            reader.mark_invalid();
+            meta.readers.remove(&r.get_id());
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
         // which are added before applying snapshot
