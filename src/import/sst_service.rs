@@ -291,25 +291,6 @@ where
         cmd.set_requests(vec![req].into());
         let (cb, future) = paired_future_callback();
 
-        if let Err(e) = self.router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
-            let e = handle_send_error(region_id, e);
-            resp.set_error(e.into());
-            ctx.spawn(
-                sink.success(resp)
-                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
-            );
-            return;
-        }
-
-        // Make ingest command.
-        let mut ingest = Request::default();
-        ingest.set_cmd_type(CmdType::IngestSst);
-        ingest.mut_ingest_sst().set_sst(meta.clone());
-
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.mut_requests().push(ingest);
-
         let router = self.router.clone();
         let task_slots = self.task_slots.clone();
         let importer = self.importer.clone();
@@ -317,10 +298,25 @@ where
         let handle_task = async move {
             let m = meta.clone();
             let res = async move {
+                let mut resp = IngestResponse::default();
+                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
+                    let e = handle_send_error(region_id, e);
+                    resp.set_error(e.into());
+                    return Ok(resp);
+                }
+
+                // Make ingest command.
+                let mut ingest = Request::default();
+                ingest.set_cmd_type(CmdType::IngestSst);
+                ingest.mut_ingest_sst().set_sst(m.clone());
+
+                let mut cmd = RaftCmdRequest::default();
+                cmd.set_header(header);
+                cmd.mut_requests().push(ingest);
+
                 let mut res = future.await.map_err(Error::from)?;
                 fail_point!("import::sst_service::ingest");
                 let mut header = res.response.take_header();
-                let mut resp = IngestResponse::default();
                 if header.has_error() {
                     pb_error_inc(label, header.get_error());
                     resp.set_error(header.take_error());
