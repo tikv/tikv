@@ -209,6 +209,15 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
+## Reserve some space to ensure recovering the store from `no space left` must success. The
+## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## `max(reserve-space, capacity * 5%)` will be reserved exactly.
+##
+## Set it to 0 will cause no space is reserved at all.
+##
+## Generally it's not necessary to change it. This configuration could be deprecated in future.
+# reserve-space = "5GB"
+
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
 ##
@@ -623,6 +632,8 @@
 # target-file-size-base = "8MB"
 
 ## Max bytes for `compaction.max_compaction_bytes`.
+## If it's necessary to enlarge value of this entry, it's better to also enlarge `reserve-space`
+## in `storage` to ensure that a restarted TiKV instance can perform compactions successfully.
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.

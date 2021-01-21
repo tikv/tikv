@@ -18,7 +18,8 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::PerfContext;
+use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -56,10 +57,10 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
-    KeysInfoFormatter, PerfContextStatistics, ADMIN_CMD_EPOCH_MAP,
+    KeysInfoFormatter, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{observe_perf_context_type, report_perf_context, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
@@ -349,7 +350,7 @@ where
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-    perf_context_statistics: PerfContextStatistics,
+    perf_context: EK::PerfContext,
 
     yield_duration: Duration,
 
@@ -394,7 +395,7 @@ where
             host,
             importer,
             region_scheduler,
-            engine,
+            engine: engine.clone(),
             router,
             notifier,
             kv_wb,
@@ -407,7 +408,7 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
             store_id,
@@ -469,10 +470,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            report_perf_context!(
-                self.perf_context_statistics,
-                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            );
+            self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -3466,7 +3464,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.perf_context_statistics.start();
+        self.apply_ctx.perf_context.start_observe();
     }
 
     /// There is no control fsm in apply poller.
