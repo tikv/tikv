@@ -30,6 +30,9 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+
 use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
@@ -340,8 +343,7 @@ pub async fn validate_endpoints(
     security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
-
+    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());    
     let mut members = None;
     let mut cluster_id = None;
     for ep in &cfg.endpoints {
@@ -425,8 +427,13 @@ pub async fn try_connect_leader(
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
+    let mut shuffule_members: Vec<kvproto::pdpb::Member> = Vec::new();
+    for m in members {
+        shuffule_members.push(m.clone());
+    }
+    shuffule_members.shuffle(&mut thread_rng());
     // Try to connect to other members, then the previous leader.
-    'outer: for m in members
+    'outer: for m in shuffule_members
         .iter()
         .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
