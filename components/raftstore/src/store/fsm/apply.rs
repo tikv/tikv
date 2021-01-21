@@ -1312,9 +1312,11 @@ where
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
