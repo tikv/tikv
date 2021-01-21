@@ -218,6 +218,30 @@ fn test_validate_endpoints() {
     assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
 }
 
+#[test]
+fn test_validate_endpoints_shuffle_retry() {
+    let eps_count = 3;
+    let server = MockServer::with_case(eps_count, Arc::new(Split::new()));
+    let env = Arc::new(
+        EnvBuilder::new()
+            .cq_count(1)
+            .name_prefix(thd_name!("test-pd"))
+            .build(),
+    );
+    let eps = server.bind_addrs();
+    let mut copy_eps = eps.clone();
+    let mut mock_port = 0;
+    for ep in eps {
+        if ep.1 > mock_port {
+            mock_port = ep.1;
+        }
+    }
+    copy_eps.insert(0, ("127.0.0.1".to_string(), mock_port + 100));
+    copy_eps.pop();
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    assert!(block_on(validate_endpoints(env, &new_config(copy_eps), mgr)).is_err());
+}
+
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
