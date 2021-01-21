@@ -473,6 +473,10 @@ impl DataKeyManager {
             // Encryption is being enabled.
             (Ok(None), _) => {
                 info!("encryption is being enabled. method = {:?}", args.method);
+                // If `master_key` doesn't work correctly, dict files will not be created.
+                let plaintext_temp = "";
+                let _ = master_key.encrypt(plaintext_temp.as_bytes())?;
+
                 Ok(LoadDicts::Loaded(Dicts::new(
                     &args.dict_path,
                     args.rotation_period,
