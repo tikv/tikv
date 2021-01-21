@@ -43,7 +43,7 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOStats, IOType};
+    use file_system::{set_io_rate_limiter, IOMeasure, IOOp, IORateLimiter, IOStats, IOType};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
@@ -51,8 +51,10 @@ mod tests {
     use tempfile::Builder;
 
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IOStats>) {
-        let recorder = Arc::new(IOStats::new());
-        set_io_rate_limiter(Some(Arc::new(IORateLimiter::new(Some(recorder.clone())))));
+        let limiter = Arc::new(IORateLimiter::new());
+        limiter.enable_statistics(true);
+        let stats = limiter.statistics();
+        set_io_rate_limiter(Some(limiter));
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
         let env = get_env(Some(Arc::new(EngineFileSystemInspector::new())), None).unwrap();
@@ -63,7 +65,7 @@ mod tests {
         let db = Arc::new(
             new_engine_opt(dir, db_opts, vec![CFOptions::new(CF_DEFAULT, cf_opts)]).unwrap(),
         );
-        (db, recorder)
+        (db, stats)
     }
 
     #[test]
@@ -74,21 +76,26 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let (db, recorder) = new_test_db(temp_dir.path().to_str().unwrap());
+        let (db, stats) = new_test_db(temp_dir.path().to_str().unwrap());
         let value = vec![b'v'; value_size];
 
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        assert!(recorder.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(recorder.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
-        recorder.reset();
+        let flush_bytes = stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes);
+        assert!(flush_bytes > value_size * 2);
+        assert!(flush_bytes < value_size * 3);
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        assert!(recorder.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(recorder.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
-        recorder.reset();
+        assert!(
+            stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) - flush_bytes
+                > value_size * 2
+        );
+        assert!(
+            stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) - flush_bytes
+                < value_size * 3
+        );
         db.c()
             .compact_range(
                 CF_DEFAULT, None,  /*start_key*/
@@ -97,9 +104,9 @@ mod tests {
                 1,     /*max_subcompactions*/
             )
             .unwrap();
-        assert!(recorder.fetch(IOType::Compaction, IOOp::Read) > value_size * 4);
-        assert!(recorder.fetch(IOType::Compaction, IOOp::Read) < value_size * 5);
-        assert!(recorder.fetch(IOType::Compaction, IOOp::Write) > value_size * 3);
-        assert!(recorder.fetch(IOType::Compaction, IOOp::Write) < value_size * 4);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Read, IOMeasure::Bytes) > value_size * 4);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Read, IOMeasure::Bytes) < value_size * 5);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) > value_size * 3);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) < value_size * 4);
     }
 }

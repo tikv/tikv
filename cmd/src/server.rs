@@ -27,10 +27,7 @@ use engine_traits::{
     compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines,
     MetricsTask as EngineMetricsTask, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
-use file_system::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
-use file_system::{
-    set_io_rate_limiter, BytesFetcher, IORateLimiter, IOStats, MetricsTask as IOMetricsTask,
-};
+use file_system::{BytesFetcher, IORateLimiter, MetricsTask as IOMetricsTask};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -109,16 +106,8 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
-            let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
-            let fetcher = if enable_io_snoop && tikv.init_io_snooper() {
-                tikv.init_io_rate_limit(None);
-                BytesFetcher::ByIOSnooper()
-            } else {
-                let recorder = Arc::new(IOStats::new());
-                tikv.init_io_rate_limit(Some(recorder.clone()));
-                BytesFetcher::ByRateLimiter(recorder)
-            };
+            let fetcher = tikv.init_io_utils();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -842,20 +831,25 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         self.to_stop.push(metrics_flusher);
     }
 
-    fn init_io_snooper(&mut self) -> bool {
-        if let Err(e) = file_system::init_io_snooper() {
-            error!(%e; "failed to init io snooper");
-            false
-        } else {
-            info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
-            true
-        }
-    }
-
-    fn init_io_rate_limit(&mut self, recorder: Option<Arc<IOStats>>) {
-        let limiter = Arc::new(IORateLimiter::new(recorder));
+    fn init_io_utils(&mut self) -> BytesFetcher {
+        let limiter = Arc::new(IORateLimiter::new());
         self.config.storage.io_rate_limit.apply(&limiter);
-        set_io_rate_limiter(Some(limiter));
+        file_system::set_io_rate_limiter(Some(limiter.clone()));
+        let io_snooper_on = self.config.enable_io_snoop
+            && if let Err(e) = file_system::init_io_snooper() {
+                error!(%e; "failed to init io snooper");
+                false
+            } else {
+                info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
+                true
+            };
+        if io_snooper_on {
+            limiter.enable_statistics(false);
+            BytesFetcher::ByIOSnooper()
+        } else {
+            limiter.enable_statistics(true);
+            BytesFetcher::ByRateLimiter(limiter.statistics())
+        }
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {

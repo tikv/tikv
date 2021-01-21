@@ -108,6 +108,13 @@ pub enum IOMeasure {
     Iops,
 }
 
+#[derive(Debug, Clone, Copy, VariantCount)]
+pub enum IOPriority {
+    Low = 0,
+    Medium = 1,
+    High = 2,
+}
+
 /// Indicates how large a buffer to pre-allocate before reading the entire file.
 fn initial_buffer_size(file: &File) -> io::Result<usize> {
     // Allocate one extra byte so the buffer doesn't need to grow before the
