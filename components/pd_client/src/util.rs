@@ -427,7 +427,7 @@ pub async fn try_connect_leader(
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
-    let mut shuffle_members: Vec<_> = members.iter().cloned().collect();
+    let mut shuffle_members: Vec<_> = members.to_vec();
     shuffle_members.shuffle(&mut thread_rng());
     // Try to connect to other members, then the previous leader.
     'outer: for m in shuffle_members
