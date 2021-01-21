@@ -133,10 +133,16 @@ impl PessimisticLockRes {
         }
     }
 
-    pub fn into_vec(self) -> Vec<Value> {
+    pub fn into_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
         match self {
-            PessimisticLockRes::Values(v) => v.into_iter().map(Option::unwrap_or_default).collect(),
-            PessimisticLockRes::Empty => vec![],
+            PessimisticLockRes::Values(vals) => vals
+                .into_iter()
+                .map(|v| {
+                    let is_not_found = v.is_none();
+                    (v.unwrap_or_default(), is_not_found)
+                })
+                .unzip(),
+            PessimisticLockRes::Empty => (vec![], vec![]),
         }
     }
 }
