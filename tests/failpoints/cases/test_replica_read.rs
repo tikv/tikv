@@ -1,9 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine_rocks::raw::DB;
-use engine_rocks::Compat;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_rocks::{raw::DB, Compat, RocksEngine};
+use engine_traits::{Peekable, RaftEngine, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
@@ -491,4 +490,80 @@ fn test_replica_read_after_transfer_leader() {
     let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
+}
+
+/// Test if the read index request can get a correct response when the commit index of leader
+/// if not up-to-date after transferring leader.
+#[test]
+fn test_read_index_after_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    assert_eq!(r, 1);
+
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_add_peer(1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Delay the response raft messages to peer 2.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let response_recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .msg_type(MessageType::MsgAppendResponse)
+            .msg_type(MessageType::MsgHeartbeatResponse),
+    );
+    cluster.sim.wl().add_recv_filter(2, response_recv_filter_2);
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    // Pause before collecting message to make the these message be handled in one loop
+    let on_peer_collect_message_2 = "on_peer_collect_message_2";
+    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+
+    let mut resps = Vec::with_capacity(2);
+    for _ in 0..2 {
+        let epoch = cluster.get_region(b"k1").take_region_epoch();
+        let mut req = new_request(1, epoch, vec![new_read_index_cmd()], true);
+        req.mut_header().set_peer(new_peer(2, 2));
+
+        let (cb, rx) = make_cb(&req);
+        cluster.sim.rl().async_command_on_node(2, req, cb).unwrap();
+        resps.push(rx);
+    }
+
+    fail::remove(on_peer_collect_message_2);
+
+    let resps = resps
+        .into_iter()
+        .map(|x| x.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect::<Vec<_>>();
+
+    // `term` in the header is `current_term`, not term of the entry at `read_index`.
+    let term = resps[0].get_header().get_current_term();
+    assert_eq!(term, resps[1].get_header().get_current_term());
+    assert_eq!(term, pd_client.get_region_last_report_term(1).unwrap());
+
+    for i in 0..2 {
+        let index = resps[i].responses[0].get_read_index().read_index;
+        let engine = RocksEngine::from_db(cluster.get_raft_engine(2));
+        let entry = engine.get_entry(1, index).unwrap().unwrap();
+        // According to Raft, a peer shouldn't be able to perform read index until it commits
+        // to the current term. So term of `read_index` must equal to the current one.
+        assert_eq!(entry.get_term(), term);
+    }
 }

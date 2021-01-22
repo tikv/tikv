@@ -1946,10 +1946,15 @@ where
                 continue;
             }
             if !replica_read {
-                if read_index.is_none() {
+                match read_index {
+                    // `read_index` could be less than `read.read_index` because the former is
+                    // filled with `committed index` when proposed, and the latter is filled after
+                    // a read-index procedure finished.
+                    Some(i) if i < read.read_index.unwrap() => read_index = read.read_index,
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
                     // Starting from the second, all the following ones' read_index is not none.
-                    read_index = read.read_index;
+                    None => read_index = read.read_index,
+                    _ => {}
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
