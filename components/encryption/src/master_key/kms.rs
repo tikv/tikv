@@ -147,7 +147,7 @@ impl KmsProvider for AwsKms {
         Ok(decrypt_response.plaintext.unwrap().as_ref().to_vec())
     }
 
-    fn generate_data_key(&mut self, runtime: &mut Runtime) -> Result<DataKeyPair> {
+    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<DataKeyPair> {
         let generate_request = GenerateDataKeyRequest {
             encryption_context: None,
             grant_tokens: None,
@@ -287,8 +287,7 @@ impl KmsBackend {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
             let mut runtime = self.runtime.lock().unwrap();
-            let data_key = self.kms_provider.
-          (&mut runtime)?;
+            let data_key = self.kms_provider.generate_data_key(&mut runtime)?;
             *opt_state = Some(State::new_from_datakey(data_key)?);
         }
         let state = opt_state.as_ref().unwrap();
