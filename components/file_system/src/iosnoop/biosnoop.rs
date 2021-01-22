@@ -149,7 +149,8 @@ pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
-            let mut io_type_buf = std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+            let mut io_type_buf =
+                std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
             if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
                 let (chunks, _) = e.as_slice().as_chunks();
                 assert!(chunks.len() == 2);

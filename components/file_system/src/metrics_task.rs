@@ -6,23 +6,25 @@ use tikv_util::IntervalRunnable;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
-use crate::BytesRecorder;
 use crate::IOBytes;
+use crate::IORateLimiterStatistics;
 use crate::{IOOp, IOType};
 
 pub enum BytesFetcher {
-    ByRateLimiter(Arc<BytesRecorder>),
-    ByIOSnooper(),
+    /// Fetch IO statistics from IO rate limiter, which records passed-through IOs in atomic counters.
+    FromRateLimiter(Arc<IORateLimiterStatistics>),
+    /// Fetch IO statistics from bcc snooper, which traces IO requests spawned by current process.
+    FromIOSnooper(),
 }
 
 impl BytesFetcher {
     fn fetch(&self, io_type: IOType) -> IOBytes {
         match *self {
-            BytesFetcher::ByRateLimiter(ref recorder) => IOBytes {
-                read: recorder.fetch(io_type, IOOp::Read) as i64,
-                write: recorder.fetch(io_type, IOOp::Write) as i64,
+            BytesFetcher::FromRateLimiter(ref stats) => IOBytes {
+                read: stats.fetch(io_type, IOOp::Read) as i64,
+                write: stats.fetch(io_type, IOOp::Write) as i64,
             },
-            BytesFetcher::ByIOSnooper() => fetch_io_bytes(io_type),
+            BytesFetcher::FromIOSnooper() => fetch_io_bytes(io_type),
         }
     }
 }

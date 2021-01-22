@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(slice_as_chunks)]
+// #![feature(slice_as_chunks)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -18,7 +18,9 @@ mod rate_limiter;
 pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_task::{BytesFetcher, MetricsTask};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
+};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,

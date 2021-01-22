@@ -12,14 +12,14 @@ use std::sync::{
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
 #[derive(Debug)]
-pub struct BytesRecorder {
+pub struct IORateLimiterStatistics {
     read: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
     write: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
 }
 
-impl BytesRecorder {
+impl IORateLimiterStatistics {
     pub fn new() -> Self {
-        BytesRecorder {
+        IORateLimiterStatistics {
             read: Default::default(),
             write: Default::default(),
         }
@@ -59,15 +59,21 @@ impl BytesRecorder {
 #[derive(Debug)]
 pub struct IORateLimiter {
     refill_bytes: usize,
-    recorder: Option<Arc<BytesRecorder>>,
+    enable_statistics: bool,
+    stats: Arc<IORateLimiterStatistics>,
 }
 
 impl IORateLimiter {
-    pub fn new(refill_bytes: usize, recorder: Option<Arc<BytesRecorder>>) -> IORateLimiter {
+    pub fn new(refill_bytes: usize, enable_statistics: bool) -> IORateLimiter {
         IORateLimiter {
             refill_bytes,
-            recorder,
+            enable_statistics,
+            stats: Arc::new(IORateLimiterStatistics::new()),
         }
+    }
+
+    pub fn statistics(&self) -> Arc<IORateLimiterStatistics> {
+        self.stats.clone()
     }
 
     /// Request for token for bytes and potentially update statistics. If this
@@ -79,8 +85,8 @@ impl IORateLimiter {
         } else {
             bytes
         };
-        if let Some(recorder) = &self.recorder {
-            recorder.add(io_type, io_op, bytes);
+        if self.enable_statistics {
+            self.stats.add(io_type, io_op, bytes);
         }
         bytes
     }
