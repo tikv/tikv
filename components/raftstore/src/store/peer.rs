@@ -902,12 +902,25 @@ where
             // Checking term to make sure campaign has finished and the leader starts
             // doing its job, it's not required but a safe options.
             state != GroupState::Chaos
-                && self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.has_valid_leader()
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
                 && !self.has_unresolved_reads()
                 // If it becomes leader, the stats is not valid anymore.
                 && !self.is_leader()
         }
+    }
+
+    #[inline]
+    pub fn has_valid_leader(&self) -> bool {
+        if self.raft_group.raft.leader_id == raft::INVALID_ID {
+            return false;
+        }
+        for p in self.region().get_peers() {
+            if p.get_id() == self.raft_group.raft.leader_id && p.get_role() != PeerRole::Learner {
+                return true;
+            }
+        }
+        false
     }
 
     /// Pings if followers are still connected.
@@ -1114,7 +1127,27 @@ where
             return Ok(());
         }
 
+        let from_id = m.get_from();
+        let has_snap_task = self.get_store().has_gen_snap_task();
         self.raft_group.step(m)?;
+
+        let mut for_balance = false;
+        if !has_snap_task && self.get_store().has_gen_snap_task() {
+            if let Some(progress) = self.raft_group.status().progress {
+                if let Some(pr) = progress.get(from_id) {
+                    // When a peer is uninitialized (e.g. created by load balance),
+                    // the last index of the peer is 0 which makes the matched index to be 0.
+                    if pr.matched == 0 {
+                        for_balance = true;
+                    }
+                }
+            }
+        }
+        if for_balance {
+            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
+                gen_task.set_for_balance();
+            }
+        }
         Ok(())
     }
 

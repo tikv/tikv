@@ -11,13 +11,14 @@ use external_storage::ExternalStorage;
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
+use kvproto::metapb::Region;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err, time::Limiter};
 use txn_types::KvPair;
 
 use crate::metrics::*;
-use crate::{Error, Result};
+use crate::{backup_file_name, Error, Result};
 
 struct Writer {
     writer: RocksSstWriter,
@@ -111,12 +112,59 @@ impl Writer {
     }
 }
 
+pub struct BackupWriterBuilder {
+    store_id: u64,
+    limiter: Limiter,
+    region: Region,
+    db: Arc<DB>,
+    compression_type: Option<SstCompressionType>,
+    compression_level: i32,
+    sst_max_size: u64,
+}
+
+impl BackupWriterBuilder {
+    pub fn new(
+        store_id: u64,
+        limiter: Limiter,
+        region: Region,
+        db: Arc<DB>,
+        compression_type: Option<SstCompressionType>,
+        compression_level: i32,
+        sst_max_size: u64,
+    ) -> BackupWriterBuilder {
+        Self {
+            store_id,
+            limiter,
+            region,
+            db,
+            compression_type,
+            compression_level,
+            sst_max_size,
+        }
+    }
+
+    pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter> {
+        let key = file_system::sha256(&start_key).ok().map(hex::encode);
+        let store_id = self.store_id;
+        let name = backup_file_name(store_id, &self.region, key);
+        BackupWriter::new(
+            self.db.clone(),
+            &name,
+            self.compression_type,
+            self.compression_level,
+            self.limiter.clone(),
+            self.sst_max_size,
+        )
+    }
+}
+
 /// A writer writes txn entries into SST files.
 pub struct BackupWriter {
     name: String,
     default: Writer,
     write: Writer,
     limiter: Limiter,
+    sst_max_size: u64,
 }
 
 impl BackupWriter {
@@ -124,9 +172,10 @@ impl BackupWriter {
     pub fn new(
         db: Arc<DB>,
         name: &str,
-        limiter: Limiter,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
+        limiter: Limiter,
+        sst_max_size: u64,
     ) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
@@ -148,6 +197,7 @@ impl BackupWriter {
             default: Writer::new(default),
             write: Writer::new(write),
             limiter,
+            sst_max_size,
         })
     }
 
@@ -210,6 +260,14 @@ impl BackupWriter {
             .with_label_values(&["save"])
             .observe(start.elapsed().as_secs_f64());
         Ok(files)
+    }
+
+    pub fn need_split_keys(&self) -> bool {
+        self.default.total_bytes + self.write.total_bytes >= self.sst_max_size
+    }
+
+    pub fn need_flush_keys(&self) -> bool {
+        self.default.total_bytes + self.write.total_bytes > 0
     }
 }
 
@@ -291,6 +349,7 @@ impl BackupRawKVWriter {
 mod tests {
     use super::*;
     use engine_traits::Iterable;
+    use raftstore::store::util::new_peer;
     use std::collections::BTreeMap;
     use std::f64::INFINITY;
     use std::path::Path;
@@ -352,14 +411,31 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-        let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo", Limiter::new(INFINITY), None, 0).unwrap();
+        let mut r = kvproto::metapb::Region::default();
+        r.set_id(1);
+        r.mut_peers().push(new_peer(1, 1));
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo1", Limiter::new(INFINITY), None, 0).unwrap();
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo1",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -385,8 +461,15 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer =
-            BackupWriter::new(db.get_sync_db(), "foo2", Limiter::new(INFINITY), None, 0).unwrap();
+        let mut writer = BackupWriter::new(
+            db.get_sync_db(),
+            "foo2",
+            None,
+            0,
+            Limiter::new(INFINITY),
+            144 * 1024 * 1024,
+        )
+        .unwrap();
         writer
             .write(
                 vec![

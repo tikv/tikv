@@ -14,7 +14,8 @@ mod iosnoop;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, IORateLimiter};
+pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
+pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -26,9 +27,9 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
+use variant_count::VariantCount;
 
 #[derive(Debug)]
 pub enum IOOp {
@@ -37,12 +38,15 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
 pub enum IOType {
     Other,
-    Read,
-    Write,
-    Coprocessor,
+    // Including coprocessor and storage read.
+    ForegroundRead,
+    // Including scheduler worker, raftstore and apply. Scheduler worker only
+    // does read related works, but it's on the path of foreground write, so
+    // account it as foreground-write instead of foreground-read.
+    ForegroundWrite,
     Flush,
     Compaction,
     Replication,
@@ -258,13 +262,33 @@ impl<R: Read> Read for Sha256Reader<R> {
     }
 }
 
+const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
+
+/// Create a file with hole, to reserve space for TiKV.
+pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
+    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
+    if file_exists(&path) {
+        if get_file_size(&path)? == file_size {
+            return Ok(());
+        }
+        delete_file_if_exist(&path)?;
+    }
+    if file_size > 0 {
+        let f = File::create(&path)?;
+        f.allocate(file_size)?;
+        f.sync_all()?;
+        sync_dir(data_dir)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use rand::distributions::Alphanumeric;
     use rand::{thread_rng, Rng};
     use std::io::Write;
     use std::iter;
-    use tempfile::TempDir;
+    use tempfile::{Builder, TempDir};
 
     use super::*;
 
@@ -405,5 +429,24 @@ mod tests {
             sha256_hasher.lock().unwrap().finish().unwrap().to_vec(),
             direct_sha256
         );
+    }
+
+    #[test]
+    fn test_reserve_space_for_recover() {
+        let tmp_dir = Builder::new()
+            .prefix("test_reserve_space_for_recover")
+            .tempdir()
+            .unwrap();
+        let data_path = tmp_dir.path();
+        let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
+        let file = file_path.as_path();
+        let reserve_size = 4096 * 4;
+        assert!(!file.exists());
+        reserve_space_for_recover(data_path, reserve_size).unwrap();
+        assert!(file.exists());
+        let meta = file.metadata().unwrap();
+        assert_eq!(meta.len(), reserve_size);
+        reserve_space_for_recover(data_path, 0).unwrap();
+        assert!(!file.exists());
     }
 }

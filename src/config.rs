@@ -2195,6 +2195,7 @@ mod readpool_tests {
 pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
+    pub sst_max_size: ReadableSize,
 }
 
 impl BackupConfig {
@@ -2211,11 +2212,13 @@ impl BackupConfig {
 
 impl Default for BackupConfig {
     fn default() -> Self {
+        let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
             batch_size: 8,
+            sst_max_size: default_coprocessor.region_max_size,
         }
     }
 }
@@ -2368,8 +2371,6 @@ impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
-
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
 
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
@@ -2573,6 +2574,19 @@ impl TiKvConfig {
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
+        }
+        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+            warn!(
+                "override backup.sst-max-size with min sst-max-size, {:?}",
+                default_coprocessor.region_max_size / 10
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
+        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            warn!(
+                "override backup.sst-max-size with max sst-max-size, {:?}",
+                default_coprocessor.region_max_size * 2
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -3614,5 +3628,17 @@ mod tests {
                 cf_opts.get_target_file_size_base()
             );
         }
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }

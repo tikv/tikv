@@ -51,8 +51,7 @@ use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
-    SplitCheckTask,
+    ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -1602,15 +1601,6 @@ where
             return Ok(Either::Right(vec![]));
         }
 
-        let before_check_snapshot_1_2 = || {
-            fail_point!(
-                "before_check_snapshot_1_2",
-                self.fsm.region_id() == 1 && self.fsm.peer_id() == 2,
-                |_| {}
-            );
-        };
-        before_check_snapshot_1_2();
-
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
         let key = SnapKey::from_region_snap(region_id, snap);
@@ -1620,6 +1610,26 @@ where
         let peer_id = msg.get_to_peer().get_id();
         let snap_enc_start_key = enc_start_key(&snap_region);
         let snap_enc_end_key = enc_end_key(&snap_region);
+
+        let before_check_snapshot_1_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1_2",
+                self.fsm.region_id() == 1 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        let before_check_snapshot_1000_2_fp = || -> bool {
+            fail_point!(
+                "before_check_snapshot_1000_2",
+                self.fsm.region_id() == 1000 && self.store_id() == 2,
+                |_| true
+            );
+            false
+        };
+        if before_check_snapshot_1_2_fp() || before_check_snapshot_1000_2_fp() {
+            return Ok(Either::Left(key));
+        }
 
         if snap_region
             .get_peers()
@@ -1884,9 +1894,7 @@ where
             .retain(|r| self.fsm.region_id() != r.get_id());
 
         // Destroy read delegates.
-        if let Some(reader) = meta.readers.remove(&region_id) {
-            reader.mark_invalid();
-        }
+        meta.readers.remove(&region_id);
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
@@ -2113,6 +2121,9 @@ where
                 // Don't ping to speed up leader election
                 need_ping = false;
             }
+        } else if !self.fsm.peer.has_valid_leader() {
+            self.fsm.hibernate_state.reset(GroupState::Chaos);
+            self.register_raft_base_tick();
         }
         if need_ping {
             // Speed up snapshot instead of waiting another heartbeat.
@@ -2212,23 +2223,22 @@ where
 
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{} original region should exists", self.fsm.peer.tag);
+            panic!("{} original region should exist", self.fsm.peer.tag);
         }
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
 
-            let not_exist = meta
-                .region_ranges
-                .insert(enc_end_key(&new_region), new_region_id)
-                .is_none();
-            assert!(not_exist, "[region {}] should not exists", new_region_id);
-
             if new_region_id == region_id {
+                let not_exist = meta
+                    .region_ranges
+                    .insert(enc_end_key(&new_region), new_region_id)
+                    .is_none();
+                assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
 
-            // Create new region
+            // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
                 if let Err(e) = self
@@ -2245,6 +2255,7 @@ where
                 continue;
             }
 
+            // Now all checking passed.
             {
                 let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
                 assert_eq!(
@@ -2316,6 +2327,11 @@ where
 
             new_peer.peer.activate(self.ctx);
             meta.regions.insert(new_region_id, new_region.clone());
+            let not_exist = meta
+                .region_ranges
+                .insert(enc_end_key(&new_region), new_region_id)
+                .is_none();
+            assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
@@ -2758,8 +2774,7 @@ where
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
-        let reader = meta.readers.remove(&source.get_id()).unwrap();
-        reader.mark_invalid();
+        meta.readers.remove(&source.get_id());
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after
@@ -2976,8 +2991,7 @@ where
             let prev = meta.region_ranges.remove(&enc_end_key(&r));
             assert_eq!(prev, Some(r.get_id()));
             assert!(meta.regions.remove(&r.get_id()).is_some());
-            let reader = meta.readers.remove(&r.get_id()).unwrap();
-            reader.mark_invalid();
+            meta.readers.remove(&r.get_id());
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`
         // which are added before applying snapshot
@@ -3853,20 +3867,6 @@ where
             self.fsm.peer.size_diff_hint += sst.get_length();
         }
         self.register_split_region_check_tick();
-
-        let task = CleanupSSTTask::DeleteSST { ssts };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSST(task))
-        {
-            error!(
-                "schedule to delete ssts";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.
