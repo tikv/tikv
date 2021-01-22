@@ -342,7 +342,6 @@ impl Datum {
         Ok(order)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn cmp_enum(&self, _ctx: &mut EvalContext, v: &Enum) -> Result<Ordering> {
         let order = match *self {
             // FIXME: cmp only care about enum value here, should we take data into consideration?
@@ -353,7 +352,6 @@ impl Datum {
         Ok(order)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn cmp_set(&self, _ctx: &mut EvalContext, v: &Set) -> Result<Ordering> {
         let order = match *self {
             // FIXME: cmp only care about set value here, should we take data into consideration?

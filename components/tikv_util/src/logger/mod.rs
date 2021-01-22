@@ -554,7 +554,6 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn finish(self) -> io::Result<()> {
         Ok(())
     }

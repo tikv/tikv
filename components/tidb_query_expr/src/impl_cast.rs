@@ -250,7 +250,6 @@ pub fn map_cast_func(expr: &Expr) -> Result<RpnFnMeta> {
 // - cast_duration_as_int_or_uint -> cast_any_as_any<Duration, Int>
 // - cast_json_as_int -> cast_any_as_any<Json, Int>
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_int(
@@ -270,7 +269,6 @@ fn cast_signed_int_as_unsigned_int(
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_int_as_int_others(val: Option<&Int>) -> Result<Option<Int>> {
@@ -394,14 +392,12 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
 ///
 /// This function is added to prove `rpn_fn` supports `enum`/`set` correctly. We will add enum/set
 /// related copr functions into `get_cast_fn_rpn_meta` after Enum/Set decode implemented.
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn]
 #[inline]
 fn cast_enum_as_int(val: EnumRef) -> Result<Option<Int>> {
     Ok(Some(val.value() as Int))
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn]
 #[inline]
 fn cast_set_as_int(val: SetRef) -> Result<Option<Int>> {
@@ -448,7 +444,6 @@ fn cast_json_as_uint(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opti
 // cast_duration_as_real -> cast_any_as_any<Duration, Real>
 // cast_json_as_real -> by cast_any_as_any<Json, Real>
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_signed_int_as_signed_real(val: Option<&Int>) -> Result<Option<Real>> {
@@ -458,7 +453,6 @@ fn cast_signed_int_as_signed_real(val: Option<&Int>) -> Result<Option<Real>> {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_signed_int_as_unsigned_real(
@@ -480,7 +474,6 @@ fn cast_signed_int_as_unsigned_real(
 
 // because we needn't to consider if uint overflow upper boundary of signed real,
 // so we can merge uint to signed/unsigned real in one function
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Option<Real>> {
@@ -490,14 +483,12 @@ fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Opt
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_real_as_signed_real(val: Option<&Real>) -> Result<Option<Real>> {
     Ok(val.cloned())
 }
 
-#[allow(clippy::unnecessary_wraps)]
 #[rpn_fn(nullable, capture = [metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_real_as_unsigned_real(
