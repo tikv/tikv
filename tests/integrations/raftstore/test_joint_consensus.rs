@@ -5,7 +5,6 @@ use kvproto::raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use raftstore::store::util::find_peer;
-use raftstore::store::Callback;
 use raftstore::Result;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -360,19 +359,9 @@ fn test_invalid_confchange_request() {
     );
     assert!(pd_client.is_in_joint(region_id));
 
-    // Can not split or merge region while in jonit state
-    let (tx, rx) = mpsc::channel();
-    let region = cluster.get_region(b"k5");
-    cluster.split_region(
-        &region,
-        b"k1",
-        Callback::write(Box::new(move |resp| tx.send(resp.response).unwrap())),
-    );
-    let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    must_contains_error(&resp, "in joint state, can not propose split or merge");
-
+    // Can not merge region while in jonit state
     let resp = cluster.try_merge(right.get_id(), left.get_id());
-    must_contains_error(&resp, "in joint state, can not propose split or merge");
+    must_contains_error(&resp, "in joint state, can not propose merge command");
 
     // Can not leave joint if which will demote leader
     cluster.must_transfer_leader(region_id, new_peer(2, 2));
