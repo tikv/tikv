@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(core_intrinsics)]
-extern crate test;
+#![feature(slice_as_chunks)]
 
 #[macro_use]
 extern crate lazy_static;
+extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
