@@ -180,7 +180,7 @@ impl LeaderClient {
         };
 
         let (client, members) = future.await?;
-        fail_point!("leader_client_reconnect");
+        fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
             let mut inner = self.inner.wl();
