@@ -898,12 +898,25 @@ where
             // Checking term to make sure campaign has finished and the leader starts
             // doing its job, it's not required but a safe options.
             state != GroupState::Chaos
-                && self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.has_valid_leader()
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
                 && !self.has_unresolved_reads()
                 // If it becomes leader, the stats is not valid anymore.
                 && !self.is_leader()
         }
+    }
+
+    #[inline]
+    pub fn has_valid_leader(&self) -> bool {
+        if self.raft_group.raft.leader_id == raft::INVALID_ID {
+            return false;
+        }
+        for p in self.region().get_peers() {
+            if p.get_id() == self.raft_group.raft.leader_id && p.get_role() != PeerRole::Learner {
+                return true;
+            }
+        }
+        false
     }
 
     /// Pings if followers are still connected.

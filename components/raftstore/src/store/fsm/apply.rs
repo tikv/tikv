@@ -18,7 +18,8 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::PerfContext;
+use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -56,10 +57,10 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
-    KeysInfoFormatter, PerfContextStatistics, ADMIN_CMD_EPOCH_MAP,
+    KeysInfoFormatter, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{observe_perf_context_type, report_perf_context, Error, Result};
+use crate::{Error, Result};
 
 use super::metrics::*;
 
@@ -349,7 +350,7 @@ where
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-    perf_context_statistics: PerfContextStatistics,
+    perf_context: EK::PerfContext,
 
     yield_duration: Duration,
 
@@ -358,6 +359,13 @@ where
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
+    /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
+    /// peer could see this update if leader had changed. We must also delete them after the applied-index
+    /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
+    /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
+    /// this entry will never apply again at first, then we can delete the ssts files.
+    delete_ssts: Vec<SstMeta>,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -387,7 +395,7 @@ where
             host,
             importer,
             region_scheduler,
-            engine,
+            engine: engine.clone(),
             router,
             notifier,
             kv_wb,
@@ -400,8 +408,9 @@ where
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
+            delete_ssts: vec![],
             store_id,
             pending_create_peers,
         }
@@ -461,10 +470,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            report_perf_context!(
-                self.perf_context_statistics,
-                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-            );
+            self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -477,6 +483,14 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        }
+        if !self.delete_ssts.is_empty() {
+            let tag = self.tag.clone();
+            for sst in self.delete_ssts.drain(..) {
+                self.importer.delete(&sst).unwrap_or_else(|e| {
+                    panic!("{} cleanup ingested file {:?}: {:?}", tag, sst, e);
+                });
+            }
         }
         // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
         self.host.on_flush_apply(self.engine.clone());
@@ -1296,9 +1310,11 @@ where
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
+                    assert!(ctx.kv_wb.is_empty());
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
@@ -1335,6 +1351,7 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
+            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -3444,7 +3461,7 @@ where
                 _ => {}
             }
         }
-        self.apply_ctx.perf_context_statistics.start();
+        self.apply_ctx.perf_context.start_observe();
     }
 
     /// There is no control fsm in apply poller.

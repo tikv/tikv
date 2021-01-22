@@ -38,6 +38,12 @@ impl Debug for FileEncryptionInfo {
     }
 }
 
+impl FileEncryptionInfo {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty() && self.iv.is_empty()
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EncryptionMethod {
     Unknown = 0,
