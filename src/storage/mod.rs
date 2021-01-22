@@ -60,6 +60,7 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
+use crate::storage::mvcc::MvccReader;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -73,7 +74,9 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{
+    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
 use std::{
@@ -680,6 +683,116 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+    }
+
+    pub fn scan_lock(
+        &self,
+        ctx: Context,
+        max_ts: TimeStamp,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        const CMD: CommandKind = CommandKind::scan_lock;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let concurrency_manager = self.concurrency_manager.clone();
+
+        let res = self.read_pool.spawn_handle(
+            async move {
+                if let Ok(start_key) = start_key.as_ref().map(|k| k.to_raw()).unwrap_or(Ok(vec![]))
+                {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                            key = end_key;
+                        }
+                    }
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key, false);
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+
+                concurrency_manager.update_max_ts(max_ts);
+                // TODO: Use better error handling here
+                concurrency_manager
+                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                        Lock::check_ts_conflict(Cow::Borrowed(lock), &key, max_ts, &TsSet::Empty)
+                    })
+                    .map_err(mvcc::Error::from)?;
+
+                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
+                    let mut key_range = KeyRange::default();
+                    if let Some(start_key) = &start_key {
+                        key_range.set_start_key(start_key.as_encoded().to_vec());
+                    }
+                    if let Some(end_key) = &end_key {
+                        key_range.set_end_key(end_key.as_encoded().to_vec());
+                    }
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        read_id: None,
+                        start_ts: max_ts,
+                        key_ranges: vec![key_range],
+                    }
+                } else {
+                    SnapContext {
+                        pb_ctx: &ctx,
+                        ..Default::default()
+                    }
+                };
+
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let mut reader = MvccReader::new(
+                        snapshot,
+                        Some(ScanMode::Forward),
+                        !ctx.get_not_fill_cache(),
+                        ctx.get_isolation_level(),
+                    );
+                    let result = reader
+                        .scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
+                        .map_err(txn::Error::from);
+                    statistics.add(reader.get_statistics());
+                    let (kv_pairs, _) = result?;
+                    let mut locks = Vec::with_capacity(kv_pairs.len());
+                    for (key, lock) in kv_pairs {
+                        let mut lock_info = LockInfo::default();
+                        lock_info.set_primary_lock(lock.primary);
+                        lock_info.set_lock_version(lock.ts.into_inner());
+                        lock_info.set_key(key.into_raw().map_err(txn::Error::from)?);
+                        lock_info.set_lock_ttl(lock.ttl);
+                        lock_info.set_txn_size(lock.txn_size);
+                        locks.push(lock_info);
+                    }
+
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(locks)
+                }
+            },
+            priority,
+            thread_rng().next_u64(),
+        );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -1735,7 +1848,7 @@ mod tests {
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
+    use kvproto::kvrpcpb::{CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},

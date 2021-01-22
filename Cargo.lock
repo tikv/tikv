@@ -2016,7 +2016,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#29d65899faf79865215c58d56605737d97266a81"
+source = "git+https://github.com/MyonKeminta/kvproto.git?branch=m/add-end-key-to-scan-lock#6acc0dac7a86311af20f796449460e9d876fb166"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
