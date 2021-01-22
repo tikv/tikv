@@ -165,7 +165,7 @@ impl<T> Sender<T> {
         let notifier_registered = &self.state.notifier_registered;
         if notifier_registered
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+            .is_ok()
         {
             return Some(Notifier(Arc::clone(&self.state)));
         }
