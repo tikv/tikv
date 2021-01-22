@@ -92,9 +92,9 @@ impl<T> Res<T> {
     }
 }
 
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
+impl<T> From<Res<T>> for Result<T> {
+    fn from(r: Res<T>) -> Result<T> {
+        match r {
             Res::Ok(t) => Ok(t),
             Res::Truncated(_) => Err(Error::truncated()),
             Res::Overflow(_) => Err(Error::overflow("", "")),
@@ -1849,7 +1849,7 @@ impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
 fn first_non_digit(bs: &[u8], start_idx: usize) -> usize {
     bs.iter()
         .skip(start_idx)
-        .position(|&c| c < b'0' || c > b'9')
+        .position(|&c| !(b'0'..=b'9').contains(&c))
         .map_or_else(|| bs.len(), |s| s + start_idx)
 }
 

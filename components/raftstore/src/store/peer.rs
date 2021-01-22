@@ -2932,13 +2932,14 @@ where
             return;
         }
 
+        #[allow(clippy::suspicious_operation_groupings)]
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
         {
             info!(
                 "reject transferring leader";
-                "region_id" =>self.region_id,
+                "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
             );
@@ -3182,8 +3183,10 @@ where
         if self.replication_mode_version == 0 {
             return None;
         }
-        let mut status = RegionReplicationStatus::default();
-        status.state_id = self.replication_mode_version;
+        let mut status = RegionReplicationStatus {
+            state_id: self.replication_mode_version,
+            ..Default::default()
+        };
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
                 let res = self.raft_group.raft.check_group_commit_consistent();

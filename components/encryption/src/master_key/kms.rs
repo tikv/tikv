@@ -95,7 +95,7 @@ impl AwsKms {
         Ok(plaintext)
     }
 
-    fn generate_data_key(&mut self) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn generate_data_key(&mut self) -> (Vec<u8>, Vec<u8>) {
         let generate_request = GenerateDataKeyRequest {
             encryption_context: None,
             grant_tokens: None,
@@ -113,7 +113,7 @@ impl AwsKms {
         .unwrap();
         let ciphertext_key = generate_response.ciphertext_blob.unwrap().as_ref().to_vec();
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
-        Ok((ciphertext_key, plaintext_key))
+        (ciphertext_key, plaintext_key)
     }
 }
 
@@ -179,7 +179,7 @@ impl Inner {
             self.cached_ciphertext_key = ciphertext_key.to_owned();
             kms.decrypt(ciphertext_key)?
         } else {
-            let (ciphertext_key, plaintext_key) = kms.generate_data_key()?;
+            let (ciphertext_key, plaintext_key) = kms.generate_data_key();
             self.cached_ciphertext_key = ciphertext_key;
             plaintext_key
         };
@@ -312,7 +312,7 @@ mod tests {
                 plaintext: Some(magic_contents.as_ref().into()),
             });
         let mut aws_kms = AwsKms::with_request_dispatcher(&config, dispatcher).unwrap();
-        let (ciphertext, plaintext) = aws_kms.generate_data_key().unwrap();
+        let (ciphertext, plaintext) = aws_kms.generate_data_key();
         assert_eq!(ciphertext, magic_contents);
         assert_eq!(plaintext, magic_contents);
 

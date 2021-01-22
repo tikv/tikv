@@ -61,10 +61,13 @@ impl<N: Fsm> FsmState<N> {
 
     /// Take the fsm if it's IDLE.
     pub fn take_fsm(&self) -> Option<Box<N>> {
-        let previous_state =
-            self.status
-                .compare_and_swap(NOTIFYSTATE_IDLE, NOTIFYSTATE_NOTIFIED, Ordering::AcqRel);
-        if previous_state != NOTIFYSTATE_IDLE {
+        let previous_state = self.status.compare_exchange(
+            NOTIFYSTATE_IDLE,
+            NOTIFYSTATE_NOTIFIED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        if previous_state.is_err() {
             return None;
         }
 
@@ -102,20 +105,21 @@ impl<N: Fsm> FsmState<N> {
         let previous = self.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
-            previous_status = self.status.compare_and_swap(
+            let ret = self.status.compare_exchange(
                 NOTIFYSTATE_NOTIFIED,
                 NOTIFYSTATE_IDLE,
                 Ordering::AcqRel,
+                Ordering::Acquire,
             );
-            match previous_status {
-                NOTIFYSTATE_NOTIFIED => return,
-                NOTIFYSTATE_DROP => {
+            previous_status = match ret {
+                Ok(_) => return,
+                Err(NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
                     unsafe { Box::from_raw(ptr) };
                     return;
                 }
-                _ => {}
-            }
+                Err(s) => s,
+            };
         }
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }

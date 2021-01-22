@@ -136,9 +136,9 @@ impl<'a> ChunkRef<'a, EnumRef<'a>> for &'a ChunkedVecEnum {
     }
 }
 
-impl Into<ChunkedVecEnum> for Vec<Option<Enum>> {
-    fn into(self) -> ChunkedVecEnum {
-        ChunkedVecEnum::from_vec(self)
+impl From<Vec<Option<Enum>>> for ChunkedVecEnum {
+    fn from(v: Vec<Option<Enum>>) -> ChunkedVecEnum {
+        ChunkedVecEnum::from_vec(v)
     }
 }
 

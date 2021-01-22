@@ -187,9 +187,10 @@ impl Conn {
                     error!("different version on the same connection";
                         "previous version" => ?version, "version" => ?ver,
                         "downstream" => ?self.peer, "conn_id" => ?self.id);
-                    let mut compat = Compatibility::default();
-                    compat.required_version = version.to_string();
-                    Some(compat)
+                    Some(Compatibility {
+                        required_version: version.to_string(),
+                        ..Default::default()
+                    })
                 }
             }
             None => {
@@ -414,18 +415,26 @@ mod tests {
             }
         };
 
-        let mut event_small = Event::default();
         let row_small = EventRow::default();
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = vec![row_small].into();
-        event_small.event = Some(Event_oneof_event::Entries(event_entries));
+        let event_entries = EventEntries {
+            entries: vec![row_small].into(),
+            ..Default::default()
+        };
+        let event_small = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
 
-        let mut event_big = Event::default();
         let mut row_big = EventRow::default();
-        row_big.set_key(vec![0 as u8; CDC_MAX_RESP_SIZE as usize]);
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = vec![row_big].into();
-        event_big.event = Some(Event_oneof_event::Entries(event_entries));
+        row_big.set_key(vec![0_u8; CDC_MAX_RESP_SIZE as usize]);
+        let event_entries = EventEntries {
+            entries: vec![row_big].into(),
+            ..Default::default()
+        };
+        let event_big = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
 
         let mut resolved_ts = ResolvedTs::default();
         resolved_ts.set_ts(1);

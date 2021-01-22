@@ -170,7 +170,7 @@
 //!             let (text, _) = arg.extract(row_index);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
-//!         Ok(Evaluable::into_vector_value(result))
+//!         Ok(Evaluable::cast_into_vector_value(result))
 //!     }
 //! }
 //! ```
@@ -1128,7 +1128,7 @@ impl VargsRpnFn {
                         for row_index in 0..output_rows {
                             #arg_loop
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_into_vector_value(result))
                     })
                 }
 
@@ -1271,7 +1271,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_into_vector_value(result))
                     })
                 }
 
@@ -1569,7 +1569,7 @@ impl NormalRpnFn {
                 for i in 0..output_rows {
                     result.push(None);
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_into_vector_value(result));
             }
 
             if !fastpath {
@@ -1578,7 +1578,7 @@ impl NormalRpnFn {
                     #nonnull_unwrap
                     #chunked_push_3
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_into_vector_value(result));
             }
 
             for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
@@ -1612,7 +1612,7 @@ impl NormalRpnFn {
                     let arg = &self;
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     #final_loop
-                    Ok(#vec_type::into_vector_value(result))
+                    Ok(#vec_type::cast_into_vector_value(result))
                 }
             }
 
@@ -1826,7 +1826,7 @@ mod tests_normal {
                         let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_into_vector_value(result))
                 }
             }
         };
@@ -1992,7 +1992,7 @@ mod tests_normal {
                         let (arg0, arg) = arg.extract(row_index);
                         result.push(foo::<A, B>(arg0)?);
                     }
-                    Ok(B::into_vector_value(result))
+                    Ok(B::cast_into_vector_value(result))
                 }
             }
         };
@@ -2144,7 +2144,7 @@ mod tests_normal {
                         let (arg2, arg) = arg.extract(row_index);
                         result.push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_into_vector_value(result))
                 }
             }
         };
@@ -2228,7 +2228,7 @@ mod tests_normal {
                         for i in 0..output_rows {
                             result.push(None);
                         }
-                        return Ok(Decimal::into_vector_value(result));
+                        return Ok(Decimal::cast_into_vector_value(result));
                     }
                     if !fastpath {
                         for row_index in 0..output_rows {
@@ -2240,7 +2240,7 @@ mod tests_normal {
                             let arg0 = arg0.unwrap();
                             result.push(foo(arg0)?);
                         }
-                        return Ok(Decimal::into_vector_value(result));
+                        return Ok(Decimal::cast_into_vector_value(result));
                     }
                     for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
                         if !val {
@@ -2252,7 +2252,7 @@ mod tests_normal {
                         result.push(foo(arg0)?);
                     }
 
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_into_vector_value(result))
                 }
             }
         };

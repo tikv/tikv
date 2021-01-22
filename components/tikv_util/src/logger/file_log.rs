@@ -243,6 +243,7 @@ mod tests {
         path.exists() && path.is_file()
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn rename_with_suffix(
         path: impl AsRef<Path>,
         suffix: impl AsRef<OsStr>,
