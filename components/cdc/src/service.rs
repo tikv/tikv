@@ -12,6 +12,7 @@ use grpcio::{
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
 };
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use security::{check_common_name, SecurityManager};
 use tikv_util::collections::HashMap;
@@ -307,6 +308,7 @@ impl ChangeData for Service {
         let recv_req = stream.for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -316,8 +318,19 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
+<<<<<<< HEAD
             let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
             scheduler
+=======
+            let downstream = Downstream::new(
+                peer.clone(),
+                region_epoch,
+                req_id,
+                conn_id,
+                enable_old_value,
+            );
+            let ret = scheduler
+>>>>>>> 927e36f95... cdc: fix old value config glitch when changefeeds with different settings connect to one region (#9515)
                 .schedule(Task::Register {
                     request,
                     downstream,
