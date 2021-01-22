@@ -113,6 +113,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        FileConflict {
+            display("ingest file conflict")
+        }
     }
 }
 
@@ -148,6 +151,7 @@ impl ErrorCodeExt for Error {
             Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),
+            Error::FileConflict => error_code::sst_importer::FILE_CONFLICT,
         }
     }
 }
