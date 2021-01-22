@@ -808,6 +808,7 @@ fn test_pessimistic_lock() {
         assert_eq!(resp.errors.len(), 1);
         assert!(resp.errors[0].has_locked());
         assert!(resp.values.is_empty());
+        assert!(resp.not_founds.is_empty());
     }
 
     must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
@@ -820,6 +821,7 @@ fn test_pessimistic_lock() {
         assert_eq!(resp.errors.len(), 1);
         assert!(resp.errors[0].has_conflict());
         assert!(resp.values.is_empty());
+        assert!(resp.not_founds.is_empty());
     }
 
     // Return multiple values
@@ -836,6 +838,7 @@ fn test_pessimistic_lock() {
         assert!(resp.errors.is_empty());
         if return_values {
             assert_eq!(resp.get_values().to_vec(), vec![v.clone(), vec![]]);
+            assert_eq!(resp.get_not_founds().to_vec(), vec![false, true]);
         }
         must_kv_pessimistic_rollback(&client, ctx.clone(), k.clone(), 40);
     }
