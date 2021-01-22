@@ -445,11 +445,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         todo!()
     }
 
-    fn get_dc_locations(
+    fn get_dc_location_info(
         &mut self,
         _: grpcio::RpcContext<'_>,
-        _: kvproto::pdpb::GetDcLocationsRequest,
-        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationsResponse>,
+        _: kvproto::pdpb::GetDcLocationInfoRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
         todo!()
     }
