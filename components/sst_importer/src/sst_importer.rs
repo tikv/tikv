@@ -95,6 +95,10 @@ impl SSTImporter {
         }
     }
 
+    pub fn exist(&self, meta: &SstMeta) -> bool {
+        self.dir.exist(meta).unwrap_or(false)
+    }
+
     // Downloads an SST file from an external storage.
     //
     // This method is blocking. It performs the following transformations before
@@ -644,6 +648,11 @@ impl ImportDir {
         Ok(path)
     }
 
+    fn exist(&self, meta: &SstMeta) -> Result<bool> {
+        let path = self.join(meta)?;
+        Ok(path.save.exists())
+    }
+
     fn ingest<E: KvEngine>(
         &self,
         meta: &SstMeta,
@@ -838,7 +847,7 @@ impl fmt::Debug for ImportFile {
 
 const SST_SUFFIX: &str = ".sst";
 
-fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
+pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}{}",
         UuidBuilder::from_slice(meta.get_uuid())?.build(),
