@@ -333,7 +333,6 @@ mod tests {
             // Try to "disable" keys split
             region_max_keys: 2000000000,
             region_split_keys: 1000000000,
-            batch_split_limit: 5,
             ..Default::default()
         };
 
