@@ -47,6 +47,7 @@ fn detected_slot_idx(txn_ts: TimeStamp) -> usize {
 /// `LockManager` has two components working in two threads:
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
 ///   * The other one is the `Detector` which detects deadlocks between transactions.
+#[allow(dead_code)]
 struct LockManager {
     waiter_mgr_worker: Option<FutureWorker<waiter_manager::Task>>,
     detector_worker: Option<FutureWorker<deadlock::Task>>,
@@ -64,6 +65,9 @@ struct LockManager {
 
 #[derive(Copy, Clone)]
 pub struct HackedLockManager {}
+
+#[allow(dead_code)]
+#[allow(unused_variables)]
 impl LockManagerTrait for HackedLockManager {
     fn wait_for(
         &self,
@@ -109,6 +113,7 @@ impl Clone for LockManager {
     }
 }
 
+#[allow(dead_code)]
 impl LockManager {
     pub fn new(pipelined: bool) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
