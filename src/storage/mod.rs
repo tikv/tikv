@@ -27,13 +27,8 @@ pub use self::{
         RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
-<<<<<<< HEAD
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, StorageCallback, TxnStatus},
-=======
-    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};

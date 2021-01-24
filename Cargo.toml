@@ -85,7 +85,7 @@ fail = "0.4"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
-futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
+futures03 = { package = "futures", version = "0.3.1", features = ["compat","thread-pool"] }
 futures-cpupool = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }

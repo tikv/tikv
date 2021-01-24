@@ -1,26 +1,20 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::f64::INFINITY;
-<<<<<<< HEAD
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use engine_rocks::util::ingest_maybe_slowdown_writes;
 use engine_traits::{name_to_cf, CF_DEFAULT};
-use futures::sync::mpsc;
-use futures::{future, Future, Stream};
-use futures_cpupool::{Builder, CpuPool};
-=======
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use futures::Future;
+use futures03::compat::{Compat, Future01CompatExt, Stream01CompatExt};
+use futures03::executor::{ThreadPool, ThreadPoolBuilder};
+use futures03::future::FutureExt;
+use futures03::TryStreamExt;
+use std::collections::HashSet;
 
-use collections::HashSet;
-
-use engine_traits::{name_to_cf, KvEngine, CF_DEFAULT};
-use futures::executor::{ThreadPool, ThreadPoolBuilder};
-use futures::{TryFutureExt, TryStreamExt};
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::errorpb;
 
@@ -35,16 +29,13 @@ use kvproto::raft_cmdpb::*;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::RocksEngine;
 use engine_traits::{SstExt, SstWriterBuilder};
-<<<<<<< HEAD
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::Callback;
-use security::{check_common_name, SecurityManager};
-=======
 use raftstore::router::handle_send_error;
 use raftstore::store::{Callback, ProposalRouter, RaftCommand};
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
+use security::{check_common_name, SecurityManager};
+
 use sst_importer::send_rpc_response;
-use tikv_util::future::paired_future_callback;
+use tikv_util::future::create_stream_with_buffer;
+use tikv_util::future::paired_std_future_callback;
 use tikv_util::time::{Instant, Limiter};
 
 use sst_importer::import_mode::*;
@@ -59,33 +50,20 @@ use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImport
 #[derive(Clone)]
 pub struct ImportSSTService<Router> {
     cfg: Config,
-<<<<<<< HEAD
     router: Router,
     engine: Arc<DB>,
-    threads: CpuPool,
-=======
-    engine: E,
-    router: Router,
     threads: ThreadPool,
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
     limiter: Limiter,
-<<<<<<< HEAD
     security_mgr: Arc<SecurityManager>,
-}
-
-impl<Router: RaftStoreRouter> ImportSSTService<Router> {
-=======
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
-impl<E, Router> ImportSSTService<E, Router>
+impl<Router> ImportSSTService<Router>
 where
-    E: KvEngine,
-    Router: ProposalRouter<E::Snapshot> + Clone,
+    Router: ProposalRouter<RocksEngine> + Clone,
 {
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
     pub fn new(
         cfg: Config,
         router: Router,
@@ -93,10 +71,11 @@ where
         importer: Arc<SSTImporter>,
         security_mgr: Arc<SecurityManager>,
     ) -> ImportSSTService<Router> {
-        let threads = Builder::new()
-            .name_prefix("sst-importer")
+        let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
-            .create();
+            .name_prefix("sst-importer")
+            .create()
+            .unwrap();
         ImportSSTService {
             cfg,
             engine,
@@ -105,11 +84,8 @@ where
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
             limiter: Limiter::new(INFINITY),
-<<<<<<< HEAD
             security_mgr,
-=======
             task_slots: Arc::new(Mutex::new(HashSet::default())),
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
         }
     }
 
@@ -125,15 +101,10 @@ where
     }
 }
 
-<<<<<<< HEAD
-impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
-=======
-impl<E, Router> ImportSst for ImportSSTService<E, Router>
+impl<Router> ImportSst for ImportSSTService<Router>
 where
-    E: KvEngine,
-    Router: 'static + ProposalRouter<E::Snapshot> + Clone + Send,
+    Router: 'static + ProposalRouter<RocksEngine> + Clone + Send,
 {
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
     fn switch_mode(
         &mut self,
         ctx: RpcContext<'_>,
@@ -166,11 +137,11 @@ where
             Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
-        ctx.spawn(
-            future::result(res)
-                .map(|_| SwitchModeResponse::default())
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
-        )
+        let task = async move {
+            let res = Ok(SwitchModeResponse::default());
+            send_rpc_response!(res, sink, label, timer);
+        };
+        ctx.spawn(Compat::new(task.unit_error().boxed()));
     }
 
     /// Receive SST from client and save the file for later ingesting.
@@ -185,46 +156,40 @@ where
         }
         let label = "upload";
         let timer = Instant::now_coarse();
-        let import = Arc::clone(&self.importer);
-        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
+        let import = self.importer.clone();
+        let (rx, buf_driver) =
+            create_stream_with_buffer(stream.compat(), self.cfg.stream_channel_window);
+        let mut rx = rx.map_err(Error::from);
 
-        ctx.spawn(
-            self.threads.spawn(
-                bounded_stream
-                    .into_future()
-                    .map_err(|(e, _)| Error::from(e))
-                    .and_then(move |(chunk, stream)| {
-                        // The first message of the stream contains metadata
-                        // of the file.
-                        let meta = match chunk {
-                            Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
-                            _ => return Err(Error::InvalidChunk),
-                        };
-                        let file = import.create(meta)?;
-                        Ok((file, stream))
+        let handle_task = async move {
+            let res = async move {
+                let first_chunk = rx.try_next().await?;
+                let meta = match first_chunk {
+                    Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
+                    _ => return Err(Error::InvalidChunk),
+                };
+                let file = import.create(meta)?;
+                let mut file = rx
+                    .try_fold(file, |mut file, chunk| async move {
+                        let start = Instant::now_coarse();
+                        let data = chunk.get_data();
+                        if data.is_empty() {
+                            return Err(Error::InvalidChunk);
+                        }
+                        file.append(data)?;
+                        IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
+                        Ok(file)
                     })
-                    .and_then(move |(file, stream)| {
-                        stream
-                            .map_err(Error::from)
-                            .fold(file, |mut file, chunk| {
-                                let start = Instant::now_coarse();
-                                let data = chunk.get_data();
-                                if data.is_empty() {
-                                    return future::err(Error::InvalidChunk);
-                                }
-                                if let Err(e) = file.append(data) {
-                                    return future::err(e);
-                                }
-                                IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-                                IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
-                                future::ok(file)
-                            })
-                            .and_then(|mut file| file.finish())
-                    })
-                    .map(|_| UploadResponse::default())
-                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
-            ),
-        )
+                    .await?;
+                file.finish().map(|_| UploadResponse::default())
+            }
+            .await;
+            send_rpc_response!(res, sink, label, timer);
+        };
+
+        self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -243,7 +208,7 @@ where
         let limiter = self.limiter.clone();
         let engine = Arc::clone(&self.engine);
 
-        ctx.spawn(self.threads.spawn_fn(move || {
+        let handle_task = async move {
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
@@ -265,25 +230,19 @@ where
                 limiter,
                 sst_writer,
             );
+            let mut resp = DownloadResponse::default();
+            match res {
+                Ok(range) => match range {
+                    Some(r) => resp.set_range(r),
+                    None => resp.set_is_empty(true),
+                },
+                Err(e) => resp.set_error(e.into()),
+            }
+            let resp = Ok(resp);
+            send_rpc_response!(resp, sink, label, timer);
+        };
 
-            future::result(res)
-                .map_err(Error::from)
-                .then(|res| {
-                    let mut resp = DownloadResponse::default();
-                    match res {
-                        Ok(range) => {
-                            if let Some(r) = range {
-                                resp.set_range(r);
-                            } else {
-                                resp.set_is_empty(true);
-                            }
-                        }
-                        Err(e) => resp.set_error(e.into()),
-                    }
-                    Ok(resp)
-                })
-                .then(move |res| send_rpc_response!(res, sink, label, timer))
-        }));
+        self.threads.spawn_ok(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -302,19 +261,10 @@ where
         }
         let label = "ingest";
         let timer = Instant::now_coarse();
-
-<<<<<<< HEAD
-        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
-            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
-=======
         let mut resp = IngestResponse::default();
         let mut errorpb = errorpb::Error::default();
-        if self.switcher.get_mode() == SwitchMode::Normal
-            && self
-                .engine
-                .ingest_maybe_slowdown_writes(CF_DEFAULT)
-                .expect("cf")
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
+        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
         {
             let err = "too many sst files are ingesting";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
@@ -328,41 +278,12 @@ where
             return;
         }
 
-<<<<<<< HEAD
-        let (cb, future) = paired_future_callback();
-        if let Err(e) = self.router.send_command(cmd, Callback::write(cb)) {
-            let mut resp = IngestResponse::default();
-            resp.set_error(e.into());
-            ctx.spawn(sink.success(resp).map_err(|e| {
-                warn!("send rpc failed"; "err" => %e);
-            }));
-            return;
-        }
-
-        ctx.spawn(
-            future
-                .map_err(Error::from)
-                .then(move |res| match res {
-                    Ok(mut res) => {
-                        let mut resp = IngestResponse::default();
-                        let mut header = res.response.take_header();
-                        if header.has_error() {
-                            pb_error_inc(label, header.get_error());
-                            resp.set_error(header.take_error());
-                        }
-                        future::ok(resp)
-                    }
-                    Err(e) => future::err(e),
-                })
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
-        )
-=======
         if !Self::acquire_lock(&self.task_slots, req.get_sst()).unwrap_or(false) {
             errorpb.set_message(Error::FileConflict.to_string());
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
-                    .unwrap_or_else(|e| warn!("send rpc failed"; "err" => %e)),
+                    .map_err(|e| warn!("send rpc failed"; "err" => %e)),
             );
             return;
         }
@@ -379,7 +300,7 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header.clone());
         cmd.set_requests(vec![req].into());
-        let (cb, future) = paired_future_callback();
+        let (cb, future) = paired_std_future_callback();
 
         let router = self.router.clone();
         let task_slots = self.task_slots.clone();
@@ -420,7 +341,7 @@ where
                     return Ok(resp);
                 }
 
-                let (cb, future) = paired_future_callback();
+                let (cb, future) = paired_std_future_callback();
                 if let Err(e) = router.send(RaftCommand::new(cmd, Callback::write(cb))) {
                     let e = handle_send_error(region_id, e);
                     resp.set_error(e.into());
@@ -440,7 +361,6 @@ where
             send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn_ok(handle_task);
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
     }
 
     fn compact(
@@ -456,7 +376,7 @@ where
         let timer = Instant::now_coarse();
         let engine = Arc::clone(&self.engine);
 
-        ctx.spawn(self.threads.spawn_fn(move || {
+        let handle_task = async move {
             let (start, end) = if !req.has_range() {
                 (None, None)
             } else {
@@ -486,12 +406,13 @@ where
                     "output_level" => ?output_level, "err" => %e
                 ),
             }
-
-            future::result(res)
+            let res = res
                 .map_err(|e| Error::Engine(box_err!(e)))
-                .map(|_| CompactResponse::default())
-                .then(move |res| send_rpc_response!(res, sink, label, timer))
-        }))
+                .map(|_| CompactResponse::default());
+            send_rpc_response!(res, sink, label, timer);
+        };
+
+        self.threads.spawn_ok(handle_task);
     }
 
     fn set_download_speed_limit(
@@ -513,10 +434,12 @@ where
             INFINITY
         });
 
-        ctx.spawn(
-            future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
-                .then(move |res| send_rpc_response!(res, sink, label, timer)),
-        )
+        let ctx_task = async move {
+            let res = Ok(SetDownloadSpeedLimitResponse::default());
+            send_rpc_response!(res, sink, label, timer);
+        };
+
+        ctx.spawn(Compat::new(ctx_task.unit_error().boxed()));
     }
 
     fn write(
@@ -530,57 +453,55 @@ where
         }
         let label = "write";
         let timer = Instant::now_coarse();
-        let import = Arc::clone(&self.importer);
-        let engine = Arc::clone(&self.engine);
-        let bounded_stream = mpsc::spawn(stream, &self.threads, self.cfg.stream_channel_window);
-        ctx.spawn(
-            self.threads.spawn(
-                bounded_stream
-                    .into_future()
-                    .map_err(|(e, _)| Error::from(e))
-                    .and_then(move |(req, stream)| {
-                        let meta = match req {
-                            Some(r) => match r.chunk {
-                                Some(Chunk::Meta(m)) => m,
-                                _ => return Err(Error::InvalidChunk),
-                            },
+        let import = self.importer.clone();
+        let engine = self.engine.clone();
+        let (rx, buf_driver) =
+            create_stream_with_buffer(stream.compat(), self.cfg.stream_channel_window);
+        let mut rx = rx.map_err(Error::from);
+
+        let handle_task = async move {
+            let res = async move {
+                let first_req = rx.try_next().await?;
+                let meta = match first_req {
+                    Some(r) => match r.chunk {
+                        Some(Chunk::Meta(m)) => m,
+                        _ => return Err(Error::InvalidChunk),
+                    },
+                    _ => return Err(Error::InvalidChunk),
+                };
+
+                let writer = match import.new_writer(RocksEngine::from_ref(&engine), meta) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        error!("build writer failed {:?}", e);
+                        return Err(Error::InvalidChunk);
+                    }
+                };
+                let writer = rx
+                    .try_fold(writer, |mut writer, req| async move {
+                        let start = Instant::now_coarse();
+                        let batch = match req.chunk {
+                            Some(Chunk::Batch(b)) => b,
                             _ => return Err(Error::InvalidChunk),
                         };
-                        let writer = match import.new_writer(RocksEngine::from_ref(&engine), meta) {
-                            Ok(w) => w,
-                            Err(e) => {
-                                error!("build writer failed {:?}", e);
-                                return Err(Error::InvalidChunk);
-                            }
-                        };
-                        Ok((writer, stream))
+                        writer.write(batch)?;
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        Ok(writer)
                     })
-                    .and_then(move |(writer, stream)| {
-                        stream
-                            .map_err(Error::from)
-                            .fold(writer, |mut writer, req| {
-                                let start = Instant::now_coarse();
-                                let batch = match req.chunk {
-                                    Some(Chunk::Batch(b)) => b,
-                                    _ => return Err(Error::InvalidChunk),
-                                };
-                                writer.write(batch)?;
-                                IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
-                                Ok(writer)
-                            })
-                            .and_then(|writer| writer.finish())
-                    })
-                    .then(move |res| match res {
-                        Ok(metas) => {
-                            let mut resp = WriteResponse::default();
-                            resp.set_metas(metas.into());
-                            Ok(resp)
-                        }
-                        Err(e) => Err(e),
-                    })
-                    .then(move |res| send_rpc_response!(res, sink, label, timer)),
-            ),
-        )
+                    .await?;
+
+                writer.finish().map(|metas| {
+                    let mut resp = WriteResponse::default();
+                    resp.set_metas(metas.into());
+                    resp
+                })
+            }
+            .await;
+            send_rpc_response!(res, sink, label, timer);
+        };
+
+        self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
     }
 }
 

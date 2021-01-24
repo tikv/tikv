@@ -325,15 +325,8 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     yield_duration: Duration,
     perf_context_statistics: PerfContextStatistics,
 
-<<<<<<< HEAD
     // TxnExtra collected from applied cmds.
     txn_extras: MustConsumeVec<TxnExtra>,
-=======
-    store_id: u64,
-    /// region_id -> (peer_id, is_splitting)
-    /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 
     /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
     /// peer could see this update if leader had changed. We must also delete them after the applied-index
@@ -341,7 +334,6 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMeta>,
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
 }
 
 impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
@@ -376,14 +368,9 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
             yield_duration: cfg.apply_yield_duration.0,
-<<<<<<< HEAD
             perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
             txn_extras: MustConsumeVec::new("extra data from txn"),
-=======
             delete_ssts: vec![],
-            store_id,
-            pending_create_peers,
->>>>>>> f4be3a0bf... importer: Check whether file exist before importing (#9522)
         }
     }
 
@@ -1272,11 +1259,15 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
-                    assert!(ctx.kv_wb.is_empty());
+                    ctx.kv_wb.as_ref().map(|wb| {
+                        assert!(wb.is_empty());
+                    });
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
-                    assert!(ctx.kv_wb.is_empty());
+                    ctx.kv_wb.as_ref().map(|wb| {
+                        assert!(wb.is_empty());
+                    });
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.
