@@ -43,7 +43,7 @@ impl From<&[u8]> for BaseBuffView {
     }
 }
 
-pub trait UnwrapExternCFunc<T> {
+trait UnwrapExternCFunc<T> {
     unsafe fn into_inner(&self) -> &T;
 }
 
@@ -66,11 +66,12 @@ impl RaftStoreProxy {
 }
 
 #[no_mangle]
-pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> u8 {
+pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> RaftProxyStatus {
     unsafe {
-        (*(proxy_ptr as *const RaftStoreProxy))
+        let r = (*(proxy_ptr as *const RaftStoreProxy))
             .status
-            .load(Ordering::SeqCst)
+            .load(Ordering::SeqCst);
+        std::mem::transmute(r)
     }
 }
 
@@ -142,7 +143,7 @@ impl From<EncryptionMethod> for interfaces::root::DB::EncryptionMethod {
 impl FileEncryptionInfoRaw {
     fn new(res: FileEncryptionRes) -> Self {
         FileEncryptionInfoRaw {
-            res: res as _,
+            res,
             method: EncryptionMethod::Unknown.into(),
             key: std::ptr::null_mut(),
             iv: std::ptr::null_mut(),
@@ -152,7 +153,7 @@ impl FileEncryptionInfoRaw {
 
     fn error(erro_msg: RawVoidPtr) -> Self {
         FileEncryptionInfoRaw {
-            res: FileEncryptionRes::Error as _,
+            res: FileEncryptionRes::Error,
             method: EncryptionMethod::Unknown.into(),
             key: std::ptr::null_mut(),
             iv: std::ptr::null_mut(),
@@ -162,7 +163,7 @@ impl FileEncryptionInfoRaw {
 
     fn from(f: FileEncryptionInfo) -> Self {
         FileEncryptionInfoRaw {
-            res: FileEncryptionRes::Ok as _,
+            res: FileEncryptionRes::Ok,
             method: f.method.into(),
             key: get_engine_store_server_helper().gen_cpp_string(&f.key),
             iv: get_engine_store_server_helper().gen_cpp_string(&f.iv),

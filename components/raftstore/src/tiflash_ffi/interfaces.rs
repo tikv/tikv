@@ -430,7 +430,9 @@ pub mod root {
         pub struct TiFlashRaftProxyHelperFFI {
             pub proxy_ptr: root::DB::RaftStoreProxyPtr,
             pub fn_handle_get_proxy_status: ::std::option::Option<
-                unsafe extern "C" fn(arg1: root::DB::RaftStoreProxyPtr) -> u8,
+                unsafe extern "C" fn(
+                    arg1: root::DB::RaftStoreProxyPtr,
+                ) -> root::DB::RaftProxyStatus,
             >,
             pub fn_is_encryption_enabled: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::RaftStoreProxyPtr) -> u8,
