@@ -248,6 +248,7 @@ members = [
   "components/collections",
 
   "tiflash-proxy",
+  "gen_ffi_interfaces"
 ]
 default-members = ["tiflash-proxy"]
 

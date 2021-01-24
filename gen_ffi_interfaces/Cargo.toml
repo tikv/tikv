@@ -1,0 +1,15 @@
+[package]
+name = "gen_ffi_interfaces"
+version = "0.1.0"
+authors = ["Tong Zhigao <tongzhigao@pingcap.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.bindgen]
+version = ""
+default-features = false
+features = ["which-rustfmt"]
+
+[dependencies]
+walkdir = "2"

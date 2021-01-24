@@ -403,7 +403,7 @@ impl Snap {
 
             let (cf_type, snap_kv) = if plain_file_used(cf_file.cf) {
                 (
-                    tiflash_ffi::WriteCmdCf::Lock,
+                    tiflash_ffi::ColumnFamilyType::Lock,
                     Snap::read_lock_cf_file(
                         cf_file.path.to_str().unwrap(),
                         self.mgr.encryption_key_manager.as_ref(),
@@ -411,9 +411,9 @@ impl Snap {
                 )
             } else {
                 let cf_type = if cf_file.cf == CF_DEFAULT {
-                    tiflash_ffi::WriteCmdCf::Default
+                    tiflash_ffi::ColumnFamilyType::Default
                 } else if cf_file.cf == CF_WRITE {
-                    tiflash_ffi::WriteCmdCf::Write
+                    tiflash_ffi::ColumnFamilyType::Write
                 } else {
                     unreachable!()
                 };

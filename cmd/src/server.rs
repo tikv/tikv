@@ -89,7 +89,7 @@ use crate::setup::*;
 
 use raftstore::tiflash_ffi::{
     get_tiflash_server_helper, RaftProxyStatus, ReadIndexClient, TiFlashRaftProxy,
-    TiFlashRaftProxyHelper, TiFlashStatus,
+    TiFlashRaftProxyHelperFFI, TiFlashStatus,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::time::Duration;
@@ -134,7 +134,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
                 }),
             };
 
-            let proxy_helper = TiFlashRaftProxyHelper::new(&proxy);
+            let proxy_helper = TiFlashRaftProxyHelperFFI::new(&proxy);
 
             info!("set tiflash proxy helper");
 
@@ -176,7 +176,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
 
             tikv.stop();
 
-            proxy.set_status(RaftProxyStatus::Stop);
+            proxy.set_status(RaftProxyStatus::Stopped);
 
             info!("all services in tiflash proxy are stopped");
 
