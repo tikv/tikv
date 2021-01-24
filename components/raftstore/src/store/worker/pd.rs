@@ -34,7 +34,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
-use crate::tiflash_ffi::get_tiflash_server_helper;
+use crate::tiflash_ffi::get_engine_store_server_helper;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;
@@ -650,7 +650,7 @@ where
     }
 
     fn handle_store_heartbeat(&mut self, mut stats: pdpb::StoreStats, store_info: StoreInfo<EK>) {
-        let store_stats = get_tiflash_server_helper().handle_compute_store_stats();
+        let store_stats = get_engine_store_server_helper().handle_compute_store_stats();
         if store_stats.fs_stats.ok == 0 {
             return;
         }

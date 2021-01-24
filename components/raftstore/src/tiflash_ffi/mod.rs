@@ -22,13 +22,14 @@ use std::borrow::Borrow;
 pub use crate::tiflash_ffi::interfaces::root::DB::{
     BaseBuffView, ColumnFamilyType, CppStrVecView, CppStrWithView, FileEncryptionRes,
     RaftCmdHeader, RaftProxyStatus, RawCppPtr, RegionId, StoreStats, TiFlashApplyRes,
-    TiFlashRaftProxyHelperFFI, TiFlashServerHelper, TiFlashStatus, WriteCmdType, WriteCmdsView,
+    TiFlashRaftProxyHelperFFI, TiFlashStatus, WriteCmdType, WriteCmdsView,
 };
 use crate::tiflash_ffi::interfaces::root::DB::{
     FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawVoidPtr, SnapshotView,
-    SnapshotViewArray,
+    SnapshotViewArray, TiFlashServerHelper,
 };
 
+pub type EngineStoreServerHelper = TiFlashServerHelper;
 pub type SnapshotKV = VecDeque<(Vec<u8>, Vec<u8>)>;
 pub type SnapshotKVView = (Vec<BaseBuffView>, Vec<BaseBuffView>);
 
@@ -52,13 +53,13 @@ impl<T> UnwrapExternCFunc<T> for std::option::Option<T> {
     }
 }
 
-pub struct TiFlashRaftProxy {
+pub struct RaftStoreProxy {
     pub status: AtomicU8,
     pub key_manager: Option<Arc<DataKeyManager>>,
     pub read_index_client: Box<dyn read_index_helper::ReadIndex>,
 }
 
-impl TiFlashRaftProxy {
+impl RaftStoreProxy {
     pub fn set_status(&mut self, s: RaftProxyStatus) {
         self.status.store(s as u8, Ordering::SeqCst);
     }
@@ -67,7 +68,7 @@ impl TiFlashRaftProxy {
 #[no_mangle]
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> u8 {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .status
             .load(Ordering::SeqCst)
     }
@@ -76,7 +77,7 @@ pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> u
 #[no_mangle]
 pub extern "C" fn ffi_is_encryption_enabled(proxy_ptr: RaftStoreProxyPtr) -> u8 {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .is_some()
             .into()
@@ -88,7 +89,7 @@ pub extern "C" fn ffi_encryption_method(
     proxy_ptr: RaftStoreProxyPtr,
 ) -> interfaces::root::DB::EncryptionMethod {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .as_ref()
             .map_or(EncryptionMethod::Plaintext, |x| x.encryption_method())
@@ -115,14 +116,14 @@ pub extern "C" fn ffi_batch_read_index(
             req.merge_from_bytes(p.to_slice()).unwrap();
             req_vec.push(req);
         }
-        let resp = (*(proxy_ptr as *const TiFlashRaftProxy))
+        let resp = (*(proxy_ptr as *const RaftStoreProxy))
             .read_index_client
             .batch_read_index(req_vec);
-        let res = get_tiflash_server_helper().gen_batch_read_index_res(resp.len() as u64);
+        let res = get_engine_store_server_helper().gen_batch_read_index_res(resp.len() as u64);
         assert_ne!(res, std::ptr::null_mut());
         for (r, region_id) in &resp {
             let r = ProtoMsgBaseBuff::new(r);
-            get_tiflash_server_helper().insert_batch_read_index_resp(
+            get_engine_store_server_helper().insert_batch_read_index_resp(
                 res,
                 r.borrow().into(),
                 *region_id,
@@ -163,8 +164,8 @@ impl FileEncryptionInfoRaw {
         FileEncryptionInfoRaw {
             res: FileEncryptionRes::Ok as _,
             method: f.method.into(),
-            key: get_tiflash_server_helper().gen_cpp_string(&f.key),
-            iv: get_tiflash_server_helper().gen_cpp_string(&f.iv),
+            key: get_engine_store_server_helper().gen_cpp_string(&f.key),
+            iv: get_engine_store_server_helper().gen_cpp_string(&f.iv),
             erro_msg: std::ptr::null_mut(),
         }
     }
@@ -176,7 +177,7 @@ pub extern "C" fn ffi_handle_get_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .as_ref()
             .map_or(
@@ -186,7 +187,7 @@ pub extern "C" fn ffi_handle_get_file(
                     p.map_or_else(
                         |e| {
                             FileEncryptionInfoRaw::error(
-                                get_tiflash_server_helper().gen_cpp_string(
+                                get_engine_store_server_helper().gen_cpp_string(
                                     format!("Encryption key manager get file failure: {}", e)
                                         .as_ref(),
                                 ),
@@ -205,7 +206,7 @@ pub extern "C" fn ffi_handle_new_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .as_ref()
             .map_or(
@@ -215,7 +216,7 @@ pub extern "C" fn ffi_handle_new_file(
                     p.map_or_else(
                         |e| {
                             FileEncryptionInfoRaw::error(
-                                get_tiflash_server_helper().gen_cpp_string(
+                                get_engine_store_server_helper().gen_cpp_string(
                                     format!("Encryption key manager new file failure: {}", e)
                                         .as_ref(),
                                 ),
@@ -234,7 +235,7 @@ pub extern "C" fn ffi_handle_delete_file(
     name: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .as_ref()
             .map_or(
@@ -244,7 +245,7 @@ pub extern "C" fn ffi_handle_delete_file(
                     p.map_or_else(
                         |e| {
                             FileEncryptionInfoRaw::error(
-                                get_tiflash_server_helper().gen_cpp_string(
+                                get_engine_store_server_helper().gen_cpp_string(
                                     format!("Encryption key manager delete file failure: {}", e)
                                         .as_ref(),
                                 ),
@@ -264,7 +265,7 @@ pub extern "C" fn ffi_handle_link_file(
     dst: BaseBuffView,
 ) -> FileEncryptionInfoRaw {
     unsafe {
-        (*(proxy_ptr as *const TiFlashRaftProxy))
+        (*(proxy_ptr as *const RaftStoreProxy))
             .key_manager
             .as_ref()
             .map_or(
@@ -277,7 +278,7 @@ pub extern "C" fn ffi_handle_link_file(
                     p.map_or_else(
                         |e| {
                             FileEncryptionInfoRaw::error(
-                                get_tiflash_server_helper().gen_cpp_string(
+                                get_engine_store_server_helper().gen_cpp_string(
                                     format!("Encryption key manager link file failure: {}", e)
                                         .as_ref(),
                                 ),
@@ -291,7 +292,7 @@ pub extern "C" fn ffi_handle_link_file(
 }
 
 impl TiFlashRaftProxyHelperFFI {
-    pub fn new(proxy: &TiFlashRaftProxy) -> Self {
+    pub fn new(proxy: &RaftStoreProxy) -> Self {
         let proxy_ptr = proxy as *const _ as *const u8;
         TiFlashRaftProxyHelperFFI {
             proxy_ptr: proxy_ptr as *const _,
@@ -490,7 +491,7 @@ impl RawCppPtr {
 impl Drop for RawCppPtr {
     fn drop(&mut self) {
         if !self.is_null() {
-            get_tiflash_server_helper().gc_raw_cpp_ptr(self.ptr, self.type_);
+            get_engine_store_server_helper().gc_raw_cpp_ptr(self.ptr, self.type_);
             self.ptr = std::ptr::null_mut();
         }
     }
@@ -498,15 +499,15 @@ impl Drop for RawCppPtr {
 
 unsafe impl Send for RawCppPtr {}
 
-unsafe impl Send for TiFlashServerHelper {}
+unsafe impl Send for EngineStoreServerHelper {}
 
-pub static mut TIFLASH_SERVER_HELPER_PTR: u64 = 0;
+pub static mut ENGINE_STORE_SERVER_HELPER_PTR: u64 = 0;
 
-pub fn get_tiflash_server_helper() -> &'static TiFlashServerHelper {
-    return unsafe { &(*(TIFLASH_SERVER_HELPER_PTR as *const TiFlashServerHelper)) };
+pub fn get_engine_store_server_helper() -> &'static EngineStoreServerHelper {
+    return unsafe { &(*(ENGINE_STORE_SERVER_HELPER_PTR as *const EngineStoreServerHelper)) };
 }
 
-impl TiFlashServerHelper {
+impl EngineStoreServerHelper {
     fn gc_raw_cpp_ptr(&self, ptr: *mut ::std::os::raw::c_void, tp: RawCppPtrType) {
         unsafe {
             (self.fn_gc_raw_cpp_ptr.into_inner())(self.inner, ptr, tp);

@@ -88,7 +88,7 @@ use tokio::runtime::Builder;
 use crate::setup::*;
 
 use raftstore::tiflash_ffi::{
-    get_tiflash_server_helper, RaftProxyStatus, ReadIndexClient, TiFlashRaftProxy,
+    get_engine_store_server_helper, RaftProxyStatus, RaftStoreProxy, ReadIndexClient,
     TiFlashRaftProxyHelperFFI, TiFlashStatus,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8};
@@ -126,7 +126,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             tikv.init_fs();
             tikv.init_yatp();
             tikv.init_encryption();
-            let mut proxy = TiFlashRaftProxy {
+            let mut proxy = RaftStoreProxy {
                 status: AtomicU8::new(RaftProxyStatus::Idle as u8),
                 key_manager: tikv.encryption_key_manager.clone(),
                 read_index_client: Box::new(ReadIndexClient {
@@ -138,14 +138,18 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
 
             info!("set tiflash proxy helper");
 
-            get_tiflash_server_helper().handle_set_proxy(&proxy_helper);
+            get_engine_store_server_helper().handle_set_proxy(&proxy_helper);
 
             info!("wait for tiflash server to start");
-            while get_tiflash_server_helper().handle_get_tiflash_status() == TiFlashStatus::Idle {
+            while get_engine_store_server_helper().handle_get_tiflash_status()
+                == TiFlashStatus::Idle
+            {
                 thread::sleep(Duration::from_millis(200));
             }
 
-            if get_tiflash_server_helper().handle_get_tiflash_status() != TiFlashStatus::Running {
+            if get_engine_store_server_helper().handle_get_tiflash_status()
+                != TiFlashStatus::Running
+            {
                 info!("tiflash server is not running, make proxy exit");
                 return;
             }
@@ -165,7 +169,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             {
                 let _ = tikv.engines.take().unwrap().engines;
                 loop {
-                    if get_tiflash_server_helper().handle_check_terminated() {
+                    if get_engine_store_server_helper().handle_check_terminated() {
                         break;
                     }
                     thread::sleep(Duration::from_millis(200));
@@ -181,7 +185,8 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             info!("all services in tiflash proxy are stopped");
 
             info!("wait for tiflash server to stop");
-            while get_tiflash_server_helper().handle_get_tiflash_status() != TiFlashStatus::Stopped
+            while get_engine_store_server_helper().handle_get_tiflash_status()
+                != TiFlashStatus::Stopped
             {
                 thread::sleep(Duration::from_millis(200));
             }

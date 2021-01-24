@@ -64,7 +64,7 @@ use crate::{Error, Result};
 
 use super::metrics::*;
 use crate::tiflash_ffi::{
-    gen_snap_kv_data_from_sst, get_tiflash_server_helper, ColumnFamilyType, RaftCmdHeader,
+    gen_snap_kv_data_from_sst, get_engine_store_server_helper, ColumnFamilyType, RaftCmdHeader,
     SnapshotHelper, TiFlashApplyRes, WriteCmdType, WriteCmds,
 };
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
@@ -950,7 +950,7 @@ where
         {
             // hacked by solotzg.
             let cmds = WriteCmds::new();
-            get_tiflash_server_helper().handle_write_raft_cmd(
+            get_engine_store_server_helper().handle_write_raft_cmd(
                 &cmds,
                 RaftCmdHeader::new(self.region.get_id(), index, term),
             );
@@ -1148,7 +1148,7 @@ where
                 {
                     // hacked by solotzg.
                     let cmds = WriteCmds::new();
-                    get_tiflash_server_helper().handle_write_raft_cmd(
+                    get_engine_store_server_helper().handle_write_raft_cmd(
                         &cmds,
                         RaftCmdHeader::new(self.region.get_id(), index, term),
                     );
@@ -1352,7 +1352,7 @@ where
             TiFlashApplyRes::None
         } else {
             // hacked by solotzg.
-            get_tiflash_server_helper().handle_admin_raft_cmd(
+            get_engine_store_server_helper().handle_admin_raft_cmd(
                 &request,
                 &response,
                 RaftCmdHeader::new(
@@ -1472,7 +1472,7 @@ where
             }
         } else {
             let flash_res = {
-                get_tiflash_server_helper().handle_write_raft_cmd(
+                get_engine_store_server_helper().handle_write_raft_cmd(
                     &cmds,
                     RaftCmdHeader::new(
                         self.region.get_id(),
@@ -1687,7 +1687,7 @@ where
             }
         }
 
-        get_tiflash_server_helper().handle_ingest_sst(
+        get_engine_store_server_helper().handle_ingest_sst(
             &mut snapshot_helper,
             RaftCmdHeader::new(
                 self.region.get_id(),

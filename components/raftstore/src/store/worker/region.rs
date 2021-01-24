@@ -411,7 +411,7 @@ where
             );
             assert_eq!(idx, snap.index);
             assert_eq!(term, snap.term);
-            tiflash_ffi::get_tiflash_server_helper().apply_pre_handled_snapshot(snap.inner);
+            tiflash_ffi::get_engine_store_server_helper().apply_pre_handled_snapshot(snap.inner);
         } else {
             info!(
                 "apply data to tiflash";
@@ -423,7 +423,7 @@ where
             }
             check_abort(&abort)?;
             let pre_handled_snap = s.pre_handle_snapshot(&region, peer_id, idx, term);
-            tiflash_ffi::get_tiflash_server_helper()
+            tiflash_ffi::get_engine_store_server_helper()
                 .apply_pre_handled_snapshot(pre_handled_snap.inner);
         }
 

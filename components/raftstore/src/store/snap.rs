@@ -443,7 +443,7 @@ impl Snap {
         term: u64,
     ) -> PreHandledSnapshot {
         let mut snapshot_helper = self.gen_snapshot_helper(region);
-        let res = tiflash_ffi::get_tiflash_server_helper().pre_handle_snapshot(
+        let res = tiflash_ffi::get_engine_store_server_helper().pre_handle_snapshot(
             &region,
             peer_id,
             &mut snapshot_helper,
