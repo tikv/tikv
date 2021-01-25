@@ -1,10 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine_rocks::raw::DB;
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
 use std::sync::atomic::AtomicBool;
