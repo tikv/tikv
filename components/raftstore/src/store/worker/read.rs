@@ -32,8 +32,6 @@ use tikv_util::time::{Instant, ThreadReadId};
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
 
-const DELEGATE_LRU_CACHE_CAPACITY: usize = 10 * 1024;
-
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
     fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
@@ -375,7 +373,7 @@ where
             cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
-            delegates: LruCache::with_capacity(DELEGATE_LRU_CACHE_CAPACITY),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
         }
     }
 
@@ -601,7 +599,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),
-            delegates: LruCache::with_capacity(DELEGATE_LRU_CACHE_CAPACITY),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
         }
