@@ -69,8 +69,8 @@ fn test_physical_scan_lock() {
 #[test]
 fn test_applied_lock_collector() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
     cluster.pd_client.disable_default_operator();
+    cluster.run();
 
     // Create all stores' clients.
     let env = Arc::new(Environment::new(1));

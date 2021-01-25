@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 encryption = { path = "../encryption" }
-fail = "0.3"
+fail = "0.4"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 rand = "0.7"

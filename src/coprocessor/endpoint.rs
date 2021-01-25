@@ -20,6 +20,7 @@ use tipb::{DagRequest, ExecType};
 
 use crate::read_pool::ReadPoolHandle;
 use crate::server::Config;
+use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 
@@ -446,12 +447,15 @@ impl<E: Engine> Endpoint<E> {
 
             loop {
                 tracker.on_begin_item();
+                let perf_statistics_instant = PerfStatisticsInstant::new();
 
                 let result = handler.handle_streaming_request();
+
                 let mut storage_stats = Statistics::default();
                 handler.collect_scan_statistics(&mut storage_stats);
+                let perf_statistics = perf_statistics_instant.delta();
+                tracker.on_finish_item(Some(storage_stats), perf_statistics);
 
-                tracker.on_finish_item(Some(storage_stats));
                 let (exec_details, exec_details_v2) = tracker.get_item_exec_details();
 
                 match result {
@@ -1279,6 +1283,12 @@ mod tests {
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Response 1
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req2 payload. So here:
+            // req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
@@ -1291,10 +1301,16 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
             // Response 2
+            //
+            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
+            // Someday it will be separated, but for now, let's just consider the combination.
+            //
+            // In the worst case, `total_suspend_time` could be totally req1 payload. So here:
+            // req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
@@ -1307,7 +1323,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
+                PAYLOAD_SMALL + PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 

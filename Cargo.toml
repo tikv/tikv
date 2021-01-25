@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "4.0.9"
+version = "4.0.10"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -81,7 +81,7 @@ engine_panic = { path = "components/engine_panic", optional = true }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 error_code = { path = "components/error_code" }
-fail = "0.3"
+fail = "0.4"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
@@ -132,7 +132,7 @@ slog_derive = "0.2"
 parking_lot = "0.10"
 prometheus = { version = "0.8", features = ["nightly", "push"] }
 sst_importer = { path = "components/sst_importer" }
-sysinfo = "0.14"
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv-4.0"}
 tempfile = "3.0"
 tidb_query = { path = "components/tidb_query" }
 tidb_query_datatype = { path = "components/tidb_query_datatype" }
