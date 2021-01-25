@@ -3101,6 +3101,14 @@ where
 
         let region = self.fsm.peer.region();
         if msg.get_admin_request().has_prepare_merge() {
+            // Just for simplicity, do not start region merge while in joint state
+            if self.fsm.peer.in_joint_state() {
+                return Err(box_err!(
+                    "{} region in joint state, can not propose merge command, command: {:?}",
+                    self.fsm.peer.tag,
+                    msg.get_admin_request()
+                ));
+            }
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
                 let meta = self.ctx.store_meta.lock().unwrap();
