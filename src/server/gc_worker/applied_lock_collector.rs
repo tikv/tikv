@@ -339,13 +339,13 @@ impl LockCollectorRunner {
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        let curr_max_ts = self.observer_state.max_ts.compare_exchange(
+        let res = self.observer_state.max_ts.compare_exchange(
             max_ts.into_inner(),
             0,
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
-        if curr_max_ts.is_ok() {
+        if res.is_ok() {
             self.collected_locks.clear();
             info!("stop collecting locks"; "max_ts" => max_ts);
             Ok(())
@@ -353,7 +353,7 @@ impl LockCollectorRunner {
             warn!(
                 "trying to stop collecting locks, but now collecting with a different max_ts";
                 "stopping_max_ts" => max_ts,
-                "current_max_ts" => TimeStamp::new(curr_max_ts.unwrap_err()),
+                "current_max_ts" => TimeStamp::new(res.unwrap_err()),
             );
             Err(box_err!("collecting locks with another max_ts"))
         }

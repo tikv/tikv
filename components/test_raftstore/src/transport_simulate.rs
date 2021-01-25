@@ -731,10 +731,11 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
     }
 
     fn after(&self, res: Result<()>) -> Result<()> {
-        let dropped =
-            self.dropped
-                .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed);
-        if res.is_err() && dropped.is_ok() {
+        let dropped = self
+            .dropped
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok();
+        if res.is_err() && dropped {
             Ok(())
         } else {
             res

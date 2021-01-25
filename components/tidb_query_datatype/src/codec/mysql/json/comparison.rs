@@ -258,7 +258,7 @@ mod tests {
             let left: Json = left_str.parse().unwrap();
             let right: Json = right_str.parse().unwrap();
             assert!(left < right);
-            // assert_eq!(left, left);
+            assert_eq!(left, left.clone());
         }
         assert_eq!(Json::none().unwrap(), Json::none().unwrap());
     }

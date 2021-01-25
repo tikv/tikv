@@ -53,7 +53,7 @@ pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
             return Ok(writer.write(Some(b"0".to_vec())));
         }
 
-        for c in trimmed.take_while(|&&c| (b'0'..=b'9').contains(&c)) {
+        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));

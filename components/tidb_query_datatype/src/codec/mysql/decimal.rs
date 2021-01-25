@@ -1849,7 +1849,7 @@ impl<'a> ConvertTo<Decimal> for JsonRef<'a> {
 fn first_non_digit(bs: &[u8], start_idx: usize) -> usize {
     bs.iter()
         .skip(start_idx)
-        .position(|&c| !(b'0'..=b'9').contains(&c))
+        .position(|c| !(b'0'..=b'9').contains(c))
         .map_or_else(|| bs.len(), |s| s + start_idx)
 }
 

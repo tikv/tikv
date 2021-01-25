@@ -193,7 +193,7 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn cast_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
+    fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
 /// # Notes
@@ -270,7 +270,7 @@ macro_rules! impl_evaluable_ret {
             type ChunkedType = $chunk;
 
             #[inline]
-            fn cast_into_vector_value(vec: $chunk) -> VectorValue {
+            fn cast_chunk_into_vector_value(vec: $chunk) -> VectorValue {
                 VectorValue::from(vec)
             }
         }

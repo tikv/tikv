@@ -566,7 +566,7 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&&c| (b'0'..=b'9').contains(&c)) {
+        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             let cur = i64::from(*c - b'0');
             r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
                 if negative {
@@ -597,7 +597,7 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&&c| (b'0'..=b'9').contains(&c)) {
+        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
