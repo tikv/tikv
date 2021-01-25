@@ -2138,6 +2138,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
+name = "maybe-uninit"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
+
+[[package]]
 name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2604,7 +2610,7 @@ dependencies = [
  "libc",
  "redox_syscall",
  "rustc_version",
- "smallvec 0.6.10",
+ "smallvec 0.6.14",
  "winapi 0.3.8",
 ]
 
@@ -2618,7 +2624,7 @@ dependencies = [
  "cloudabi 0.0.3",
  "libc",
  "redox_syscall",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "winapi 0.3.8",
 ]
 
@@ -2633,7 +2639,7 @@ dependencies = [
  "instant",
  "libc",
  "redox_syscall",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "winapi 0.3.8",
 ]
 
@@ -3994,15 +4000,18 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "0.6.10"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
+checksum = "b97fcaeba89edba30f044a10c6a3cc39df9c3f17d7cd829dd1446cab35f890e0"
+dependencies = [
+ "maybe-uninit",
+]
 
 [[package]]
 name = "smallvec"
-version = "1.4.2"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
+checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "snappy-sys"
@@ -4213,9 +4222,8 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d070254b7172eee9eb3990bea8f72aeabfe1226c40bf71a52e4fe75777812e9a"
+version = "0.15.3"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv-4.0#708857e0345340889b38f30a69d5fc4445ef949f"
 dependencies = [
  "cfg-if 0.1.10",
  "doc-comment",
@@ -4566,7 +4574,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_datatype",
@@ -5253,7 +5261,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5479532badd04e128284890390c1e876ef7a993d0570b3597ae43dfa1d59afa4"
 dependencies = [
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
 ]
 
 [[package]]
