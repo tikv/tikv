@@ -275,6 +275,7 @@ fn test_invalid_confchange_request() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
+    let region = cluster.get_region(b"");
 
     cluster.must_put(b"k1", b"v1");
     pd_client.must_add_peer(region_id, new_peer(2, 2));
@@ -342,6 +343,30 @@ fn test_invalid_confchange_request() {
     // Can not leave a non-joint config
     let resp = leave_joint(&mut cluster, region_id).unwrap();
     must_contains_error(&resp, "leave a non-joint config");
+
+    // Split region
+    cluster.must_split(&region, b"k3");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k5").unwrap();
+    assert_eq!(region_id, right.get_id());
+    // Enter joint
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(2, 2)),
+            (ConfChangeType::AddNode, new_peer(3, 3)),
+        ],
+    );
+    assert!(pd_client.is_in_joint(region_id));
+
+    // Can not merge region while in jonit state
+    let resp = cluster.try_merge(right.get_id(), left.get_id());
+    must_contains_error(&resp, "in joint state, can not propose merge command");
+
+    // Can not leave joint if which will demote leader
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
+    let resp = leave_joint(&mut cluster, region_id).unwrap();
+    must_contains_error(&resp, "ignore leave joint command that demoting leader");
 }
 
 /// Tests when leader restart in joint state, joint state should be the same
@@ -386,9 +411,10 @@ fn test_restart_in_joint_state() {
     pd_client.must_leave_joint(region_id);
 
     // Joint confchange finished
-    cluster.must_put(b"k3", b"v3");
-    must_get_none(&cluster.get_engine(2), b"k3");
-    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    let region = cluster.get_region(b"k2");
+    must_has_peer(&region, 1, PeerRole::Voter);
+    must_has_peer(&region, 2, PeerRole::Learner);
+    must_has_peer(&region, 3, PeerRole::Voter);
 }
 
 /// Tests when leader down in joint state, both peers in new configuration and
@@ -443,11 +469,12 @@ fn test_leader_down_in_joint_state() {
     pd_client.must_leave_joint(region_id);
 
     // Joint confchange finished
-    cluster.must_put(b"k10", b"v10");
-    must_get_none(&cluster.get_engine(2), b"k10");
-    must_get_none(&cluster.get_engine(3), b"k10");
-    must_get_equal(&cluster.get_engine(4), b"k10", b"v10");
-    must_get_equal(&cluster.get_engine(5), b"k10", b"v10");
+    let region = cluster.get_region(b"k1");
+    must_has_peer(&region, 1, PeerRole::Voter);
+    must_has_peer(&region, 2, PeerRole::Learner);
+    must_has_peer(&region, 3, PeerRole::Learner);
+    must_has_peer(&region, 4, PeerRole::Voter);
+    must_has_peer(&region, 5, PeerRole::Voter);
 }
 
 fn call_conf_change_v2<T>(
@@ -502,4 +529,11 @@ fn put_request(region: &Region, id: u64, key: &[u8], val: &[u8]) -> RaftCmdReque
     );
     request.mut_header().set_peer(new_peer(id, id));
     request
+}
+
+fn must_has_peer(region: &Region, peer_id: u64, role: PeerRole) {
+    assert!(region
+        .get_peers()
+        .iter()
+        .any(|p| p.get_id() == peer_id && p.get_role() == role));
 }
