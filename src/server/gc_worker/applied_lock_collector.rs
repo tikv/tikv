@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use keys::origin_key;
+use std::borrow::Cow;
 use std::cmp::Ordering::*;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use txn_types::Key;
+use txn_types::{Key, TsSet};
 
+use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
@@ -382,10 +384,14 @@ impl Runnable for LockCollectorRunner {
 pub struct AppliedLockCollector {
     worker: Mutex<Worker>,
     scheduler: Scheduler<LockCollectorTask>,
+    concurrency_manager: ConcurrencyManager,
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
+    pub fn new(
+        coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let state = Arc::new(LockObserverState::default());
@@ -397,7 +403,11 @@ impl AppliedLockCollector {
 
         // Start the worker
 
-        Ok(Self { worker, scheduler })
+        Ok(Self {
+            worker,
+            scheduler,
+            concurrency_manager,
+        })
     }
 
     pub fn stop(&self) {
@@ -407,6 +417,15 @@ impl AppliedLockCollector {
     /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
     /// at one time.
     pub fn start_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
+        // Before starting collecting, check the concurrency manager to avoid later prewrite
+        // requests uses a min_commit_ts less than the safepoint.
+        // `max_ts` here is the safepoint of the current round of GC.
+        self.concurrency_manager.update_max_ts(max_ts);
+        self.concurrency_manager
+            .read_range_check(None, None, |k, l| {
+                Lock::check_ts_conflict(Cow::Borrowed(l), k, max_ts, &TsSet::Empty)
+                    .map_err(MvccError::from)
+            })?;
         self.scheduler
             .schedule(LockCollectorTask::StartCollecting { max_ts, callback })
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
@@ -501,7 +520,9 @@ mod tests {
 
     fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost<RocksEngine>) {
         let mut coprocessor_host = CoprocessorHost::default();
-        let collector = AppliedLockCollector::new(&mut coprocessor_host).unwrap();
+        let collector =
+            AppliedLockCollector::new(&mut coprocessor_host, ConcurrencyManager::new(1.into()))
+                .unwrap();
         (collector, coprocessor_host)
     }
 
@@ -535,6 +556,7 @@ mod tests {
 
         // Started.
         start_collecting(&c, 2).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 2.into());
         get_collected_locks(&c, 2).unwrap();
         stop_collecting(&c, 2).unwrap();
         // Stopped.
@@ -544,9 +566,11 @@ mod tests {
         // When start_collecting is invoked with a larger ts, the later one will ovewrite the
         // previous one.
         start_collecting(&c, 3).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 3.into());
         get_collected_locks(&c, 3).unwrap();
         get_collected_locks(&c, 4).unwrap_err();
         start_collecting(&c, 4).unwrap();
+        assert_eq!(c.concurrency_manager.max_ts(), 4.into());
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
         // Do not allow aborting previous observing with a smaller max_ts.

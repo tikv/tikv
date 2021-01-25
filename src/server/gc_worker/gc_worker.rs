@@ -692,9 +692,13 @@ where
     pub fn start_observe_lock_apply(
         &mut self,
         coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
-        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        let collector = Arc::new(AppliedLockCollector::new(
+            coprocessor_host,
+            concurrency_manager,
+        )?);
         self.applied_lock_collector = Some(collector);
         Ok(())
     }

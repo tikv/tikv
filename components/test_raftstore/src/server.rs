@@ -246,6 +246,10 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
+        let latest_ts =
+            block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             sim_router.clone(),
@@ -254,12 +258,9 @@ impl Simulator for ServerCluster {
         );
         gc_worker.start().unwrap();
         gc_worker
-            .start_observe_lock_apply(&mut coprocessor_host)
+            .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
-        let latest_ts =
-            block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
