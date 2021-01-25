@@ -219,7 +219,7 @@ fn test_validate_endpoints() {
 }
 
 #[test]
-fn test_validate_endpoints_shuffle_retry() {
+fn test_validate_endpoints_retry() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(Split::new()));
     let env = Arc::new(
