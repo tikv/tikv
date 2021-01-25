@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.10] - 2021-01-15
+
++ Bug Fixes
+  + Fix the wrong mapping between ready and peer [#9409](https://github.com/tikv/tikv/pull/9409)
+  + Fix the issue that some logs are not redacted when `security.redact-info-log` is set to `true` [#9314](https://github.com/tikv/tikv/pull/9314)
+
 ## [4.0.9] - 2020-12-18
 
 + Improvements

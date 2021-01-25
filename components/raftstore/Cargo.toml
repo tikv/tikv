@@ -47,7 +47,7 @@ engine_rocks = { path = "../engine_rocks" }
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
-fail = "0.3"
+fail = "0.4"
 openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
