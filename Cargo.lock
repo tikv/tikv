@@ -1130,7 +1130,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "sysinfo 0.14.15",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -4222,24 +4222,8 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2983daff11a197c7c406b130579bc362177aa54cf2cc1f34d6ac88fccaa6a5e1"
-dependencies = [
- "cfg-if 0.1.10",
- "doc-comment",
- "libc",
- "ntapi",
- "once_cell",
- "rayon",
- "winapi 0.3.8",
-]
-
-[[package]]
-name = "sysinfo"
 version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67330cbee3b2a819e3365a773f05e884a136603687f812bf24db5b6c3d76b696"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv-4.0#708857e0345340889b38f30a69d5fc4445ef949f"
 dependencies = [
  "cfg-if 0.1.10",
  "doc-comment",
@@ -4705,7 +4689,7 @@ dependencies = [
  "slog-global",
  "slog_derive",
  "sst_importer",
- "sysinfo 0.15.3",
+ "sysinfo",
  "tempfile",
  "test_sst_importer",
  "test_util",
@@ -4823,7 +4807,7 @@ dependencies = [
  "slog-global",
  "slog-json",
  "slog-term",
- "sysinfo 0.15.3",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "time 0.1.42",
