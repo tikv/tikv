@@ -283,4 +283,31 @@ impl PdMocker for Service {
         resp.set_header(header);
         Some(Ok(resp))
     }
+
+    fn put_store(&self, _: &PutStoreRequest) -> Option<Result<PutStoreResponse>> {
+        let mut resp = PutStoreResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_cluster_config(
+        &self,
+        _: &GetClusterConfigRequest,
+    ) -> Option<Result<GetClusterConfigResponse>> {
+        let mut resp = GetClusterConfigResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn get_gc_safe_point(
+        &self,
+        _: &GetGcSafePointRequest,
+    ) -> Option<Result<GetGcSafePointResponse>> {
+        let mut resp = GetGcSafePointResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        Some(Ok(resp))
+    }
 }
