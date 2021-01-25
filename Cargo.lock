@@ -4222,9 +4222,8 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d070254b7172eee9eb3990bea8f72aeabfe1226c40bf71a52e4fe75777812e9a"
+version = "0.15.3"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv-4.0#708857e0345340889b38f30a69d5fc4445ef949f"
 dependencies = [
  "cfg-if 0.1.10",
  "doc-comment",
