@@ -4440,6 +4440,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
  "fail",
  "futures 0.1.29",
@@ -4604,7 +4605,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "4.0.9"
+version = "4.0.10"
 dependencies = [
  "async-stream",
  "async-trait",
