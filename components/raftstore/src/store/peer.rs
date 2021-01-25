@@ -1946,15 +1946,17 @@ where
                 continue;
             }
             if !replica_read {
-                match (read_index, read.read_index) {
+                if read_index.is_some() && read.read_index.is_some() {
                     // `read_index` could be less than `read.read_index` because the former is
                     // filled with `committed index` when proposed, and the latter is filled after
                     // a read-index procedure finished.
-                    (Some(i_test), Some(i_got)) if i_test < i_got => read_index = read.read_index,
+                    let local_responsed_index = read_index.unwrap();
+                    let batch_index = read.read_index.unwrap();
+                    read_index = Some(cmp::max(local_responsed_index, batch_index));
+                } else if read_index.is_none() {
                     // Actually, the read_index is none if and only if it's the first one in read.cmds.
                     // Starting from the second, all the following ones' read_index is not none.
-                    (None, _) => read_index = read.read_index,
-                    _ => {}
+                    read_index = read.read_index;
                 }
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
