@@ -16,7 +16,7 @@ use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler, Worker};
+use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -490,6 +490,12 @@ impl RunnableWithTimer for RegionCollector {
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
+    // We use a dedicated worker for region info accessor. If we later want to share a worker with
+    // other tasks, we must make sure the other tasks don't block on flush or compaction, which
+    // may cause a deadlock between the flush or compaction task, and the region info accessor task
+    // fired by compaction guard from the RocksDB compaction thread.
+    // https://github.com/tikv/tikv/issues/9044
+    worker: Worker,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 
@@ -497,16 +503,18 @@ impl RegionInfoAccessor {
     /// Creates a new `RegionInfoAccessor` and register to `host`.
     /// `RegionInfoAccessor` doesn't need, and should not be created more than once. If it's needed
     /// in different places, just clone it, and their contents are shared.
-    pub fn new(host: &mut CoprocessorHost<impl KvEngine>, worker: &Worker) -> Self {
+    pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
+        let worker = WorkerBuilder::new("region-info").create();
         let scheduler = worker.start_with_timer("region-collector-worker", RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
-        Self { scheduler }
+        Self { worker, scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
         self.scheduler.stop();
+        self.worker.stop();
     }
 
     /// Gets all content from the collection. Only used for testing.
