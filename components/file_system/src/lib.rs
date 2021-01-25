@@ -108,11 +108,66 @@ pub enum IOMeasure {
     Iops,
 }
 
-#[derive(Debug, Clone, Copy, VariantCount)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, VariantCount)]
 pub enum IOPriority {
     Low = 0,
     Medium = 1,
     High = 2,
+}
+
+pub mod io_priority_serde {
+    use std::fmt;
+
+    use serde::de::{Error, Unexpected, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    use super::IOPriority;
+
+    pub fn serialize<S>(t: &IOPriority, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            IOPriority::Low => "low",
+            IOPriority::Medium => "medium",
+            IOPriority::High => "high",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<IOPriority, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = IOPriority;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a IO priority")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<IOPriority, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "low" => IOPriority::Low,
+                    "medium" => IOPriority::Medium,
+                    "high" => IOPriority::High,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other(&"invalid compression type".to_string()),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
 }
 
 /// Indicates how large a buffer to pre-allocate before reading the entire file.

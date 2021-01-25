@@ -235,13 +235,14 @@
 
 [storage.io-rate-limit]
 # total = "1GB"
-# read = "1GB"
-# write = "1GB"
-# compaction = "1GB"
-# compaction-read = "1GB"
-# compaction-write = "1GB"
-# import = "1GB"
-# export = "1GB"
+# foreground-read-priority = "high"
+# foreground-write-priority = "high"
+# flush-priority = "high"
+# compaction-priority = "high"
+# replication-priority = "high"
+# load-balance-priority = "high"
+# import-priority = "high"
+# export-priority = "high"
 
 [pd]
 ## PD endpoints.

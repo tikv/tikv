@@ -27,7 +27,7 @@ use engine_traits::{
     compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines,
     MetricsTask as EngineMetricsTask, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
-use file_system::{BytesFetcher, IORateLimiter, MetricsTask as IOMetricsTask};
+use file_system::{BytesFetcher, MetricsTask as IOMetricsTask};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -832,8 +832,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_io_utils(&mut self) -> BytesFetcher {
-        let limiter = Arc::new(IORateLimiter::new());
-        self.config.storage.io_rate_limit.apply(&limiter);
+        let limiter = Arc::new(self.config.storage.io_rate_limit.build());
         file_system::set_io_rate_limiter(Some(limiter.clone()));
         let io_snooper_on = self.config.enable_io_snoop
             && if let Err(e) = file_system::init_io_snooper() {

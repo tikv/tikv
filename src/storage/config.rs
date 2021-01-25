@@ -7,7 +7,7 @@ use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Res
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOMeasure, IORateLimiter};
+use file_system::{get_io_rate_limiter, IOMeasure, IOPriority, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
@@ -128,11 +128,11 @@ impl ConfigManager for StorageConfigManger {
                 return Err("IO rate limiter is not present".into());
             }
             let limiter = limiter.unwrap();
-            let mut config = IORateLimitConfig::empty();
             if let Some(limit) = io_rate_limit.remove("total") {
-                config.total = limit.into();
+                if let OptionReadableSize(Some(limit)) = limit.into() {
+                    limiter.set_io_rate_limit(IOMeasure::Bytes, limit.as_b() as usize);
+                }
             }
-            config.apply(&limiter);
         }
         Ok(())
     }
@@ -221,26 +221,62 @@ impl BlockCacheConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
     pub total: OptionReadableSize,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub foreground_read_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub foreground_write_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub flush_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub compaction_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub replication_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub load_balance_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub import_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub export_priority: IOPriority,
 }
 
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
             total: OptionReadableSize(Some(ReadableSize::mb(2000))),
+            foreground_read_priority: IOPriority::High,
+            foreground_write_priority: IOPriority::High,
+            flush_priority: IOPriority::High,
+            compaction_priority: IOPriority::High,
+            replication_priority: IOPriority::High,
+            load_balance_priority: IOPriority::High,
+            import_priority: IOPriority::High,
+            export_priority: IOPriority::High,
         }
     }
 }
 
 impl IORateLimitConfig {
-    pub fn empty() -> Self {
-        IORateLimitConfig {
-            total: OptionReadableSize(None),
-        }
-    }
-    pub fn apply<T: AsRef<IORateLimiter>>(&self, limiter: T) {
-        let limiter = limiter.as_ref();
+    pub fn build(&self) -> IORateLimiter {
+        let mut limiter = IORateLimiter::new();
         if let Some(limit) = self.total.0 {
             limiter.set_io_rate_limit(IOMeasure::Bytes, limit.as_b() as usize);
         }
+        limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
+        limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
+        limiter.set_io_priority(IOType::Flush, self.flush_priority);
+        limiter.set_io_priority(IOType::Compaction, self.compaction_priority);
+        limiter.set_io_priority(IOType::Replication, self.replication_priority);
+        limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);
+        limiter.set_io_priority(IOType::Import, self.import_priority);
+        limiter.set_io_priority(IOType::Export, self.export_priority);
+        limiter
     }
 }

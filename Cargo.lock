@@ -1365,6 +1365,7 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand",
+ "serde",
  "tempfile",
  "tikv_alloc",
  "tikv_util",

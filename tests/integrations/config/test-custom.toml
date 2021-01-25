@@ -88,13 +88,14 @@ memory-allocator = "nodump"
 
 [storage.io-rate-limit]
 total = "1000MB"
-read = "1000MB"
-write = "1000MB"
-compaction = "400MB"
-compaction-read = "200MB"
-compaction-write = "200MB"
-import = "200MB"
-export = "200MB"
+foreground-read-priority = "low"
+foreground-write-priority = "low"
+flush-priority = "low"
+compaction-priority = "low"
+replication-priority = "low"
+load-balance-priority = "low"
+import-priority = "low"
+export-priority = "low"
 
 [pd]
 endpoints = [

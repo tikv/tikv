@@ -13,6 +13,7 @@ use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use file_system::IOPriority;
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -648,13 +649,14 @@ fn test_serde_custom_tikv_config() {
         },
         io_rate_limit: IORateLimitConfig {
             total: OptionReadableSize(Some(ReadableSize::mb(1000))),
-            read: OptionReadableSize(Some(ReadableSize::mb(1000))),
-            write: OptionReadableSize(Some(ReadableSize::mb(1000))),
-            compaction: OptionReadableSize(Some(ReadableSize::mb(400))),
-            compaction_read: OptionReadableSize(Some(ReadableSize::mb(200))),
-            compaction_write: OptionReadableSize(Some(ReadableSize::mb(200))),
-            import: OptionReadableSize(Some(ReadableSize::mb(200))),
-            export: OptionReadableSize(Some(ReadableSize::mb(200))),
+            foreground_read_priority: IOPriority::Low,
+            foreground_write_priority: IOPriority::Low,
+            flush_priority: IOPriority::Low,
+            compaction_priority: IOPriority::Low,
+            replication_priority: IOPriority::Low,
+            load_balance_priority: IOPriority::Low,
+            import_priority: IOPriority::Low,
+            export_priority: IOPriority::Low,
         },
     };
     value.coprocessor = CopConfig {
