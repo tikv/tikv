@@ -292,7 +292,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
+    cluster.wait_log_truncated(r1, 1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -400,22 +400,6 @@ fn test_new_split_learner_can_not_find_leader() {
     let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
-}
-
-fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
-    for _ in 1..300 {
-        let apply_state: RaftApplyState = engine
-            .c()
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-            .unwrap()
-            .unwrap();
-        let truncated_index = apply_state.get_truncated_state().get_index();
-        if truncated_index > index {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    panic!("raft log is not truncated to {}", index);
 }
 
 /// Test if the read index request can get a correct response when the commit index of leader
