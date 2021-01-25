@@ -168,13 +168,12 @@ fn test_node_cluster_region_info_accessor() {
 
     // Create a RegionInfoAccessor on node 1
     let (tx, rx) = channel();
-    let worker = Worker::new("test");
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host, &worker);
+                let c = RegionInfoAccessor::new(host);
                 tx.send(c).unwrap();
             }
         }));

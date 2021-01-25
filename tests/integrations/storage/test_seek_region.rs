@@ -118,14 +118,12 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 fn test_region_collection_seek_region() {
     let mut cluster = new_node_cluster(0, 3);
 
-    let share_worker = Arc::new(Mutex::new(Worker::new("test")));
     let (tx, rx) = channel();
     cluster
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let worker = share_worker.lock().unwrap();
-            let p = RegionInfoAccessor::new(host, &*worker);
+            let p = RegionInfoAccessor::new(host);
             tx.send((id, p)).unwrap()
         }));
 
