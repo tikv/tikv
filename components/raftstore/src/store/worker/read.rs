@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -143,7 +143,6 @@ pub struct ReadDelegate {
     last_valid_ts: Timespec,
 
     tag: String,
-    invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
 
@@ -154,11 +153,8 @@ pub struct ReadDelegate {
 
 impl Drop for ReadDelegate {
     fn drop(&mut self) {
-        // `mark_invalid` if the source `ReadDelegate` is dropped
-        if self.track_ver.source {
-            self.mark_invalid();
-            self.track_ver.inc();
-        }
+        // call `inc` to notify the source `ReadDelegate` is dropped
+        self.track_ver.inc();
     }
 }
 
@@ -218,15 +214,10 @@ impl ReadDelegate {
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
-            invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
             track_ver: TrackVer::new(),
         }
-    }
-
-    fn mark_invalid(&self) {
-        self.invalid.store(true, Ordering::Release);
     }
 
     fn fresh_valid_ts(&mut self) {
@@ -471,11 +462,6 @@ where
                 return Ok(None);
             }
         };
-
-        if delegate.invalid.load(Ordering::Acquire) {
-            self.delegates.remove(&region_id);
-            return Ok(None);
-        }
 
         fail_point!("localreader_on_find_delegate");
 
@@ -888,7 +874,6 @@ mod tests {
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
-                invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
@@ -1067,20 +1052,17 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
-        let (reader_clone1, reader_clone2) = {
-            let reader = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
-            (reader.clone(), reader)
-        };
-        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
+        let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
+        assert!(reader.get_delegate(1).is_some());
 
         // dropping the non-source `reader` will not make other readers invalid
-        drop(reader_clone2);
-        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
+        drop(reader_clone);
+        assert!(reader.get_delegate(1).is_some());
 
         // drop the source `reader`
         store_meta.lock().unwrap().readers.remove(&1).unwrap();
-        // `reader_clone` shoulde be marked as invalid
-        assert!(reader_clone1.invalid.load(Ordering::Relaxed));
+        // the invalid delegate should be removed
+        assert!(reader.get_delegate(1).is_none());
     }
 
     #[test]
@@ -1100,7 +1082,6 @@ mod tests {
                 applied_index_term: 1,
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
-                invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
