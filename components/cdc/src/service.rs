@@ -318,10 +318,6 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-<<<<<<< HEAD
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
-            scheduler
-=======
             let downstream = Downstream::new(
                 peer.clone(),
                 region_epoch,
@@ -329,8 +325,7 @@ impl ChangeData for Service {
                 conn_id,
                 enable_old_value,
             );
-            let ret = scheduler
->>>>>>> 927e36f95... cdc: fix old value config glitch when changefeeds with different settings connect to one region (#9515)
+            scheduler
                 .schedule(Task::Register {
                     request,
                     downstream,

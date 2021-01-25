@@ -369,19 +369,15 @@ impl Delegate {
             if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
-<<<<<<< HEAD
-            downstreams[i].sink_event(change_data_event.clone());
-=======
             let mut event = change_data_event.clone();
-            if !downstream.enable_old_value && self.txn_extra_op == TxnExtraOp::ReadOldValue {
+            if !downstreams[i].enable_old_value && self.txn_extra_op == TxnExtraOp::ReadOldValue {
                 if let Some(Event_oneof_event::Entries(ref mut entries)) = event.event {
                     for entry in entries.mut_entries().iter_mut() {
                         entry.mut_old_value().clear();
                     }
                 }
             }
-            downstream.sink_event(event);
->>>>>>> 927e36f95... cdc: fix old value config glitch when changefeeds with different settings connect to one region (#9515)
+            downstreams[i].sink_event(event);
         }
         downstreams.last().unwrap().sink_event(change_data_event);
     }
