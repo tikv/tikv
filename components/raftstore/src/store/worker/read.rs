@@ -424,11 +424,18 @@ where
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
+                let (meta_len, meta_reader) = {
+                    let meta = self.store_meta.lock().unwrap();
+                    (
+                        meta.len(),
+                        meta.readers.get(&region_id).cloned().map(Arc::new),
+                    )
+                };
+
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
-
-                let meta = self.store_meta.lock().unwrap();
-                match meta.readers.get(&region_id).cloned().map(Arc::new) {
+                self.delegates.resize(meta_len);
+                match meta_reader {
                     Some(reader) => {
                         self.delegates.insert(region_id, Arc::clone(&reader));
                         Some(reader)
