@@ -425,7 +425,7 @@ where
                 let (meta_len, meta_reader) = {
                     let meta = self.store_meta.lock().unwrap();
                     (
-                        meta.len(),
+                        meta.readers.len(),
                         meta.readers.get(&region_id).cloned().map(Arc::new),
                     )
                 };
