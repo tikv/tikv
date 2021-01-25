@@ -1340,6 +1340,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
         req.take_cf(),
         req.take_key(),
         req.take_value(),
+        req.take_ttl(),
         cb,
     );
 
@@ -1370,7 +1371,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, req.take_ttl(), cb);
 
     async move {
         let v = match res {

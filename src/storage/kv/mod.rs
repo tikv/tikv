@@ -62,7 +62,8 @@ impl CbContext {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
-    Put(CfName, Key, Value),
+    // cf_name, key, value, ttl
+    Put(CfName, Key, Value, u64),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
 }

@@ -1348,7 +1348,13 @@ where
     EK: KvEngine,
 {
     fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
-        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        let key = req.get_put().get_key();
+        let value = Cow::from(req.get_put().get_value());
+        
+        if req.get_expire_ts() != 0 {
+            append_expire_ts(value.to_mut(), req.get_expire_ts());
+            // value.to_mut().encode_u64(req.get_expire_ts()).unwrap();
+        };
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
@@ -1364,7 +1370,7 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            wb.put_cf(cf, &key, value).unwrap_or_else(|e| {
+            wb.put_cf(cf, &key, &value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
@@ -1375,7 +1381,7 @@ where
                 )
             });
         } else {
-            wb.put(&key, value).unwrap_or_else(|e| {
+            wb.put(&key, &value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,

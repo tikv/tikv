@@ -41,7 +41,7 @@ use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use raftstore::store::{CompactionGuardGeneratorFactory, TTLCompactionFilterFactory, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
@@ -551,6 +551,14 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        if cf_opts.enable_ttl {
+            cf_opts
+                .set_compaction_filter_factory(
+                    "ttl_compaction_filter_factory",
+                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                )
+                .unwrap();
+        }
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -2450,6 +2458,13 @@ impl TiKvConfig {
                 )
                 .into());
             }
+        }
+
+        if self.enable_ttl {
+            // if default cf is non-empty, write cf and lock cf should be empty
+            // not to make mixture of txnkv and rawkv
+
+            // TODO:
         }
 
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;

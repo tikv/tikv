@@ -1673,9 +1673,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.6.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad76ae5de2e2d85fe8f45e072f7909e22fa9ffaf0d53b280825783720dab051c"
+checksum = "e89d54316f4fdc3181139f2725944de33e9a2fde1bf9128e9e4b88543ad6955e"
 dependencies = [
  "derive-new",
  "prost",
@@ -2016,7 +2016,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#1df45810a26df001620f9508b06588640847965e"
+source = "git+https://github.com/Connor1996/kvproto.git?branch=ttl#4d48e94447f7f4eceefb4d9c805e54ea5c9d89cd"
 dependencies = [
  "futures 0.3.7",
  "grpcio",

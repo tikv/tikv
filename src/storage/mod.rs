@@ -993,6 +993,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
+        ttl: u64,
         callback: Callback<()>,
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
@@ -1003,6 +1004,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 Self::rawkv_cf(&cf)?,
                 Key::from_encoded(key),
                 value,
+                ttl,
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
@@ -1016,6 +1018,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
+        ttl: u64,
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
@@ -1028,7 +1031,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let modifies = pairs
             .into_iter()
-            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
+            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v, ttl))
             .collect();
         self.engine.async_write(
             &ctx,

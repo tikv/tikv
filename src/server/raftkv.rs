@@ -394,7 +394,11 @@ where
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
-
+        let expire_ts = if batch.ttl == 0 {
+            0
+        } else {
+            UnixSecs::now().into_inner() + batch.ttl
+        };
         let mut reqs = Vec::with_capacity(batch.modifies.len());
         for m in batch.modifies {
             let mut req = Request::default();
@@ -414,6 +418,9 @@ where
                     put.set_value(v);
                     if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
+                    }
+                    if expire_ts != 0 {
+                        put.set_expire_ts(expire_ts);
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
