@@ -1259,15 +1259,15 @@ impl ApplyDelegate {
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
-                    ctx.kv_wb.as_ref().map(|wb| {
+                    if let Some(wb) = ctx.kv_wb.as_ref() {
                         assert!(wb.is_empty());
-                    });
+                    }
                     self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
-                    ctx.kv_wb.as_ref().map(|wb| {
+                    if let Some(wb) = ctx.kv_wb.as_ref() {
                         assert!(wb.is_empty());
-                    });
+                    }
                     self.handle_ingest_sst(&ctx.importer, &ctx.engine, req, &mut ssts)
                 }
                 // Readonly commands are handled in raftstore directly.

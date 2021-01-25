@@ -179,7 +179,7 @@ fn test_ingest_file_twice_and_conflict() {
     assert!(resp.has_error());
     assert_eq!("ingest file conflict", resp.get_error().get_message());
     tx2.send(()).unwrap();
-    let resp = block_on(resp_recv).unwrap();
+    let resp = resp_recv.wait().unwrap();
     assert!(!resp.has_error());
 
     fail::remove(latch_fp);
