@@ -24,13 +24,15 @@ use crate::store::{
 };
 use crate::Result;
 
-use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
 use super::metrics::*;
 use crate::store::fsm::store::StoreMeta;
+
+const DELEGATE_LRU_CACHE_CAPACITY: usize = 10 * 1024;
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -324,7 +326,7 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
-    delegates: HashMap<u64, Arc<ReadDelegate>>,
+    delegates: LruCache<u64, Arc<ReadDelegate>>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
@@ -373,7 +375,7 @@ where
             cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity(DELEGATE_LRU_CACHE_CAPACITY),
         }
     }
 
@@ -465,8 +467,6 @@ where
             }
         };
 
-        // FIXME: if the `ReadDelegate` is marked invalid but no incoming request
-        // to it, it will not be removed and consuming memory
         if delegate.invalid.load(Ordering::Acquire) {
             self.delegates.remove(&region_id);
             return Ok(None);
@@ -594,7 +594,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity(DELEGATE_LRU_CACHE_CAPACITY),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
         }
