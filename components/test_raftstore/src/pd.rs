@@ -1017,6 +1017,12 @@ impl TestPdClient {
     }
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
+        if peer.get_role() == PeerRole::Voter {
+            let mut learner = peer.clone();
+            learner.set_role(PeerRole::Learner);
+            self.add_peer(region_id, learner.clone());
+            self.must_have_peer(region_id, learner);
+        }
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer);
     }

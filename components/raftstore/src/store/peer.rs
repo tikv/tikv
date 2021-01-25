@@ -2324,8 +2324,22 @@ where
                         cp
                     ));
                 }
+                (ConfChangeType::AddNode, PeerRole::Voter) => {
+                    let pr = match current_progress.get(peer.get_id()) {
+                        Some(pr) => pr,
+                        None => {
+                            return Err(box_err!("{} invalid conf change request: {:?}, voter should be added as learner first.", self.tag, cp));
+                        }
+                    };
+                    if pr.matched == 0 {
+                        return Err(box_err!(
+                            "{} reject adding uninitialized peer {:?}",
+                            self.tag,
+                            cp
+                        ));
+                    }
+                }
                 (ConfChangeType::RemoveNode, _)
-                | (ConfChangeType::AddNode, PeerRole::Voter)
                 | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
                 _ => {
                     return Err(box_err!(
