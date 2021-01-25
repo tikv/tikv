@@ -34,7 +34,6 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.10", features = ["nightly"] }
 quick-error = "1.2.3"
-rand = "0.7"
 security = { path = "../security", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"

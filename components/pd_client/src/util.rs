@@ -30,9 +30,6 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-
 use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
@@ -427,10 +424,8 @@ pub async fn try_connect_leader(
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();
     let mut resp = None;
-    let mut shuffle_members: Vec<_> = members.to_vec();
-    shuffle_members.shuffle(&mut thread_rng());
     // Try to connect to other members, then the previous leader.
-    'outer: for m in shuffle_members
+    'outer: for m in members
         .iter()
         .filter(|m| *m != previous_leader)
         .chain(&[previous_leader.clone()])
@@ -440,8 +435,11 @@ pub async fn try_connect_leader(
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
-                        resp = Some(r);
-                        break 'outer;
+                        // check whether the response have leader info, otherwise continue to loop the rest members
+                        if r.has_leader() {
+                            resp = Some(r);
+                            break 'outer;
+                        }
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",
