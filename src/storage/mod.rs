@@ -704,7 +704,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key.as_ref().map(|k| k.to_raw()).unwrap_or(Ok(vec![]))
+                if let Ok(start_key) = start_key
+                    .as_ref()
+                    .map(|k| k.to_raw())
+                    .unwrap_or_else(|| Ok(vec![]))
                 {
                     let mut key = vec![];
                     if let Some(end_key) = &end_key {
@@ -4182,7 +4185,7 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4238,114 +4241,82 @@ mod tests {
             },
         );
 
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(99.into(), None, 10, Context::default()),
-                expect_value_callback(tx.clone(), 0, vec![]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(100.into(), None, 10, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    100.into(),
-                    Some(Key::from_raw(b"a")),
-                    10,
-                    Context::default(),
-                ),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    100.into(),
-                    Some(Key::from_raw(b"y")),
-                    10,
-                    Context::default(),
-                ),
-                expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 10, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![
-                        lock_a.clone(),
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                        lock_y.clone(),
-                        lock_z.clone(),
-                    ],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 4, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_a, lock_b.clone(), lock_c.clone(), lock_x.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    101.into(),
-                    Some(Key::from_raw(b"b")),
-                    4,
-                    Context::default(),
-                ),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                        lock_y.clone(),
-                    ],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    101.into(),
-                    Some(Key::from_raw(b"b")),
-                    0,
-                    Context::default(),
-                ),
-                expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let res =
+            block_on(storage.scan_lock(Context::default(), 99.into(), None, None, 10)).unwrap();
+        assert_eq!(res, vec![]);
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 100.into(), None, None, 10)).unwrap();
+        assert_eq!(res, vec![lock_x.clone(), lock_y.clone(), lock_z.clone()]);
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            100.into(),
+            Some(Key::from_raw(b"a")),
+            None,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_x.clone(), lock_y.clone(), lock_z.clone()]);
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            100.into(),
+            Some(Key::from_raw(b"y")),
+            None,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_y.clone(), lock_z.clone()]);
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10)).unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_a.clone(),
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+                lock_z.clone(),
+            ]
+        );
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 4)).unwrap();
+        assert_eq!(
+            res,
+            vec![lock_a, lock_b.clone(), lock_c.clone(), lock_x.clone()]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            None,
+            4,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+            ]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            None,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y, lock_z]);
     }
 
     #[test]
@@ -4452,17 +4423,9 @@ mod tests {
                 rx.recv().unwrap();
 
                 // All locks should be resolved except for a, b and c.
-                storage
-                    .sched_txn_command(
-                        commands::ScanLock::new(ts, None, 0, Context::default()),
-                        expect_value_callback(
-                            tx.clone(),
-                            0,
-                            vec![lock_a.clone(), lock_b.clone(), lock_c.clone()],
-                        ),
-                    )
-                    .unwrap();
-                rx.recv().unwrap();
+                let res =
+                    block_on(storage.scan_lock(Context::default(), ts, None, None, 0)).unwrap();
+                assert_eq!(res, vec![lock_a.clone(), lock_b.clone(), lock_c.clone()]);
 
                 ts = (ts.into_inner() + 10).into();
             }
@@ -4515,13 +4478,9 @@ mod tests {
             lock.set_key(b"a".to_vec());
             lock
         };
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(99.into(), None, 0, Context::default()),
-                expect_value_callback(tx.clone(), 0, vec![lock_a]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let res =
+            block_on(storage.scan_lock(Context::default(), 99.into(), None, None, 0)).unwrap();
+        assert_eq!(res, vec![lock_a]);
 
         // Resolve lock for key 'a'.
         storage
@@ -4563,7 +4522,7 @@ mod tests {
                     resolve_keys,
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4576,13 +4535,9 @@ mod tests {
             lock.set_key(b"a".to_vec());
             lock
         };
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 0, Context::default()),
-                expect_value_callback(tx, 0, vec![lock_a]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 0)).unwrap();
+        assert_eq!(res, vec![lock_a]);
     }
 
     #[test]
