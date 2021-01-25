@@ -386,7 +386,7 @@ where
             .snapshot_on_kv_engine(start_key.as_encoded(), &[])
             .unwrap();
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
-        let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
+        let (locks, _) = reader.scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)?;
 
         let mut lock_infos = Vec::with_capacity(locks.len());
         for (key, lock) in locks {

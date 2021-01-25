@@ -766,7 +766,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         ctx.get_isolation_level(),
                     );
                     let result = reader
-                        .scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit)
+                        .scan_locks(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |lock| lock.ts <= max_ts,
+                            limit,
+                        )
                         .map_err(txn::Error::from);
                     statistics.add(reader.get_statistics());
                     let (kv_pairs, _) = result?;
@@ -4316,7 +4321,49 @@ mod tests {
             0,
         ))
         .unwrap();
-        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y, lock_z]);
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+                lock_z
+            ]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"c")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b.clone()]);
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            4,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![lock_b.clone(), lock_c.clone(), lock_x.clone(), lock_y]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            3,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b, lock_c, lock_x]);
     }
 
     #[test]
