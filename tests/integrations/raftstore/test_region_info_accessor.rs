@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {

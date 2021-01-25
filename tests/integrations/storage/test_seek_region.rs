@@ -1,14 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use collections::HashMap;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
-use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
