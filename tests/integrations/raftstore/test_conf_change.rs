@@ -8,7 +8,7 @@ use std::time::*;
 use futures::executor::block_on;
 
 use kvproto::metapb::{self, PeerRole};
-use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
+use kvproto::raft_cmdpb::RaftResponseHeader;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
@@ -97,16 +97,13 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(b"k4"), Some(b"v4".to_vec()));
     must_get_equal(&engine_2, b"k4", b"v4");
 
-    let resp = call_conf_change(cluster, r1, ConfChangeType::AddNode, new_peer(2, 2)).unwrap();
-    let exec_res = resp
-        .get_header()
-        .get_error()
-        .get_message()
-        .contains("duplicated");
-    assert!(
-        exec_res,
-        "add duplicated peer should failed, but got {:?}",
-        resp
+    assert_conf_change_failure(
+        cluster,
+        r1,
+        ConfChangeType::AddNode,
+        new_peer(2, 2),
+        "duplicated",
+        "add duplicated peer",
     );
 
     // Remove peer (2, 2) from region 1.
@@ -525,6 +522,7 @@ fn test_node_split_brain() {
 
 /// A helper function for testing the conf change is safe.
 fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
+    configure_for_snapshot(cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
@@ -547,13 +545,59 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // Ensure new leader is elected and it works.
     cluster.must_put(b"k1", b"v1");
 
+    // New voter should be added as learner first.
+    assert_conf_change_failure(
+        cluster,
+        region_id,
+        ConfChangeType::AddNode,
+        new_peer(4, 4),
+        "learner first",
+        "adding voter directly",
+    );
+
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+
+    pd_client.must_add_peer(region_id, new_learner_peer(4, 4));
+    // Uninitialized learner should not be proposed to voter.
+    assert_conf_change_failure(
+        cluster,
+        region_id,
+        ConfChangeType::AddNode,
+        new_peer(4, 4),
+        "uninitialized",
+        "promoting uninitialized peer",
+    );
+    cluster.clear_send_filters();
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region_id, 1).msg_type(MessageType::MsgAppend),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region_id, 4).msg_type(MessageType::MsgAppend),
+    ));
+
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let index = cluster
+        .truncated_state(region_id, leader.get_store_id())
+        .get_index();
+    for _ in 0..cluster.cfg.raft_store.raft_log_gc_count_limit {
+        cluster.must_put(b"k2", b"v2");
+    }
+    cluster.wait_log_truncated(region_id, leader.get_store_id(), index + 1);
+
     // Ensure the conf change is safe:
-    // The "AddNode" request will be rejected
+    // The "AddNode" request for an unhealthy node will be rejected
     // if there are only 2 healthy nodes in a cluster of 3 nodes.
-    pd_client.add_peer(region_id, new_peer(4, 4));
-    // Put a new kv to ensure the previous "AddNode" is handled.
-    cluster.must_put(b"k2", b"v2");
-    pd_client.must_none_peer(region_id, new_peer(4, 4));
+    assert_conf_change_failure(
+        cluster,
+        region_id,
+        ConfChangeType::AddNode,
+        new_peer(4, 4),
+        "perform",
+        "decreasing committed index to snapshot",
+    );
 
     // Recover the isolated peer.
     cluster.clear_send_filters();
@@ -667,15 +711,14 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_4, b"k2", b"v2");
 
     // Can't add duplicate learner.
-    let resp = call_conf_change(
+    assert_conf_change_failure(
         cluster,
         r1,
         ConfChangeType::AddLearnerNode,
         new_learner_peer(4, 11),
-    )
-    .unwrap();
-    let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"), "{:?}", resp);
+        "duplicated",
+        "add duplicated learner",
+    );
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
@@ -709,34 +752,26 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // false warning about pending conf change.
     cluster.must_put(b"k4", b"v4");
 
-    let mut add_peer = |peer: metapb::Peer| {
-        let conf_type = if is_learner(&peer) {
-            ConfChangeType::AddLearnerNode
+    let mut check_add_duplicated_peer = |peer: metapb::Peer| {
+        let (conf_type, tag) = if is_learner(&peer) {
+            (ConfChangeType::AddLearnerNode, "adding duplicated learner")
         } else {
-            ConfChangeType::AddNode
+            (ConfChangeType::AddNode, "adding duplicated voter")
         };
-        call_conf_change(cluster, r1, conf_type, peer).unwrap()
+        assert_conf_change_failure(cluster, r1, conf_type, peer, "duplicated", tag);
     };
 
     // Add learner on store which already has peer.
-    let resp = add_peer(new_learner_peer(4, 13));
-    let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"), "{:?}", err_msg);
+    check_add_duplicated_peer(new_learner_peer(4, 13));
     pd_client.must_have_peer(r1, new_peer(4, 12));
 
     // Add peer with different id on store which already has learner.
     pd_client.must_remove_peer(r1, new_peer(4, 12));
     pd_client.must_add_peer(r1, new_learner_peer(4, 13));
+    check_add_duplicated_peer(new_peer(4, 13));
 
-    let resp = add_peer(new_learner_peer(4, 14));
-    let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"), "{:?}", resp);
+    check_add_duplicated_peer(new_learner_peer(4, 14));
     pd_client.must_none_peer(r1, new_learner_peer(4, 14));
-
-    let resp = add_peer(new_peer(4, 15));
-    let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"), "{:?}", resp);
-    pd_client.must_none_peer(r1, new_peer(4, 15));
 }
 
 #[test]
@@ -778,15 +813,13 @@ fn test_conf_change_remove_leader() {
     cluster.must_put(b"k1", b"v1");
 
     // Try to remove leader, which should be ignored.
-    let res =
-        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
-    assert!(
-        res.get_header()
-            .get_error()
-            .get_message()
-            .contains("ignore remove leader"),
-        "{:?}",
-        res
+    assert_conf_change_failure(
+        &mut cluster,
+        r1,
+        ConfChangeType::RemoveNode,
+        new_peer(1, 1),
+        "ignore remove leader",
+        "removing leader",
     );
 }
 
@@ -910,19 +943,26 @@ fn test_node_stale_peer() {
     test_stale_peer(&mut cluster);
 }
 
-fn call_conf_change<T>(
+fn assert_conf_change_failure<T: Simulator>(
     cluster: &mut Cluster<T>,
     region_id: u64,
     conf_change_type: ConfChangeType,
     peer: metapb::Peer,
-) -> Result<RaftCmdResponse>
-where
-    T: Simulator,
-{
+    error_msg: &str,
+    tag: &str,
+) {
     let conf_change = new_change_peer_request(conf_change_type, peer);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
     let admin_req = new_admin_request(region_id, &epoch, conf_change);
-    cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
+    let resp = cluster
+        .call_command_on_leader(admin_req, Duration::from_secs(3))
+        .unwrap();
+    let exec_res = resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains(error_msg);
+    assert!(exec_res, "{} should failed, but got {:?}", tag, resp);
 }
 
 /// Tests if conf change relies on heartbeat.

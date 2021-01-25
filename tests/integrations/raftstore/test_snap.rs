@@ -425,7 +425,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
         .sim
         .wl()
         .add_recv_filter(4, Box::new(SnapshotAppendFilter::new(tx)));
-    pd_client.add_peer(1, new_peer(4, 5));
+    pd_client.add_peer(1, new_learner_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
