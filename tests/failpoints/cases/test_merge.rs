@@ -267,13 +267,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
     }
 
     // wait to trigger compact raft log
-    for _ in 0..50 {
-        let state2 = cluster.truncated_state(1000, 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(1000, 1, state1.get_index() + 1);
 
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
@@ -707,13 +701,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     cluster.start().unwrap();
 
     // Wait for compact log to apply
-    for _ in 0..50 {
-        let state2 = cluster.truncated_state(left.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(left.get_id(), 1, state1.get_index() + 1);
     // Now schedule merge
     fail::remove(schedule_merge_fp);
 
@@ -1173,17 +1161,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
     // Remove log compaction failpoint
     fail::remove(on_raft_gc_log_tick_fp);
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(region.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(region.get_id(), 1, state1.get_index() + 1);
 
     let peer_on_store3 = find_peer(&region, 3).unwrap().to_owned();
     assert_eq!(peer_on_store3.get_id(), 3);
@@ -1291,17 +1269,7 @@ fn test_node_merge_crash_when_snapshot() {
     // Remove log compaction failpoint
     fail::remove(on_raft_gc_log_tick_fp);
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(region.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(region.get_id(), 1, state1.get_index() + 1);
 
     let on_region_worker_apply_fp = "on_region_worker_apply";
     fail::cfg(on_region_worker_apply_fp, "return()").unwrap();
