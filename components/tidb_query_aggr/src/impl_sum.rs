@@ -122,7 +122,7 @@ where
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.sum.add_assign(ctx, &value.into_owned_value())?;
                 self.has_value = true;
                 Ok(())
             }

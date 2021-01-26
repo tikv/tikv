@@ -40,7 +40,7 @@ pub use txn_heart_beat::TxnHeartBeat;
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::iter::{self, FromIterator};
+use std::iter;
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
@@ -56,7 +56,6 @@ use crate::storage::types::{
     TxnStatus,
 };
 use crate::storage::{metrics, Result as StorageResult, Snapshot, Statistics};
-use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
 /// Store Transaction scheduler commands.
@@ -313,16 +312,16 @@ impl From<ResolveLockRequest> for TypedCommand<()> {
             .map(|key| Key::from_raw(key))
             .collect();
         let txn_status = if req.get_start_version() > 0 {
-            HashMap::from_iter(iter::once((
+            iter::once((
                 req.get_start_version().into(),
                 req.get_commit_version().into(),
-            )))
+            ))
+            .collect()
         } else {
-            HashMap::from_iter(
-                req.take_txn_infos()
-                    .into_iter()
-                    .map(|info| (info.txn.into(), info.status.into())),
-            )
+            req.take_txn_infos()
+                .into_iter()
+                .map(|info| (info.txn.into(), info.status.into()))
+                .collect()
         };
 
         if resolve_keys.is_empty() {

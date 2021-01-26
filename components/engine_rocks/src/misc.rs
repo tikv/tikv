@@ -569,7 +569,7 @@ mod tests {
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);

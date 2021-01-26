@@ -408,8 +408,10 @@ mod tests {
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
-        let mut cfg = Config::default();
-        cfg.addr = "127.0.0.1:0".to_owned();
+        let cfg = Config {
+            addr: "127.0.0.1:0".to_owned(),
+            ..Default::default()
+        };
 
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()

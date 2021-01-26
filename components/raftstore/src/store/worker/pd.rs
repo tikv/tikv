@@ -966,12 +966,14 @@ where
                     Ok(ts) => {
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        let old_value = max_ts_sync_status.compare_and_swap(
-                            initial_status,
-                            initial_status | 1,
-                            Ordering::SeqCst,
-                        );
-                        success = old_value == initial_status;
+                        success = max_ts_sync_status
+                            .compare_exchange(
+                                initial_status,
+                                initial_status | 1,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok();
                         break;
                     }
                     Err(e) => {
