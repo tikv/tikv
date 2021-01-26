@@ -118,7 +118,7 @@ where
     {
         if let AggrFnStateFirst::Empty = self {
             // TODO: avoid this clone
-            *self = AggrFnStateFirst::Valued(value.map(|x| x.to_owned_value()));
+            *self = AggrFnStateFirst::Valued(value.map(|x| x.into_owned_value()));
         }
         Ok(())
     }

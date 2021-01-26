@@ -80,6 +80,7 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
+    enable_old_value: bool,
 }
 
 impl Downstream {
@@ -92,6 +93,7 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
+        enable_old_value: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -101,6 +103,7 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            enable_old_value,
         }
     }
 
@@ -366,7 +369,15 @@ impl Delegate {
             if normal_only && downstream.state.load() != DownstreamState::Normal {
                 continue;
             }
-            downstream.sink_event(change_data_event.clone());
+            let mut event = change_data_event.clone();
+            if !downstream.enable_old_value && self.txn_extra_op == TxnExtraOp::ReadOldValue {
+                if let Some(Event_oneof_event::Entries(ref mut entries)) = event.event {
+                    for entry in entries.mut_entries().iter_mut() {
+                        entry.mut_old_value().clear();
+                    }
+                }
+            }
+            downstream.sink_event(event);
         }
     }
 
@@ -538,11 +549,15 @@ impl Delegate {
 
         for rs in rows {
             if !rs.is_empty() {
-                let mut event_entries = EventEntries::default();
-                event_entries.entries = rs.into();
-                let mut event = Event::default();
-                event.region_id = self.region_id;
-                event.event = Some(Event_oneof_event::Entries(event_entries));
+                let event_entries = EventEntries {
+                    entries: rs.into(),
+                    ..Default::default()
+                };
+                let event = Event {
+                    region_id: self.region_id,
+                    event: Some(Event_oneof_event::Entries(event_entries)),
+                    ..Default::default()
+                };
                 downstream.sink_event(event);
             }
         }
@@ -701,12 +716,16 @@ impl Delegate {
         for (_, v) in rows {
             entries.push(v);
         }
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = entries.into();
-        let mut change_data_event = Event::default();
-        change_data_event.region_id = self.region_id;
-        change_data_event.index = index;
-        change_data_event.event = Some(Event_oneof_event::Entries(event_entries));
+        let event_entries = EventEntries {
+            entries: entries.into(),
+            ..Default::default()
+        };
+        let change_data_event = Event {
+            region_id: self.region_id,
+            index,
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
         self.broadcast(change_data_event, true);
         Ok(())
     }
@@ -857,7 +876,7 @@ mod tests {
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
@@ -986,7 +1005,7 @@ mod tests {
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
@@ -1055,20 +1074,24 @@ mod tests {
         ];
         delegate.on_scan(downstream_id, entries);
         // Flush all pending entries.
-        let mut row1 = EventRow::default();
-        row1.start_ts = 1;
-        row1.commit_ts = 0;
-        row1.key = b"a".to_vec();
-        row1.op_type = EventRowOpType::Put as _;
+        let mut row1 = EventRow {
+            start_ts: 1,
+            commit_ts: 0,
+            key: b"a".to_vec(),
+            value: b"b".to_vec(),
+            op_type: EventRowOpType::Put as _,
+            ..Default::default()
+        };
         set_event_row_type(&mut row1, EventLogType::Prewrite);
-        row1.value = b"b".to_vec();
-        let mut row2 = EventRow::default();
-        row2.start_ts = 1;
-        row2.commit_ts = 2;
-        row2.key = b"a".to_vec();
-        row2.op_type = EventRowOpType::Put as _;
+        let mut row2 = EventRow {
+            start_ts: 1,
+            commit_ts: 2,
+            key: b"a".to_vec(),
+            value: b"b".to_vec(),
+            op_type: EventRowOpType::Put as _,
+            ..Default::default()
+        };
         set_event_row_type(&mut row2, EventLogType::Committed);
-        row2.value = b"b".to_vec();
         let mut row3 = EventRow::default();
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
