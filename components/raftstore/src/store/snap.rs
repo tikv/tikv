@@ -44,7 +44,6 @@ use crate::store::metrics::{
 };
 use crate::store::peer_storage::JOB_STATUS_CANCELLING;
 use crate::store::snap::snap_io::get_decrypter_reader;
-use crate::store::util::check_key_in_region;
 use crate::{Error as RaftStoreError, Result as RaftStoreResult};
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
@@ -365,76 +364,61 @@ pub struct PreHandledSnapshot {
 
 unsafe impl Send for PreHandledSnapshot {}
 
-impl Snap {
-    fn read_lock_cf_file(
+type LockCFDecoder = BufReader<Box<dyn Read + Send>>;
+
+pub struct LockCFFileReader {
+    decoder: LockCFDecoder,
+    key: Vec<u8>,
+    val: Vec<u8>,
+}
+
+impl LockCFFileReader {
+    pub fn ffi_get_cf_file_reader(
         path: &str,
         key_mgr: Option<&Arc<DataKeyManager>>,
-    ) -> tiflash_ffi::SnapshotKV {
-        let mut lock_cf_snap = tiflash_ffi::SnapshotKV::new();
+    ) -> tiflash_ffi::RawVoidPtr {
         let file = File::open(path).unwrap();
-        let mut decoder = if let Some(key_mgr) = key_mgr {
+        let mut decoder: LockCFDecoder = if let Some(key_mgr) = key_mgr {
             let reader = get_decrypter_reader(path, key_mgr).unwrap();
             BufReader::new(reader)
         } else {
             BufReader::new(Box::new(file) as Box<dyn Read + Send>)
         };
 
-        loop {
-            let key = decoder.decode_compact_bytes().unwrap();
-            if key.is_empty() {
-                break;
-            }
-            let ori_key = keys::origin_key(&key);
-            let ori_val = decoder.decode_compact_bytes().unwrap();
-            lock_cf_snap.push_back((ori_key.to_vec(), ori_val));
+        let key = decoder.decode_compact_bytes().unwrap();
+        let mut val = vec![];
+        if !key.is_empty() {
+            val = decoder.decode_compact_bytes().unwrap();
         }
 
-        lock_cf_snap
+        Box::into_raw(Box::new(LockCFFileReader { decoder, key, val })) as *mut _
     }
 
-    fn gen_snapshot_helper(&self, region: &kvproto::metapb::Region) -> tiflash_ffi::SnapshotHelper {
-        let mut snapshot_helper = tiflash_ffi::SnapshotHelper::default();
+    pub fn ffi_remained(&self) -> u8 {
+        (!self.key.is_empty()) as u8
+    }
 
-        for cf_file in &self.cf_files {
-            if cf_file.size == 0 {
-                // Skip empty cf file.
-                continue;
-            }
+    pub fn ffi_key(&self) -> tiflash_ffi::BaseBuffView {
+        let ori_key = keys::origin_key(&self.key);
+        ori_key.into()
+    }
 
-            let (cf_type, snap_kv) = if plain_file_used(cf_file.cf) {
-                (
-                    tiflash_ffi::ColumnFamilyType::Lock,
-                    Snap::read_lock_cf_file(
-                        cf_file.path.to_str().unwrap(),
-                        self.mgr.encryption_key_manager.as_ref(),
-                    ),
-                )
-            } else {
-                let cf_type = if cf_file.cf == CF_DEFAULT {
-                    tiflash_ffi::ColumnFamilyType::Default
-                } else if cf_file.cf == CF_WRITE {
-                    tiflash_ffi::ColumnFamilyType::Write
-                } else {
-                    unreachable!()
-                };
-                (
-                    cf_type,
-                    tiflash_ffi::gen_snap_kv_data_from_sst(
-                        cf_file.path.to_str().unwrap(),
-                        self.mgr.encryption_key_manager.clone(),
-                    ),
-                )
-            };
+    pub fn ffi_val(&self) -> tiflash_ffi::BaseBuffView {
+        self.val.as_slice().into()
+    }
 
-            for kv in &snap_kv {
-                check_key_in_region(kv.0.as_ref(), &region).unwrap();
-            }
-
-            snapshot_helper.add_cf_snap(cf_type, snap_kv);
+    pub fn ffi_next(&mut self) {
+        let key = self.decoder.decode_compact_bytes().unwrap();
+        if !key.is_empty() {
+            self.val = self.decoder.decode_compact_bytes().unwrap();
+        } else {
+            self.val.clear();
         }
-        snapshot_helper
+        self.key = key;
     }
+}
 
+impl Snap {
     pub fn pre_handle_snapshot(
         &self,
         region: &kvproto::metapb::Region,
@@ -442,17 +426,29 @@ impl Snap {
         index: u64,
         term: u64,
     ) -> PreHandledSnapshot {
-        let mut snapshot_helper = self.gen_snapshot_helper(region);
-        let res = tiflash_ffi::get_engine_store_server_helper().pre_handle_snapshot(
-            &region,
-            peer_id,
-            &mut snapshot_helper,
-            index,
-            term,
-        );
+        let mut sst_views = vec![];
+        for cf_file in &self.cf_files {
+            if cf_file.size == 0 {
+                // Skip empty cf file.
+                continue;
+            }
+
+            if plain_file_used(cf_file.cf) {
+                assert!(cf_file.cf == CF_LOCK);
+            }
+
+            sst_views.push((
+                cf_file.path.to_str().unwrap().as_bytes(),
+                tiflash_ffi::name_to_cf(cf_file.cf),
+            ));
+        }
+        let empty = sst_views.is_empty();
+
+        let res = tiflash_ffi::get_engine_store_server_helper()
+            .pre_handle_snapshot(&region, peer_id, sst_views, index, term);
 
         PreHandledSnapshot {
-            empty: snapshot_helper.empty(),
+            empty,
             index,
             term,
             inner: res,

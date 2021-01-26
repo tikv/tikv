@@ -64,8 +64,8 @@ use crate::{Error, Result};
 
 use super::metrics::*;
 use crate::tiflash_ffi::{
-    gen_snap_kv_data_from_sst, get_engine_store_server_helper, ColumnFamilyType, RaftCmdHeader,
-    SnapshotHelper, TiFlashApplyRes, WriteCmdType, WriteCmds,
+    get_engine_store_server_helper, ColumnFamilyType, RaftCmdHeader, TiFlashApplyRes, WriteCmdType,
+    WriteCmds,
 };
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -1652,7 +1652,8 @@ where
         ctx: &ApplyContext<EK, W>,
         ssts: &Vec<SstMeta>,
     ) -> TiFlashApplyRes {
-        let mut snapshot_helper = SnapshotHelper::default();
+        let mut ssts_wrap = vec![];
+        let mut sst_views = vec![];
 
         for sst in ssts {
             if sst.get_cf_name() == CF_LOCK {
@@ -1673,22 +1674,18 @@ where
                 continue;
             }
 
-            let snap = gen_snap_kv_data_from_sst(
-                ctx.importer.get_path(sst).to_str().unwrap(),
-                ctx.importer.key_manager.clone(),
-            );
+            ssts_wrap.push((
+                ctx.importer.get_path(sst),
+                crate::tiflash_ffi::name_to_cf(sst.get_cf_name()),
+            ));
+        }
 
-            if sst.get_cf_name() == CF_WRITE {
-                snapshot_helper.add_cf_snap(ColumnFamilyType::Write, snap);
-            } else if sst.get_cf_name() == CF_DEFAULT {
-                snapshot_helper.add_cf_snap(ColumnFamilyType::Default, snap);
-            } else {
-                unreachable!()
-            }
+        for (path, cf) in &ssts_wrap {
+            sst_views.push((path.to_str().unwrap().as_bytes(), *cf));
         }
 
         get_engine_store_server_helper().handle_ingest_sst(
-            &mut snapshot_helper,
+            sst_views,
             RaftCmdHeader::new(
                 self.region.get_id(),
                 ctx.exec_ctx.as_ref().unwrap().index,

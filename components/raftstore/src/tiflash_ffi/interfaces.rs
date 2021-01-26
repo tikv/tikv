@@ -281,8 +281,6 @@ pub mod root {
         use self::super::super::root;
         pub type ConstRawVoidPtr = *const ::std::os::raw::c_void;
         pub type RawVoidPtr = *mut ::std::os::raw::c_void;
-        pub type RegionId = u64;
-        pub type RaftStoreProxyPtr = root::DB::ConstRawVoidPtr;
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
         pub enum ColumnFamilyType {
@@ -337,20 +335,6 @@ pub mod root {
         #[derive(Debug)]
         pub struct BaseBuffView {
             pub data: *const ::std::os::raw::c_char,
-            pub len: u64,
-        }
-        #[repr(C)]
-        #[derive(Debug)]
-        pub struct SnapshotView {
-            pub keys: *const root::DB::BaseBuffView,
-            pub vals: *const root::DB::BaseBuffView,
-            pub cf: root::DB::ColumnFamilyType,
-            pub len: u64,
-        }
-        #[repr(C)]
-        #[derive(Debug)]
-        pub struct SnapshotViewArray {
-            pub views: *const root::DB::SnapshotView,
             pub len: u64,
         }
         #[repr(C)]
@@ -427,6 +411,68 @@ pub mod root {
         }
         #[repr(C)]
         #[derive(Debug)]
+        pub struct SSTView {
+            pub type_: root::DB::ColumnFamilyType,
+            pub path: root::DB::BaseBuffView,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct SSTViewVec {
+            pub views: *const root::DB::SSTView,
+            pub len: u64,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RaftStoreProxyPtr {
+            pub _inner: root::DB::ConstRawVoidPtr,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct SSTReaderPtr {
+            pub _inner: root::DB::RawVoidPtr,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct SSTReaderInterfaces {
+            pub fn_get_sst_reader: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTView,
+                    arg2: root::DB::RaftStoreProxyPtr,
+                ) -> root::DB::SSTReaderPtr,
+            >,
+            pub fn_remained: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ) -> u8,
+            >,
+            pub fn_key: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ) -> root::DB::BaseBuffView,
+            >,
+            pub fn_value: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ) -> root::DB::BaseBuffView,
+            >,
+            pub fn_next: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ),
+            >,
+            pub fn_gc: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ),
+            >,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
         pub struct TiFlashRaftProxyHelperFFI {
             pub proxy_ptr: root::DB::RaftStoreProxyPtr,
             pub fn_handle_get_proxy_status: ::std::option::Option<
@@ -473,10 +519,11 @@ pub mod root {
                     arg2: root::DB::CppStrVecView,
                 ) -> root::DB::RawVoidPtr,
             >,
+            pub sst_reader_interfaces: root::DB::SSTReaderInterfaces,
         }
         #[repr(C)]
         #[derive(Debug)]
-        pub struct TiFlashServerHelper {
+        pub struct EngineStoreServerHelper {
             pub magic_number: u32,
             pub version: u32,
             pub inner: *mut root::DB::TiFlashServer,
@@ -505,12 +552,12 @@ pub mod root {
                 ),
             >,
             pub fn_handle_destroy: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer, arg2: root::DB::RegionId),
+                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer, arg2: u64),
             >,
             pub fn_handle_ingest_sst: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::TiFlashServer,
-                    arg2: root::DB::SnapshotViewArray,
+                    arg2: root::DB::SSTViewVec,
                     arg3: root::DB::RaftCmdHeader,
                 ) -> root::DB::TiFlashApplyRes,
             >,
@@ -528,7 +575,7 @@ pub mod root {
                     arg1: *mut root::DB::TiFlashServer,
                     arg2: root::DB::BaseBuffView,
                     arg3: u64,
-                    arg4: root::DB::SnapshotViewArray,
+                    arg4: root::DB::SSTViewVec,
                     arg5: u64,
                     arg6: u64,
                 ) -> root::DB::RawCppPtr,

@@ -44,6 +44,7 @@ pub use self::peer_storage::{
 pub use self::read_queue::ReadIndexContext;
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::replication_mode::{GlobalReplicationState, StoreGroup};
+pub use self::snap::LockCFFileReader;
 pub use self::snap::{
     check_abort, copy_snapshot,
     snap_io::{apply_sst_cf_file, build_sst_cf_file},

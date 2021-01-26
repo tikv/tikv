@@ -5,7 +5,7 @@ use std::process;
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use clap::{App, Arg};
-use raftstore::tiflash_ffi::{get_engine_store_server_helper, ENGINE_STORE_SERVER_HELPER_PTR};
+use raftstore::tiflash_ffi::{get_engine_store_server_helper, init_engine_store_server_helper};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
@@ -14,11 +14,12 @@ pub fn print_proxy_version() {
     println!("{}", crate::proxy_version_info());
 }
 
-pub unsafe fn run_proxy(argc: c_int, argv: *const *const c_char, tiflash_server_helper: *const u8) {
-    {
-        let ptr = &ENGINE_STORE_SERVER_HELPER_PTR as *const _ as *mut _;
-        *ptr = tiflash_server_helper;
-    }
+pub unsafe fn run_proxy(
+    argc: c_int,
+    argv: *const *const c_char,
+    engine_store_server_helper: *const u8,
+) {
+    init_engine_store_server_helper(engine_store_server_helper);
 
     let mut args = vec![];
 
