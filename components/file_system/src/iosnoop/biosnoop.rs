@@ -145,12 +145,6 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-#[repr(C)]
-struct RawStats {
-    read: u64,
-    write: u64,
-}
-
 pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
@@ -158,12 +152,8 @@ pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
             let mut io_type_buf =
                 std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
             if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
-                assert!(e.len() == std::mem::size_of::<RawStats>());
-                let raw_stats = std::ptr::read_unaligned(e.as_ptr() as *const RawStats);
-                return IOBytes {
-                    read: raw_stats.read as i64,
-                    write: raw_stats.write as i64,
-                };
+                assert!(e.len() == std::mem::size_of::<IOBytes>());
+                return std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
             }
         }
     }

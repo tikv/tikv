@@ -340,7 +340,7 @@ impl Worker {
         )
     }
 
-    pub fn clone_yatp_handle(&self) -> Remote<yatp::task::future::TaskCell> {
+    pub fn clone_raw_handle(&self) -> Remote<yatp::task::future::TaskCell> {
         self.remote.clone()
     }
 

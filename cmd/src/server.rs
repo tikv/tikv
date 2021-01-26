@@ -29,7 +29,9 @@ use engine_traits::{
     compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, RaftEngine, CF_DEFAULT,
     CF_WRITE,
 };
-use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsTask as IOMetricsTask};
+use file_system::{
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
+};
 use fs2::FileExt;
 use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
@@ -145,26 +147,26 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
-pub struct EngineMetricsTask<R: RaftEngine> {
+pub struct EngineMetricsManager<R: RaftEngine> {
     engines: Engines<RocksEngine, R>,
     last_reset: Instant,
 }
 
-impl<R: RaftEngine> EngineMetricsTask<R> {
+impl<R: RaftEngine> EngineMetricsManager<R> {
     pub fn new(engines: Engines<RocksEngine, R>) -> Self {
-        EngineMetricsTask {
+        EngineMetricsManager {
             engines,
             last_reset: Instant::now(),
         }
     }
 
-    pub fn on_tick(&mut self) {
+    pub fn flush(&mut self, now: Instant) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");
-        if self.last_reset.elapsed() >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             self.engines.kv.reset_statistics();
             self.engines.raft.reset_statistics();
-            self.last_reset = Instant::now();
+            self.last_reset = now;
         }
     }
 }
@@ -882,17 +884,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        let remote = self.background_worker.clone_yatp_handle();
+        let handle = self.background_worker.clone_raw_handle();
         let mut interval = GLOBAL_TIMER_HANDLE
             .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
             .compat();
         let mut engine_task =
-            EngineMetricsTask::new(self.engines.as_ref().unwrap().engines.clone());
-        let mut io_task = IOMetricsTask::new(fetcher);
-        remote.spawn(async move {
+            EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
+        let mut io_task = IOMetricsManager::new(fetcher);
+        handle.spawn(async move {
             while let Some(Ok(_)) = interval.next().await {
-                engine_task.on_tick();
-                io_task.on_tick();
+                let now = Instant::now();
+                engine_task.flush(now);
+                io_task.flush(now);
             }
         });
     }
