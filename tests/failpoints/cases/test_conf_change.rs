@@ -172,7 +172,7 @@ fn test_tick_after_destroy() {
     must_get_equal(&engine_3, b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
-    pd_client.must_add_peer(1, new_peer(1, 4));
+    pd_client.must_add_peer(1, new_learner_peer(1, 4));
     cluster.clear_send_filters();
     cluster.must_put(b"k3", b"v3");
 

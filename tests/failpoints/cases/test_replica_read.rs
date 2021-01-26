@@ -168,7 +168,7 @@ fn test_read_before_init() {
 
     fail::cfg("before_handle_snapshot_ready_3", "return").unwrap();
     // Add peer 3
-    let p3 = new_peer(3, 3);
+    let p3 = new_learner_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
     thread::sleep(Duration::from_millis(500));
     let region = cluster.get_region(b"k0");
@@ -218,7 +218,7 @@ fn test_read_applying_snapshot() {
 
     // Don't apply snapshot to init peer 3
     fail::cfg("region_apply_snap", "pause").unwrap();
-    let p3 = new_peer(3, 3);
+    let p3 = new_learner_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
     thread::sleep(Duration::from_millis(500));
 

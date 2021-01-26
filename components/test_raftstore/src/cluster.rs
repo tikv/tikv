@@ -28,6 +28,7 @@ use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use raftstore::store::transport::CasualRouter;
+use raftstore::store::util::is_learner;
 use raftstore::store::*;
 use raftstore::{Error, Result};
 use tikv::config::TiKvConfig;
@@ -899,7 +900,12 @@ impl<T: Simulator> Cluster<T> {
         let region = block_on(self.pd_client.get_region_by_id(region_id))
             .unwrap()
             .unwrap();
-        let add_peer = new_change_peer_request(ConfChangeType::AddNode, peer);
+        let cc_ty = if is_learner(&peer) {
+            ConfChangeType::AddLearnerNode
+        } else {
+            ConfChangeType::AddNode
+        };
+        let add_peer = new_change_peer_request(cc_ty, peer);
         let req = new_admin_request(region_id, region.get_region_epoch(), add_peer);
         self.async_request(req)
     }

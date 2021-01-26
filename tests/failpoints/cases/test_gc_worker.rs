@@ -169,7 +169,7 @@ fn test_notify_observer_after_apply() {
     fail::cfg(apply_plain_kvs_fp, "pause").unwrap();
     cluster
         .pd_client
-        .must_add_peer(ctx.get_region_id(), new_peer(store_id, store_id));
+        .must_add_peer(ctx.get_region_id(), new_learner_peer(store_id, store_id));
     // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocksdb.
     let mut locks = vec![];
     retry_until(|| {

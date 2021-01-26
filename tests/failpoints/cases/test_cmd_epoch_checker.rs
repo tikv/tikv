@@ -328,7 +328,7 @@ fn test_accept_proposal_during_conf_change() {
 
     let conf_change_fp = "apply_on_conf_change_all_1";
     fail::cfg(conf_change_fp, "pause").unwrap();
-    let add_peer_rx = cluster.async_add_peer(r, new_peer(2, 2)).unwrap();
+    let add_peer_rx = cluster.async_add_peer(r, new_learner_peer(2, 2)).unwrap();
     add_peer_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap_err();

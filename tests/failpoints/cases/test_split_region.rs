@@ -340,7 +340,7 @@ fn test_split_not_to_split_existing_tombstone_region() {
     assert_eq!(r1, 1);
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
-    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
@@ -380,7 +380,7 @@ fn test_split_not_to_split_existing_tombstone_region() {
 
     cluster.clear_send_filters();
 
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
+    pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 4));
 
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 }
@@ -411,7 +411,7 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
 
-    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
@@ -462,7 +462,7 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
 
-    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
@@ -479,7 +479,7 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
 
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 4));
+    pd_client.must_add_peer(left.get_id(), new_learner_peer(2, 4));
 
     let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
     fail::cfg(before_check_snapshot_1000_2_fp, "pause").unwrap();
@@ -586,7 +586,7 @@ fn test_split_duplicated_batch() {
     let filter = CollectSnapshotFilter::new(tx);
     let pending_msgs = filter.pending_msg.clone();
     cluster.sim.wl().add_recv_filter(3, Box::new(filter));
-    pd_client.must_add_peer(r1, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
     if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {

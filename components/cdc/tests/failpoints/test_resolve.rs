@@ -181,6 +181,7 @@ fn test_region_error() {
 #[test]
 fn test_joint_confchange() {
     let mut cluster = new_server_cluster(1, 3);
+    cluster.pd_client.disable_default_operator();
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
     cluster.cfg.cdc.hibernate_regions_compatible = true;
     let mut suite = TestSuite::with_cluster(3, cluster);
