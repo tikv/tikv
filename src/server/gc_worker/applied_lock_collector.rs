@@ -1,12 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use keys::origin_key;
-use std::borrow::Cow;
 use std::cmp::Ordering::*;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use txn_types::{Key, TsSet};
+use txn_types::Key;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -15,7 +14,7 @@ use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::CmdType;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
-use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, Lock, TimeStamp};
 use raftstore::coprocessor::{
     ApplySnapshotObserver, BoxApplySnapshotObserver, BoxQueryObserver, Cmd, Coprocessor,
     CoprocessorHost, ObserverContext, QueryObserver,
@@ -422,9 +421,16 @@ impl AppliedLockCollector {
         // `max_ts` here is the safepoint of the current round of GC.
         self.concurrency_manager.update_max_ts(max_ts);
         self.concurrency_manager
-            .read_range_check(None, None, |k, l| {
-                Lock::check_ts_conflict(Cow::Borrowed(l), k, max_ts, &TsSet::Empty)
-                    .map_err(MvccError::from)
+            .read_range_check(None, None, |key, lock| {
+                // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                // can't be ignored in this case.
+                if lock.ts <= max_ts {
+                    Err(MvccError::from(MvccErrorInner::KeyIsLocked(
+                        lock.clone().into_lock_info(key.to_raw()?),
+                    )))
+                } else {
+                    Ok(())
+                }
             })?;
         self.scheduler
             .schedule(LockCollectorTask::StartCollecting { max_ts, callback })

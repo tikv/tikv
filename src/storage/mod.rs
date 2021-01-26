@@ -726,12 +726,24 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 concurrency_manager.update_max_ts(max_ts);
-                // TODO: Use better error handling here
-                concurrency_manager
-                    .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
-                        Lock::check_ts_conflict(Cow::Borrowed(lock), &key, max_ts, &TsSet::Empty)
-                    })
-                    .map_err(mvcc::Error::from)?;
+                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
+                // a good idea to return an error to the client, making the GC fail. A better
+                // approach is to wait for these locks to be unlocked.
+                concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                        // can't be ignored in this case.
+                        if lock.ts <= max_ts {
+                            Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(key.to_raw()?),
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )?;
 
                 let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
                     let mut key_range = KeyRange::default();
@@ -777,12 +789,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let (kv_pairs, _) = result?;
                     let mut locks = Vec::with_capacity(kv_pairs.len());
                     for (key, lock) in kv_pairs {
-                        let mut lock_info = LockInfo::default();
-                        lock_info.set_primary_lock(lock.primary);
-                        lock_info.set_lock_version(lock.ts.into_inner());
-                        lock_info.set_key(key.into_raw().map_err(txn::Error::from)?);
-                        lock_info.set_lock_ttl(lock.ttl);
-                        lock_info.set_txn_size(lock.txn_size);
+                        let lock_info =
+                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
                     }
 
@@ -4253,13 +4261,17 @@ mod tests {
             },
         );
 
+        let cm = storage.concurrency_manager.clone();
+
         let res =
             block_on(storage.scan_lock(Context::default(), 99.into(), None, None, 10)).unwrap();
         assert_eq!(res, vec![]);
+        assert_eq!(cm.max_ts(), 99.into());
 
         let res =
             block_on(storage.scan_lock(Context::default(), 100.into(), None, None, 10)).unwrap();
         assert_eq!(res, vec![lock_x.clone(), lock_y.clone(), lock_z.clone()]);
+        assert_eq!(cm.max_ts(), 100.into());
 
         let res = block_on(storage.scan_lock(
             Context::default(),
@@ -4294,6 +4306,7 @@ mod tests {
                 lock_z.clone(),
             ]
         );
+        assert_eq!(cm.max_ts(), 101.into());
 
         let res =
             block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 4)).unwrap();
@@ -4359,7 +4372,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             res,
-            vec![lock_b.clone(), lock_c.clone(), lock_x.clone(), lock_y]
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone()
+            ]
         );
 
         let res = block_on(storage.scan_lock(
@@ -4370,7 +4388,54 @@ mod tests {
             3,
         ))
         .unwrap();
-        assert_eq!(res, vec![lock_b, lock_c, lock_x]);
+        assert_eq!(res, vec![lock_b.clone(), lock_c.clone(), lock_x.clone()]);
+
+        let mem_lock = |k: &[u8], ts: u64, lock_type| {
+            let key = Key::from_raw(k);
+            let guard = block_on(cm.lock_key(&key));
+            guard.with_lock(|lock| {
+                *lock = Some(txn_types::Lock::new(
+                    lock_type,
+                    k.to_vec(),
+                    ts.into(),
+                    100,
+                    None,
+                    0.into(),
+                    1,
+                    20.into(),
+                ));
+            });
+            guard
+        };
+
+        let guard = mem_lock(b"z", 80, LockType::Put);
+        block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 1)).unwrap_err();
+
+        let guard2 = mem_lock(b"a", 80, LockType::Put);
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y]);
+
+        drop(guard);
+        drop(guard2);
+
+        // LockType::Lock can't be ignored by scan_lock
+        let guard = mem_lock(b"c", 80, LockType::Lock);
+        block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            1,
+        ))
+        .unwrap_err();
+        drop(guard);
     }
 
     #[test]

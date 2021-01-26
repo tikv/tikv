@@ -1291,13 +1291,6 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     }
 }
 
-// txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
-//     match v {
-//         Ok(locks) => resp.set_locks(locks.into()),
-//         Err(e) => resp.set_error(extract_key_error(&e)),
-//     }
-// });
-
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
