@@ -156,6 +156,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
                             .map(|_| None)
                             .map_err(Into::into);
+                        if result.is_err() {
+                            self.statistics.lock.processed_keys += 1;
+                        }
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -172,6 +175,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             }
 
             if let Some(v) = result? {
+                self.statistics.write.processed_keys += 1;
                 return Ok(Some((current_user_key, v)));
             }
         }
@@ -231,7 +235,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
                 .map_err(Error::from)?;
-            self.statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put | WriteType::Delete => last_version = Some(write.to_owned()),
@@ -315,7 +318,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             }
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
-            self.statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
