@@ -803,9 +803,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && matches!(msg, PeerMsg::ApplyRes {
-                                res: ApplyTaskRes::Destroy { .. },
-                            }),
+                            && matches!(
+                                msg,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                }
+                            ),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);

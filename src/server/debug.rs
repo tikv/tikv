@@ -1656,11 +1656,10 @@ mod tests {
                     let peers = peers
                         .iter()
                         .enumerate()
-                        .map(|(i, &sid)| {
-                            let mut peer = Peer::default();
-                            peer.id = i as u64;
-                            peer.store_id = sid;
-                            peer
+                        .map(|(i, &sid)| Peer {
+                            id: i as u64,
+                            store_id: sid,
+                            ..Default::default()
                         })
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
@@ -1762,7 +1761,7 @@ mod tests {
         enum Expect {
             Keep,
             Remove,
-        };
+        }
         // test check CF_LOCK.
         default.extend(vec![
             // key, start_ts, check
