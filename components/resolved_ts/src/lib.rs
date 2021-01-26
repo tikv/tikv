@@ -63,6 +63,7 @@ impl Resolver {
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
+            debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
             return;
         };
         debug!(
