@@ -69,9 +69,10 @@ const MIN_LOCAL_PORT: u16 = 32767;
 pub fn alloc_port() -> u16 {
     let p = INITIAL_PORT.load(Ordering::Relaxed);
     if p == 0 {
-        INITIAL_PORT.compare_and_swap(
+        let _ = INITIAL_PORT.compare_exchange(
             0,
             rand::thread_rng().gen_range(10240, MIN_LOCAL_PORT),
+            Ordering::SeqCst,
             Ordering::SeqCst,
         );
     }

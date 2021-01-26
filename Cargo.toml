@@ -1,8 +1,3 @@
-# See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
-# Without resolver = 2, using `cargo build --features x` to build `cmd`
-# will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
-cargo-features = ["resolver"]
-
 [package]
 name = "tikv"
 version = "5.0.0-rc.x"
@@ -222,6 +217,9 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
 [workspace]
+# See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
+# Without resolver = 2, using `cargo build --features x` to build `cmd`
+# will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
 resolver = "2"
 members = [
   "fuzz",
