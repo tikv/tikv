@@ -1428,6 +1428,7 @@ dependencies = [
  "futures-core",
  "futures-task",
  "futures-util",
+ "num_cpus",
 ]
 
 [[package]]
@@ -4052,6 +4053,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.7",
  "futures-executor",
  "futures-util",
  "grpcio",
