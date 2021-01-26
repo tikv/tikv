@@ -222,9 +222,9 @@ impl From<BlobRunMode> for ConfigValue {
     }
 }
 
-impl Into<BlobRunMode> for ConfigValue {
-    fn into(self) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = self {
+impl From<ConfigValue> for BlobRunMode {
+    fn from(c: ConfigValue) -> BlobRunMode {
+        if let ConfigValue::BlobRunMode(s) = c {
             match s.as_str() {
                 "kNormal" => BlobRunMode::Normal,
                 "kReadOnly" => BlobRunMode::ReadOnly,
@@ -232,7 +232,7 @@ impl Into<BlobRunMode> for ConfigValue {
                 m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
             }
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", self);
+            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
         }
     }
 }
@@ -252,9 +252,9 @@ impl FromStr for BlobRunMode {
     }
 }
 
-impl Into<DBTitanDBBlobRunMode> for BlobRunMode {
-    fn into(self) -> DBTitanDBBlobRunMode {
-        match self {
+impl From<BlobRunMode> for DBTitanDBBlobRunMode {
+    fn from(m: BlobRunMode) -> DBTitanDBBlobRunMode {
+        match m {
             BlobRunMode::Normal => DBTitanDBBlobRunMode::Normal,
             BlobRunMode::ReadOnly => DBTitanDBBlobRunMode::ReadOnly,
             BlobRunMode::Fallback => DBTitanDBBlobRunMode::Fallback,

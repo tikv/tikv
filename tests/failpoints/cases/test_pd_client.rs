@@ -97,6 +97,9 @@ fn test_pd_client_deadlock() {
         }
         handle.join().unwrap();
     }
+
+    drop(client);
+    fail::remove(leader_client_reconnect_fp);
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other
