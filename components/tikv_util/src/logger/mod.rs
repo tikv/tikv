@@ -662,7 +662,7 @@ mod tests {
             "is_true" => true,
             "is_false" => false,
             "is_None" => none,
-            "u8" => 34 as u8,
+            "u8" => 34_u8,
             "str_array" => ?["💖",
                 "�",
                 "☺☻☹",

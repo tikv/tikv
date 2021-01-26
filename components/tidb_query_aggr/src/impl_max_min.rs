@@ -171,12 +171,12 @@ where
         }
 
         if self.extremum.is_none() {
-            self.extremum = value.map(|x| x.to_owned_value());
+            self.extremum = value.map(|x| x.into_owned_value());
             return Ok(());
         }
 
         if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
-            self.extremum = value.map(|x| x.to_owned_value());
+            self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())
     }
@@ -254,7 +254,7 @@ where
                     .cmp(&value.unwrap().as_str()?)
                     == E::ORD)
         {
-            self.extremum = value.map(|x| x.to_owned_value());
+            self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())
     }
@@ -343,7 +343,7 @@ where
                     .cmp(&value.unwrap().to_string())
                     == E::ORD)
         {
-            self.extremum = value.map(|x| x.to_owned_value());
+            self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())
     }
@@ -425,7 +425,7 @@ where
             .as_ref()
             .map(|x| TT::from_owned_value(unsafe { std::mem::transmute(x) }));
         if value.is_some() && (self.extremum_value.is_none() || extreme_ref.cmp(&value) == E::ORD) {
-            self.extremum_value = value.map(|x| x.to_owned_value());
+            self.extremum_value = value.map(|x| x.into_owned_value());
         }
         Ok(())
     }
