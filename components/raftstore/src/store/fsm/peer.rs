@@ -3115,6 +3115,14 @@ where
 
         let region = self.fsm.peer.region();
         if msg.get_admin_request().has_prepare_merge() {
+            // Just for simplicity, do not start region merge while in joint state
+            if self.fsm.peer.in_joint_state() {
+                return Err(box_err!(
+                    "{} region in joint state, can not propose merge command, command: {:?}",
+                    self.fsm.peer.tag,
+                    msg.get_admin_request()
+                ));
+            }
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
                 let meta = self.ctx.store_meta.lock().unwrap();
@@ -4145,7 +4153,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
         put.set_key(b"aaaa".to_vec());
-        put.set_value(vec![8 as u8; 2000]);
+        put.set_value(vec![8_u8; 2000]);
         q.set_cmd_type(CmdType::Put);
         q.set_put(put);
         req.mut_requests().push(q.clone());
@@ -4156,7 +4164,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
         put.set_key(b"aaaa".to_vec());
-        put.set_value(vec![8 as u8; 20]);
+        put.set_value(vec![8_u8; 20]);
         q.set_cmd_type(CmdType::Put);
         q.set_put(put);
         req.mut_requests().push(q);

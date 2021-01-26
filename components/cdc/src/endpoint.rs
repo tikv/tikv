@@ -649,9 +649,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.regions = regions;
-        resolved_ts.ts = self.min_resolved_ts.into_inner();
+        let resolved_ts = ResolvedTs {
+            regions,
+            ts: self.min_resolved_ts.into_inner(),
+            ..Default::default()
+        };
 
         let send_cdc_event = |conn: &Conn, event| {
             if let Err(e) = conn.get_sink().try_send(event) {
@@ -702,10 +704,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             // No such downstream registers in the delegate.
             None => return,
         };
-        let mut event = Event::default();
-        event.region_id = region_id;
-        event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts));
-        downstream.sink_event(event);
+        downstream.sink_event(Event {
+            region_id,
+            event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
+            ..Default::default()
+        });
     }
 
     fn register_min_ts_event(&self) {
@@ -1499,12 +1502,12 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         for _ in 0..5 {
-            if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
-                task_rx.recv_timeout(Duration::from_secs(1))
+            if let Ok(Some(Task::Deregister(Deregister::Downstream {
+                err: Some(Error::Request(err)),
+                ..
+            }))) = task_rx.recv_timeout(Duration::from_secs(1))
             {
-                if let Some(Error::Request(err)) = err {
-                    assert!(!err.has_server_is_busy());
-                }
+                assert!(!err.has_server_is_busy());
             }
         }
     }

@@ -554,7 +554,7 @@ impl ConvertTo<Decimal> for Duration {
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         let r = self.to_numeric_string().parse::<Decimal>();
         debug_assert!(r.is_ok());
-        Ok(r?)
+        r
     }
 }
 

@@ -629,7 +629,7 @@ impl ImportDir {
         ImportFile::create(meta.clone(), path, key_manager)
     }
 
-    fn delete_file(&self, path: &PathBuf, key_manager: Option<&DataKeyManager>) -> Result<()> {
+    fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
             fs::remove_file(&path)?;
             if let Some(manager) = key_manager {
