@@ -848,10 +848,12 @@ fn test_node_split_update_region_right_derive() {
 #[test]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.run();
-    cluster.must_transfer_leader(1, new_peer(1, 1));
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // Remove a peer to make conf version become 2.
     pd_client.must_remove_peer(1, new_peer(2, 2));

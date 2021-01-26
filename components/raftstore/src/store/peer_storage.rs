@@ -23,7 +23,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
 use crate::store::fsm::GenSnapTask;
-use crate::store::util::conf_state_from_region;
+use crate::store::util;
 use crate::store::ProposalContext;
 use crate::{Error, Result};
 use into_other::into_other;
@@ -400,7 +400,7 @@ fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalState>
         Some(s) => s,
         None => {
             let mut raft_state = RaftLocalState::default();
-            if !region.get_peers().is_empty() {
+            if util::is_region_initialized(region) {
                 // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
                 raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -422,7 +422,7 @@ fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyState
             Some(s) => s,
             None => {
                 let mut apply_state = RaftApplyState::default();
-                if !region.get_peers().is_empty() {
+                if util::is_region_initialized(region) {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
                     state.set_index(RAFT_INIT_LOG_INDEX);
@@ -603,7 +603,7 @@ impl PeerStorage {
     }
 
     pub fn is_initialized(&self) -> bool {
-        !self.region().get_peers().is_empty()
+        util::is_region_initialized(self.region())
     }
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
@@ -621,7 +621,7 @@ impl PeerStorage {
         }
         Ok(RaftState::new(
             hard_state,
-            conf_state_from_region(self.region()),
+            util::conf_state_from_region(self.region()),
         ))
     }
 
@@ -1070,7 +1070,6 @@ impl PeerStorage {
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(
         &self,
-        region_id: u64,
         old_region: &metapb::Region,
         new_region: &metapb::Region,
     ) -> Result<()> {
@@ -1078,18 +1077,28 @@ impl PeerStorage {
         let (new_start_key, new_end_key) = (enc_start_key(new_region), enc_end_key(new_region));
         if old_start_key < new_start_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 old_start_key,
                 new_start_key
             )));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_sched.schedule(RegionTask::destroy(
-                region_id,
+                old_region.get_id(),
                 new_end_key,
                 old_end_key
             )));
         }
+        Ok(())
+    }
+
+    /// Delete all extra split data from the `start_key` to `end_key`.
+    pub fn clear_extra_split_data(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        box_try!(self.region_sched.schedule(RegionTask::destroy(
+            self.get_region_id(),
+            start_key,
+            end_key
+        )));
         Ok(())
     }
 
@@ -1285,8 +1294,7 @@ impl PeerStorage {
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
-            if let Err(e) = self.clear_extra_data(self.get_region_id(), self.region(), &snap_region)
-            {
+            if let Err(e) = self.clear_extra_data(self.region(), &snap_region) {
                 // No need panic here, when applying snapshot, the deletion will be tried
                 // again. But if the region range changes, like [a, c) -> [a, b) and [b, c),
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
@@ -1303,12 +1311,12 @@ impl PeerStorage {
         // serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
         // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes local reader invalid to serve read request.
-        // 2. No read request can be responsed during merging.
+        //    suspected immediately which makes the local reader not serve read request.
+        // 2. No read request can be responsed in peer fsm during merging.
         // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are used to prevent reading **corrupt** data.
+        // At present, they are also used to prevent reading **corrupt** data.
         for r in &ctx.destroyed_regions {
-            if let Err(e) = self.clear_extra_data(r.get_id(), r, &snap_region) {
+            if let Err(e) = self.clear_extra_data(r, &snap_region) {
                 error!(
                     "failed to cleanup data, may leave some dirty data";
                     "region_id" => r.get_id(),
@@ -1518,7 +1526,7 @@ where
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
 
-    let conf_state = conf_state_from_region(state.get_region());
+    let conf_state = util::conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
     let mut s = mgr.get_snapshot_for_building::<E>(&key)?;

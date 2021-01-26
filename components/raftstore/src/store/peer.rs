@@ -404,6 +404,9 @@ pub struct Peer {
     /// Send to these peers to check whether itself is stale.
     pub check_stale_conf_ver: u64,
     pub check_stale_peers: Vec<metapb::Peer>,
+    /// Whether this peer is created by replication and is the first
+    /// one of this region on local store.
+    pub local_first_replicate: bool,
 
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Check whether this proposal can be proposed based on its epoch
@@ -494,6 +497,7 @@ impl Peer {
             bcast_wake_up_time: None,
             check_stale_conf_ver: 0,
             check_stale_peers: vec![],
+            local_first_replicate: false,
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             cmd_epoch_checker: Default::default(),
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
@@ -993,6 +997,15 @@ impl Peer {
             if id == self.peer.get_id() {
                 continue;
             }
+            // The `matched` is 0 only in these two cases:
+            // 1. Current leader hasn't communicated with this peer.
+            // 2. This peer does not exist yet(maybe it is created but not initialized)
+            //
+            // The correctness of region merge depends on the fact that all target peers must exist during merging.
+            // (PD rely on `pending_peers` to check whether all target peers exist)
+            //
+            // So if the `matched` is 0, it must be a pending peer.
+            // It can be ensured because `truncated_index` must be greater than `RAFT_INIT_LOG_INDEX`(5).
             if progress.matched < truncated_idx {
                 if let Some(p) = self.get_peer_from_cache(id) {
                     pending_peers.push(p);
