@@ -2048,7 +2048,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0-rc#954c2a47b628a3b12743476e3a03d86568bf0e89"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+>>>>>>> d5d7f63b8... raftstore: 2nd attempt to fix deadlock when creating compaction guard (#9552)
 dependencies = [
  "cc",
  "cmake",
@@ -2057,7 +2061,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0-rc#954c2a47b628a3b12743476e3a03d86568bf0e89"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+>>>>>>> d5d7f63b8... raftstore: 2nd attempt to fix deadlock when creating compaction guard (#9552)
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2077,7 +2085,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0-rc#954c2a47b628a3b12743476e3a03d86568bf0e89"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+>>>>>>> d5d7f63b8... raftstore: 2nd attempt to fix deadlock when creating compaction guard (#9552)
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3498,7 +3510,11 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0-rc#954c2a47b628a3b12743476e3a03d86568bf0e89"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+>>>>>>> d5d7f63b8... raftstore: 2nd attempt to fix deadlock when creating compaction guard (#9552)
 dependencies = [
  "libc",
  "librocksdb_sys",
