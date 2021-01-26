@@ -23,6 +23,7 @@ use engine_traits::PerfContextKind;
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
+use engine_traits::util::append_expire_ts;
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -1349,12 +1350,8 @@ where
 {
     fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
         let key = req.get_put().get_key();
-        let value = Cow::from(req.get_put().get_value());
-        
-        if req.get_expire_ts() != 0 {
-            append_expire_ts(value.to_mut(), req.get_expire_ts());
-            // value.to_mut().encode_u64(req.get_expire_ts()).unwrap();
-        };
+        let mut value = req.get_put().get_value().to_vec();
+        append_expire_ts(&mut value, req.get_put().get_expire_ts());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 

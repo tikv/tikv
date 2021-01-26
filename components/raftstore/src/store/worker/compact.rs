@@ -26,6 +26,11 @@ pub enum Task {
         tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
         tombstones_percent_threshold: u64,
     },
+
+    TTLCheckAndCompact {
+        start_key: Option<Key>,
+        end_key: Option<Key>,
+    }
 }
 
 impl Display for Task {
@@ -66,6 +71,20 @@ impl Display for Task {
                 .field(
                     "tombstones_percent_threshold",
                     &tombstones_percent_threshold,
+                )
+                .finish(),
+            Task::TTLCheckAndCompact {
+                ref start_key,
+                ref end_key,
+            } => f
+                .debug_struct("TTLCheckAndCompact")
+                .field(
+                    "start_key",
+                    &start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+                )
+                .field(
+                    "end_key",
+                    &end_key.as_ref().map(|k| log_wrappers::Value::key(k)),
                 )
                 .finish(),
         }
@@ -119,6 +138,29 @@ where
         );
         Ok(())
     }
+
+    pub fn compact_files_cf(
+        &mut self,
+        cf_name: &str,
+        files: &[String],
+    ) -> Result<(), Error> {
+        let timer = Instant::now();
+        let compact_range_timer = COMPACT_RANGE_CF
+            .with_label_values(&[cf_name])
+            .start_coarse_timer();
+        box_try!(self
+            .engine
+            .compact_files(cf_name, start_key, end_key, false, 1 /* threads */,));
+        compact_range_timer.observe_duration();
+        info!(
+            "compact files finished";
+            "range_start" => start_key.map(::log_wrappers::Value::key),
+            "range_end" => end_key.map(::log_wrappers::Value::key),
+            "cf" => cf_name,
+            "time_takes" => ?timer.elapsed(),
+        );
+        Ok(())
+    }
 }
 
 impl<E> Runnable for Runner<E>
@@ -145,8 +187,7 @@ where
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
-            } => match collect_ranges_need_compact(
-                &self.engine,
+            } => match self.collect_ranges_need_compact(
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
@@ -169,6 +210,12 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
+            Task::TTLCheckAndCompact {
+                start_key,
+                end_key,
+            } => {
+                self.get_compa
+            }
         }
     }
 }

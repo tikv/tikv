@@ -21,7 +21,6 @@ mod region_snapshot;
 mod replication_mode;
 mod snap;
 mod worker;
-mod ttl;
 
 pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,

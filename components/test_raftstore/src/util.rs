@@ -594,7 +594,7 @@ pub fn create_test_engine(
         ));
     }
 
-    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache, None);
+    let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache, None, cfg.enable_ttl);
 
     let engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),

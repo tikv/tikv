@@ -79,7 +79,7 @@ impl Modify {
 
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
-            Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::Put(_, k, v, _) => cf_size + k.as_encoded().len() + v.len(),
             Modify::DeleteRange(..) => unreachable!(),
         }
     }
@@ -182,7 +182,7 @@ pub trait Engine: Send + Clone + 'static {
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
         self.write(
             ctx,
-            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value, 0)]),
         )
     }
 

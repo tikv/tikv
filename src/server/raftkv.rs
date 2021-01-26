@@ -47,7 +47,7 @@ use raftstore::{
     store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
 };
 use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::time::Instant;
+use tikv_util::time::{UnixSecs, Instant};
 
 quick_error! {
     #[derive(Debug)]
@@ -358,7 +358,7 @@ where
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
-                Modify::Put(_, ref mut key, _) => {
+                Modify::Put(_, ref mut key, _, _) => {
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
@@ -394,11 +394,7 @@ where
         if batch.modifies.is_empty() {
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
-        let expire_ts = if batch.ttl == 0 {
-            0
-        } else {
-            UnixSecs::now().into_inner() + batch.ttl
-        };
+        let current_ts = UnixSecs::now().into_inner();
         let mut reqs = Vec::with_capacity(batch.modifies.len());
         for m in batch.modifies {
             let mut req = Request::default();
@@ -412,15 +408,15 @@ where
                     req.set_cmd_type(CmdType::Delete);
                     req.set_delete(delete);
                 }
-                Modify::Put(cf, k, v) => {
+                Modify::Put(cf, k, v, ttl) => {
                     let mut put = PutRequest::default();
                     put.set_key(k.into_encoded());
                     put.set_value(v);
                     if cf != CF_DEFAULT {
                         put.set_cf(cf.to_string());
                     }
-                    if expire_ts != 0 {
-                        put.set_expire_ts(expire_ts);
+                    if ttl != 0 {
+                        put.set_expire_ts(current_ts + ttl);
                     }
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);

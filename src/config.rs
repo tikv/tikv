@@ -31,7 +31,7 @@ use engine_rocks::util::{
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
     RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE, TTLCompactionFilterFactory, TTLPropertiesCollectorFactory,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -41,7 +41,7 @@ use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::{CompactionGuardGeneratorFactory, TTLCompactionFilterFactory, SplitConfig};
+use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
@@ -544,6 +544,7 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
@@ -551,7 +552,8 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        if cf_opts.enable_ttl {
+        if enable_ttl {
+            cf_opts.add_table_properties_collector_factory("tikv.ttl-properties-collector", Box::new(TTLPropertiesCollectorFactory{}));
             cf_opts
                 .set_compaction_filter_factory(
                     "ttl_compaction_filter_factory",
@@ -1099,11 +1101,12 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
-                self.defaultcf.build_opt(cache, region_info_accessor),
+                self.defaultcf.build_opt(cache, region_info_accessor, enable_ttl),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -2288,6 +2291,9 @@ pub struct TiKvConfig {
     pub enable_io_snoop: bool,
 
     #[config(skip)]
+    pub enable_ttl: bool,
+
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
 
     #[config(skip)]
@@ -2353,6 +2359,7 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
+            enable_ttl: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),

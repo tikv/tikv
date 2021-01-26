@@ -305,6 +305,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub ttl_check_scheduler: Scheduler<TTLCheckTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -383,6 +384,7 @@ where
     }
 
     pub fn update_ticks_timeout(&mut self) {
+        let mut rng = rand::thread_rng();
         self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
             self.cfg.raft_base_tick_interval.0;
         self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
@@ -395,6 +397,8 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
+        self.tick_batch[PeerTicks::CHECK_TTL.bits() as usize].wait_duration =
+            self.cfg.ttl_check_tick_interval.0.mul_f64(1.0 + rnd.gen_range(-0.2..=0.2));
     }
 }
 
@@ -753,8 +757,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 _ => {}
             }
             self.poll_ctx.cfg = incoming.clone();
-            self.poll_ctx.update_ticks_timeout();
         }
+        // update ticks timeout everytime, cause some ticks interval maybe random.
+        self.poll_ctx.update_ticks_timeout();
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {

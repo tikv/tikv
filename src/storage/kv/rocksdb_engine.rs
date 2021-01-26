@@ -14,12 +14,14 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
     WriteBatch, WriteBatchExt,
 };
+use engine_traits::util::append_expire_ts;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
 use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
+use tikv_util::time::UnixSecs;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
@@ -209,7 +211,7 @@ impl TestEngineBuilder {
             .iter()
             .map(|cf| match *cf {
                 CF_DEFAULT => {
-                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
+                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None, false))
                 }
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
@@ -237,7 +239,13 @@ pub fn write_modifies(kv_engine: &BaseRocksEngine, modifies: Vec<Modify>) -> Res
                     wb.delete_cf(cf, k.as_encoded())
                 }
             }
-            Modify::Put(cf, k, v) => {
+            Modify::Put(cf, k, mut v, ttl) => {
+                let expire_ts = if ttl != 0 {
+                    ttl + UnixSecs::now().into_inner()
+                } else {
+                    0
+                };
+                append_expire_ts(&mut v, expire_ts);
                 if cf == CF_DEFAULT {
                     trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
                     wb.put(k.as_encoded(), &v)

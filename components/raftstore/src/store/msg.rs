@@ -166,6 +166,7 @@ bitflags! {
         const PD_HEARTBEAT           = 0b00001000;
         const CHECK_MERGE            = 0b00010000;
         const CHECK_PEER_STALE_STATE = 0b00100000;
+        const CHECK_TTL              = 0b01000000;
     }
 }
 
@@ -179,6 +180,7 @@ impl PeerTicks {
             PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
             PeerTicks::CHECK_MERGE => "check_merge",
             PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
+            PeerTicks::CHECK_TTL => "check_ttl",
             _ => unreachable!(),
         }
     }
@@ -190,6 +192,7 @@ impl PeerTicks {
             PeerTicks::PD_HEARTBEAT,
             PeerTicks::CHECK_MERGE,
             PeerTicks::CHECK_PEER_STALE_STATE,
+            PeerTicks::CHECK_TTL,
         ];
         TICKS
     }

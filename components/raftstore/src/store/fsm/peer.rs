@@ -647,7 +647,7 @@ where
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
-            _ => unreachable!(),
+            PeerTicks::CHECK_TTL => self.on_check_ttl(),
         }
     }
 
@@ -657,6 +657,7 @@ where
         self.register_pd_heartbeat_tick();
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
+        self.register_check_ttl_tick();
         self.on_check_merge();
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
@@ -3806,6 +3807,14 @@ where
 
     fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
+    }
+
+    fn register_check_ttl_tick(&mut self) {
+        self.schedule_tick(PeerTicks::CHECK_TTL)
+    }
+
+    fn on_check_ttl(&mut self) {
+        self.ctx.
     }
 }
 

@@ -1,15 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
 use std::cmp;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, MvccProperties, TableProperties, TablePropertiesCollection};
+use engine_traits::{IndexHandle, MvccProperties, DecodeProperties, IndexHandles, Range, KvEngine, TableProperties, TablePropertiesCollection};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,

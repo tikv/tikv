@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock};
 
 use engine_rocks::RocksEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::util::append_expire_ts;
 use kvproto::kvrpcpb::Context;
+use tikv_util::time::UnixSecs;
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
@@ -283,8 +285,14 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 let cf_tree = engine.get_cf(cf);
                 cf_tree.write().unwrap().remove(&k);
             }
-            Modify::Put(cf, k, v) => {
+            Modify::Put(cf, k, mut v, ttl) => {
                 let cf_tree = engine.get_cf(cf);
+                let expire_ts = if ttl != 0 {
+                    ttl + UnixSecs::now().into_inner()
+                } else {
+                    0
+                };
+                append_expire_ts(&mut v, expire_ts);
                 cf_tree.write().unwrap().insert(k, v);
             }
 

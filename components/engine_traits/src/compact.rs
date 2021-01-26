@@ -40,6 +40,12 @@ pub trait CompactExt {
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()>;
+
+    fn compact_files(
+        &self,
+        cf: &str,
+        files: &[String],
+    ) -> Result<()>;
 }
 
 pub trait CompactedEvent: Send {
