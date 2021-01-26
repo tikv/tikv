@@ -13,7 +13,7 @@ pub struct IntervalDriver {
     interval: Duration,
     handle: Option<JoinHandle<()>>,
     sender: Option<Sender<bool>>,
-    tasks: Vec<Box<dyn IntervalRunnable>>,
+    tasks: Vec<Box<dyn IntervalTask>>,
 }
 
 impl IntervalDriver {
@@ -31,7 +31,7 @@ impl IntervalDriver {
         self.interval = interval;
     }
 
-    pub fn add_task<T: IntervalRunnable + 'static>(&mut self, task: T) {
+    pub fn add_task<T: IntervalTask + 'static>(&mut self, task: T) {
         self.tasks.push(Box::new(task));
     }
 
@@ -74,7 +74,7 @@ impl IntervalDriver {
     }
 }
 
-pub trait IntervalRunnable: Send + Sync {
+pub trait IntervalTask: Send + Sync {
     fn init(&mut self) {}
     fn on_tick(&mut self);
     fn stop(&mut self) {}

@@ -152,7 +152,6 @@ pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
             let mut io_type_buf =
                 std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
             if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
-                // TODO: the returned slice could be misaligned
                 let (chunks, _) = e.as_slice().as_chunks();
                 assert!(chunks.len() == 2);
                 let read = u64::from_ne_bytes(chunks[0]) as i64;

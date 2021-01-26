@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-// #![feature(slice_as_chunks)]
+#![feature(slice_as_chunks)]
 
 #[macro_use]
 extern crate lazy_static;

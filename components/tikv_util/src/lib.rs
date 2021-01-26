@@ -53,7 +53,7 @@ pub mod timer;
 pub mod trace;
 pub mod worker;
 pub mod yatp_pool;
-pub use interval_driver::{IntervalDriver, IntervalRunnable};
+pub use interval_driver::{IntervalDriver, IntervalTask};
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 

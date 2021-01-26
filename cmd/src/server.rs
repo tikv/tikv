@@ -839,19 +839,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_io_utility(&mut self) -> BytesFetcher {
         let io_snooper_on = self.config.enable_io_snoop
-            && if let Err(e) = file_system::init_io_snooper() {
-                error!(%e; "failed to init io snooper");
-                false
-            } else {
-                info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
-                true
-            };
-        let (limiter, fetcher) = if io_snooper_on {
-            (IORateLimiter::new(0, false), BytesFetcher::FromIOSnooper())
+            && file_system::init_io_snooper()
+                .map_err(|e| error!(%e; "failed to init io snooper"))
+                .is_ok();
+        let (fetcher, limiter) = if io_snooper_on {
+            (BytesFetcher::FromIOSnooper(), IORateLimiter::new(0, false))
         } else {
             let limiter = IORateLimiter::new(0, true);
-            let stats = limiter.statistics();
-            (limiter, BytesFetcher::FromRateLimiter(stats))
+            (BytesFetcher::FromRateLimiter(limiter.statistics()), limiter)
         };
         set_io_rate_limiter(Some(Arc::new(limiter)));
         fetcher

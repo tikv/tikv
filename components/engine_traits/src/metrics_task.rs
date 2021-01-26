@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use tikv_util::IntervalRunnable;
+use tikv_util::IntervalTask;
 
 use crate::engine::KvEngine;
 use crate::engines::Engines;
@@ -24,7 +24,7 @@ impl<K: KvEngine, R: RaftEngine> MetricsTask<K, R> {
     }
 }
 
-impl<K: KvEngine, R: RaftEngine> IntervalRunnable for MetricsTask<K, R> {
+impl<K: KvEngine, R: RaftEngine> IntervalTask for MetricsTask<K, R> {
     fn on_tick(&mut self) {
         self.engines.kv.flush_metrics("kv");
         self.engines.raft.flush_metrics("raft");

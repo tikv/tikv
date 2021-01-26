@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tikv_util::IntervalRunnable;
+use tikv_util::IntervalTask;
 
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
@@ -53,7 +53,7 @@ macro_rules! flush_io_bytes {
     };
 }
 
-impl IntervalRunnable for MetricsTask {
+impl IntervalTask for MetricsTask {
     fn on_tick(&mut self) {
         flush_io_latency_metrics();
         flush_io_bytes!(
