@@ -878,6 +878,33 @@ mod tests {
     }
 
     #[test]
+    fn test_master_key_failure_and_succeed() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let mut file_dict_path = tmp_dir.path().to_path_buf();
+        file_dict_path.push(FILE_DICT_NAME);
+
+        let wrong_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: true,
+            ..MockBackend::default()
+        });
+        let right_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: false,
+            ..MockBackend::default()
+        });
+        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+
+        let result = new_key_manager(&tmp_dir, None, wrong_key, &*previous);
+        // When the master key is invalid, the key manager will not create dict files.
+        assert!(result.is_err());
+        assert!(!file_dict_path.exists());
+        let result = new_key_manager(&tmp_dir, None, right_key, &*previous);
+        assert!(result.is_ok());
+        assert!(file_dict_path.exists());
+    }
+
+    #[test]
     fn test_key_manager_rotate_master_key_rewrite_failure() {
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
