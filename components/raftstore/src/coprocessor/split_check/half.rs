@@ -186,8 +186,10 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
+        let cfg = Config {
+            region_max_size: ReadableSize(BUCKET_NUMBER_LIMIT as u64),
+            ..Default::default()
+        };
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 

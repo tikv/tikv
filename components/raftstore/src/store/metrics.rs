@@ -133,8 +133,8 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum CompactionGuardAction {
-        create,
-        create_failure,
+        init,
+        init_failure,
         partition,
         skip_partition,
     }

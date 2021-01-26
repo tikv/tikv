@@ -411,16 +411,16 @@ where
             user_key.as_encoded(),
         )
     {
-        assert_ge!(
-            after_ts,
-            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-        );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
             break;
         }
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
+                assert_ge!(
+                    after_ts,
+                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+                );
                 ret = Some(write_ref.to_owned());
                 break;
             }

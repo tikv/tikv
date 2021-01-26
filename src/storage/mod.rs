@@ -54,7 +54,7 @@ pub use self::{
         TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
@@ -1900,9 +1900,9 @@ mod tests {
         let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
         assert!(matches!(
             result,
-            Err(Error(box ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
-                ..
-            }))))
+            Err(Error(box ErrorInner::Mvcc(mvcc::Error(
+                box mvcc::ErrorInner::KeyIsLocked { .. }
+            ))))
         ));
     }
 
@@ -2364,10 +2364,13 @@ mod tests {
 
     #[test]
     fn test_scan_with_key_only() {
-        let mut titan_db_config = TitanDBConfig::default();
-        titan_db_config.enabled = true;
-        let mut db_config = crate::config::DbConfig::default();
-        db_config.titan = titan_db_config;
+        let db_config = crate::config::DbConfig {
+            titan: TitanDBConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let engine = {
             let path = "".to_owned();
             let cfs = crate::storage::ALL_CFS.to_vec();
@@ -2845,8 +2848,10 @@ mod tests {
 
     #[test]
     fn test_sched_too_busy() {
-        let mut config = Config::default();
-        config.scheduler_pending_write_threshold = ReadableSize(1);
+        let config = Config {
+            scheduler_pending_write_threshold: ReadableSize(1),
+            ..Default::default()
+        };
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .config(config)
             .build()
@@ -3039,8 +3044,10 @@ mod tests {
 
     #[test]
     fn test_high_priority_no_block() {
-        let mut config = Config::default();
-        config.scheduler_worker_pool_size = 1;
+        let config = Config {
+            scheduler_worker_pool_size: 1,
+            ..Default::default()
+        };
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .config(config)
             .build()

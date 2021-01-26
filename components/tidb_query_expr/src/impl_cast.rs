@@ -354,7 +354,7 @@ fn cast_string_as_int(
                         Ok(Some(x as i64))
                     }
                     Err(err) => match *err.kind() {
-                        IntErrorKind::Overflow | IntErrorKind::Underflow => {
+                        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
                             let err = if is_str_neg {
                                 Error::overflow("BIGINT UNSIGNED", valid_int_prefix)
                             } else {
@@ -1968,8 +1968,8 @@ mod tests {
 
         // binary literal
         let cases = vec![
-            (vec![0x01, 0x02, 0x03], Some(0x010203 as i64)),
-            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304 as i64)),
+            (vec![0x01, 0x02, 0x03], Some(0x010203_i64)),
+            (vec![0x01, 0x02, 0x03, 0x4], Some(0x01020304_i64)),
             (
                 vec![0x01, 0x02, 0x03, 0x4, 0x05, 0x06, 0x06, 0x06, 0x06],
                 None,
