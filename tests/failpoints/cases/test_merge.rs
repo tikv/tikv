@@ -369,7 +369,9 @@ fn test_node_merge_recover_snapshot() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
+    // Start the cluster and evict the region leader from peer 3.
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
