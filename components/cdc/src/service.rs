@@ -15,6 +15,7 @@ use grpcio::{
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
 };
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
@@ -302,6 +303,7 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -311,7 +313,13 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
+            let downstream = Downstream::new(
+                peer.clone(),
+                region_epoch,
+                req_id,
+                conn_id,
+                enable_old_value,
+            );
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
