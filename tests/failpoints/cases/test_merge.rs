@@ -267,13 +267,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
     }
 
     // wait to trigger compact raft log
-    for _ in 0..50 {
-        let state2 = cluster.truncated_state(1000, 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(1000, 1, state1.get_index() + 1);
 
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
@@ -689,8 +683,6 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     // Prevent apply fsm to apply compact log
     let handle_apply_fp = "on_handle_apply";
     fail::cfg(handle_apply_fp, "return()").unwrap();
-
-    let state1 = cluster.truncated_state(left.get_id(), 1);
     fail::remove(raft_gc_log_tick_fp);
 
     // Wait for compact log to be proposed and committed maybe
@@ -706,13 +698,18 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
 
     cluster.start().unwrap();
 
+    let last_index = cluster.raft_local_state(left.get_id(), 1).get_last_index();
     // Wait for compact log to apply
-    for _ in 0..50 {
-        let state2 = cluster.truncated_state(left.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
+    let timer = Instant::now();
+    loop {
+        let apply_index = cluster.apply_state(left.get_id(), 1).get_applied_index();
+        if apply_index >= last_index {
             break;
         }
-        sleep_ms(10);
+        if timer.elapsed() > Duration::from_secs(3) {
+            panic!("logs are not applied after 3 seconds");
+        }
+        thread::sleep(Duration::from_millis(20));
     }
     // Now schedule merge
     fail::remove(schedule_merge_fp);
@@ -1052,14 +1049,7 @@ fn test_node_merge_write_data_to_source_region_after_merging() {
     for i in 0..15 {
         cluster.must_put(format!("k2{}", i).as_bytes(), b"v2");
     }
-    // Wait for log compaction
-    for _ in 0..50 {
-        let state2 = cluster.apply_state(region.get_id(), 1);
-        if state2.get_truncated_state().get_index() >= state1.get_applied_index() {
-            break;
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(region.get_id(), 1, state1.get_applied_index());
     // Ignore this msg to make left region exist.
     let on_has_merge_target_fp = "on_has_merge_target";
     fail::cfg(on_has_merge_target_fp, "return").unwrap();
@@ -1173,17 +1163,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
     // Remove log compaction failpoint
     fail::remove(on_raft_gc_log_tick_fp);
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(region.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(region.get_id(), 1, state1.get_index() + 1);
 
     let peer_on_store3 = find_peer(&region, 3).unwrap().to_owned();
     assert_eq!(peer_on_store3.get_id(), 3);
@@ -1291,17 +1271,7 @@ fn test_node_merge_crash_when_snapshot() {
     // Remove log compaction failpoint
     fail::remove(on_raft_gc_log_tick_fp);
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(region.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(region.get_id(), 1, state1.get_index() + 1);
 
     let on_region_worker_apply_fp = "on_region_worker_apply";
     fail::cfg(on_region_worker_apply_fp, "return()").unwrap();
