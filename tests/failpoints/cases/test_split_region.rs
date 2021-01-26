@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use fail;
 
-use engine_traits::CF_WRITE;
-use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -17,7 +15,7 @@ use tikv_util::HandyRwLock;
 
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_follower_slow_split() {
@@ -152,67 +150,6 @@ fn test_split_lost_request_vote() {
     // After the follower split success, it will response to the pending vote.
     fail::cfg("apply_after_split_1_3", "off").unwrap();
     assert!(rx.recv_timeout(Duration::from_millis(100)).is_ok());
-}
-
-fn gen_split_region() -> (Region, Region, Region) {
-    let mut cluster = new_server_cluster(0, 2);
-    let region_max_size = 50000;
-    let region_split_size = 30000;
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.coprocessor.region_max_size = ReadableSize(region_max_size);
-    cluster.cfg.coprocessor.region_split_size = ReadableSize(region_split_size);
-
-    let mut range = 1..;
-    cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
-    let region = pd_client.get_region(b"").unwrap();
-    let last_key = put_till_size(&mut cluster, region_split_size, &mut range);
-    let target = pd_client.get_region(&last_key).unwrap();
-
-    assert_eq!(region, target);
-
-    let max_key = put_cf_till_size(&mut cluster, CF_WRITE, region_max_size, &mut range);
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-    if left == right {
-        cluster.wait_region_split_max_cnt(&region, 20, 10, false);
-    }
-
-    let left = pd_client.get_region(b"").unwrap();
-    let right = pd_client.get_region(&max_key).unwrap();
-
-    (region, left, right)
-}
-
-#[test]
-fn test_pause_split_when_snap_gen_will_split() {
-    let is_generating_snapshot = "is_generating_snapshot";
-    fail::cfg(is_generating_snapshot, "return()").unwrap();
-
-    let (region, left, right) = gen_split_region();
-
-    assert_ne!(left, right);
-    assert_eq!(region.get_start_key(), left.get_start_key());
-    assert_eq!(region.get_end_key(), right.get_end_key());
-
-    fail::remove(is_generating_snapshot);
-}
-
-#[test]
-fn test_pause_split_when_snap_gen_never_split() {
-    let is_generating_snapshot = "is_generating_snapshot";
-    let region_split_skip_max_count = "region_split_skip_max_count";
-    fail::cfg(region_split_skip_max_count, "return()").unwrap();
-    fail::cfg(is_generating_snapshot, "return()").unwrap();
-
-    let (region, left, right) = gen_split_region();
-
-    assert_eq!(region, left);
-    assert_eq!(left, right);
-
-    fail::remove(is_generating_snapshot);
-    fail::remove(region_split_skip_max_count);
 }
 
 type FilterSender<T> = Mutex<mpsc::Sender<T>>;
