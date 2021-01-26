@@ -2069,6 +2069,12 @@ mod delta_entry_tests {
         must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
         must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, true);
 
+        must_prewrite_put(&engine, b"c", b"c_4", b"c", 4);
+        must_commit(&engine, b"c", 4, 6);
+        must_acquire_pessimistic_lock(&engine, b"c", b"c", 5, 15);
+        must_pessimistic_prewrite_put(&engine, b"c", b"c_5", b"c", 5, 15, true);
+        must_cleanup(&engine, b"c", 20, 0);
+
         let entry_a_1 = EntryBuilder::default()
             .key(b"a")
             .value(b"a_1")
@@ -2107,6 +2113,20 @@ mod delta_entry_tests {
             .start_ts(9.into())
             .for_update_ts(15.into())
             .build_prewrite(LockType::Put, true);
+        let entry_c_4 = EntryBuilder::default()
+            .key(b"c")
+            .value(b"c_4")
+            .start_ts(4.into())
+            .commit_ts(6.into())
+            .build_commit(WriteType::Put, true);
+        let entry_c_5 = EntryBuilder::default()
+            .key(b"c")
+            .value(b"c_5")
+            .primary(b"c")
+            .start_ts(5.into())
+            .for_update_ts(15.into())
+            .old_value(b"c_4")
+            .build_prewrite(LockType::Put, true);
 
         let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -2122,9 +2142,9 @@ mod delta_entry_tests {
         };
 
         // Scanning entries in (10, max] should get all prewrites
-        check(10, vec![&entry_a_5, &entry_b_15]);
-        // Scanning entries include delete in (7, max] should get a_5, b_10 and b_15
-        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10]);
+        check(10, vec![&entry_a_5, &entry_b_15, &entry_c_5]);
+        // Scanning entries include delete in (7, max] should get a_5, b_10, b_15 and c_5
+        check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10, &entry_c_5]);
         // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_10, and b_15
         check(
             0,
@@ -2135,6 +2155,8 @@ mod delta_entry_tests {
                 &entry_b_15,
                 &entry_b_10,
                 &entry_b_2,
+                &entry_c_5,
+                &entry_c_4,
             ],
         );
     }
