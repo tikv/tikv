@@ -214,8 +214,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        let region_info_accessor =
-            RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
+        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -377,11 +376,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.storage.data_dir,
             cmp::min(
                 ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
-                // Max one of configured `reserve_space` and `storage.capacity * 5%`.
-                cmp::max(
-                    (capacity as f64 * 0.05) as u64,
-                    self.config.storage.reserve_space.0,
-                ),
+                if self.config.storage.reserve_space.0 == 0 {
+                    0
+                } else {
+                    // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                    cmp::max(
+                        (capacity as f64 * 0.05) as u64,
+                        self.config.storage.reserve_space.0,
+                    )
+                },
             ),
         )
         .unwrap();

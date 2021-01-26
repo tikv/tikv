@@ -47,8 +47,10 @@ fn test_deadline_3() {
     let product = ProductTable::new();
     let (_, endpoint) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
-        let mut cfg = tikv::server::Config::default();
-        cfg.end_point_request_max_handle_duration = tikv_util::config::ReadableDuration::secs(1);
+        let cfg = tikv::server::Config {
+            end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
+            ..Default::default()
+        };
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
     let req = DAGSelect::from(&product).build();
