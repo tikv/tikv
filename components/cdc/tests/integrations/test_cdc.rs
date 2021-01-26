@@ -1025,7 +1025,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             check_fn(resolved_ts.ts)
         }
-    };
+    }
 
     check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
     assert!(cm.max_ts() >= 100.into());
@@ -1286,9 +1286,11 @@ fn test_cdc_scan_ignore_gc_fence() {
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
 
     let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let mut mutation = Mutation::default();
-    mutation.key = key.to_vec();
-    mutation.value = v2.to_vec();
+    let mutation = Mutation {
+        key: key.to_vec(),
+        value: v2.to_vec(),
+        ..Default::default()
+    };
     suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
 
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();

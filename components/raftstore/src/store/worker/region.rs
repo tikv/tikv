@@ -384,7 +384,12 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        let _ = status.compare_exchange(
+            JOB_STATUS_PENDING,
+            JOB_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();

@@ -328,8 +328,10 @@ mod tests {
     #[test]
     fn test_modify_file() {
         let mut file = Builder::new().prefix("test_modify").tempfile().unwrap();
-        let mut cfg = SecurityConfig::default();
-        cfg.cert_path = file.path().to_str().unwrap().to_owned();
+        let cfg = SecurityConfig {
+            cert_path: file.path().to_str().unwrap().to_owned(),
+            ..Default::default()
+        };
 
         let mut last = None;
         assert!(cfg.is_modified(&mut last).unwrap());

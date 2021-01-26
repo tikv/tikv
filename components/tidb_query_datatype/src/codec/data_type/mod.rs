@@ -193,7 +193,7 @@ pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     type ChunkedType: ChunkedVec<Self>;
     /// Converts a vector of this concrete type into a `VectorValue` in the same type;
     /// panics if the varient mismatches.
-    fn into_vector_value(vec: Self::ChunkedType) -> VectorValue;
+    fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
 /// # Notes
@@ -270,7 +270,7 @@ macro_rules! impl_evaluable_ret {
             type ChunkedType = $chunk;
 
             #[inline]
-            fn into_vector_value(vec: $chunk) -> VectorValue {
+            fn cast_chunk_into_vector_value(vec: $chunk) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
@@ -305,7 +305,7 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 
     /// Convert this reference to owned type
-    fn to_owned_value(self) -> Self::EvaluableType;
+    fn into_owned_value(self) -> Self::EvaluableType;
 
     fn from_owned_value(value: &'a Self::EvaluableType) -> Self;
 }
@@ -331,7 +331,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.clone()
     }
 
@@ -383,7 +383,7 @@ impl<'a> EvaluableRef<'a> for BytesRef<'a> {
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_vec()
     }
 
@@ -447,7 +447,7 @@ impl<'a> EvaluableRef<'a> for JsonRef<'a> {
     }
 
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
 
@@ -484,7 +484,7 @@ impl<'a> EvaluableRef<'a> for EnumRef<'a> {
         }
     }
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
     #[inline]
@@ -519,7 +519,7 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
         }
     }
     #[inline]
-    fn to_owned_value(self) -> Self::EvaluableType {
+    fn into_owned_value(self) -> Self::EvaluableType {
         self.to_owned()
     }
     #[inline]
