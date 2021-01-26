@@ -839,6 +839,12 @@ fn test_request_snapshot_after_propose_merge() {
     // Make sure peer 1 is the leader.
     cluster.must_transfer_leader(region.get_id(), new_peer(1, 1));
 
+    let k = b"k1_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), k, b"value");
+    }
+
     // Drop append messages, so prepare merge can not be committed.
     cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
         MessageType::MsgAppend,

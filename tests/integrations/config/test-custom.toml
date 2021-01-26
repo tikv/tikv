@@ -115,7 +115,7 @@ raft-log-gc-size-limit = "1KB"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
-region-split-check-diff = "6MB"
+region-split-check-diff = "20MB"
 region-compact-check-interval = "12s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
@@ -489,6 +489,8 @@ cert-allowed-cn = [
 [security.encryption]
 data-encryption-method = "aes128-ctr"
 data-key-rotation-period = "14d"
+enable-file-dictionary-log = false
+file-dictionary-rewrite-threshold = 123456
 
 [security.encryption.master-key]
 type = "file"
@@ -499,6 +501,7 @@ type = "plaintext"
 
 [backup]
 num-threads = 456
+batch-size = 7
 
 [import]
 num-threads = 123

@@ -15,7 +15,7 @@ pub use self::apply::{
     Msg as ApplyTask, Notifier as ApplyNotifier, ObserveID, Proposal, RegionProposal, Registration,
     TaskRes as ApplyTaskRes,
 };
-pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
+pub use self::peer::{CollectedReady, DestroyPeerJob, GroupState, PeerFsm};
 pub use self::store::{
     create_raft_batch_system, new_compaction_listener, RaftBatchSystem, RaftPollerBuilder,
     RaftRouter, StoreInfo, StoreMeta,

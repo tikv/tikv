@@ -138,6 +138,11 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    // To destroy temp dir later.
+    pub fn take_path(&mut self) -> Vec<TempDir> {
+        std::mem::replace(&mut self.paths, vec![])
+    }
+
     pub fn id(&self) -> u64 {
         self.cfg.server.cluster_id
     }
@@ -330,7 +335,7 @@ impl<T: Simulator> Cluster<T> {
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
-                None => return Err(box_err!("can't get leader of region {}", region_id)),
+                None => return Err(Error::NotLeader(region_id, None)),
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
@@ -613,27 +618,32 @@ impl<T: Simulator> Cluster<T> {
     }
 
     // If the resp is "not leader error", get the real leader.
-    // Sometimes, we may still can't get leader even in "not leader error",
-    // returns a INVALID_PEER for this.
+    // Otherwise reset or refresh leader if needed.
+    // Returns if the request should retry.
     fn refresh_leader_if_needed(&mut self, resp: &RaftCmdResponse, region_id: u64) -> bool {
         if !is_error_response(resp) {
             return false;
         }
 
         let err = resp.get_header().get_error();
-        if err.has_stale_command() {
-            // command got truncated, leadership may have changed.
+        if err
+            .get_message()
+            .contains("peer has not applied to current term")
+        {
+            // leader peer has not applied to current term
+            return true;
+        }
+
+        // If command is stale, leadership may have changed.
+        // Or epoch not match, it can be introduced by wrong leader.
+        if err.has_stale_command() || err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
             return true;
         }
-        // Not match epoch can be introduced by wrong leader.
-        if err.has_epoch_not_match() {
-            self.reset_leader_of_region(region_id);
-        }
+
         if !err.has_not_leader() {
             return false;
         }
-
         let err = err.get_not_leader();
         if !err.has_leader() {
             self.reset_leader_of_region(region_id);
@@ -664,13 +674,18 @@ impl<T: Simulator> Cluster<T> {
             );
             let result = self.call_command_on_leader(req, timeout);
 
-            if let Err(Error::Timeout(_)) = result {
-                warn!("call command timeout, let's retry");
-                sleep_ms(100);
-                continue;
-            }
+            let resp = match result {
+                e @ Err(Error::Timeout(_))
+                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::StaleCommand) => {
+                    warn!("call command failed, retry it"; "err" => ?e);
+                    sleep_ms(100);
+                    continue;
+                }
+                Err(e) => panic!("call command failed {:?}", e),
+                Ok(resp) => resp,
+            };
 
-            let resp = result.unwrap();
             if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
@@ -707,7 +722,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {}", hex::encode_upper(key));
+        panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -1126,7 +1141,7 @@ impl<T: Simulator> Cluster<T> {
                             || error.has_stale_command()
                             || error
                                 .get_message()
-                                .contains("peer is not applied to current term")
+                                .contains("peer has not applied to current term")
                         {
                             warn!("fail to split: {:?}, ignore.", error);
                             return;
@@ -1153,7 +1168,7 @@ impl<T: Simulator> Cluster<T> {
                 panic!(
                     "region {:?} has not been split by {}",
                     region,
-                    hex::encode_upper(split_key)
+                    log_wrappers::hex_encode_upper(split_key)
                 );
             }
             try_cnt += 1;

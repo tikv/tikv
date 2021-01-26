@@ -395,7 +395,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
-        Ok(Some(Cow::Owned(hex::encode_upper(s.to_vec()).into_bytes())))
+        Ok(Some(Cow::Owned(
+            log_wrappers::hex_encode_upper(s.to_vec()).into_bytes(),
+        )))
     }
 
     #[inline]

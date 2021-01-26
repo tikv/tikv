@@ -72,9 +72,9 @@ checksum = "bc4662175ead9cd84451d5c35070517777949a2ed84551764129cedb88384841"
 
 [[package]]
 name = "arc-swap"
-version = "0.4.4"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b8a9123b8027467bce0099fe556c628a53c8d83df0507084c31e9ba2e39aff"
+checksum = "dabe5a181f83789739c194cbe5a897dde195078fac08568d09221fd6137a7ba8"
 
 [[package]]
 name = "arrayref"
@@ -110,14 +110,14 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18c4fde11fd6a6f244541acc8df7dda88f346363e70f52f8ea4dd66e299c815c"
+checksum = "c832f4cc51a4c7420c8e84ed9571e760f551531478fa1f72fcda2f768bd10271"
 dependencies = [
  "futures-core",
  "futures-io",
  "futures-timer",
- "pin-project-lite",
+ "pin-project-lite 0.2.0",
 ]
 
 [[package]]
@@ -217,6 +217,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "raft",
  "raftstore",
@@ -450,13 +451,13 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "failure",
  "futures 0.1.29",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "prometheus",
@@ -1077,7 +1078,7 @@ dependencies = [
  "crossbeam",
  "engine_traits",
  "error_code",
- "fail 0.4.0",
+ "fail",
  "failure",
  "futures 0.3.7",
  "futures-util",
@@ -1118,6 +1119,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "prometheus",
  "prost",
  "protobuf",
@@ -1154,7 +1156,7 @@ dependencies = [
  "encryption",
  "engine",
  "engine_traits",
- "fail 0.3.0",
+ "fail",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -1252,17 +1254,6 @@ dependencies = [
  "tikv_alloc",
  "tokio 0.2.13",
  "url",
-]
-
-[[package]]
-name = "fail"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63eec71a3013ee912a0ecb339ff0c5fa5ed9660df04bfefa10c250b885d018c"
-dependencies = [
- "lazy_static",
- "log",
- "rand 0.6.5",
 ]
 
 [[package]]
@@ -1437,6 +1428,7 @@ dependencies = [
  "futures-core",
  "futures-task",
  "futures-util",
+ "num_cpus",
 ]
 
 [[package]]
@@ -1949,16 +1941,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#0e3ce33f29b8be60d24610eb1c4695114de367ca"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#dfe1b7b9d0dfea83fa357ac6cb2cc6ff43599712"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2033,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2052,7 +2045,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2066,9 +2059,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.0.25"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb5e43362e38e2bca2fd5f5134c4d4564a23a5c28e9b95411652021a8675ebe"
+checksum = "602113192b08db8f38796c4e85c39e960c145965140e918018bcde1952429655"
 dependencies = [
  "cc",
  "libc",
@@ -2144,6 +2137,12 @@ name = "matches"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
+
+[[package]]
+name = "maybe-uninit"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "md5"
@@ -2569,9 +2568,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "1.0.2"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18869315e81473c951eb56ad5558bbc56978562d3ecfb87abb7a1e944cea4518"
+checksum = "3305af35278dd29f46fcdd139e0b1fbfae2153f0e5928b39b035542dd31e37b7"
 dependencies = [
  "num-traits",
 ]
@@ -2612,7 +2611,7 @@ dependencies = [
  "libc",
  "redox_syscall",
  "rustc_version",
- "smallvec 0.6.10",
+ "smallvec 0.6.14",
  "winapi 0.3.8",
 ]
 
@@ -2626,7 +2625,7 @@ dependencies = [
  "cloudabi 0.0.3",
  "libc",
  "redox_syscall",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "winapi 0.3.8",
 ]
 
@@ -2641,7 +2640,7 @@ dependencies = [
  "instant",
  "libc",
  "redox_syscall",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "winapi 0.3.8",
 ]
 
@@ -2678,14 +2677,14 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "error_code",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log",
+ "log_wrappers",
  "prometheus",
  "quick-error",
  "security",
@@ -2768,6 +2767,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237844750cfbb86f67afe27eee600dfbbcb6188d734139b534cbfbf4f96792ae"
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b063f57ec186e6140e2b8b6921e5f1bd89c7356dda5b33acc5401203ca6131c"
+
+[[package]]
 name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2812,8 +2817,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc5942d2bd52ec562b572798496532e343c2f69383777740e1eeddf0e468cf3"
+source = "git+https://github.com/tikv/pprof-rs.git?branch=tikv-release-4.0#e47d299873bb0c37e9675ea2e8c313a57211842a"
 dependencies = [
  "backtrace",
  "inferno",
@@ -3110,12 +3114,11 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures-executor",
  "futures-util",
- "hex 0.4.2",
  "into_other",
  "keys",
  "kvproto",
@@ -3454,7 +3457,7 @@ dependencies = [
  "mime_guess",
  "native-tls",
  "percent-encoding",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "serde",
  "serde_urlencoded",
  "time 0.1.42",
@@ -3471,7 +3474,7 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.2",
+ "log_wrappers",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3514,7 +3517,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -3922,7 +3925,7 @@ version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94f478ede9f64724c5d173d7bb56099ec3e2d9fc2774aac65d34b8b890405f41"
 dependencies = [
- "arc-swap 0.4.4",
+ "arc-swap 0.4.8",
  "libc",
 ]
 
@@ -3998,15 +4001,18 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "0.6.10"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
+checksum = "b97fcaeba89edba30f044a10c6a3cc39df9c3f17d7cd829dd1446cab35f890e0"
+dependencies = [
+ "maybe-uninit",
+]
 
 [[package]]
 name = "smallvec"
-version = "1.4.2"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
+checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
 
 [[package]]
 name = "snappy-sys"
@@ -4047,6 +4053,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.7",
  "futures-executor",
  "futures-util",
  "grpcio",
@@ -4217,9 +4224,8 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d070254b7172eee9eb3990bea8f72aeabfe1226c40bf71a52e4fe75777812e9a"
+version = "0.15.3"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv-4.0#708857e0345340889b38f30a69d5fc4445ef949f"
 dependencies = [
  "cfg-if 0.1.10",
  "doc-comment",
@@ -4341,7 +4347,7 @@ dependencies = [
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "grpcio",
  "kvproto",
@@ -4363,9 +4369,9 @@ dependencies = [
  "futures 0.1.29",
  "futures-cpupool",
  "grpcio",
- "hex 0.4.2",
  "keys",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raftstore",
@@ -4413,7 +4419,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "encryption",
- "fail 0.3.0",
+ "fail",
  "grpcio",
  "kvproto",
  "rand 0.7.3",
@@ -4444,8 +4450,9 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "error_code",
  "external_storage",
- "fail 0.3.0",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
@@ -4454,6 +4461,7 @@ dependencies = [
  "hyper",
  "keys",
  "kvproto",
+ "log_wrappers",
  "panic_hook",
  "pd_client",
  "profiler",
@@ -4547,6 +4555,7 @@ dependencies = [
  "indexmap",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "match_template",
  "nom 5.1.0",
  "num",
@@ -4567,7 +4576,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
  "static_assertions",
  "tidb_query_codegen",
  "tidb_query_datatype",
@@ -4599,13 +4608,14 @@ dependencies = [
  "bstr",
  "error_code",
  "failure",
+ "log_wrappers",
  "tikv_alloc",
  "tipb",
 ]
 
 [[package]]
 name = "tikv"
-version = "4.0.8"
+version = "4.0.10"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4627,7 +4637,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "failure",
  "fs2",
  "futures 0.1.29",
@@ -4771,17 +4781,17 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "error_code",
- "fail 0.3.0",
+ "fail",
  "fs2",
  "futures 0.1.29",
  "futures 0.3.7",
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex 0.4.2",
  "lazy_static",
  "libc",
  "log",
+ "log_wrappers",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -4934,7 +4944,7 @@ dependencies = [
  "mio-named-pipes",
  "mio-uds",
  "num_cpus",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "signal-hook-registry",
  "slab",
  "tokio-macros",
@@ -5159,7 +5169,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "log",
- "pin-project-lite",
+ "pin-project-lite 0.1.4",
  "tokio 0.2.13",
 ]
 
@@ -5209,8 +5219,8 @@ dependencies = [
  "derive-new",
  "error_code",
  "farmhash",
- "hex 0.4.2",
  "kvproto",
+ "log_wrappers",
  "quick-error",
  "slog",
  "tikv_alloc",
@@ -5253,7 +5263,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5479532badd04e128284890390c1e876ef7a993d0570b3597ae43dfa1d59afa4"
 dependencies = [
- "smallvec 1.4.2",
+ "smallvec 1.6.1",
 ]
 
 [[package]]
@@ -5566,7 +5576,7 @@ dependencies = [
  "const-random-macro",
  "crossbeam-deque 0.7.1",
  "dashmap",
- "fail 0.4.0",
+ "fail",
  "lazy_static",
  "num_cpus",
  "parking_lot_core 0.8.0",

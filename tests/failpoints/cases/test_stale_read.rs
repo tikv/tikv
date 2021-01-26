@@ -269,7 +269,7 @@ fn test_stale_read_during_merging() {
 
     //             merge into
     // region1000 ------------> region1
-    cluster.try_merge(region1000.get_id(), region1.get_id());
+    cluster.must_try_merge(region1000.get_id(), region1.get_id());
 
     // Pause the apply workers except for the peer 4.
     let apply_commit_merge = "apply_before_commit_merge_except_1_4";
@@ -326,6 +326,8 @@ fn test_read_index_when_transfer_leader_2() {
 
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    // Stop log compaction to transfer leader with filter easier.
+    configure_for_request_snapshot(&mut cluster);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 

@@ -16,3 +16,4 @@ failure = "0.1"
 tikv_alloc = { path = "../tikv_alloc" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 bstr = "0.2.8"
+log_wrappers = { path = "../log_wrappers" }

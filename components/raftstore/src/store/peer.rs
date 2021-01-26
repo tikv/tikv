@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
@@ -37,10 +37,10 @@ use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, GroupState, Proposal, RegionProposal,
 };
-use crate::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadProgress, RegionTask};
+use crate::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot, SplitCheckTask};
 use crate::{Error, Result};
 use pd_client::INVALID_ID;
 use tikv_util::collections::{HashMap, HashSet};
@@ -408,6 +408,11 @@ pub struct Peer {
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Check whether this proposal can be proposed based on its epoch
     cmd_epoch_checker: CmdEpochChecker,
+
+    /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
+    /// reading rocksdb. To avoid unnecessary io operations, we always let the later
+    /// task run when there are more than 1 pending tasks.
+    pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 }
 
 impl Peer {
@@ -491,6 +496,7 @@ impl Peer {
             check_stale_peers: vec![],
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             cmd_epoch_checker: Default::default(),
+            pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -900,9 +906,10 @@ impl Peer {
         // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
         // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        let committed = self.raft_group.raft.raft_log.committed;
-        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
-        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
+        let index = self.get_store().committed_index();
+        if msg_type == MessageType::MsgReadIndex
+            && self.get_store().term(index).unwrap_or(0) == self.term()
+        {
             // If the leader hasn't committed any entries in its term, it can't response read only
             // requests. Please also take a look at raft-rs.
             let state = self.inspect_lease();
@@ -911,7 +918,7 @@ impl Peer {
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
                 resp.term = self.term();
                 resp.to = m.from;
-                resp.index = self.get_store().committed_index();
+                resp.index = index;
                 resp.set_entries(m.take_entries());
 
                 self.pending_messages.push(resp);
@@ -1267,7 +1274,7 @@ impl Peer {
     pub fn handle_raft_ready_append<T: Transport, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-    ) -> Option<(Ready, InvokeContext)> {
+    ) -> Option<CollectedReady> {
         if self.pending_remove {
             return None;
         }
@@ -1454,7 +1461,7 @@ impl Peer {
             }
         };
 
-        Some((ready, invoke_ctx))
+        Some(CollectedReady::new(invoke_ctx, ready))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(
@@ -1517,8 +1524,7 @@ impl Peer {
     pub fn handle_raft_ready_apply<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        ready: &mut Ready,
-        invoke_ctx: &InvokeContext,
+        ready: &mut CollectedReady,
     ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
@@ -1527,9 +1533,9 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if raft::is_empty_snap(ready.snapshot()) {
-            debug_assert!(!invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
-            let committed_entries = ready.committed_entries.take().unwrap();
+        if raft::is_empty_snap(ready.ready.snapshot()) {
+            debug_assert!(!ready.ctx.has_snapshot() && !self.get_store().is_applying_snapshot());
+            let committed_entries = ready.ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
             if !lease_to_be_updated {
@@ -1615,7 +1621,7 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, ready);
+        self.apply_reads(ctx, &ready.ready);
     }
 
     pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
@@ -2519,7 +2525,7 @@ impl Peer {
             // The admin request is rejected because it may need to update epoch checker which
             // introduces an uncertainty and may breaks the correctness of epoch checker.
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2697,7 +2703,7 @@ impl Peer {
         // `self.get_store().applied_index()` is passed.
         if self.get_store().applied_index_term() != self.term() {
             return Err(box_err!(
-                "{} peer is not applied to current term, applied_term {}, current_term {}",
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
                 self.tag,
                 self.get_store().applied_index_term(),
                 self.term()
@@ -2819,8 +2825,13 @@ impl Peer {
         None
     }
 
+    pub fn is_region_size_or_keys_none(&self) -> bool {
+        fail_point!("region_size_or_keys_none", |_| true);
+        self.approximate_size.is_none() || self.approximate_keys.is_none()
+    }
+
     pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
-        let task = PdTask::Heartbeat {
+        let task = PdTask::Heartbeat(HeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
             peer: self.peer.clone(),
@@ -2828,16 +2839,56 @@ impl Peer {
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.approximate_size,
-            approximate_keys: self.approximate_keys,
+            approximate_size: self.approximate_size.unwrap_or_default(),
+            approximate_keys: self.approximate_keys.unwrap_or_default(),
+        });
+        if !self.is_region_size_or_keys_none() {
+            if let Err(e) = ctx.pd_scheduler.schedule(task) {
+                error!(
+                    "failed to notify pd";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "err" => ?e,
+                );
+            }
+            return;
+        }
+
+        if self.pending_pd_heartbeat_tasks.load(Ordering::SeqCst) > 2 {
+            return;
+        }
+        let region_id = self.region_id;
+        let peer_id = self.peer.get_id();
+        let scheduler = ctx.pd_scheduler.clone();
+        let split_check_task = SplitCheckTask::GetRegionApproximateSizeAndKeys {
+            region: self.region().clone(),
+            pending_tasks: self.pending_pd_heartbeat_tasks.clone(),
+            cb: Box::new(move |size: u64, keys: u64| {
+                if let PdTask::Heartbeat(mut h) = task {
+                    h.approximate_size = size;
+                    h.approximate_keys = keys;
+                    if let Err(e) = scheduler.schedule(PdTask::Heartbeat(h)) {
+                        error!(
+                            "failed to notify pd";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "err" => ?e,
+                        );
+                    }
+                }
+            }),
         };
-        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+        self.pending_pd_heartbeat_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        if let Err(e) = ctx.split_check_scheduler.schedule(split_check_task) {
             error!(
                 "failed to notify pd";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
+                "region_id" => region_id,
+                "peer_id" => peer_id,
                 "err" => ?e,
             );
+            self.pending_pd_heartbeat_tasks
+                .fetch_sub(1, Ordering::SeqCst);
         }
     }
 
@@ -3192,7 +3243,7 @@ where
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        &log_wrappers::Value::key(key),
                         cf,
                         e
                     )
@@ -3204,7 +3255,7 @@ where
                     panic!(
                         "[region {}] failed to get {}: {:?}",
                         region.get_id(),
-                        hex::encode_upper(key),
+                        &log_wrappers::Value::key(key),
                         e
                     )
                 })

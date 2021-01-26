@@ -3,6 +3,36 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [4.0.10] - 2021-01-15
+
++ Bug Fixes
+  + Fix the wrong mapping between ready and peer [#9409](https://github.com/tikv/tikv/pull/9409)
+  + Fix the issue that some logs are not redacted when `security.redact-info-log` is set to `true` [#9314](https://github.com/tikv/tikv/pull/9314)
+
+## [4.0.9] - 2020-12-18
+
++ Improvements
+  + Add the tag to trace the source of the `split` command [#8936](https://github.com/tikv/tikv/pull/8936)
+  + Support dynamically changing the `pessimistic-txn.pipelined` configuration [#9100](https://github.com/tikv/tikv/pull/9100)
+  + Reduce the impact on performance when running Backup & Restore and TiDB Lightning [#9098](https://github.com/tikv/tikv/pull/9098)
+  + Add monitoring metrics for the ingesting SST errors [#9096](https://github.com/tikv/tikv/pull/9096)
+  + Prevent hibernation when some peers are still catching up with logs [#9093](https://github.com/tikv/tikv/pull/9093)
+  + Increase the success rate of the pipelined pessimistic locking [#9086](https://github.com/tikv/tikv/pull/9086)
+  + Change the default value of `apply-max-batch-size` and `store-max-batch-size` to `1024` [#9020](https://github.com/tikv/tikv/pull/9020)
+  + Add the `max-background-flushes` configuration item [#8947](https://github.com/tikv/tikv/pull/8947)
+  + Enable the unified read pool for the storage module by default [#8887](https://github.com/tikv/tikv/pull/8887)
+  + Disable `force-consistency-checks` by default to improve performance [#9029](https://github.com/tikv/tikv/pull/9029)
++ Bug Fixes
+  + Fix the issue that Coprocessor might return wrong results when there are more than 255 columns [#9131](https://github.com/tikv/tikv/pull/9131)
+  + Fix the issue that Region Merge might cause data loss during network partition [#9108](https://github.com/tikv/tikv/pull/9108)
+  + Fix the issue that the `ANALYZE` statement might cause panic when using the `latin1` character set [#9082](https://github.com/tikv/tikv/pull/9082)
+  + Fix the wrong results returned when converting the numeric type to the time type [#9031](https://github.com/tikv/tikv/pull/9031)
+  + Fix a bug that TiDB Lightning fails to ingest SST files to TiKV with the Importer-backend or Local-backend when Transparent Data Encryption (TDE) is enabled [#8995](https://github.com/tikv/tikv/pull/8995)
+  + Fix the invalid `advertise-status-addr` value (`0.0.0.0`) [#9036](https://github.com/tikv/tikv/pull/9036)
+  + Fix the issue that an error is returned indicating that a key exists when this key is locked and deleted in a committed transaction [#8930](https://github.com/tikv/tikv/pull/8930)
+  + Fix the issue that the RocksDB cache mapping error causes data corruption [#9029](https://github.com/tikv/tikv/pull/9029)
+  + Fix a bug that Follower Read might return stale data after the leader is transferred [#9240](https://github.com/tikv/tikv/pull/9240)
+
 ## [4.0.8] - 2020-10-30
 
 + Improvements

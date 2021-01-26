@@ -1588,26 +1588,6 @@ macro_rules! readpool_config {
                 }
             }
 
-            pub fn use_unified_pool(&self) -> bool {
-                // The unified pool is used by default unless the corresponding module has
-                // customized configurations.
-                self.use_unified_pool
-                    .unwrap_or_else(|| *self == Default::default())
-            }
-
-            pub fn adjust_use_unified_pool(&mut self) {
-                if self.use_unified_pool.is_none() {
-                    // The unified pool is used by default unless the corresponding module has customized configurations.
-                    if *self == Default::default() {
-                        info!("readpool.{}.use-unified-pool is not set, set to true by default", $display_name);
-                        self.use_unified_pool = Some(true);
-                    } else {
-                        info!("readpool.{}.use-unified-pool is not set, set to false because there are other customized configurations", $display_name);
-                        self.use_unified_pool = Some(false);
-                    }
-                }
-            }
-
             pub fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.use_unified_pool() {
                     return Ok(());
@@ -1757,6 +1737,21 @@ impl Default for StorageReadPoolConfig {
     }
 }
 
+impl StorageReadPoolConfig {
+    pub fn use_unified_pool(&self) -> bool {
+        // The storage module does not use the unified pool by default.
+        self.use_unified_pool.unwrap_or(false)
+    }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The storage module does not use the unified pool by default.
+            info!("readpool.storage.use-unified-pool is not set, set to false by default");
+            self.use_unified_pool = Some(false);
+        }
+    }
+}
+
 const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 
 readpool_config!(
@@ -1779,6 +1774,27 @@ impl Default for CoprReadPoolConfig {
             max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
+        }
+    }
+}
+
+impl CoprReadPoolConfig {
+    pub fn use_unified_pool(&self) -> bool {
+        // The coprocessor module uses the unified pool unless it has customized configurations.
+        self.use_unified_pool
+            .unwrap_or_else(|| *self == Default::default())
+    }
+
+    pub fn adjust_use_unified_pool(&mut self) {
+        if self.use_unified_pool.is_none() {
+            // The coprocessor module uses the unified pool unless it has customized configurations.
+            if *self == Default::default() {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to true by default");
+                self.use_unified_pool = Some(true);
+            } else {
+                info!("readpool.coprocessor.use-unified-pool is not set, set to false because there are other customized configurations");
+                self.use_unified_pool = Some(false);
+            }
         }
     }
 }
@@ -1965,12 +1981,16 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
     pub num_threads: usize,
+    pub batch_size: usize,
 }
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("backup.num_threads cannot be 0".into());
+        }
+        if self.batch_size == 0 {
+            return Err("backup.batch_size cannot be 0".into());
         }
         Ok(())
     }
@@ -1982,6 +2002,7 @@ impl Default for BackupConfig {
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            batch_size: 8,
         }
     }
 }
@@ -2146,8 +2167,6 @@ impl TiKvConfig {
     ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
-
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
 
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
@@ -3168,7 +3187,7 @@ mod tests {
         "#;
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
-        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(true));
+        assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
 
         let content = r#"
@@ -3181,5 +3200,17 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }
