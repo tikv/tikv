@@ -307,6 +307,7 @@ impl Worker {
     pub fn new<S: Into<String>>(name: S) -> Worker {
         Builder::new(name).create()
     }
+
     pub fn start<R: Runnable + 'static, S: Into<String>>(
         &self,
         name: S,
@@ -337,6 +338,10 @@ impl Worker {
             self.pending_capacity,
             metrics_pending_task_count,
         )
+    }
+
+    pub fn clone_yatp_handle(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.remote.clone()
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {

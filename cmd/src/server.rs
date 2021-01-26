@@ -16,6 +16,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -28,9 +29,11 @@ use engine_traits::{
     compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, RaftEngine, CF_DEFAULT,
     CF_WRITE,
 };
-use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter};
+use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsTask as IOMetricsTask};
 use fs2::FileExt;
+use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
+use futures::stream::StreamExt;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -80,13 +83,12 @@ use tikv_util::{
     config::{ensure_dir_exist, ReadableSize, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
-    worker::{Builder as WorkerBuilder, FutureWorker, Worker},
-    IntervalDriver,
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
 
-use crate::{metrics_flusher::MetricsFlusher, setup::*, signal_handler};
-use tikv_util::worker::LazyWorker;
+use crate::{setup::*, signal_handler};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -139,6 +141,33 @@ pub fn run_tikv(config: TiKvConfig) {
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
+
+const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+
+pub struct EngineMetricsTask<R: RaftEngine> {
+    engines: Engines<RocksEngine, R>,
+    last_reset: Instant,
+}
+
+impl<R: RaftEngine> EngineMetricsTask<R> {
+    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
+        EngineMetricsTask {
+            engines,
+            last_reset: Instant::now(),
+        }
+    }
+
+    pub fn on_tick(&mut self) {
+        self.engines.kv.flush_metrics("kv");
+        self.engines.raft.flush_metrics("raft");
+        if self.last_reset.elapsed() >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+            self.engines.kv.reset_statistics();
+            self.engines.raft.reset_statistics();
+            self.last_reset = Instant::now();
+        }
+    }
+}
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -853,10 +882,19 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        self.background_worker.start_with_timer(
-            "metrics-flusher",
-            MetricsFlusher::new(self.engines.as_ref().unwrap().engines.clone(), fetcher),
-        );
+        let remote = self.background_worker.clone_yatp_handle();
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
+            .compat();
+        let mut engine_task =
+            EngineMetricsTask::new(self.engines.as_ref().unwrap().engines.clone());
+        let mut io_task = IOMetricsTask::new(fetcher);
+        remote.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                engine_task.on_tick();
+                io_task.on_tick();
+            }
+        });
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
@@ -1140,12 +1178,6 @@ where
 {
     fn stop(self: Box<Self>) {
         (*self).stop()
-    }
-}
-
-impl Stop for IntervalDriver {
-    fn stop(mut self: Box<IntervalDriver>) {
-        (*self).stop();
     }
 }
 
