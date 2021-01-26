@@ -199,10 +199,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     fn scan_locks<S: Snapshot>(
         reader: &mut MvccReader<S>,
         start: Option<&Key>,
-        checkpoint_ts: TimeStamp,
+        _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) =
-            reader.scan_locks(start, |l| l.ts <= checkpoint_ts, DEFAULT_SCAN_BATCH_SIZE)?;
+        let (locks, has_remaining) = reader.scan_locks(
+            start,
+            |l| l.ts >= TimeStamp::zero(),
+            DEFAULT_SCAN_BATCH_SIZE,
+        )?;
         Ok((locks, has_remaining))
     }
 
