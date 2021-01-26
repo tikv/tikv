@@ -186,8 +186,14 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let engine = Arc::clone(&self.engine);
+        let start = Instant::now();
 
         ctx.spawn(self.threads.spawn_fn(move || {
+            // Records how long the download task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["queue"])
+                .observe(start.elapsed().as_secs_f64());
+
             // SST writer must not be opened in gRPC threads, because it may be
             // blocked for a long time due to IO, especially, when encryption at rest
             // is enabled, and it leads to gRPC keepalive timeout.
