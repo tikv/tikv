@@ -163,7 +163,7 @@ struct Servers<ER: RaftEngine> {
     server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient, ER>,
     importer: Arc<SSTImporter>,
-    cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
+    // cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
 impl<ER: RaftEngine> TiKVServer<ER> {
@@ -466,20 +466,20 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
 
-        // Create cdc.
-        let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
-        let cdc_scheduler = cdc_worker.scheduler();
-        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
+        // // Create cdc.
+        // let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
+        // let cdc_scheduler = cdc_worker.scheduler();
+        // let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
 
         // Resolved TS
         let mut resolved_ts_worker = Box::new(LazyWorker::new("resolved-ts"));
         let resolved_ts_scheduler = resolved_ts_worker.scheduler();
 
-        self.engines
-            .as_mut()
-            .unwrap()
-            .engine
-            .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
+        // self.engines
+        //     .as_mut()
+        //     .unwrap()
+        //     .engine
+        //     .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
         let lock_mgr = LockManager::new(self.config.pessimistic_txn.pipelined);
         cfg_controller.register(
@@ -568,9 +568,9 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             cop_read_pools.handle()
         };
 
-        // Register cdc
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
-        cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+        // // Register cdc
+        // let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        // cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let change_data_ob = resolved_ts::ChangeDataObserver::new(resolved_ts_scheduler.clone());
         change_data_ob.register_to(self.coprocessor_host.as_mut().unwrap());
@@ -685,20 +685,20 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .registry
             .register_consistency_check_observer(100, observer);
 
-        // Start CDC.
-        let cdc_endpoint = cdc::Endpoint::new(
-            &self.config.cdc,
-            self.pd_client.clone(),
-            cdc_scheduler.clone(),
-            self.router.clone(),
-            cdc_ob,
-            engines.store_meta.clone(),
-            self.concurrency_manager.clone(),
-            server.env(),
-            self.security_mgr.clone(),
-        );
-        cdc_worker.start_with_timer(cdc_endpoint);
-        self.to_stop.push(cdc_worker);
+        // // Start CDC.
+        // let cdc_endpoint = cdc::Endpoint::new(
+        //     &self.config.cdc,
+        //     self.pd_client.clone(),
+        //     cdc_scheduler.clone(),
+        //     self.router.clone(),
+        //     cdc_ob,
+        //     engines.store_meta.clone(),
+        //     self.concurrency_manager.clone(),
+        //     server.env(),
+        //     self.security_mgr.clone(),
+        // );
+        // cdc_worker.start_with_timer(cdc_endpoint);
+        // self.to_stop.push(cdc_worker);
 
         let sinker: Option<resolved_ts::DummySinker<_>> = None;
 
@@ -722,7 +722,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             server,
             node,
             importer,
-            cdc_scheduler,
+            // cdc_scheduler,
         });
 
         server_config
@@ -827,15 +827,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         );
         backup_worker.start_with_timer(backup_endpoint);
 
-        let cdc_service =
-            cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
-        if servers
-            .server
-            .register_service(create_change_data(cdc_service))
-            .is_some()
-        {
-            fatal!("failed to register cdc service");
-        }
+        // let cdc_service =
+        //     cdc::Service::new(servers.cdc_scheduler.clone(), self.security_mgr.clone());
+        // if servers
+        //     .server
+        //     .register_service(create_change_data(cdc_service))
+        //     .is_some()
+        // {
+        //     fatal!("failed to register cdc service");
+        // }
     }
 
     fn init_metrics_flusher(&mut self) {

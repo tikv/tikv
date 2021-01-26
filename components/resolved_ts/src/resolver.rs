@@ -83,6 +83,7 @@ impl Resolver {
 
         let entry = self.locks.get_mut(&start_ts);
         // It's possible that rollback happens on a not existing transaction.
+        // ["7480000000000000FF315F728000000000FF00DE690000000000FA@422464381892427787, commit@422464384631832582 is not tracked, region 100"]
         assert!(
             entry.is_some() || commit_ts.is_none(),
             "{}@{}, commit@{} is not tracked, region {}",
