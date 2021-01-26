@@ -336,8 +336,6 @@ pub use raft_engine::{CacheStats, RaftEngine, RaftLogBatch};
 
 // These modules need further scrutiny
 
-pub mod metrics_task;
-pub use crate::metrics_task::*;
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;

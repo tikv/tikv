@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use tikv_util::IntervalTask;
-
 use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
 use crate::IOBytes;
@@ -29,6 +27,16 @@ impl BytesFetcher {
     }
 }
 
+macro_rules! flush_io_bytes {
+    ($fetcher:expr, $metrics:ident, $io_type:expr, $last_fetch:expr) => {
+        let bytes = $fetcher.fetch($io_type);
+        let delta_bytes = bytes - $last_fetch;
+        $last_fetch = bytes;
+        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read);
+        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write);
+    };
+}
+
 pub struct MetricsTask {
     fetcher: BytesFetcher,
     last_fetch: [IOBytes; IOType::VARIANT_COUNT],
@@ -41,20 +49,8 @@ impl MetricsTask {
             last_fetch: Default::default(),
         }
     }
-}
 
-macro_rules! flush_io_bytes {
-    ($fetcher:expr, $metrics:ident, $io_type:expr, $last_fetch:expr) => {
-        let bytes = $fetcher.fetch($io_type);
-        let delta_bytes = bytes - $last_fetch;
-        $last_fetch = bytes;
-        IO_BYTES_VEC.$metrics.read.inc_by(delta_bytes.read);
-        IO_BYTES_VEC.$metrics.write.inc_by(delta_bytes.write);
-    };
-}
-
-impl IntervalTask for MetricsTask {
-    fn on_tick(&mut self) {
+    pub fn on_tick(&mut self) {
         flush_io_latency_metrics();
         flush_io_bytes!(
             self.fetcher,

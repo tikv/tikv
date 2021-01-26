@@ -25,10 +25,10 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines,
-    MetricsTask as EngineMetricsTask, RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, RaftEngine, CF_DEFAULT,
+    CF_WRITE,
 };
-use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsTask as IOMetricsTask};
+use file_system::{set_io_rate_limiter, BytesFetcher, IORateLimiter};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -85,7 +85,7 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 
-use crate::{setup::*, signal_handler};
+use crate::{metrics_flusher::MetricsFlusher, setup::*, signal_handler};
 use tikv_util::worker::LazyWorker;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -853,18 +853,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        let mut metrics_flusher = Box::new(IntervalDriver::new("metrics-flusher"));
-        metrics_flusher.add_task(IOMetricsTask::new(fetcher));
-        metrics_flusher.add_task(EngineMetricsTask::new(
-            self.engines.as_ref().unwrap().engines.clone(),
-        ));
-
-        // Start metrics flusher
-        if let Err(e) = metrics_flusher.start() {
-            error!(%e; "failed to start metrics flusher");
-        }
-
-        self.to_stop.push(metrics_flusher);
+        self.background_worker.start_with_timer(
+            "metrics-flusher",
+            MetricsFlusher::new(self.engines.as_ref().unwrap().engines.clone(), fetcher),
+        );
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {

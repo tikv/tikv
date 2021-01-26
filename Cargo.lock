@@ -4480,18 +4480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_engine_traits"
-version = "0.1.0"
-dependencies = [
- "engine_rocks",
- "engine_traits",
- "slog",
- "slog-global",
- "tempfile",
- "tikv_util",
-]
-
-[[package]]
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
