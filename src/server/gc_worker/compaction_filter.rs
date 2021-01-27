@@ -734,8 +734,10 @@ pub mod tests {
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
 
-        let mut runner = TestGCRunner::default();
-        runner.safe_point = safe_point;
+        let mut runner = TestGCRunner {
+            safe_point,
+            ..Default::default()
+        };
         runner.gc(&engine);
     }
 
@@ -1114,8 +1116,10 @@ pub mod tests {
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::default();
-        gc_runner.ratio_threshold = Some(0.9);
+        let mut gc_runner = TestGCRunner {
+            ratio_threshold: Some(0.9),
+            ..Default::default()
+        };
 
         // So the construction of SST files will be:
         // L6: |key_106, key_104, key_102|

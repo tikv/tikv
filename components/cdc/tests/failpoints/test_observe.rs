@@ -141,7 +141,10 @@ fn test_delayed_change_cmd() {
         .direction(Direction::Send)
         .msg_type(MessageType::MsgHeartbeat)
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            if send_flag.compare_and_swap(true, false, Ordering::SeqCst) {
+            if send_flag
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 sx.send(msg.clone()).unwrap();
             }
         }));

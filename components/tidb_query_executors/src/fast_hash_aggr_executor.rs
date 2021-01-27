@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                     group,
                                     &mut self.states,
                                     &mut self.states_offset_each_logical_row,
-                                    |val| Ok(val.map(|x| x.to_owned_value()))
+                                    |val| Ok(val.map(|x| x.into_owned_value()))
                                 )?;
                             } else {
                                 panic!();
@@ -309,7 +309,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                                 group,
                                                 &mut self.states,
                                                 &mut self.states_offset_each_logical_row,
-                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.to_owned_value()))?)
+                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.into_owned_value()))?)
                                             )?;
                                         }
                                     }

@@ -8,7 +8,7 @@ use pd_client::{Feature, FeatureGate};
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
 
 /// Represents state of the group.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub enum GroupState {
     /// The group is working generally, leader keeps
     /// replicating data to followers.
