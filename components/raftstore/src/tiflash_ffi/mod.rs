@@ -28,7 +28,7 @@ pub use crate::tiflash_ffi::interfaces::root::DB::{
 };
 use crate::tiflash_ffi::interfaces::root::DB::{
     ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, SSTReaderInterfaces,
-    SSTView, SSTViewVec,
+    SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER, RAFT_STORE_PROXY_VERSION,
 };
 
 impl From<&[u8]> for BaseBuffView {
@@ -612,19 +612,17 @@ impl EngineStoreServerHelper {
 
     pub fn check(&self) {
         assert_eq!(std::mem::align_of::<Self>(), std::mem::align_of::<u64>());
-        const MAGIC_NUMBER: u32 = 0x13579BDF;
-        const VERSION: u32 = 401005;
 
-        if self.magic_number != MAGIC_NUMBER {
+        if self.magic_number != RAFT_STORE_PROXY_MAGIC_NUMBER {
             eprintln!(
-                "TiFlash Proxy FFI magic number not match: expect {} got {}",
-                MAGIC_NUMBER, self.magic_number
+                "RaftStore Proxy FFI magic number not match: expect {} got {}",
+                RAFT_STORE_PROXY_MAGIC_NUMBER, self.magic_number
             );
             std::process::exit(-1);
-        } else if self.version != VERSION {
+        } else if self.version != RAFT_STORE_PROXY_VERSION {
             eprintln!(
-                "TiFlash Proxy FFI version not match: expect {} got {}",
-                VERSION, self.version
+                "RaftStore Proxy FFI version not match: expect {} got {}",
+                RAFT_STORE_PROXY_VERSION, self.version
             );
             std::process::exit(-1);
         }
