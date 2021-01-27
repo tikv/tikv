@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_compaction_guard_should_partition() {
-        let guard = CompactionGuardGenerator {
+        let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
             min_output_file_size: 8 << 20, // 8MB
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_compaction_guard_should_partition_binary_search() {
-        let guard = CompactionGuardGenerator {
+        let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
             boundaries: vec![
                 b"aaa00".to_vec(),
