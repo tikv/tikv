@@ -225,14 +225,16 @@ mod tests {
         let backend = make_noop_backend();
         assert_eq!(url_of_backend(&backend).to_string(), "noop:///");
 
-        let mut backend = StorageBackend::default();
-        backend.backend = Some(Backend::S3(S3 {
-            bucket: "bucket".to_owned(),
-            prefix: "/backup 01/prefix/".to_owned(),
-            endpoint: "http://endpoint.com".to_owned(),
-            // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
-            ..S3::default()
-        }));
+        let mut backend = StorageBackend {
+            backend: Some(Backend::S3(S3 {
+                bucket: "bucket".to_owned(),
+                prefix: "/backup 01/prefix/".to_owned(),
+                endpoint: "http://endpoint.com".to_owned(),
+                // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
+                ..S3::default()
+            })),
+            ..Default::default()
+        };
         assert_eq!(
             url_of_backend(&backend).to_string(),
             "s3://bucket/backup%2001/prefix/"

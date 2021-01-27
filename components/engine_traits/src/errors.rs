@@ -83,3 +83,9 @@ impl From<Error> for RaftError {
         }
     }
 }
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        format!("{:?}", e)
+    }
+}

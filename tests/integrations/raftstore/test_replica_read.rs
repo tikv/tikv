@@ -309,3 +309,123 @@ fn test_read_index_out_of_order() {
     assert!(resp2.recv_timeout(Duration::from_secs(1)).is_ok());
     assert!(resp1.recv_timeout(Duration::from_secs(1)).is_ok());
 }
+
+#[test]
+fn test_split_isolation() {
+    let mut cluster = new_node_cluster(0, 2);
+    // Use long election timeout and short lease.
+    configure_for_hibernate(&mut cluster);
+    configure_for_lease_read(&mut cluster, Some(200), Some(10));
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let rid = cluster.run_conf_change();
+    pd_client.must_add_peer(rid, new_learner_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.stop_node(2);
+    // Split region into ['', 'k2') and ['k2', '')
+    let r1 = cluster.get_region(b"k2");
+    cluster.must_split(&r1, b"k2");
+    let idx = cluster.truncated_state(1, 1).get_index();
+    // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
+    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    }
+    cluster.wait_log_truncated(1, 1, idx + 1);
+    // Wait till leader peer goes to sleep again.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_base_tick_interval.0
+            * 2
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
+    );
+    let mut peer = None;
+    let r2 = cluster.get_region(b"k1");
+    for p in r2.get_peers() {
+        if p.store_id == 2 {
+            peer = Some(p.clone());
+            break;
+        }
+    }
+    let peer = peer.unwrap();
+    cluster.run_node(2).unwrap();
+    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be created.
+    for _ in 0..10 {
+        let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
+        let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
+        if !resp.get_header().has_error() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    panic!("test failed");
+}
+
+/// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta` will be replace with
+/// the new `ReadDelegate`, and the `ReadDelegate` stored at `LocalReader` should also be updated
+#[test]
+fn test_read_local_after_snapshpot_replace_peer() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), None);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    // send read request to peer 3, so the local reader will cache the `ReadDelegate` of peer 3
+    // it is okey only send one request because the read pool thread count is 1
+    let r = cluster.get_region(b"k1");
+    // wait applying snapshot finish
+    sleep_ms(100);
+    let resp = async_read_on_peer(&mut cluster, new_peer(3, 3), r, b"k1", true, true);
+    let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+
+    // trigger leader send snapshot to peer 3
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 0..12 {
+        cluster.must_put(format!("k2{}", i).as_bytes(), b"v2");
+    }
+    cluster.clear_send_filters();
+    // wait peer 3 apply snapshot and replace the `ReadDelegate` on `StoreMeta`
+    must_get_equal(&cluster.get_engine(3), b"k20", b"v2");
+
+    // replace peer 3 with peer 1003
+    cluster
+        .pd_client
+        .must_remove_peer(region_id, new_peer(3, 3));
+    cluster
+        .pd_client
+        .must_add_peer(region_id, new_peer(3, 1003));
+
+    cluster.must_put(b"k3", b"v3");
+    // wait peer 1003 apply snapshot
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // value can be readed from `engine` doesn't mean applying snapshot is finished
+    // wait little more time
+    sleep_ms(100);
+
+    let r = cluster.get_region(b"k1");
+    let resp = async_read_on_peer(&mut cluster, new_peer(3, 1003), r, b"k3", true, true);
+    let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
+    // should not have `mismatch peer id` error
+    if resp.get_header().has_error() {
+        panic!("unexpect err: {:?}", resp.get_header().get_error());
+    }
+    let exp_value = resp.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v3");
+}

@@ -276,7 +276,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                                     let src: &VectorValue = item.source_data.physical_columns[column_index].decoded();
                                     let src_ref = TT::borrow_vector_value(src);
                                     // TODO: This clone is not necessary.
-                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.to_owned_value()));
+                                    dest_column.push(src_ref.get_option_ref(item.source_data.logical_rows[item.logical_row_index]).map(|x| x.into_owned_value()));
                                 }
                             },
                         }

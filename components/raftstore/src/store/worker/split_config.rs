@@ -13,6 +13,8 @@ const DEFAULT_QPS_THRESHOLD: usize = 3000;
 const DEFAULT_SPLIT_BALANCE_SCORE: f64 = 0.25;
 // We get contained score by sample.contained/(sample.right+sample.left+sample.contained). It will be used to avoid to split regions requested by range.
 const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
+const DEFAULT_SIZE_THRESHOLD: u64 = 4 * 1024 * 1024;
+const DEFAULT_KEY_THRESHOLD: u64 = 40960;
 
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -24,6 +26,8 @@ pub struct SplitConfig {
     pub detect_times: u64,
     pub sample_num: usize,
     pub sample_threshold: i32,
+    pub size_threshold: u64,
+    pub key_threshold: u64,
 }
 
 impl Default for SplitConfig {
@@ -35,6 +39,8 @@ impl Default for SplitConfig {
             detect_times: DEFAULT_DETECT_TIMES,
             sample_num: DEFAULT_SAMPLE_NUM,
             sample_threshold: DEFAULT_SAMPLE_THRESHOLD,
+            size_threshold: DEFAULT_SIZE_THRESHOLD,
+            key_threshold: DEFAULT_KEY_THRESHOLD,
         }
     }
 }

@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::Infallible;
+
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::Fail;
 
@@ -44,6 +46,12 @@ impl From<tikv_util::deadline::DeadlineError> for EvaluateError {
     #[inline]
     fn from(_: tikv_util::deadline::DeadlineError) -> Self {
         EvaluateError::DeadlineExceeded
+    }
+}
+
+impl From<Infallible> for EvaluateError {
+    fn from(e: Infallible) -> Self {
+        match e {}
     }
 }
 

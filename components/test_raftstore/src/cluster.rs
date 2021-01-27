@@ -21,8 +21,9 @@ use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
+use engine_traits::PbPeekable;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, PbPeekable, WriteBatchExt, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
 };
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
@@ -395,7 +396,7 @@ impl<T: Simulator> Cluster<T> {
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
-                None => return Err(box_err!("can't get leader of region {}", region_id)),
+                None => return Err(Error::NotLeader(region_id, None)),
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
@@ -604,10 +605,11 @@ impl<T: Simulator> Cluster<T> {
             let mut store = new_store(*id, "".to_owned());
             if let Some(labels) = self.labels.get(id) {
                 for (key, value) in labels.iter() {
-                    let mut l = StoreLabel::default();
-                    l.key = key.clone();
-                    l.value = value.clone();
-                    store.labels.push(l);
+                    store.labels.push(StoreLabel {
+                        key: key.clone(),
+                        value: value.clone(),
+                        ..Default::default()
+                    });
                 }
             }
             self.pd_client.put_store(store).unwrap();
@@ -733,7 +735,8 @@ impl<T: Simulator> Cluster<T> {
     ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
-        while tried_times < 10 || timer.elapsed() < timeout {
+        // At least retry once.
+        while tried_times < 2 || timer.elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -745,13 +748,18 @@ impl<T: Simulator> Cluster<T> {
             );
             let result = self.call_command_on_leader(req, timeout);
 
-            if let Err(Error::Timeout(_)) = result {
-                warn!("call command timeout, let's retry");
-                sleep_ms(100);
-                continue;
-            }
+            let resp = match result {
+                e @ Err(Error::Timeout(_))
+                | e @ Err(Error::NotLeader(_, _))
+                | e @ Err(Error::StaleCommand) => {
+                    warn!("call command failed, retry it"; "err" => ?e);
+                    sleep_ms(100);
+                    continue;
+                }
+                Err(e) => panic!("call command failed {:?}", e),
+                Ok(resp) => resp,
+            };
 
-            let resp = result.unwrap();
             if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
@@ -788,7 +796,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(20);
         }
 
-        panic!("find no region for {}", hex::encode_upper(key));
+        panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
     pub fn get_region(&self, key: &[u8]) -> metapb::Region {
@@ -846,6 +854,18 @@ impl<T: Simulator> Cluster<T> {
             .rl()
             .async_command_on_node(leader.get_store_id(), req, cb)?;
         Ok(rx)
+    }
+
+    pub fn async_exit_joint(&mut self, region_id: u64) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap();
+        let exit_joint = new_admin_request(
+            region_id,
+            region.get_region_epoch(),
+            new_change_peer_v2_request(vec![]),
+        );
+        self.async_request(exit_joint)
     }
 
     pub fn async_put(
@@ -992,6 +1012,23 @@ impl<T: Simulator> Cluster<T> {
         self.apply_state(region_id, store_id).take_truncated_state()
     }
 
+    pub fn wait_log_truncated(&self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let truncated_state = self.truncated_state(region_id, store_id);
+            if truncated_state.get_index() >= index {
+                return;
+            }
+            if timer.elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not truncated to {}: {:?} on store {}",
+                    region_id, index, truncated_state, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
@@ -1080,7 +1117,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].kv.write(&kv_wb).unwrap();
+        kv_wb.write().unwrap();
     }
 
     pub fn restore_raft(&self, region_id: u64, store_id: u64, snap: &RocksSnapshot) {
@@ -1101,7 +1138,7 @@ impl<T: Simulator> Cluster<T> {
             Ok(true)
         })
         .unwrap();
-        self.engines[&store_id].raft.write(&raft_wb).unwrap();
+        raft_wb.write().unwrap();
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
@@ -1229,7 +1266,7 @@ impl<T: Simulator> Cluster<T> {
                 panic!(
                     "region {:?} has not been split by {}",
                     region,
-                    hex::encode_upper(split_key)
+                    log_wrappers::hex_encode_upper(split_key)
                 );
             }
             try_cnt += 1;

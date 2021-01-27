@@ -9,7 +9,8 @@
 pub use rocksdb::{
     new_compaction_filter_raw, run_ldb_tool, BlockBasedOptions, CFHandle, Cache,
     ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
-    CompactionFilterFactory, CompactionJobInfo, CompactionPriority, DBBottommostLevelCompaction,
+    CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+    CompactionJobInfo, CompactionOptions, CompactionPriority, DBBottommostLevelCompaction,
     DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBInfoLogLevel,
     DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType,
     DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions, LRUCacheOptions,

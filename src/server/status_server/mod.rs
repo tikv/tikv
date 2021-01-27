@@ -714,16 +714,16 @@ where
                             }
                         }
 
-                        let should_check_cert = match (&method, path.as_ref()) {
-                            (&Method::GET, "/metrics") => false,
-                            (&Method::GET, "/status") => false,
-                            (&Method::GET, "/config") => false,
-                            (&Method::GET, "/debug/pprof/profile") => false,
-                            // 1. POST "/config" will modify the configuration of TiKV.
-                            // 2. GET "/region" will get start key and end key. These keys could be actual
-                            // user data since in some cases the data itself is stored in the key.
-                            _ => true,
-                        };
+                        // 1. POST "/config" will modify the configuration of TiKV.
+                        // 2. GET "/region" will get start key and end key. These keys could be actual
+                        // user data since in some cases the data itself is stored in the key.
+                        let should_check_cert = !matches!(
+                            (&method, path.as_ref()),
+                            (&Method::GET, "/metrics")
+                                | (&Method::GET, "/status")
+                                | (&Method::GET, "/config")
+                                | (&Method::GET, "/debug/pprof/profile")
+                        );
 
                         if should_check_cert && !check_cert(security_config, x509) {
                             return Ok(StatusServer::err_response(

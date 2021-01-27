@@ -111,7 +111,6 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
-            security_mgr.clone(),
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
@@ -303,7 +302,7 @@ pub mod test_router {
 
     impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
@@ -313,21 +312,21 @@ pub mod test_router {
             &self,
             _: RaftCommand<S>,
         ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
 
     impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
         fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
             Ok(())
         }
 
@@ -336,12 +335,12 @@ pub mod test_router {
             _: u64,
             msg: SignificantMsg<RocksSnapshot>,
         ) -> RaftStoreResult<()> {
-            self.significant_msg_sender.send(msg).unwrap();
+            let _ = self.significant_msg_sender.send(msg);
             Ok(())
         }
 
         fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
         }
     }
 }
@@ -409,8 +408,10 @@ mod tests {
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
-        let mut cfg = Config::default();
-        cfg.addr = "127.0.0.1:0".to_owned();
+        let cfg = Config {
+            addr: "127.0.0.1:0".to_owned(),
+            ..Default::default()
+        };
 
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()

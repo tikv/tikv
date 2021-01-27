@@ -9,21 +9,24 @@ description = "test helpers for sst_importer"
 test = false
 
 [features]
+default = ["protobuf-codec"]
 protobuf-codec = [
   "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
   "keys/protobuf-codec",
   "kvproto/protobuf-codec",
 ]
 prost-codec = [
   "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
   "keys/prost-codec",
   "kvproto/prost-codec",
 ]
 
 [dependencies]
 crc32fast = "1.2"
-engine_rocks = { path = "../engine_rocks" }
-engine_traits = { path = "../engine_traits" }
-keys = { path = "../keys" }
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

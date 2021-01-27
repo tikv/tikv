@@ -5,8 +5,15 @@ edition = "2018"
 publish = false
 
 [features]
-protobuf-codec = ["txn_types/protobuf-codec"]
-prost-codec = ["txn_types/prost-codec"]
+default = ["protobuf-codec"]
+protobuf-codec = [
+  "txn_types/protobuf-codec",
+  "tikv_util/protobuf-codec",
+]
+prost-codec = [
+  "txn_types/prost-codec",
+  "tikv_util/prost-codec",
+]
 
 [dependencies]
 collections = { path = "../collections" }

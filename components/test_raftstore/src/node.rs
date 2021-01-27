@@ -201,7 +201,7 @@ impl Simulator for NodeCluster {
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             Arc::default(),
-            Some(bg_worker.clone()),
+            bg_worker.clone(),
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0

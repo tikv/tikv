@@ -15,7 +15,7 @@ pub use self::apply::{
     GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, ObserveID, ObserveRange, Proposal,
     Registration, TaskRes as ApplyTaskRes,
 };
-pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
+pub use self::peer::{CollectedReady, DestroyPeerJob, PeerFsm};
 pub use self::store::{
     create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreInfo, StoreMeta,
 };

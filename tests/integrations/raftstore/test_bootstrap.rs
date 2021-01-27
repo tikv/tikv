@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::server::Node;
 use tikv_util::config::VersionTrack;
-use tikv_util::worker::{dummy_scheduler, FutureWorker};
+use tikv_util::worker::{dummy_scheduler, Builder as WorkerBuilder, FutureWorker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -57,14 +57,14 @@ fn test_node_bootstrap_with_prepared_data() {
         RocksEngine::from_db(Arc::clone(&raft_engine)),
     );
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
-
+    let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
     let mut node = Node::new(
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
         Arc::clone(&pd_client),
         Arc::default(),
-        None,
+        bg_worker,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = FutureWorker::new("test-pd-worker");
