@@ -264,10 +264,7 @@ pub mod tests {
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
     use std::sync::mpsc;
-    use std::{
-        iter::{self, FromIterator},
-        u64,
-    };
+    use std::{iter, u64};
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
@@ -319,7 +316,7 @@ pub mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
-        let cfs_with_range_prop = HashSet::from_iter(cfs_with_range_prop.iter().cloned());
+        let cfs_with_range_prop: HashSet<_> = cfs_with_range_prop.iter().cloned().collect();
         let mut cf_opt = ColumnFamilyOptions::new();
         cf_opt.set_no_range_properties(true);
 
@@ -344,10 +341,12 @@ pub mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(100);
-        cfg.region_split_size = ReadableSize(60);
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_size: ReadableSize(100),
+            region_split_size: ReadableSize(60),
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
@@ -468,10 +467,12 @@ pub mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_size = ReadableSize(100);
-        cfg.region_split_size = ReadableSize(60);
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_size: ReadableSize(100),
+            region_split_size: ReadableSize(60),
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),

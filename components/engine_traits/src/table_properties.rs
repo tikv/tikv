@@ -34,7 +34,7 @@ pub trait TablePropertiesExt {
         end_key: &[u8],
     ) -> Result<Self::TablePropertiesCollection> {
         let range = Range::new(start_key, end_key);
-        Ok(self.get_properties_of_tables_in_range(cfname, &[range])?)
+        self.get_properties_of_tables_in_range(cfname, &[range])
     }
 }
 

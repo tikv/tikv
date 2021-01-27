@@ -1025,7 +1025,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             check_fn(resolved_ts.ts)
         }
-    };
+    }
 
     check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
     assert!(cm.max_ts() >= 100.into());
@@ -1286,9 +1286,11 @@ fn test_cdc_scan_ignore_gc_fence() {
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
 
     let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let mut mutation = Mutation::default();
-    mutation.key = key.to_vec();
-    mutation.value = v2.to_vec();
+    let mutation = Mutation {
+        key: key.to_vec(),
+        value: v2.to_vec(),
+        ..Default::default()
+    };
     suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
 
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -1583,5 +1585,108 @@ fn test_term_change() {
         }
     }
     event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_no_write_corresponding_to_lock() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Txn1 commit_ts = 15
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1.clone()], k1.clone(), 10.into());
+    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 15.into());
+
+    // Txn2 start_ts = 15
+    m1.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m1.clone()], k1.clone(), 15.into());
+    // unprotected rollback, no write is written
+    suite.must_kv_rollback(1, vec![k1.clone()], 15.into());
+
+    // Write a new txn
+    m1.value = b"v3".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 20.into());
+    suite.must_kv_commit(1, vec![k1], 20.into(), 25.into());
+
+    let mut advance_cnt = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            advance_cnt += 1;
+            if resolved_ts.ts >= 25 {
+                break;
+            }
+            if advance_cnt > 50 {
+                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+            }
+        }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_write_rollback_when_no_lock() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Txn1 commit_ts = 15
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+
+    // Wait until resolved_ts advanced to 10
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts == 10 {
+                break;
+            }
+        }
+    }
+
+    // Do a rollback on the same key, but the start_ts is different.
+    suite.must_kv_rollback(1, vec![k1.clone()], 5.into());
+
+    // resolved_ts shouldn't be advanced beyond 10
+    for _ in 0..10 {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts > 10 {
+                panic!("resolved_ts shouldn't be advanced beyond 10");
+            }
+        }
+    }
+
+    suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
+
+    let mut advance_cnt = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            advance_cnt += 1;
+            if resolved_ts.ts > 15 {
+                break;
+            }
+            if advance_cnt > 10 {
+                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+            }
+        }
+    }
+
     suite.stop();
 }
