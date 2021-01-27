@@ -95,8 +95,8 @@ impl std::ops::Sub for IOBytes {
 
     fn sub(self, other: Self) -> Self::Output {
         Self {
-            read: self.read - other.read,
-            write: self.write - other.write,
+            read: self.read.saturating_sub(other.read),
+            write: self.write.saturating_sub(other.write),
         }
     }
 }
