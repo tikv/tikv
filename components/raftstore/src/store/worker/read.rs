@@ -1076,7 +1076,8 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
 
         safe_ts.store(2, Ordering::Relaxed);
-        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        let task =
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
 
@@ -1125,6 +1126,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
+                safe_ts: Arc::new(AtomicU64::new(0)),
             };
             meta.readers.insert(1, read_delegate);
         }
