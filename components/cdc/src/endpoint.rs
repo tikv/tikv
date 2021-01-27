@@ -654,6 +654,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             ts: self.min_resolved_ts.into_inner(),
             ..Default::default()
         };
+        info!("broadcast resolved ts"; "event" => ?resolved_ts);
 
         let send_cdc_event = |conn: &Conn, event| {
             if let Err(e) = conn.get_sink().try_send(event) {
@@ -767,6 +768,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             };
 
             if !regions.is_empty() {
+                info!("schedule Task::MinTS"; "regions" => ?regions, "min_ts" => min_ts);
                 match scheduler.schedule(Task::MinTS { regions, min_ts }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                     // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not

@@ -404,13 +404,13 @@ impl Delegate {
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return None;
         }
-        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return None,
         };
-        debug!("resolved ts updated";
+        info!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
@@ -615,6 +615,7 @@ impl Delegate {
             event: Some(Event_oneof_event::Entries(event_entries)),
             ..Default::default()
         };
+        info!("broadcast change data event"; "event" => ?change_data_event);
         self.broadcast(change_data_event, true);
         Ok(())
     }
