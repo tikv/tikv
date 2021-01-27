@@ -8,8 +8,8 @@ mod cgroup;
 // re-export some traits for ease of use
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
-use std::sync::Mutex;
 use crate::config::ReadableSize;
+use std::sync::Mutex;
 
 lazy_static! {
     pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
