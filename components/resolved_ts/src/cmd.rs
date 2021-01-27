@@ -1,6 +1,7 @@
 use collections::HashMap;
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raftstore::coprocessor::Cmd;
+use tikv::server::raftkv::WriteBatchFlags;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
 
 pub enum ChangeRow {
@@ -26,6 +27,14 @@ pub struct ChangeLog {
 impl ChangeLog {
     pub fn encode_change_log(cmd: Cmd) -> ChangeLog {
         let Cmd { index, request, .. } = cmd;
+        let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::ONE_PC) {
+            debug!("skip encode one pc change log");
+            return ChangeLog {
+                index,
+                rows: vec![],
+            };
+        }
         ChangeLog {
             index,
             rows: Self::encode_rows(request.requests.into()),
