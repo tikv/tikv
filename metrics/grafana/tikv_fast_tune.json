@@ -14,19 +14,19 @@
       "type": "grafana",
       "id": "grafana",
       "name": "Grafana",
-      "version": "6.1.6"
+      "version": "6.0.1"
     },
     {
       "type": "panel",
       "id": "graph",
       "name": "Graph",
-      "version": ""
+      "version": "5.0.0"
     },
     {
       "type": "datasource",
       "id": "prometheus",
       "name": "Prometheus",
-      "version": "1.0.0"
+      "version": "5.0.0"
     }
   ],
   "annotations": {
@@ -6985,7 +6985,7 @@
         "options": [
 
         ],
-        "query": "label_values(tikv_engine_size_bytes, tidb_cluster)",
+        "query": "label_values(tikv_engine_block_cache_size_bytes, tidb_cluster)",
         "refresh": 2,
         "regex": "",
         "sort": 1,
@@ -7008,7 +7008,7 @@
         "multi": true,
         "name": "instance",
         "options": [],
-        "query": "label_values(tikv_engine_size_bytes, instance)",
+        "query": "label_values(tikv_engine_size_bytes{tidb_cluster=\"$tidb_cluster\"}, instance)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
