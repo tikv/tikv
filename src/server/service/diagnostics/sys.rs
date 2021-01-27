@@ -287,12 +287,12 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     ];
     // cache
     let caches = vec![
-        ("l1-cache-size", cache_size::l1_cache_size()),
-        ("l1-cache-line-size", cache_size::l1_cache_line_size()),
-        ("l2-cache-size", cache_size::l2_cache_size()),
-        ("l2-cache-line-size", cache_size::l2_cache_line_size()),
-        ("l3-cache-size", cache_size::l3_cache_size()),
-        ("l3-cache-line-size", cache_size::l3_cache_line_size()),
+        ("l1-cache-size", cache_size(1)),
+        ("l1-cache-line-size", cache_line_size(1)),
+        ("l2-cache-size", cache_size(2)),
+        ("l2-cache-line-size", cache_line_size(2)),
+        ("l3-cache-size", cache_size(3)),
+        ("l3-cache-line-size", cache_line_size(3)),
     ];
     for cache in caches.into_iter() {
         if let Some(v) = cache.1 {
