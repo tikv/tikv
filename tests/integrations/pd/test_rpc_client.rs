@@ -228,18 +228,12 @@ fn test_validate_endpoints_retry() {
             .name_prefix(thd_name!("test-pd"))
             .build(),
     );
-    let eps = server.bind_addrs();
-    let mut copy_eps = eps.clone();
-    let mut mock_port = 0;
-    for ep in eps {
-        if ep.1 > mock_port {
-            mock_port = ep.1;
-        }
-    }
-    copy_eps.insert(0, ("127.0.0.1".to_string(), mock_port + 100));
-    copy_eps.pop();
+    let mut eps = server.bind_addrs();
+    let mock_port = 65535;
+    eps.insert(0, ("127.0.0.1".to_string(), mock_port));
+    eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(block_on(validate_endpoints(env, &new_config(copy_eps), mgr)).is_err());
+    assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {
