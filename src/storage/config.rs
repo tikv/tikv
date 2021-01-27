@@ -17,12 +17,17 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
 const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
-const DEFAULT_RESERVER_SPACE_SIZE: u64 = 2;
+
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
 // on average, in that situation the writing bytes estimated 10MB,
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
+
+const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
+// 20GB for reserved space is enough because size of one compaction is limited,
+// generally less than 2GB.
+pub const MAX_RESERVED_SPACE_GB: u64 = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -60,7 +65,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
-            reserve_space: ReadableSize::gb(DEFAULT_RESERVER_SPACE_SIZE),
+            reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
         }
@@ -77,6 +82,13 @@ impl Config {
                 concurrency. To save memory, change it from {:?} to {:?}",
                   self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
             self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
+        }
+        if self.reserve_space.0 > ReadableSize::gb(MAX_RESERVED_SPACE_GB).0 {
+            self.reserve_space = ReadableSize::gb(MAX_RESERVED_SPACE_GB);
+            warn!(
+                "reserve-space is too large, sanitized to {:?}",
+                self.reserve_space
+            );
         }
         Ok(())
     }

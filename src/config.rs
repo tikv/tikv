@@ -561,8 +561,10 @@ cf_config!(WriteCfConfig);
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -654,8 +656,10 @@ cf_config!(LockCfConfig);
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -725,8 +729,10 @@ cf_config!(RaftCfConfig);
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -980,8 +986,10 @@ impl Default for DbConfig {
     fn default() -> DbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(8, 2, 3, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1271,8 +1279,10 @@ impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(4, 1, 2, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -2195,6 +2205,7 @@ mod readpool_tests {
 pub struct BackupConfig {
     pub num_threads: usize,
     pub batch_size: usize,
+    pub sst_max_size: ReadableSize,
 }
 
 impl BackupConfig {
@@ -2211,11 +2222,13 @@ impl BackupConfig {
 
 impl Default for BackupConfig {
     fn default() -> Self {
+        let default_coprocessor = CopConfig::default();
         let cpu_num = SysQuota::new().cpu_cores_quota();
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
             batch_size: 8,
+            sst_max_size: default_coprocessor.region_max_size,
         }
     }
 }
@@ -2272,6 +2285,9 @@ pub struct TiKvConfig {
 
     #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
+
+    #[config(skip)]
+    pub enable_io_snoop: bool,
 
     #[config(skip)]
     pub readpool: ReadPoolConfig,
@@ -2338,6 +2354,7 @@ impl Default for TiKvConfig {
             log_rotation_timespan: ReadableDuration::hours(24),
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
+            enable_io_snoop: true,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2364,8 +2381,6 @@ impl TiKvConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
-
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
 
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
@@ -2569,6 +2584,19 @@ impl TiKvConfig {
                     + self.rocksdb.lockcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
+        }
+        if self.backup.sst_max_size.0 < default_coprocessor.region_max_size.0 / 10 {
+            warn!(
+                "override backup.sst-max-size with min sst-max-size, {:?}",
+                default_coprocessor.region_max_size / 10
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size / 10;
+        } else if self.backup.sst_max_size.0 > default_coprocessor.region_max_size.0 * 2 {
+            warn!(
+                "override backup.sst-max-size with max sst-max-size, {:?}",
+                default_coprocessor.region_max_size * 2
+            );
+            self.backup.sst_max_size = default_coprocessor.region_max_size * 2;
         }
 
         self.readpool.adjust_use_unified_pool();
@@ -2874,7 +2902,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         } else {
             Err("failed to get field".to_owned().into())
         }
-    };
+    }
     let mut dst = HashMap::new();
     for (name, value) in change {
         let fields: Vec<_> = name.as_str().split('.').collect();
@@ -3574,9 +3602,11 @@ mod tests {
     fn test_compaction_guard() {
         // Test comopaction guard disabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = false;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: false,
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3586,9 +3616,11 @@ mod tests {
         }
         // Test compaction guard enabled but region info provider is missing.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                ..Default::default()
+            };
             let provider: Option<MockRegionInfoProvider> = None;
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3598,11 +3630,13 @@ mod tests {
         }
         // Test compaction guard enabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
-            config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
-            config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                compaction_guard_min_output_file_size: ReadableSize::mb(4),
+                compaction_guard_max_output_file_size: ReadableSize::mb(64),
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3610,5 +3644,17 @@ mod tests {
                 cf_opts.get_target_file_size_base()
             );
         }
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }

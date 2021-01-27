@@ -180,8 +180,10 @@ impl TestSuite {
     }
 
     pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
-        let mut req = ChangeDataRequest::default();
-        req.region_id = region_id;
+        let mut req = ChangeDataRequest {
+            region_id,
+            ..Default::default()
+        };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
         // Assume batch resolved ts will be release in v4.0.7
         // For easy of testing (nightly CI), we lower the gate to v4.0.6
@@ -262,6 +264,31 @@ impl TestSuite {
             "{:?}",
             rollback_resp.get_error()
         );
+    }
+
+    pub fn must_check_txn_status(
+        &mut self,
+        region_id: u64,
+        primary_key: Vec<u8>,
+        lock_ts: TimeStamp,
+        caller_start_ts: TimeStamp,
+        current_ts: TimeStamp,
+        rollback_if_not_exist: bool,
+    ) -> Action {
+        let mut req = CheckTxnStatusRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.set_primary_key(primary_key);
+        req.set_lock_ts(lock_ts.into_inner());
+        req.set_caller_start_ts(caller_start_ts.into_inner());
+        req.set_current_ts(current_ts.into_inner());
+        req.set_rollback_if_not_exist(rollback_if_not_exist);
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_check_txn_status(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(!resp.has_error(), "{:?}", resp.get_error());
+        resp.get_action()
     }
 
     pub fn must_acquire_pessimistic_lock(

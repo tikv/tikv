@@ -11,7 +11,8 @@ use std::{mem, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::PerfContext;
+use engine_traits::PerfContextKind;
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
@@ -24,7 +25,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
-use raft::{Ready, StateRole};
+use raft::StateRole;
 use time::{self, Timespec};
 
 use collections::HashMap;
@@ -42,8 +43,6 @@ use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -53,12 +52,13 @@ use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+    CollectedReady,
 };
 use crate::store::local_metrics::RaftMetrics;
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
-use crate::store::util::{is_initial_msg, PerfContextStatistics};
+use crate::store::util::is_initial_msg;
 use crate::store::worker::{
     AutoSplitController, CleanupRunner, CleanupSSTRunner, CleanupSSTTask, CleanupTask,
     CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, PdRunner,
@@ -294,6 +294,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    /// The count of processed normal Fsm.
+    pub processed_fsm_count: usize,
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask<EK>>,
@@ -333,9 +335,9 @@ where
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
-    pub ready_res: Vec<(Ready, InvokeContext)>,
+    pub ready_res: Vec<CollectedReady>,
     pub current_time: Option<Timespec>,
-    pub perf_context_statistics: PerfContextStatistics,
+    pub perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
 }
@@ -661,24 +663,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 });
         }
 
-        report_perf_context!(
-            self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-        );
+        self.poll_ctx.perf_context.report_metrics();
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
-            let mut batch_pos = 0;
             let mut ready_res = mem::take(&mut self.poll_ctx.ready_res);
-            for (ready, invoke_ctx) in ready_res.drain(..) {
-                let region_id = invoke_ctx.region_id;
-                if peers[batch_pos].region_id() == region_id {
-                } else {
-                    while peers[batch_pos].region_id() != region_id {
-                        batch_pos += 1;
-                    }
-                }
-                PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
-                    .post_raft_ready_append(ready, invoke_ctx);
+            for ready in ready_res.drain(..) {
+                PeerFsmDelegate::new(&mut peers[ready.batch_offset], &mut self.poll_ctx)
+                    .post_raft_ready_append(ready);
             }
         }
         let dur = self.timer.elapsed();
@@ -737,12 +728,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 {
     fn begin(&mut self, _batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+        self.poll_ctx.processed_fsm_count = 0;
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
         self.timer = TiInstant::now_coarse();
         // update config
-        self.poll_ctx.perf_context_statistics.start();
+        self.poll_ctx.perf_context.start_observe();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,
@@ -811,9 +803,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && matches!(msg, PeerMsg::ApplyRes {
-                                res: ApplyTaskRes::Destroy { .. },
-                            }),
+                            && matches!(
+                                msg,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                }
+                            ),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);
@@ -832,6 +827,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready();
+        self.poll_ctx.processed_fsm_count += 1;
         expected_msg_count
     }
 
@@ -1054,6 +1050,7 @@ where
 
     fn build(&mut self) -> RaftPoller<EK, ER, T> {
         let mut ctx = PollContext {
+            processed_fsm_count: 0,
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
@@ -1084,7 +1081,10 @@ where
             has_ready: false,
             ready_res: Vec::new(),
             current_time: None,
-            perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
+            perf_context: self
+                .engines
+                .kv
+                .get_perf_context(self.cfg.value().perf_level, PerfContextKind::RaftstoreStore),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
@@ -1108,12 +1108,11 @@ struct Workers<EK: KvEngine> {
     pd_worker: FutureWorker<PdTask<EK>>,
     background_worker: Worker,
 
-    // Cleanup tasks gets their own workers, instead of reusing background_workers.
-    // This is because the underlying compact_range call is a blocking operation, which
-    // can take an extensive amount of time. Also putting the cleanup tasks on
-    // background_workers pool can create a deadlock when compaction guard is enabled:
-    // https://github.com/tikv/tikv/issues/9044.
+    // Both of cleanup tasks and region tasks get their own workers, instead of reusing
+    // background_workers. This is because the underlying compact_range call is a
+    // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
+    region_worker: Worker,
 
     coprocessor_host: CoprocessorHost<EK>,
 }
@@ -1166,6 +1165,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
+            region_worker: Worker::new("region-worker"),
             coprocessor_host: coprocessor_host.clone(),
         };
         mgr.init()?;
@@ -1178,7 +1178,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             self.router(),
         );
         let region_scheduler = workers
-            .background_worker
+            .region_worker
             .start_with_timer("snapshot-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(self.router(), engines.clone());
@@ -1341,6 +1341,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
+        workers.region_worker.stop();
         workers.background_worker.stop();
     }
 }
@@ -2373,11 +2374,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             "current_leader" => leader_id,
                             "current_term" => term,
                             "current_region" => ?region,
+                            "store_id" => self.fsm.store.id,
                         );
+                        return None;
                     }
                 }
                 debug!("check leader failed, meta not found";
                     "leader_info" => ?leader_info,
+                    "store_id" => self.fsm.store.id,
                 );
                 None
             })

@@ -13,11 +13,11 @@ use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
 use crate::metrics::*;
 
-impl Into<ErrorPb> for Error {
+impl From<Error> for ErrorPb {
     // TODO: test error conversion.
-    fn into(self) -> ErrorPb {
+    fn from(e: Error) -> ErrorPb {
         let mut err = ErrorPb::default();
-        match self {
+        match e {
             Error::ClusterID { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["cluster_mismatch"])

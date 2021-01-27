@@ -6,9 +6,11 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::raft_engine::RaftEngine;
+use file_system::flush_io_metrics;
 
-use crate::*;
+use crate::engine::KvEngine;
+use crate::engines::Engines;
+use crate::raft_engine::RaftEngine;
 
 const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const FLUSHER_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
@@ -47,6 +49,7 @@ impl<K: KvEngine, R: RaftEngine> MetricsFlusher<K, R> {
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     kv_db.flush_metrics("kv");
                     raft_db.flush_metrics("raft");
+                    flush_io_metrics(); // TODO: better flush it in io limiter
                     if last_reset.elapsed() >= FLUSHER_RESET_INTERVAL {
                         kv_db.reset_statistics();
                         raft_db.reset_statistics();

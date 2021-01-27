@@ -4,7 +4,7 @@
 
 mod consistency_check;
 pub(super) mod metrics;
-mod reader;
+pub(crate) mod reader;
 pub(super) mod txn;
 
 pub use self::consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator};

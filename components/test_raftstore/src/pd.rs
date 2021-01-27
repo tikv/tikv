@@ -10,7 +10,7 @@ use std::{cmp, thread};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future::{err, ok, FutureExt};
+use futures::future::{err, ok, ready, BoxFuture, FutureExt};
 use futures::{stream, stream::StreamExt};
 use tokio_timer::timer::Handle;
 
@@ -353,8 +353,10 @@ impl Cluster {
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
-        let mut s = Store::default();
-        s.store = store;
+        let mut s = Store {
+            store,
+            ..Default::default()
+        };
 
         s.region_ids.insert(region.get_id());
 
@@ -383,9 +385,13 @@ impl Cluster {
             .get(&store_id)
             .map_or(true, |s| s.store.get_id() != 0)
         {
-            let mut s = Store::default();
-            s.store = store;
-            self.stores.insert(store_id, s);
+            self.stores.insert(
+                store_id,
+                Store {
+                    store,
+                    ..Default::default()
+                },
+            );
         } else {
             self.stores.get_mut(&store_id).unwrap().store = store;
         }
@@ -1495,13 +1501,14 @@ impl PdClient for TestPdClient {
         Box::pin(ok(safe_point))
     }
 
-    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+    fn get_store_stats_async(&self, store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         let cluster = self.cluster.rl();
         let stats = cluster.store_stats.get(&store_id);
-        match stats {
+        ready(match stats {
             Some(s) => Ok(s.clone()),
             None => Err(Error::StoreTombstone(format!("store_id:{}", store_id))),
-        }
+        })
+        .boxed()
     }
 
     fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {

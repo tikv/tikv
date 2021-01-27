@@ -9,8 +9,7 @@ use std::time::Instant;
 use futures::channel::mpsc::UnboundedSender;
 use futures::compat::Future01CompatExt;
 use futures::executor::block_on;
-use futures::future;
-use futures::future::TryFutureExt;
+use futures::future::{self, TryFutureExt};
 use futures::stream::Stream;
 use futures::stream::TryStreamExt;
 use futures::task::Context;
@@ -176,21 +175,20 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-
-            (
-                try_connect_leader(
-                    Arc::clone(&inner.env),
-                    Arc::clone(&inner.security_mgr),
-                    inner.members.clone(),
-                ),
-                start,
-            )
+            let fut = try_connect_leader(
+                Arc::clone(&inner.env),
+                Arc::clone(&inner.security_mgr),
+                inner.members.clone(),
+            );
+            slow_log!(start.elapsed(), "PD client try connect leader");
+            (fut, start)
         };
 
         let (client, members) = future.await?;
-        fail_point!("leader_client_reconnect");
+        fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
+            let start_refresh = Instant::now();
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
                 panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
@@ -211,8 +209,12 @@ impl LeaderClient {
             if let Some(ref on_reconnect) = inner.on_reconnect {
                 on_reconnect();
             }
+            slow_log!(
+                start_refresh.elapsed(),
+                "PD client refresh region heartbeat",
+            );
         }
-        warn!("updating PD client done"; "spend" => ?start.elapsed());
+        info!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
@@ -324,22 +326,21 @@ where
                 if let Err(e) = block_on(client.reconnect()) {
                     error!(?e; "reconnect failed");
                 }
-                err.replace(e);
+                err = Some(e);
             }
         }
     }
 
-    Err(err.unwrap_or(box_err!("fail to request")))
+    Err(err.unwrap_or_else(|| box_err!("fail to request")))
 }
 
-pub fn validate_endpoints(
+pub async fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
     security_mgr: Arc<SecurityManager>,
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
-
     let mut members = None;
     let mut cluster_id = None;
     for ep in &cfg.endpoints {
@@ -347,7 +348,7 @@ pub fn validate_endpoints(
             return Err(box_err!("duplicate PD endpoint {}", ep));
         }
 
-        let (_, resp) = match block_on(connect(Arc::clone(&env), &security_mgr, ep)) {
+        let (_, resp) = match connect(Arc::clone(&env), &security_mgr, ep).await {
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
@@ -379,7 +380,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) =
-                block_on(try_connect_leader(Arc::clone(&env), security_mgr, members))?;
+                try_connect_leader(Arc::clone(&env), security_mgr, members).await?;
             info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
@@ -434,8 +435,11 @@ pub async fn try_connect_leader(
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
-                        resp = Some(r);
-                        break 'outer;
+                        // check whether the response have leader info, otherwise continue to loop the rest members
+                        if r.has_leader() {
+                            resp = Some(r);
+                            break 'outer;
+                        }
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",
