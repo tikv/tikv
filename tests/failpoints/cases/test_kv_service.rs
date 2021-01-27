@@ -47,7 +47,7 @@ fn test_scan_lock_push_async_commit() {
         // First, try pushing max_ts to `ts + 10`.
         if *use_green_gc {
             let mut req = RegisterLockObserverRequest::default();
-            req.max_ts = ts + 10;
+            req.set_max_ts(ts + 10);
             let resp = client.register_lock_observer(&req).unwrap();
             assert_eq!(resp.error.len(), 0);
         } else {
