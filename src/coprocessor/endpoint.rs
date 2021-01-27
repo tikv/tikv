@@ -355,11 +355,11 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
+            start_ts: ctx.txn_start_ts,
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
         if need_check_locks_in_replica_read(&ctx.context) {
-            snap_ctx.start_ts = ctx.txn_start_ts;
             for r in &ctx.ranges {
                 let start_key = txn_types::Key::from_raw(r.get_start());
                 let end_key = txn_types::Key::from_raw(r.get_end());
