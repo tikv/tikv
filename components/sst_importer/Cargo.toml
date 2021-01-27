@@ -29,6 +29,7 @@ error_code = { path = "../error_code" }
 external_storage = { path = "../external_storage" }
 futures = "0.1"
 futures-executor = "0.3"
+futures03 = { package = "futures", version = "0.3" }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"

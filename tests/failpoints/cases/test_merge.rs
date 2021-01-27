@@ -553,17 +553,32 @@ fn prepare_request_snapshot_cluster() -> (Cluster<NodeCluster>, Region, Region) 
 fn test_node_merge_reject_request_snapshot() {
     let (mut cluster, region, target_region) = prepare_request_snapshot_cluster();
 
+    let k = b"k3_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), k, b"value");
+    }
+
     let apply_prepare_merge_fp = "apply_before_prepare_merge";
     fail::cfg(apply_prepare_merge_fp, "pause").unwrap();
     let prepare_merge = new_prepare_merge(target_region);
     let mut req = new_admin_request(region.get_id(), region.get_region_epoch(), prepare_merge);
     req.mut_header().set_peer(new_peer(1, 1));
+    let (tx, rx) = mpsc::sync_channel(1);
     cluster
         .sim
         .rl()
-        .async_command_on_node(1, req, Callback::None)
+        .async_command_on_node(
+            1,
+            req,
+            Callback::Write {
+                cb: Box::new(|_: WriteResponse| {}),
+                proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
+            },
+        )
         .unwrap();
-    sleep_ms(200);
+    // Proposing merge shouldn't fail.
+    assert!(rx.recv_timeout(Duration::from_millis(200)).is_ok());
 
     // Install snapshot filter before requesting snapshot.
     let (tx, rx) = mpsc::channel();
@@ -805,7 +820,15 @@ fn test_node_merge_transfer_leader() {
 
     cluster.run();
 
+    // To ensure the region has applied to its current term so that later `split` can success
+    // without any retries. Then, `left_peer_3` will must be `1003`.
     let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+    let k = b"k1_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    must_get_equal(&cluster.get_engine(1), k, b"value");
+
     cluster.must_split(&region, b"k2");
 
     cluster.must_put(b"k1", b"v1");
@@ -817,13 +840,14 @@ fn test_node_merge_transfer_leader() {
     let left_peer_1 = find_peer(&left, 1).unwrap().to_owned();
     cluster.must_transfer_leader(left.get_id(), left_peer_1.clone());
 
+    let left_peer_3 = find_peer(&left, 3).unwrap().to_owned();
+    assert_eq!(left_peer_3.get_id(), 1003);
+
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     cluster.must_try_merge(left.get_id(), right.get_id());
 
-    let left_peer_3 = find_peer(&left, 3).unwrap().to_owned();
-    assert_eq!(left_peer_3.get_id(), 1003);
     // Prevent peer 1003 to handle ready when it's leader
     let before_handle_raft_ready_1003 = "before_handle_raft_ready_1003";
     fail::cfg(before_handle_raft_ready_1003, "pause").unwrap();
@@ -1228,19 +1252,19 @@ fn test_node_merge_crash_when_snapshot() {
 
     let r1 = pd_client.get_region(b"k1").unwrap();
     let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
-    cluster.transfer_leader(r1.get_id(), r1_on_store1);
+    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
     let r2 = pd_client.get_region(b"k2").unwrap();
     let r2_on_store1 = find_peer(&r2, 1).unwrap().to_owned();
-    cluster.transfer_leader(r2.get_id(), r2_on_store1);
+    cluster.must_transfer_leader(r2.get_id(), r2_on_store1);
     let r3 = pd_client.get_region(b"k3").unwrap();
     let r3_on_store1 = find_peer(&r3, 1).unwrap().to_owned();
-    cluster.transfer_leader(r3.get_id(), r3_on_store1);
+    cluster.must_transfer_leader(r3.get_id(), r3_on_store1);
     let r4 = pd_client.get_region(b"k4").unwrap();
     let r4_on_store1 = find_peer(&r4, 1).unwrap().to_owned();
-    cluster.transfer_leader(r4.get_id(), r4_on_store1);
+    cluster.must_transfer_leader(r4.get_id(), r4_on_store1);
     let r5 = pd_client.get_region(b"k5").unwrap();
     let r5_on_store1 = find_peer(&r5, 1).unwrap().to_owned();
-    cluster.transfer_leader(r5.get_id(), r5_on_store1);
+    cluster.must_transfer_leader(r5.get_id(), r5_on_store1);
 
     for i in 1..5 {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v");
