@@ -100,7 +100,7 @@ pub struct CompactionGuardGenerator {
 }
 
 impl SstPartitioner for CompactionGuardGenerator {
-    fn should_partition(&self, req: &SstPartitionerRequest) -> SstPartitionerResult {
+    fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult {
         let mut pos = self.pos.get();
         let mut skip_count = 0;
         while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.prev_user_key {
@@ -135,7 +135,7 @@ impl SstPartitioner for CompactionGuardGenerator {
         }
     }
 
-    fn can_do_trivial_move(&self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
+    fn can_do_trivial_move(&mut self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
         // Always allow trivial move
         true
     }
