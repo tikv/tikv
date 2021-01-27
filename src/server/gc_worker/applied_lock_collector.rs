@@ -471,6 +471,7 @@ impl Drop for AppliedLockCollector {
 mod tests {
     use super::*;
     use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{
@@ -535,8 +536,7 @@ mod tests {
     fn start_collecting(c: &AppliedLockCollector, max_ts: u64) -> Result<()> {
         let (tx, rx) = channel();
         c.start_collecting(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
-            .unwrap();
-        rx.recv().unwrap()
+            .and_then(move |()| rx.recv().unwrap())
     }
 
     fn get_collected_locks(c: &AppliedLockCollector, max_ts: u64) -> Result<(Vec<LockInfo>, bool)> {
@@ -587,6 +587,52 @@ mod tests {
         stop_collecting(&c, 3).unwrap_err();
         stop_collecting(&c, 5).unwrap_err();
         stop_collecting(&c, 4).unwrap();
+    }
+
+    #[test]
+    fn test_check_memlock_on_start() {
+        let (c, _) = new_test_collector();
+        let cm = c.concurrency_manager.clone();
+
+        let mem_lock = |k: &[u8], ts: u64, lock_type| {
+            let key = Key::from_raw(k);
+            let guard = block_on(cm.lock_key(&key));
+            guard.with_lock(|lock| {
+                *lock = Some(txn_types::Lock::new(
+                    lock_type,
+                    k.to_vec(),
+                    ts.into(),
+                    100,
+                    None,
+                    0.into(),
+                    1,
+                    20.into(),
+                ));
+            });
+            guard
+        };
+
+        let guard = mem_lock(b"a", 100, LockType::Put);
+        start_collecting(&c, 90).unwrap();
+        stop_collecting(&c, 90).unwrap();
+        start_collecting(&c, 100).unwrap_err();
+        // Use get_collected_locks to check it's not collecting.
+        get_collected_locks(&c, 100).unwrap_err();
+        start_collecting(&c, 110).unwrap_err();
+        get_collected_locks(&c, 110).unwrap_err();
+        drop(guard);
+
+        let guard = mem_lock(b"b", 100, LockType::Lock);
+        start_collecting(&c, 90).unwrap();
+        stop_collecting(&c, 90).unwrap();
+        start_collecting(&c, 100).unwrap_err();
+        get_collected_locks(&c, 100).unwrap_err();
+        start_collecting(&c, 110).unwrap_err();
+        get_collected_locks(&c, 110).unwrap_err();
+        drop(guard);
+
+        start_collecting(&c, 200).unwrap();
+        stop_collecting(&c, 200).unwrap();
     }
 
     #[test]

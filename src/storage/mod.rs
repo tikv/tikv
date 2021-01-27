@@ -4420,8 +4420,15 @@ mod tests {
             0,
         ))
         .unwrap();
-        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y]);
-
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone()
+            ]
+        );
         drop(guard);
         drop(guard2);
 
@@ -4435,6 +4442,18 @@ mod tests {
             1,
         ))
         .unwrap_err();
+        drop(guard);
+
+        let guard = mem_lock(b"c", 102, LockType::Put);
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y]);
         drop(guard);
     }
 
