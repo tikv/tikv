@@ -252,7 +252,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
 
         SERVER_INFO_GAUGE_VEC
             .with_label_values(&[
-                env!("CARGO_PKG_VERSION"),
+                &("v".to_owned() + env!("CARGO_PKG_VERSION")),
                 option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
             ])
             .set(startup_ts as i64);
