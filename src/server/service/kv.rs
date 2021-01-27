@@ -1034,10 +1034,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
-            |resp| {
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some($p(resp));
-                res
+            |resp| batch_commands_response::Response {
+                cmd: Some($p(resp)),
+                ..Default::default()
             }
         };
     }
@@ -1619,7 +1618,11 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Ok(Ok(res)) => {
+            let (values, not_founds) = res.into_values_and_not_founds();
+            resp.set_values(values.into());
+            resp.set_not_founds(not_founds);
+        },
         Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
     }
 });
@@ -1769,8 +1772,10 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
         // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
         let mut region_error = RegionError::default();
-        let mut region_not_found = RegionNotFound::default();
-        region_not_found.region_id = region_id;
+        let region_not_found = RegionNotFound {
+            region_id,
+            ..Default::default()
+        };
         region_error.set_region_not_found(region_not_found);
         return region_error;
     }

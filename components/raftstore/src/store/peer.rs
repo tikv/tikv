@@ -898,12 +898,25 @@ where
             // Checking term to make sure campaign has finished and the leader starts
             // doing its job, it's not required but a safe options.
             state != GroupState::Chaos
-                && self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.has_valid_leader()
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
                 && !self.has_unresolved_reads()
                 // If it becomes leader, the stats is not valid anymore.
                 && !self.is_leader()
         }
+    }
+
+    #[inline]
+    pub fn has_valid_leader(&self) -> bool {
+        if self.raft_group.raft.leader_id == raft::INVALID_ID {
+            return false;
+        }
+        for p in self.region().get_peers() {
+            if p.get_id() == self.raft_group.raft.leader_id && p.get_role() != PeerRole::Learner {
+                return true;
+            }
+        }
+        false
     }
 
     /// Pings if followers are still connected.
@@ -1005,6 +1018,13 @@ where
     fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftReadyMetrics) {
         metrics.message += light_ready.messages().len() as u64;
         metrics.commit += light_ready.committed_entries().len() as u64;
+    }
+
+    #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
     }
 
     #[inline]
@@ -2279,8 +2299,14 @@ where
         let current_progress = self.raft_group.status().progress.unwrap().clone();
         let kind = ConfChangeKind::confchange_kind(change_peers.len());
 
-        // Leaving joint state, skip check
         if kind == ConfChangeKind::LeaveJoint {
+            if self.peer.get_role() == PeerRole::DemotingVoter {
+                return Err(box_err!(
+                    "{} ignore leave joint command that demoting leader",
+                    self.tag
+                ));
+            }
+            // Leaving joint state, skip check
             return Ok(());
         }
 
@@ -2932,13 +2958,14 @@ where
             return;
         }
 
+        #[allow(clippy::suspicious_operation_groupings)]
         if self.is_applying_snapshot()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
         {
             info!(
                 "reject transferring leader";
-                "region_id" =>self.region_id,
+                "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from" => msg.get_from(),
             );
@@ -3182,8 +3209,10 @@ where
         if self.replication_mode_version == 0 {
             return None;
         }
-        let mut status = RegionReplicationStatus::default();
-        status.state_id = self.replication_mode_version;
+        let mut status = RegionReplicationStatus {
+            state_id: self.replication_mode_version,
+            ..Default::default()
+        };
         let state = if !self.replication_sync {
             if self.dr_auto_sync_state != DrAutoSyncState::Async {
                 let res = self.raft_group.raft.check_group_commit_consistent();

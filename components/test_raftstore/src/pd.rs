@@ -353,8 +353,10 @@ impl Cluster {
         // TODO: enable this check later.
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
-        let mut s = Store::default();
-        s.store = store;
+        let mut s = Store {
+            store,
+            ..Default::default()
+        };
 
         s.region_ids.insert(region.get_id());
 
@@ -383,9 +385,13 @@ impl Cluster {
             .get(&store_id)
             .map_or(true, |s| s.store.get_id() != 0)
         {
-            let mut s = Store::default();
-            s.store = store;
-            self.stores.insert(store_id, s);
+            self.stores.insert(
+                store_id,
+                Store {
+                    store,
+                    ..Default::default()
+                },
+            );
         } else {
             self.stores.get_mut(&store_id).unwrap().store = store;
         }

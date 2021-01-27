@@ -508,37 +508,37 @@ impl PdClient for RpcClient {
 
         let executor = |client: &LeaderClient, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.inner.wl();
-            if let Either::Right(ref sender) = inner.hb_sender {
-                let ret = sender
-                    .unbounded_send(req)
-                    .map_err(|e| Error::Other(Box::new(e)));
-                return Box::pin(future::ready(ret)) as PdFuture<_>;
+            if let Either::Left(ref mut left) = inner.hb_sender {
+                debug!("heartbeat sender is refreshed");
+                let sender = left.take().expect("expect region heartbeat sink");
+                let (tx, rx) = mpsc::unbounded();
+                inner.hb_sender = Either::Right(tx);
+                inner.client_stub.spawn(async move {
+                    let mut sender = sender.sink_map_err(Error::Grpc);
+                    let result = sender
+                        .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            sender.get_mut().cancel();
+                            info!("cancel region heartbeat sender");
+                        }
+                        Err(e) => {
+                            error!(?e; "failed to send heartbeat");
+                        }
+                    };
+                });
             }
 
-            debug!("heartbeat sender is refreshed");
-            let left = inner.hb_sender.as_mut().left().unwrap();
-            let sender = left.take().expect("expect region heartbeat sink");
-            let (tx, rx) = mpsc::unbounded();
-            tx.unbounded_send(req)
-                .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
-            inner.hb_sender = Either::Right(tx);
-            Box::pin(async move {
-                let mut sender = sender.sink_map_err(Error::Grpc);
-                let result = sender
-                    .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
-                    .await;
-                match result {
-                    Ok(()) => {
-                        sender.get_mut().cancel();
-                        info!("cancel region heartbeat sender");
-                        Ok(())
-                    }
-                    Err(e) => {
-                        error!(?e; "failed to send heartbeat");
-                        Err(e)
-                    }
-                }
-            }) as PdFuture<_>
+            let sender = inner
+                .hb_sender
+                .as_mut()
+                .right()
+                .expect("expect region heartbeat sender");
+            let ret = sender
+                .unbounded_send(req)
+                .map_err(|e| Error::Other(Box::new(e)));
+            Box::pin(future::ready(ret)) as PdFuture<_>
         };
 
         self.leader_client
@@ -773,7 +773,7 @@ impl PdClient for RpcClient {
         req.set_count(1);
         req.set_header(self.header());
         let executor = move |client: &LeaderClient, req: pdpb::TsoRequest| {
-            let cli = client.inner.read().unwrap();
+            let cli = client.inner.rl();
             let (mut req_sink, mut resp_stream) = cli
                 .client_stub
                 .tso()
