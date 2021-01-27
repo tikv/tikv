@@ -365,7 +365,7 @@ impl Delegate {
             self.region_id,
             change_data_event,
         );
-        for i in 0..downstreams.len() - 1 {
+        for i in 0..downstreams.len() {
             if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
@@ -379,7 +379,6 @@ impl Delegate {
             }
             downstreams[i].sink_event(event);
         }
-        downstreams.last().unwrap().sink_event(change_data_event);
     }
 
     /// Install a resolver and return pending downstreams.
