@@ -5,8 +5,10 @@ extern crate tikv_util;
 
 use std::io::{Read, Write};
 
-use encryption::{AwsKms, Backend, Error, KmsBackend, KmsConfig, Result};
 use file_system::{File, OpenOptions};
+#[cfg(feature = "cloud-aws")]
+use encryption_export::{AwsKms, KmsBackend, KmsConfig};
+use encryption_export::{Backend, Error, Result};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;

@@ -51,6 +51,7 @@ pub struct KmsConfig {
     pub key_id: String,
     pub region: String,
     pub endpoint: String,
+    pub provider: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +155,7 @@ mod tests {
                     key_id: "key_id".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
+                    provider: "".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,

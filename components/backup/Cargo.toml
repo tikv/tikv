@@ -5,9 +5,9 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb", "aws", "gcp"]
-aws = ["external_storage_export/aws"]
-gcp = ["external_storage_export/gcp"]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+cloud-aws = ["external_storage_export/cloud-aws"]
+cloud-gcp = ["external_storage_export/cloud-gcp"]
 protobuf-codec = [
   "concurrency_manager/protobuf-codec",
   "engine_rocks/protobuf-codec",

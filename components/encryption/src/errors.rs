@@ -78,3 +78,9 @@ impl ErrorCodeExt for Error {
         }
     }
 }
+
+impl std::convert::From<rusoto_core::request::TlsError> for Error {
+    fn from(err: rusoto_core::request::TlsError) -> Error {
+        box_err!(format!("{}", err))
+    }
+}

@@ -172,6 +172,8 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 name = "aws"
 version = "0.0.1"
 dependencies = [
+ "bytes 0.5.3",
+ "encryption",
  "external_storage",
  "futures 0.3.7",
  "futures-util",
@@ -183,11 +185,13 @@ dependencies = [
  "matches",
  "rusoto_core",
  "rusoto_credential",
+ "rusoto_kms",
  "rusoto_mock",
  "rusoto_s3",
  "rusoto_util",
  "slog",
  "slog-global",
+ "tikv_util",
  "tokio",
  "url",
 ]
@@ -624,7 +628,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
- "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -1161,21 +1165,32 @@ dependencies = [
  "protobuf",
  "rand",
  "rusoto_core",
- "rusoto_credential",
- "rusoto_kms",
- "rusoto_mock",
- "rusoto_util",
- "rust-ini",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "encryption_export"
+version = "0.0.1"
+dependencies = [
+ "aws",
+ "encryption",
+ "gcp",
+ "kvproto",
+ "openssl",
+ "protobuf",
+ "rust-ini",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4553,7 +4568,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
- "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -4611,7 +4626,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "collections",
- "encryption",
+ "encryption_export",
  "fail",
  "grpcio",
  "kvproto",
@@ -4900,7 +4915,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "derive_more",
- "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",

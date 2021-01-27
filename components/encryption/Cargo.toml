@@ -41,9 +41,6 @@ openssl = "0.10"
 protobuf = "2.8"
 rand = "0.7"
 rusoto_core = "0.45.0"
-rusoto_credential = "0.45.0"
-rusoto_kms = { version = "0.45.0", features = ["serialize_structs"] }
-rusoto_util = { path = "../rusoto_util" }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -57,6 +54,3 @@ tokio = { version = "0.2", features = ["time", "rt-core"] }
 matches = "0.1.8"
 tempfile = "3.1"
 toml = "0.5"
-rusoto_mock = "0.45.0"
-rust-ini = "0.14.0"
-structopt = "0.3"
