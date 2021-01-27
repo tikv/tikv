@@ -280,10 +280,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_keys = 100;
-        cfg.region_split_keys = 80;
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_keys: 100,
+            region_split_keys: 80,
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);

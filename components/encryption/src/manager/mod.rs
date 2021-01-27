@@ -180,10 +180,12 @@ impl Dicts {
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = Iv::new_ctr();
-        let mut file = FileInfo::default();
-        file.iv = iv.as_slice().to_vec();
-        file.key_id = self.current_key_id.load(Ordering::SeqCst);
-        file.method = compat(method);
+        let file = FileInfo {
+            iv: iv.as_slice().to_vec(),
+            key_id: self.current_key_id.load(Ordering::SeqCst),
+            method: compat(method),
+            ..Default::default()
+        };
         let file_num = {
             let mut file_dict = self.file_dict.lock().unwrap();
             file_dict.files.insert(fname.to_owned(), file.clone());
@@ -317,11 +319,13 @@ impl Dicts {
         let creation_time = duration.as_secs();
 
         let (key_id, key) = generate_data_key(method);
-        let mut data_key = DataKey::default();
-        data_key.key = key;
-        data_key.method = compat(method);
-        data_key.creation_time = creation_time;
-        data_key.was_exposed = false;
+        let data_key = DataKey {
+            key,
+            method: compat(method),
+            creation_time,
+            was_exposed: false,
+            ..Default::default()
+        };
         self.rotate_key(key_id, data_key, master_key)
     }
 }
@@ -964,9 +968,11 @@ mod tests {
         assert_eq!(manager.get_file_exists("foo").unwrap(), None,);
 
         // Must fail if key is specified but not found.
-        let mut file = FileInfo::default();
-        file.method = EncryptionMethod::Aes192Ctr as _;
-        file.key_id = 7; // Not exists.
+        let file = FileInfo {
+            method: EncryptionMethod::Aes192Ctr as _,
+            key_id: 7, // Not exists
+            ..Default::default()
+        };
         manager
             .dicts
             .file_dict

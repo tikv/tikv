@@ -25,8 +25,8 @@ pub struct SstPartitionerContext<'a> {
 }
 
 pub trait SstPartitioner {
-    fn should_partition(&self, req: &SstPartitionerRequest) -> SstPartitionerResult;
-    fn can_do_trivial_move(&self, smallest_key: &[u8], largest_key: &[u8]) -> bool;
+    fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult;
+    fn can_do_trivial_move(&mut self, smallest_key: &[u8], largest_key: &[u8]) -> bool;
 }
 
 pub trait SstPartitionerFactory: Sync + Send {

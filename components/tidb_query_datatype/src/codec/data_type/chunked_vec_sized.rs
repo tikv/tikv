@@ -99,9 +99,9 @@ impl<'a, T: Evaluable + EvaluableRet> ChunkRef<'a, &'a T> for &'a ChunkedVecSize
     }
 }
 
-impl<T: Clone> Into<ChunkedVecSized<T>> for Vec<Option<T>> {
-    fn into(self) -> ChunkedVecSized<T> {
-        ChunkedVecSized::from_vec(self)
+impl<T: Clone> From<Vec<Option<T>>> for ChunkedVecSized<T> {
+    fn from(v: Vec<Option<T>>) -> ChunkedVecSized<T> {
+        ChunkedVecSized::from_vec(v)
     }
 }
 

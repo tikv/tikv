@@ -182,15 +182,18 @@ mod tests {
     use std::panic;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
-        let mut label = metapb::StoreLabel::default();
-        label.key = key.to_owned();
-        label.value = value.to_owned();
-        label
+        metapb::StoreLabel {
+            key: key.to_owned(),
+            value: value.to_owned(),
+            ..Default::default()
+        }
     }
 
     fn new_store(id: u64, labels: Vec<metapb::StoreLabel>) -> metapb::Store {
-        let mut store = metapb::Store::default();
-        store.id = id;
+        let mut store = metapb::Store {
+            id,
+            ..Default::default()
+        };
         store.set_labels(labels.into());
         store
     }
