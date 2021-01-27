@@ -8,10 +8,12 @@ use rand::{thread_rng, RngCore};
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
-use crate::Result;
+use crate::{Error, Result};
 
 use std::fs::{rename, File, OpenOptions};
 use std::io::BufRead;
+use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -187,6 +189,16 @@ impl FileDictionaryFile {
                 }
             }
         }
+
+        // If the file dict is empty, it must be deleted which avoids continuing TiKV crashes.
+        if file_dict.files.is_empty() {
+            std::fs::remove_file(self.base.join(&self.name))?;
+            return Err(Error::Io(IoError::new(
+                ErrorKind::NotFound,
+                "the file dict is found but empty",
+            )));
+        }
+
         self.file_dict = file_dict.clone();
         Ok(file_dict)
     }

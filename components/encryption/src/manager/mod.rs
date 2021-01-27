@@ -477,9 +477,6 @@ impl DataKeyManager {
             // Encryption is being enabled.
             (Ok(None), _) => {
                 info!("encryption is being enabled. method = {:?}", args.method);
-                // If `master_key` doesn't work correctly, dict files will not be created.
-                let plaintext_temp = "";
-                let _ = master_key.encrypt(plaintext_temp.as_bytes())?;
 
                 Ok(LoadDicts::Loaded(Dicts::new(
                     &args.dict_path,
@@ -902,7 +899,7 @@ mod tests {
         let result = new_key_manager(&tmp_dir, None, wrong_key, &*previous);
         // When the master key is invalid, the key manager will not create dict files.
         assert!(result.is_err());
-        assert!(!file_dict_path.exists());
+        assert!(file_dict_path.exists());
         let result = new_key_manager(&tmp_dir, None, right_key, &*previous);
         assert!(result.is_ok());
         assert!(file_dict_path.exists());
