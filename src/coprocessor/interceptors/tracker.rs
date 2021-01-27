@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::coprocessor::tracker::Tracker as CopTracker;
+use crate::storage::kv::PerfStatisticsInstant;
 
 pub fn track<'a, F: Future + 'a>(
     fut: F,
@@ -42,8 +43,13 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.project();
         this.cop_tracker.on_begin_item();
+        let perf_statistics_instant = PerfStatisticsInstant::new();
+
         let res = this.fut.poll(cx);
-        this.cop_tracker.on_finish_item(None);
+
+        let perf_statistics = perf_statistics_instant.delta();
+        this.cop_tracker.on_finish_item(None, perf_statistics);
+
         res
     }
 }

@@ -53,8 +53,7 @@ use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::worker::{
-    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
-    SplitCheckTask,
+    ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -68,6 +67,23 @@ pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
     pub peer: metapb::Peer,
+}
+
+pub struct CollectedReady {
+    /// The offset of source peer in the batch system.
+    pub batch_offset: usize,
+    pub ctx: InvokeContext,
+    pub ready: Ready,
+}
+
+impl CollectedReady {
+    pub fn new(ctx: InvokeContext, ready: Ready) -> CollectedReady {
+        CollectedReady {
+            batch_offset: 0,
+            ctx,
+            ready,
+        }
+    }
 }
 
 /// Represents state of the group.
@@ -824,9 +840,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             proposals.push(p);
         }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
-        if let Some(r) = res {
-            self.on_role_changed(&r.0);
-            if !r.0.entries().is_empty() {
+        if let Some(mut r) = res {
+            // This bases on an assumption that fsm array passed in `end` method will have
+            // the same order of processing.
+            r.batch_offset = self.ctx.processed_fsm_count;
+            self.on_role_changed(&r.ready);
+            if !r.ready.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
@@ -835,8 +854,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
+    pub fn handle_raft_ready_apply(&mut self, ready: &mut CollectedReady) {
         self.fsm.early_apply = ready
+            .ready
             .committed_entries
             .as_ref()
             .and_then(|e| e.last())
@@ -846,23 +866,35 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.early_apply {
             return;
         }
-        self.fsm
-            .peer
-            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
+        if ready.ctx.region_id != self.fsm.region_id() {
+            panic!(
+                "{} region id not matched: {} # {}",
+                self.fsm.peer.tag,
+                ready.ctx.region_id,
+                self.fsm.region_id()
+            );
+        }
+        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
     }
 
-    pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
+    pub fn post_raft_ready_append(&mut self, mut ready: CollectedReady) {
+        if ready.ctx.region_id != self.fsm.region_id() {
+            panic!(
+                "{} region id not matched: {} # {}",
+                self.fsm.peer.tag,
+                ready.ctx.region_id,
+                self.fsm.region_id()
+            );
+        }
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         if !self.fsm.early_apply {
-            self.fsm
-                .peer
-                .handle_raft_ready_apply(self.ctx, &mut ready, &invoke_ctx);
+            self.fsm.peer.handle_raft_ready_apply(self.ctx, &mut ready);
         }
         let res = self
             .fsm
             .peer
-            .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_advance(ready);
+            .post_raft_ready_append(self.ctx, &mut ready.ready, ready.ctx);
+        self.fsm.peer.handle_raft_ready_advance(ready.ready);
         let mut has_snapshot = false;
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
@@ -1912,6 +1944,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+        fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
         self.register_split_region_check_tick();
         let mut guard = self.ctx.store_meta.lock().unwrap();
         let meta: &mut StoreMeta = &mut *guard;
@@ -2092,6 +2125,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
         }
+        fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
     fn register_merge_check_tick(&mut self) {
@@ -3511,20 +3545,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.size_diff_hint += sst.get_length();
         }
         self.register_split_region_check_tick();
-
-        let task = CleanupSSTTask::DeleteSST { ssts };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSST(task))
-        {
-            error!(
-                "schedule to delete ssts";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been stored successfully.

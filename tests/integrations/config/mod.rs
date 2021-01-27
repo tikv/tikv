@@ -159,7 +159,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_diff: ReadableSize::mb(20),
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::minutes(11),
         region_compact_check_step: 1_234,
@@ -592,7 +592,10 @@ fn test_serde_custom_tikv_config() {
             previous_master_key: MasterKeyConfig::Plaintext,
         },
     };
-    value.backup = BackupConfig { num_threads: 456 };
+    value.backup = BackupConfig {
+        num_threads: 456,
+        batch_size: 7,
+    };
     value.import = ImportConfig {
         num_threads: 123,
         stream_channel_window: 123,

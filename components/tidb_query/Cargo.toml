@@ -61,6 +61,7 @@ time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
+log_wrappers = { path = "../log_wrappers" }
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/tikv/rust-prometheus.git"

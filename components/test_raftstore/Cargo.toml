@@ -35,7 +35,7 @@ engine_rocks = { path = "../engine_rocks" }
 futures = "0.1"
 futures-cpupool = "0.1"
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
-hex = "0.4"
+log_wrappers = { path = "../log_wrappers" }
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
 pd_client = { path = "../pd_client" }

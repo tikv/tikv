@@ -256,7 +256,9 @@ pub fn upper(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
+    Ok(arg
+        .as_ref()
+        .map(|b| log_wrappers::hex_encode_upper(b).into_bytes()))
 }
 
 #[rpn_fn]

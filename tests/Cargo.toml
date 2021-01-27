@@ -81,7 +81,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 
 [dependencies]
-fail = { version = "0.3", optional = true }
+fail = "0.4"
 batch-system = { path = "../components/batch-system" }
 crc64fast = "0.1"
 crossbeam = "0.8"
@@ -95,6 +95,7 @@ futures03 = { package = "futures", version = "0.3", features = ["executor"] }
 grpcio = { version = "0.5", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }
+log_wrappers = { path = "../components/log_wrappers" }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -106,6 +107,7 @@ tempfile = "3.0"
 tidb_query = { path = "../components/tidb_query" }
 tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
+error_code = { path = "../components/error_code" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 tokio-threadpool = "0.1.13"
 toml = "0.4"

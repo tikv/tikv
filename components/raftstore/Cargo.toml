@@ -47,13 +47,12 @@ engine_rocks = { path = "../engine_rocks" }
 encryption = { path = "../encryption" }
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
-fail = "0.3"
+fail = "0.4"
 openssl = "0.10"
 fs2 = "0.4"
 futures = "0.1"
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
-hex = "0.4"
 into_other = { path = "../into_other" }
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-4.0", default-features = false }

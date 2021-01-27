@@ -1981,12 +1981,16 @@ mod readpool_tests {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
     pub num_threads: usize,
+    pub batch_size: usize,
 }
 
 impl BackupConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("backup.num_threads cannot be 0".into());
+        }
+        if self.batch_size == 0 {
+            return Err("backup.batch_size cannot be 0".into());
         }
         Ok(())
     }
@@ -1998,6 +2002,7 @@ impl Default for BackupConfig {
         Self {
             // use at most 75% of vCPU by default
             num_threads: (cpu_num * 0.75).clamp(1.0, 32.0) as usize,
+            batch_size: 8,
         }
     }
 }
@@ -2162,8 +2167,6 @@ impl TiKvConfig {
     ) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
-
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
 
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
@@ -3197,5 +3200,17 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }
