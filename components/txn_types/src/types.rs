@@ -114,7 +114,7 @@ impl Key {
     /// key.
     #[inline]
     pub fn decode_ts(&self) -> Result<TimeStamp, codec::Error> {
-        Ok(Self::decode_ts_from(&self.0)?)
+        Self::decode_ts_from(&self.0)
     }
 
     /// Creates a new key by truncating the timestamp from this key.
@@ -361,10 +361,7 @@ impl OldValue {
     }
 
     pub fn exists(&self) -> bool {
-        matches!(
-            self,
-            OldValue::Value {..}
-        )
+        matches!(self, OldValue::Value { .. })
     }
 
     pub fn size(&self) -> usize {
