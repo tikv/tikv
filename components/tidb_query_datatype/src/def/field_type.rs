@@ -107,11 +107,8 @@ pub enum Collation {
     Utf8Mb4Bin = -46,
     Utf8Mb4BinNoPadding = 46,
     Utf8Mb4GeneralCi = -45,
-<<<<<<< HEAD
     Latin1Bin = -47,
-=======
     Utf8Mb4UnicodeCi = -224,
->>>>>>> f456abae9... charset: support utf8mb4_unicode_ci collation (#8420)
 }
 
 impl Collation {
@@ -123,15 +120,10 @@ impl Collation {
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
-<<<<<<< HEAD
             -46 | -83 | -65 => Ok(Collation::Utf8Mb4Bin),
             -47 => Ok(Collation::Latin1Bin),
             -63 | 63 | 47 => Ok(Collation::Binary),
-=======
-            -46 | -83 | -65 | -47 => Ok(Collation::Utf8Mb4Bin),
-            -63 | 63 => Ok(Collation::Binary),
-            -224 | -182 => Ok(Collation::Utf8Mb4UnicodeCi),
->>>>>>> f456abae9... charset: support utf8mb4_unicode_ci collation (#8420)
+            -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
