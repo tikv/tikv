@@ -6,6 +6,7 @@ use protobuf::Message;
 use rand::{thread_rng, RngCore};
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
+use crate::manager::KEY_DICT_NAME;
 use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -191,7 +192,7 @@ impl FileDictionaryFile {
         }
 
         // If the file dict is empty, it must be deleted which avoids continuing TiKV crashes.
-        if file_dict.files.is_empty() {
+        if file_dict.files.is_empty() && !self.base.join(KEY_DICT_NAME).exists() {
             std::fs::remove_file(self.base.join(&self.name))?;
             return Err(Error::Io(IoError::new(
                 ErrorKind::NotFound,
