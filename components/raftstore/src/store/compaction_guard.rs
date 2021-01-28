@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::Cell, ffi::CString};
+use std::ffi::CString;
 
 use crate::{coprocessor::RegionInfoProvider, Error, Result};
 use engine_traits::{
@@ -48,60 +48,87 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl<P: RegionInfoProvider + Sync> SstPartitionerFactory for CompactionGuardGeneratorFactory<P> {
-    type Partitioner = CompactionGuardGenerator;
+impl<P: RegionInfoProvider + Clone + Sync> SstPartitionerFactory
+    for CompactionGuardGeneratorFactory<P>
+{
+    type Partitioner = CompactionGuardGenerator<P>;
 
     fn name(&self) -> &CString {
         &COMPACTION_GUARD
     }
 
     fn create_partitioner(&self, context: &SstPartitionerContext) -> Option<Self::Partitioner> {
-        match self
+        // create_partitioner can be called in RocksDB while holding db_mutex. It can block
+        // other operations on RocksDB. To avoid such caces, we defer region info query to
+        // the first time should_partition is called.
+        Some(CompactionGuardGenerator {
+            cf_name: self.cf_name,
+            smallest_key: context.smallest_key.to_vec(),
+            largest_key: context.largest_key.to_vec(),
+            min_output_file_size: self.min_output_file_size,
+            provider: self.provider.clone(),
+            initialized: false,
+            use_guard: false,
+            boundaries: vec![],
+            pos: 0,
+        })
+    }
+}
+
+pub struct CompactionGuardGenerator<P: RegionInfoProvider> {
+    cf_name: CfNames,
+    smallest_key: Vec<u8>,
+    largest_key: Vec<u8>,
+    min_output_file_size: u64,
+    provider: P,
+    initialized: bool,
+    use_guard: bool,
+    // The boundary keys are exclusive.
+    boundaries: Vec<Vec<u8>>,
+    pos: usize,
+}
+
+impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
+    fn initialize(&mut self) {
+        self.use_guard = match self
             .provider
-            .get_regions_in_range(context.smallest_key, context.largest_key)
+            .get_regions_in_range(&self.smallest_key, &self.largest_key)
         {
             Ok(regions) => {
                 // The regions returned from region_info_provider should have been sorted,
                 // but we sort it again just in case.
-                COMPACTION_GUARD_ACTION_COUNTER
-                    .get(self.cf_name)
-                    .create
-                    .inc();
+                COMPACTION_GUARD_ACTION_COUNTER.get(self.cf_name).init.inc();
                 let mut boundaries = regions
                     .iter()
                     .map(|region| data_end_key(&region.end_key))
                     .collect::<Vec<Vec<u8>>>();
                 boundaries.sort();
-                Some(CompactionGuardGenerator {
-                    cf_name: self.cf_name,
-                    boundaries,
-                    min_output_file_size: self.min_output_file_size,
-                    pos: Cell::new(0),
-                })
+                self.boundaries = boundaries;
+                true
             }
             Err(e) => {
                 COMPACTION_GUARD_ACTION_COUNTER
                     .get(self.cf_name)
-                    .create_failure
+                    .init_failure
                     .inc();
-                warn!("failed to create compaction guard generator"; "err" => ?e);
-                None
+                warn!("failed to initialize compaction guard generator"; "err" => ?e);
+                false
             }
-        }
+        };
+        self.pos = 0;
+        self.initialized = true;
     }
 }
 
-pub struct CompactionGuardGenerator {
-    cf_name: CfNames,
-    // The boundary keys are exclusive.
-    boundaries: Vec<Vec<u8>>,
-    min_output_file_size: u64,
-    pos: Cell<usize>,
-}
-
-impl SstPartitioner for CompactionGuardGenerator {
+impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
     fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult {
-        let mut pos = self.pos.get();
+        if !self.initialized {
+            self.initialize();
+        }
+        if !self.use_guard {
+            return SstPartitionerResult::NotRequired;
+        }
+        let mut pos = self.pos;
         let mut skip_count = 0;
         while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.prev_user_key {
             pos += 1;
@@ -115,7 +142,7 @@ impl SstPartitioner for CompactionGuardGenerator {
                 break;
             }
         }
-        self.pos.set(pos);
+        self.pos = pos;
         if pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.current_user_key {
             if req.current_output_file_size >= self.min_output_file_size {
                 COMPACTION_GUARD_ACTION_COUNTER
@@ -162,9 +189,14 @@ mod tests {
     fn test_compaction_guard_should_partition() {
         let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
-            boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
+            smallest_key: vec![],
+            largest_key: vec![],
             min_output_file_size: 8 << 20, // 8MB
-            pos: Cell::new(0),
+            provider: MockRegionInfoProvider::new(vec![]),
+            initialized: true,
+            use_guard: true,
+            boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
+            pos: 0,
         };
         // Crossing region boundary.
         let mut req = SstPartitionerRequest {
@@ -173,7 +205,7 @@ mod tests {
             current_output_file_size: 32 << 20,
         };
         assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
-        assert_eq!(guard.pos.get(), 0);
+        assert_eq!(guard.pos, 0);
         // Output file size too small.
         req = SstPartitionerRequest {
             prev_user_key: b"bba",
@@ -184,7 +216,7 @@ mod tests {
             guard.should_partition(&req),
             SstPartitionerResult::NotRequired
         );
-        assert_eq!(guard.pos.get(), 0);
+        assert_eq!(guard.pos, 0);
         // Not crossing boundary.
         req = SstPartitionerRequest {
             prev_user_key: b"aaa",
@@ -195,7 +227,7 @@ mod tests {
             guard.should_partition(&req),
             SstPartitionerResult::NotRequired
         );
-        assert_eq!(guard.pos.get(), 0);
+        assert_eq!(guard.pos, 0);
         // Move position
         req = SstPartitionerRequest {
             prev_user_key: b"cca",
@@ -203,13 +235,19 @@ mod tests {
             current_output_file_size: 32 << 20,
         };
         assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
-        assert_eq!(guard.pos.get(), 1);
+        assert_eq!(guard.pos, 1);
     }
 
     #[test]
     fn test_compaction_guard_should_partition_binary_search() {
         let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
+            smallest_key: vec![],
+            largest_key: vec![],
+            min_output_file_size: 8 << 20, // 8MB
+            provider: MockRegionInfoProvider::new(vec![]),
+            initialized: true,
+            use_guard: true,
             boundaries: vec![
                 b"aaa00".to_vec(),
                 b"aaa01".to_vec(),
@@ -228,20 +266,19 @@ mod tests {
                 b"aaa14".to_vec(),
                 b"aaa15".to_vec(),
             ],
-            min_output_file_size: 8 << 20, // 8MB
-            pos: Cell::new(0),
+            pos: 0,
         };
         // Binary search meet exact match.
-        guard.pos.set(0);
+        guard.pos = 0;
         let mut req = SstPartitionerRequest {
             prev_user_key: b"aaa12",
             current_user_key: b"aaa131",
             current_output_file_size: 32 << 20,
         };
         assert_eq!(guard.should_partition(&req), SstPartitionerResult::Required);
-        assert_eq!(guard.pos.get(), 13);
+        assert_eq!(guard.pos, 13);
         // Binary search doesn't find exact match.
-        guard.pos.set(0);
+        guard.pos = 0;
         req = SstPartitionerRequest {
             prev_user_key: b"aaa121",
             current_user_key: b"aaa122",
@@ -251,7 +288,7 @@ mod tests {
             guard.should_partition(&req),
             SstPartitionerResult::NotRequired
         );
-        assert_eq!(guard.pos.get(), 13);
+        assert_eq!(guard.pos, 13);
     }
 
     const MIN_OUTPUT_FILE_SIZE: u64 = 1024;
