@@ -877,3 +877,92 @@ fn test_old_value_basic() {
     event_feed_wrap.as_ref().replace(None);
     suite.stop();
 }
+
+#[test]
+fn test_old_value_multi_changefeeds() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (req_tx_1, event_feed_wrap_1, receive_event_1) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx_1 = req_tx_1
+        .send((req.clone(), WriteFlags::default()))
+        .wait()
+        .unwrap();
+
+    req.set_extra_op(ExtraOp::Noop);
+    let (req_tx_2, event_feed_wrap_2, receive_event_2) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx_2 = req_tx_2.send((req, WriteFlags::default())).wait().unwrap();
+
+    sleep_ms(1000);
+    // Insert value
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    let ts1 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
+    let ts2 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
+    // Update value
+    let mut m2 = Mutation::default();
+    m2.set_op(Op::Put);
+    m2.key = k1.clone();
+    m2.value = vec![b'3'; 5120];
+    let ts3 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
+    let ts4 = suite.cluster.pd_client.get_tso().wait().unwrap();
+    suite.must_kv_commit(1, vec![k1], ts3, ts4);
+    let mut event_count = 0;
+    loop {
+        let events = receive_event_1(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Prewrite {
+                            if row.get_start_ts() == ts3.into_inner() {
+                                assert_eq!(row.get_old_value(), b"v1");
+                                event_count += 1;
+                            } else {
+                                assert_eq!(row.get_old_value(), b"");
+                                event_count += 1;
+                            }
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        if event_count >= 2 {
+            break;
+        }
+    }
+
+    event_count = 0;
+    loop {
+        let events = receive_event_2(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Prewrite {
+                            assert_eq!(row.get_old_value(), b"");
+                            event_count += 1;
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        if event_count >= 2 {
+            break;
+        }
+    }
+
+    event_feed_wrap_1.replace(None);
+    event_feed_wrap_2.replace(None);
+    suite.stop();
+}

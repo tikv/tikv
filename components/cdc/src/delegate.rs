@@ -80,6 +80,7 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
+    enable_old_value: bool,
 }
 
 impl Downstream {
@@ -92,6 +93,7 @@ impl Downstream {
         region_epoch: RegionEpoch,
         req_id: u64,
         conn_id: ConnID,
+        enable_old_value: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamID::new(),
@@ -101,6 +103,7 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            enable_old_value,
         }
     }
 
@@ -362,13 +365,20 @@ impl Delegate {
             self.region_id,
             change_data_event,
         );
-        for i in 0..downstreams.len() - 1 {
+        for i in 0..downstreams.len() {
             if normal_only && downstreams[i].state.load() != DownstreamState::Normal {
                 continue;
             }
-            downstreams[i].sink_event(change_data_event.clone());
+            let mut event = change_data_event.clone();
+            if !downstreams[i].enable_old_value && self.txn_extra_op == TxnExtraOp::ReadOldValue {
+                if let Some(Event_oneof_event::Entries(ref mut entries)) = event.event {
+                    for entry in entries.mut_entries().iter_mut() {
+                        entry.mut_old_value().clear();
+                    }
+                }
+            }
+            downstreams[i].sink_event(event);
         }
-        downstreams.last().unwrap().sink_event(change_data_event);
     }
 
     /// Install a resolver and return pending downstreams.
@@ -802,7 +812,7 @@ mod tests {
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
         delegate.subscribe(downstream);
@@ -936,7 +946,7 @@ mod tests {
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
         let mut downstream =
-            Downstream::new(String::new(), region_epoch, request_id, ConnID::new());
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
         let downstream_id = downstream.get_id();
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id);
