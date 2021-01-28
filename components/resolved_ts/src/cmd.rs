@@ -89,55 +89,47 @@ impl ChangeLog {
     fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
         changes
             .into_iter()
-            .map(|(key, row)| {
-                if row.write.is_some() {
-                    let (mut commit_ts, write) = row.write.unwrap().into_put();
-                    if let Some(write) = decode_write(key.as_encoded(), &write, true) {
-                        let value = row.default.map(|v| v.into_put().1);
+            .map(|(key, row)| match (row.write, row.lock, row.default) {
+                (Some(write_op), None, default) => {
+                    let (mut commit_ts, write) = write_op.into_put();
+                    decode_write(key.as_encoded(), &write, true).map(|write| {
+                        let value = default.map(|v| v.into_put().1);
                         if is_one_pc {
-                            Some(ChangeRow::OnePc {
+                            ChangeRow::OnePc {
                                 commit_ts: commit_ts.unwrap_or_default(),
                                 write,
                                 value,
                                 key,
-                            })
+                            }
                         } else {
                             if write.write_type == WriteType::Rollback {
                                 commit_ts = None;
                             }
-                            Some(ChangeRow::Commit {
+                            ChangeRow::Commit {
                                 key,
                                 commit_ts,
                                 write,
                                 lack_start_ts: false,
-                            })
-                        }
-                    } else {
-                        None
-                    }
-                } else if row.lock.is_some() {
-                    match row.lock.unwrap() {
-                        KeyOp::Put(_, lock) => {
-                            if let Some(lock) = decode_lock(key.as_encoded(), &lock) {
-                                let value = row.default.map(|v| v.into_put().1);
-                                Some(ChangeRow::Prewrite { key, lock, value })
-                            } else {
-                                None
                             }
                         }
-                        KeyOp::Delete => {
-                            let write = Write::new(WriteType::Rollback, TimeStamp::zero(), None);
-                            Some(ChangeRow::Commit {
-                                key,
-                                commit_ts: None,
-                                write,
-                                lack_start_ts: true,
-                            })
-                        }
-                    }
-                } else {
-                    panic!("")
+                    })
                 }
+                (None, Some(lock_op), default) => match lock_op {
+                    KeyOp::Put(_, lock) => decode_lock(key.as_encoded(), &lock).map(|lock| {
+                        let value = default.map(|v| v.into_put().1);
+                        ChangeRow::Prewrite { key, lock, value }
+                    }),
+                    KeyOp::Delete => {
+                        let write = Write::new(WriteType::Rollback, TimeStamp::zero(), None);
+                        Some(ChangeRow::Commit {
+                            key,
+                            commit_ts: None,
+                            write,
+                            lack_start_ts: true,
+                        })
+                    }
+                },
+                other => panic!("unexpected row pattern {:?}", other),
             })
             .filter_map(|v| v)
             .collect()
@@ -178,6 +170,7 @@ pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
     }
 }
 
+#[derive(Debug)]
 enum KeyOp {
     Put(Option<TimeStamp>, Vec<u8>),
     Delete,
