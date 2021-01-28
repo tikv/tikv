@@ -919,11 +919,7 @@ where
         }
     }
 
-    pub fn post_raft_ready_append(
-        &mut self,
-        ready: CollectedReady,
-        unsynced_version: Option<u64>,
-    ) {
+    pub fn post_raft_ready_append(&mut self, ready: CollectedReady, unsynced_version: Option<u64>) {
         if ready.ctx.region_id != self.fsm.region_id() {
             panic!(
                 "{} region id not matched: {} # {}",
