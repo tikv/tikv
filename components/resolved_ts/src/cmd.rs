@@ -92,7 +92,7 @@ impl ChangeLog {
         changes
             .into_iter()
             .map(|(key, row)| match (row.write, row.lock, row.default) {
-                (Some(KeyOp::Put(mut commit_ts, write)), None, default) => {
+                (Some(KeyOp::Put(mut commit_ts, write)), Some(KeyOp::Delete), default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
                         let Write {
                             short_value,
@@ -361,7 +361,6 @@ mod tests {
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
                         assert_eq!(start_ts.into_inner(), 4);
-                        assert!(value.is_none());
                         assert_eq!(value, Some(vec![b'v'; 512]));
                     }
                     _ => unreachable!(),
