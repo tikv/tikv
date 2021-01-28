@@ -24,7 +24,7 @@ use crate::master_key::{create_backend, Backend};
 use crate::metrics::*;
 use crate::{Error, Result};
 
-pub const KEY_DICT_NAME: &str = "key.dict";
+const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
 
@@ -121,6 +121,14 @@ impl Dicts {
             // ...else, return either error.
             (file_dict_file, key_bytes) => {
                 if let Err(key_err) = key_bytes {
+                    let (file_dict_file, file_dict) = file_dict_file.unwrap();
+                    if file_dict.files.is_empty() {
+                        std::fs::remove_file(file_dict_file.file_path())?;
+                        info!(
+                            "encryption: file dict is empty and none of key dictionary are found."
+                        );
+                        return Ok(None);
+                    }
                     error!("encryption: failed to load key dictionary.");
                     Err(key_err)
                 } else {
@@ -477,7 +485,6 @@ impl DataKeyManager {
             // Encryption is being enabled.
             (Ok(None), _) => {
                 info!("encryption is being enabled. method = {:?}", args.method);
-
                 Ok(LoadDicts::Loaded(Dicts::new(
                     &args.dict_path,
                     args.rotation_period,
