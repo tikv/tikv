@@ -403,6 +403,11 @@ mod tests {
                 Collation::Utf8Mb4GeneralCi,
                 Some(1),
             ),
+            (
+                vec![Some("🐰"), Some("🐇"), Some("🐻"), Some("🐰")],
+                Collation::Utf8Mb4UnicodeCi,
+                Some(1),
+            ),
         ];
 
         for (args, collation, expected) in cases {

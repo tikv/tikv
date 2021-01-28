@@ -2168,8 +2168,6 @@ impl TiKvConfig {
         self.readpool.validate()?;
         self.storage.validate()?;
 
-        self.raft_store.region_split_check_diff = self.coprocessor.region_split_size / 16;
-
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
                 .join(LAST_CONFIG_FILE)
@@ -3202,5 +3200,17 @@ mod tests {
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
+    }
+
+    #[test]
+    fn test_validate_tikv_config() {
+        let mut cfg = TiKvConfig::default();
+        let default_region_split_check_diff = cfg.raft_store.region_split_check_diff.0;
+        cfg.raft_store.region_split_check_diff.0 += 1;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(
+            cfg.raft_store.region_split_check_diff.0,
+            default_region_split_check_diff + 1
+        );
     }
 }

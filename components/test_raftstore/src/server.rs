@@ -207,7 +207,7 @@ impl Simulator for ServerCluster {
         };
         let import_service = ImportSSTService::new(
             cfg.import.clone(),
-            sim_router.clone(),
+            router.clone(),
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
             security_mgr.clone(),
