@@ -43,18 +43,18 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{set_io_rate_limiter, IOMeasure, IOOp, IORateLimiter, IOStats, IOType};
+    use file_system::{IOMeasure, IOOp, IORateLimiter, IOStats, IOType, WithIORateLimiter};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IOStats>) {
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IOStats>, WithIORateLimiter) {
         let limiter = Arc::new(IORateLimiter::new());
         limiter.enable_statistics(true);
         let stats = limiter.statistics();
-        set_io_rate_limiter(Some(limiter));
+        let guard = WithIORateLimiter::new(Some(limiter));
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
         let env = get_env(Some(Arc::new(EngineFileSystemInspector::new())), None).unwrap();
@@ -65,7 +65,7 @@ mod tests {
         let db = Arc::new(
             new_engine_opt(dir, db_opts, vec![CFOptions::new(CF_DEFAULT, cf_opts)]).unwrap(),
         );
-        (db, stats)
+        (db, stats, guard)
     }
 
     #[test]
@@ -76,7 +76,7 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let (db, stats) = new_test_db(temp_dir.path().to_str().unwrap());
+        let (db, stats, _guard) = new_test_db(temp_dir.path().to_str().unwrap());
         let value = vec![b'v'; value_size];
 
         db.put(&data_key(b"a1"), &value).unwrap();

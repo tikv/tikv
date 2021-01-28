@@ -154,14 +154,16 @@ impl RawIORateLimiter {
         // start from high priority
         let mut limit =
             self.priority_ios_per_sec[IOPriority::High as usize].load(Ordering::Relaxed);
-        self.priority_ios_through[IOPriority::High as usize].store(0, Ordering::Relaxed);
+        self.priority_ios_through[IOPriority::High as usize].store(0, Ordering::Release);
         let mut higher_priority_ios_through =
             cached_priority_ios_through[IOPriority::High as usize];
         for i in (0..IOPriority::VARIANT_COUNT - 1).rev() {
             limit = if limit > higher_priority_ios_through {
                 limit - higher_priority_ios_through
+            } else if limit == 0 {
+                0 // 0 means disabled
             } else {
-                10 // 0 means disabled
+                10 // a small positive value
             };
             self.priority_ios_per_sec[i].store(limit, Ordering::Relaxed);
             higher_priority_ios_through += cached_priority_ios_through[i];
@@ -328,6 +330,26 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
         Some(limiter.clone())
     } else {
         None
+    }
+}
+
+pub struct WithIORateLimiter {
+    previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
+}
+
+impl WithIORateLimiter {
+    pub fn new(limiter: Option<Arc<IORateLimiter>>) -> Self {
+        let previous_io_rate_limiter = get_io_rate_limiter();
+        set_io_rate_limiter(limiter);
+        WithIORateLimiter {
+            previous_io_rate_limiter,
+        }
+    }
+}
+
+impl Drop for WithIORateLimiter {
+    fn drop(&mut self) {
+        set_io_rate_limiter(self.previous_io_rate_limiter.take());
     }
 }
 

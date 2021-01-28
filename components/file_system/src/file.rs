@@ -214,7 +214,7 @@ mod tests {
         // make sure only grant 1 byte pre request, to avoid interference from prefetching
         limiter.set_io_rate_limit(IOMeasure::Bytes, 100);
         let stats = limiter.statistics();
-        set_io_rate_limiter(Some(limiter));
+        let _guard = WithIORateLimiter::new(Some(limiter));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
