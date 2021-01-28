@@ -3,13 +3,8 @@
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-<<<<<<< HEAD
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-=======
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
->>>>>>> 0fe01b8da... server: add server info metrics for DBasS (#9582)
 
 use futures::{Future, Stream};
 use grpcio::{
@@ -31,12 +26,8 @@ use tikv_util::worker::Worker;
 use tikv_util::Either;
 
 use super::load_statistics::*;
-<<<<<<< HEAD
-use super::raft_client::RaftClient;
-=======
 use super::metrics::SERVER_INFO_GAUGE_VEC;
-use super::raft_client::{ConnectionBuilder, RaftClient};
->>>>>>> 0fe01b8da... server: add server info metrics for DBasS (#9582)
+use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
