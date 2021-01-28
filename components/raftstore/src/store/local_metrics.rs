@@ -446,3 +446,95 @@ impl RaftMetrics {
         missing.clear();
     }
 }
+
+/// The buffered metrics counters for raft sync log event.
+#[derive(Clone)]
+pub struct SyncEvents {
+    pub sync_raftdb_count: u64,
+    pub sync_raftdb_reach_deadline: u64,
+    pub sync_raftdb_delay_cache_is_full: u64,
+    pub sync_raftdb_with_no_ready: u64,
+    pub sync_raftdb_skipped_count: u64,
+    pub sync_raftdb_peer_destroy: u64,
+}
+
+impl Default for SyncEvents {
+    fn default() -> SyncEvents {
+        SyncEvents {
+            sync_raftdb_count: 0,
+            sync_raftdb_reach_deadline: 0,
+            sync_raftdb_delay_cache_is_full: 0,
+            sync_raftdb_with_no_ready: 0,
+            sync_raftdb_skipped_count: 0,
+            sync_raftdb_peer_destroy: 0,
+        }
+    }
+}
+
+impl SyncEvents {
+    pub fn on_peer_destroy_sync(&mut self) {
+        self.sync_raftdb_peer_destroy += 1;
+        self.sync_raftdb_count += 1;
+    }
+
+    fn flush(&mut self) {
+        if self.sync_raftdb_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_count"])
+                .inc_by(self.sync_raftdb_count as i64);
+            self.sync_raftdb_count = 0;
+        }
+        if self.sync_raftdb_reach_deadline > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline"])
+                .inc_by(self.sync_raftdb_reach_deadline as i64);
+            self.sync_raftdb_reach_deadline = 0;
+        }
+        if self.sync_raftdb_delay_cache_is_full > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_delay_cache_is_full"])
+                .inc_by(self.sync_raftdb_delay_cache_is_full as i64);
+            self.sync_raftdb_delay_cache_is_full = 0;
+        }
+        if self.sync_raftdb_with_no_ready > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline_no_ready"])
+                .inc_by(self.sync_raftdb_with_no_ready as i64);
+            self.sync_raftdb_with_no_ready = 0;
+        }
+        if self.sync_raftdb_skipped_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["raftdb_skipped_sync_count"])
+                .inc_by(self.sync_raftdb_skipped_count as i64);
+            self.sync_raftdb_skipped_count = 0;
+        }
+        if self.sync_raftdb_peer_destroy > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_peer_destroy"])
+                .inc_by(self.sync_raftdb_peer_destroy as i64);
+            self.sync_raftdb_peer_destroy = 0;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SyncEventMetrics {
+    pub thread_check_delay: LocalHistogram,
+    pub sync_events: SyncEvents,
+}
+
+impl Default for SyncEventMetrics {
+    fn default() -> SyncEventMetrics {
+        SyncEventMetrics {
+            thread_check_delay: PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM.local(),
+            sync_events: Default::default(),
+        }
+    }
+}
+
+impl SyncEventMetrics {
+    pub fn flush(&mut self) {
+        self.thread_check_delay.flush();
+        self.sync_events.flush();
+    }
+}

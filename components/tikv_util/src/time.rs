@@ -181,7 +181,10 @@ pub use self::inner::monotonic_now;
 pub use self::inner::monotonic_raw_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-const MILLISECOND_PER_SECOND: i64 = 1_000;
+const MACROSECONDS_PER_SECOND: i64 = 1_000_000;
+const MILLISECONDS_PER_SECOND: i64 = 1_000;
+
+const NANOSECONDS_PER_MACROSECOND: i64 = 1_000;
 const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
@@ -325,9 +328,9 @@ impl Instant {
     // Use millisecond resolution for ignoring the error.
     // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
-        let later_ms = later.sec * MILLISECOND_PER_SECOND
+        let later_ms = later.sec * MILLISECONDS_PER_SECOND
             + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
-        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND
+        let earlier_ms = earlier.sec * MILLISECONDS_PER_SECOND
             + i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;
         let dur = later_ms - earlier_ms;
         if dur >= 0 {
@@ -340,6 +343,14 @@ impl Instant {
             );
             Duration::from_millis(0)
         }
+    }
+
+    pub fn to_microsec(&self) -> i64 {
+        let ts = match *self {
+            Instant::Monotonic(ts) => ts,
+            Instant::MonotonicCoarse(ts) => ts,
+        };
+        ts.sec * MACROSECONDS_PER_SECOND + i64::from(ts.nsec) / NANOSECONDS_PER_MACROSECOND
     }
 }
 

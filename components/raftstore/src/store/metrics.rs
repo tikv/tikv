@@ -478,6 +478,22 @@ lazy_static! {
         "Total memory size of raft entries caches."
         ).unwrap();
 
+    pub static ref SYNC_EVENTS: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_sync_events",
+            "Counts of raftstore sync events.",
+            &["event"]
+        )
+        .unwrap();
+
+    pub static ref PEER_THREAD_CHECK_SYNC_DELAY_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_thread_check_sync_delay_microseconds",
+            "Bucketed histogram of sync log in idle stat interval",
+            // 100us ~ 100s
+            exponential_buckets(100.0, 2.0, 21).unwrap()
+        ).unwrap();
+
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_apply_pending_bytes",
         "The bytes pending in the channel of apply FSMs."

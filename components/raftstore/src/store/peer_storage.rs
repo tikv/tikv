@@ -1454,7 +1454,6 @@ where
             }
         }
 
-        self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
         self.set_region(snap_region);
 

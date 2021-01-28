@@ -476,6 +476,7 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
+            self.fsm.has_ready |= self.fsm.peer.check_new_persisted();
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -918,7 +919,11 @@ where
         }
     }
 
-    pub fn post_raft_ready_append(&mut self, ready: CollectedReady) {
+    pub fn post_raft_ready_append(
+        &mut self,
+        ready: CollectedReady,
+        unsynced_version: Option<u64>,
+    ) {
         if ready.ctx.region_id != self.fsm.region_id() {
             panic!(
                 "{} region id not matched: {} # {}",
@@ -931,7 +936,7 @@ where
         let res = self.fsm.peer.post_raft_ready_append(self.ctx, ready.ctx);
         self.fsm
             .peer
-            .handle_raft_ready_advance(self.ctx, ready.ready);
+            .handle_raft_ready_advance(self.ctx, ready.ready, unsynced_version);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             if is_merging {
@@ -1690,7 +1695,7 @@ where
         // After the applying snapshot is finished, the log may able to catch up and so a
         // CommitMerge will be applied.
         // 2. There is a CommitMerge pending in apply thread.
-        let ready = !self.fsm.peer.is_applying_snapshot()
+        let ready = !self.fsm.peer.is_applying_snapshot_strictly()
             && !self.fsm.peer.has_pending_snapshot()
             // It must be ensured that all logs have been applied.
             // Suppose apply fsm is applying a `CommitMerge` log and this snapshot is generated after
@@ -1908,6 +1913,12 @@ where
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        self.ctx
+            .sync_policy
+            .metrics
+            .sync_events
+            .on_peer_destroy_sync();
+
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
@@ -2867,7 +2878,7 @@ where
                 );
             }
         }
-        if self.fsm.peer.is_applying_snapshot() {
+        if self.fsm.peer.is_applying_snapshot_strictly() {
             panic!(
                 "{} is applying snapshot on getting merge result, target region id {}, target peer {:?}, merge result type {:?}",
                 self.fsm.peer.tag, target_region_id, target, result
@@ -3210,7 +3221,7 @@ where
         }
         // If the peer is applying snapshot, it may drop some sending messages, that could
         // make clients wait for response until timeout.
-        if self.fsm.peer.is_applying_snapshot() {
+        if self.fsm.peer.is_applying_snapshot_strictly() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(
@@ -3700,7 +3711,7 @@ where
 
         self.register_check_peer_stale_state_tick();
 
-        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
+        if self.fsm.peer.is_applying_snapshot_strictly() || self.fsm.peer.has_pending_snapshot() {
             return;
         }
 

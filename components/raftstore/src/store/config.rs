@@ -27,6 +27,9 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    // delay time of raft db sync (us).
+    #[config(skip)]
+    pub delay_sync_us: u64,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -191,6 +194,7 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
+            delay_sync_us: 0,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -407,7 +411,15 @@ impl Config {
         Ok(())
     }
 
+    pub fn delay_sync_enabled(&self) -> bool {
+        self.delay_sync_us != 0
+    }
+
     pub fn write_into_metrics(&self) {
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["delay_sync_us"])
+            .set((self.delay_sync_us as i32).into());
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());

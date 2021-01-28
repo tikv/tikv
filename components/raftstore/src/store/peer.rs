@@ -473,13 +473,18 @@ where
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
-    /// The number of the last unpersisted ready.
-    last_unpersisted_number: u64,
-
     /// The number of pending pd heartbeat tasks. Pd heartbeat task may be blocked by
     /// reading rocksdb. To avoid unnecessary io operations, we always let the later
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
+
+    /// The number of unpersisted readies: (ready number, the max number of following ready
+    /// whose must-sync is false)
+    unpersisted_numbers: VecDeque<(u64, u64)>,
+    /// (The number of ready which has a snapshot, Whether this snapshot is scheduled)
+    snapshot_ready_status: (u64, bool),
+    /// Outside code use it to notify the latest persisted number to this peer.
+    persisted_notifier: Arc<AtomicU64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -571,8 +576,10 @@ where
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             max_ts_sync_status: Arc::new(AtomicU64::new(0)),
             cmd_epoch_checker: Default::default(),
-            last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
+            unpersisted_numbers: VecDeque::default(),
+            snapshot_ready_status: (0, false),
+            persisted_notifier: Arc::new(AtomicU64::new(0)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -958,6 +965,11 @@ where
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         self.get_store().is_applying_snapshot()
+    }
+
+    #[inline]
+    pub fn is_applying_snapshot_strictly(&self) -> bool {
+        self.snapshot_ready_status.0 != 0 || self.get_store().is_applying_snapshot()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
@@ -1436,7 +1448,7 @@ where
             && self.pending_merge_state.is_none()
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
-            && !self.is_applying_snapshot()
+            && !self.is_applying_snapshot_strictly()
     }
 
     #[inline]
@@ -1499,12 +1511,22 @@ where
             && !self.replication_sync
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-    ) -> Option<CollectedReady> {
-        if self.pending_remove {
-            return None;
+    /// Check the current snapshot status.
+    /// Returns whether it's valid to handle raft ready.
+    ///
+    /// The snapshot process order would be:
+    /// 1.  Get the snapshot from the ready
+    /// 2.  If this ready is persisted in this loop, jump to step 4(`handle_raft_ready_advance`)
+    /// 3.  Wait for the notify of persisting this ready through `check_new_persisted`
+    /// 4.  Schedule the snapshot task to region worker through `schedule_applying_snapshot`
+    /// 4.  Wait for applying snapshot to complete(`check_snap_status`)
+    /// Then it's valid to handle the next ready.
+    fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+        if self.snapshot_ready_status.0 != 0 && !self.snapshot_ready_status.1 {
+            // There is a snapshot from ready but it is not scheduled because the ready has
+            // not been persisted yet. We should wait for the notify of persisting ready and
+            // do not get a new ready.
+            return false;
         }
         match self.mut_store().check_applying_snap() {
             CheckApplyingSnapStatus::Applying => {
@@ -1524,15 +1546,49 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
-                return None;
+                return false;
             }
             CheckApplyingSnapStatus::Success => {
                 self.post_pending_read_index_on_replica(ctx);
-                // If there is a snapshot, it must belongs to the last ready.
-                self.raft_group
-                    .on_persist_ready(self.last_unpersisted_number);
+
+                if self.snapshot_ready_status.0 != 0 {
+                    // This snapshot must be scheduled
+                    assert!(self.snapshot_ready_status.1);
+
+                    self.raft_group
+                        .on_persist_ready(self.snapshot_ready_status.0);
+
+                    self.snapshot_ready_status = (0, false);
+
+                    // Snapshot's has been applied.
+                    self.last_applying_idx = self.get_store().truncated_index();
+                    self.raft_group.advance_apply_to(self.last_applying_idx);
+                    self.cmd_epoch_checker.advance_apply(
+                        self.last_applying_idx,
+                        self.term(),
+                        self.raft_group.store().region(),
+                    );
+                }
+                // If `snapshot_ready_status.0` is 0, it means this snapshot does not
+                // come from the ready but comes from the unfinished snapshot task
+                // after restarting.
             }
             CheckApplyingSnapStatus::Idle => {}
+        }
+        assert_eq!(self.snapshot_ready_status, (0, false));
+        true
+    }
+
+    pub fn handle_raft_ready_append<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> Option<CollectedReady> {
+        if self.pending_remove {
+            return None;
+        }
+
+        if !self.check_snap_status(ctx) {
+            return None;
         }
 
         let mut destroy_regions = vec![];
@@ -1543,9 +1599,19 @@ where
                     "not ready to apply snapshot";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
-                    "apply_index" => self.get_store().applied_index(),
+                    "applied_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
                     "pending_request_snapshot_count" => count,
+                );
+                return None;
+            }
+
+            if !self.unpersisted_numbers.is_empty() {
+                debug!(
+                    "not ready to apply snapshot because some unpersisted readies have not persisted yet";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "unpersisted_numbers" => ?self.unpersisted_numbers,
                 );
                 return None;
             }
@@ -1602,8 +1668,6 @@ where
         );
 
         let mut ready = self.raft_group.ready();
-
-        self.last_unpersisted_number = ready.number();
 
         if !ready.must_sync() {
             // If this ready need not to sync, the term, vote must not be changed,
@@ -1706,7 +1770,7 @@ where
         committed_entries: Vec<Entry>,
     ) {
         assert!(
-            !self.is_applying_snapshot(),
+            !self.is_applying_snapshot_strictly(),
             "{} is applying snapshot when it is ready to handle committed entries",
             self.tag
         );
@@ -1791,49 +1855,136 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         ready: Ready,
+        unsynced_version: Option<u64>,
     ) {
-        assert_eq!(ready.number(), self.last_unpersisted_number);
+        let is_synced = if let Some(version) = unsynced_version {
+            if ready.must_sync() {
+                ctx.sync_policy.mark_ready_unsynced(
+                    ready.number(),
+                    self.region_id,
+                    self.persisted_notifier.clone(),
+                    version,
+                );
+                self.unpersisted_numbers
+                    .push_back((ready.number(), ready.number()));
+                false
+            } else if let Some(last) = self.unpersisted_numbers.back_mut() {
+                // Attach to the last unpersisted ready so that it can be considered to be
+                // persisted with the last ready at the same time.
+                last.1 = ready.number();
+                false
+            } else {
+                // If this ready need not to be synced and there is no previous unpersisted ready,
+                // we can safely consider it is persisted and call `advance_append` latter.
+                // It's probably the case that the follower of a cold region receives a heartbeat.
+                true
+            }
+        } else {
+            true
+        };
+
+        if is_synced {
+            self.unpersisted_numbers.clear();
+            self.persisted_notifier
+                .store(ready.number(), Ordering::Release);
+        }
+
         if !ready.snapshot().is_empty() {
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
+            assert!(ready.must_sync());
+
+            if is_synced {
+                self.mut_store().schedule_applying_snapshot();
+            }
+            // If `is_synced` is false, the snapshot will be scheduled after
+            // persisting this ready.
+            self.snapshot_ready_status = (ready.number(), is_synced);
+            // Although `is_synced` may be true, `advance_append_async` must be called
+            // because the snapshot has not applied yet.
             self.raft_group.advance_append_async(ready);
-            // Because we only handle raft ready when not applying snapshot, so following
-            // line won't be called twice for the same snapshot.
-            self.raft_group.advance_apply_to(self.last_applying_idx);
-            self.cmd_epoch_checker.advance_apply(
-                self.last_applying_idx,
-                self.term(),
-                self.raft_group.store().region(),
+        } else if !is_synced {
+            self.raft_group.advance_append_async(ready);
+        } else {
+            let mut light_rd = self.raft_group.advance_append(ready);
+
+            self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+
+            if let Some(commit_index) = light_rd.commit_index() {
+                let pre_commit_index = self.get_store().commit_index();
+                assert!(commit_index >= pre_commit_index);
+                // No need to persist the commit index but the one in memory
+                // (i.e. commit of hardstate in PeerStorage) should be updated.
+                self.mut_store().set_commit_index(commit_index);
+                if self.is_leader() {
+                    self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+                }
+            }
+
+            if !light_rd.messages().is_empty() {
+                if !self.is_leader() {
+                    fail_point!("raft_before_follower_send");
+                }
+                for vec_msg in light_rd.take_messages() {
+                    self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                }
+            }
+
+            if !light_rd.committed_entries().is_empty() {
+                self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+            }
+        }
+    }
+
+    /// Returns if there are new persisted readies.
+    pub fn check_new_persisted(&mut self) -> bool {
+        if self.unpersisted_numbers.is_empty() {
+            return false;
+        }
+        let number = self.persisted_notifier.load(Ordering::Acquire);
+        if number < self.unpersisted_numbers.front().unwrap().0 {
+            return false;
+        }
+        let last_unpersisted_number = self.unpersisted_numbers.back().unwrap().0;
+        assert!(
+            number <= last_unpersisted_number,
+            "{} persisted number {} > last_unpersisted_number {}, unpersisted numbers {:?}",
+            self.tag,
+            number,
+            last_unpersisted_number,
+            self.unpersisted_numbers
+        );
+        // There must be a match in `self.unpersisted_numbers`
+        let mut persisted_number = 0;
+        while let Some(v) = self.unpersisted_numbers.front() {
+            if number < v.0 {
+                break;
+            }
+            let v = self.unpersisted_numbers.pop_front().unwrap();
+            if number == v.0 {
+                persisted_number = v.1;
+                break;
+            }
+        }
+        if persisted_number == 0 {
+            panic!(
+                "{} no match of persisted number {}, unpersisted numbers {:?}",
+                self.tag, number, self.unpersisted_numbers
             );
-            return;
         }
 
-        let mut light_rd = self.raft_group.advance_append(ready);
+        if self.snapshot_ready_status.0 != 0 {
+            if self.unpersisted_numbers.is_empty() {
+                // Since the snapshot must belong to the last ready, if `unpersisted_numbers`
+                // is empty, it means this persisted number is the last one.
+                assert_eq!(self.snapshot_ready_status.0, number);
+                assert_eq!(self.snapshot_ready_status.1, false);
 
-        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
-
-        if let Some(commit_index) = light_rd.commit_index() {
-            let pre_commit_index = self.get_store().commit_index();
-            assert!(commit_index >= pre_commit_index);
-            // No need to persist the commit index but the one in memory
-            // (i.e. commit of hardstate in PeerStorage) should be updated.
-            self.mut_store().set_commit_index(commit_index);
-            if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, commit_index);
+                self.snapshot_ready_status.1 = true;
+                self.mut_store().schedule_applying_snapshot();
             }
-        }
-
-        if !light_rd.messages().is_empty() {
-            if !self.is_leader() {
-                fail_point!("raft_before_follower_send");
-            }
-            for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
-            }
-        }
-
-        if !light_rd.committed_entries().is_empty() {
-            self.handle_raft_committed_entries(ctx, light_rd.take_committed_entries());
+            false
+        } else {
+            self.raft_group.on_persist_ready(persisted_number);
+            true
         }
     }
 
@@ -1964,7 +2115,7 @@ where
     ) -> bool {
         let mut has_ready = false;
 
-        if self.is_applying_snapshot() {
+        if self.is_applying_snapshot_strictly() {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
@@ -2863,7 +3014,7 @@ where
             return;
         }
 
-        if self.is_applying_snapshot()
+        if self.is_applying_snapshot_strictly()
             || self.has_pending_snapshot()
             || msg.get_from() != self.leader_id()
         {

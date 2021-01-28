@@ -155,6 +155,7 @@ future-poll-size = 2
 hibernate-regions = false
 dev-assert = true
 perf-level = 5
+delay-sync-us = 1500
 
 [coprocessor]
 split-region-on-table = false
