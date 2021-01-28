@@ -145,31 +145,6 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
-const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
-
-pub struct EngineMetricsManager<R: RaftEngine> {
-    engines: Engines<RocksEngine, R>,
-    last_reset: Instant,
-}
-
-impl<R: RaftEngine> EngineMetricsManager<R> {
-    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
-        EngineMetricsManager {
-            engines,
-            last_reset: Instant::now(),
-        }
-    }
-
-    pub fn flush(&mut self, now: Instant) {
-        self.engines.kv.flush_metrics("kv");
-        self.engines.raft.flush_metrics("raft");
-        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            self.engines.kv.reset_statistics();
-            self.engines.raft.reset_statistics();
-            self.last_reset = now;
-        }
-    }
-}
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -888,14 +863,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let mut interval = GLOBAL_TIMER_HANDLE
             .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
             .compat();
-        let mut engine_task =
+        let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
-        let mut io_task = IOMetricsManager::new(fetcher);
+        let mut io_metrics = IOMetricsManager::new(fetcher);
         handle.spawn(async move {
             while let Some(Ok(_)) = interval.next().await {
                 let now = Instant::now();
-                engine_task.flush(now);
-                io_task.flush(now);
+                engine_metrics.flush(now);
+                io_metrics.flush(now);
             }
         });
     }
@@ -1193,5 +1168,31 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+
+pub struct EngineMetricsManager<R: RaftEngine> {
+    engines: Engines<RocksEngine, R>,
+    last_reset: Instant,
+}
+
+impl<R: RaftEngine> EngineMetricsManager<R> {
+    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
+        EngineMetricsManager {
+            engines,
+            last_reset: Instant::now(),
+        }
+    }
+
+    pub fn flush(&mut self, now: Instant) {
+        self.engines.kv.flush_metrics("kv");
+        self.engines.raft.flush_metrics("raft");
+        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+            self.engines.kv.reset_statistics();
+            self.engines.raft.reset_statistics();
+            self.last_reset = now;
+        }
     }
 }
