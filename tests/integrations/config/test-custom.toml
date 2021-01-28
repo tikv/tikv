@@ -97,6 +97,7 @@ replication-priority = "low"
 load-balance-priority = "low"
 import-priority = "low"
 export-priority = "low"
+other-priority = "low"
 
 [pd]
 endpoints = [

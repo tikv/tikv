@@ -257,6 +257,9 @@ pub struct IORateLimitConfig {
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub export_priority: IOPriority,
+    #[serde(with = "file_system::io_priority_serde")]
+    #[config(skip)]
+    pub other_priority: IOPriority,
 }
 
 impl Default for IORateLimitConfig {
@@ -271,6 +274,7 @@ impl Default for IORateLimitConfig {
             load_balance_priority: IOPriority::High,
             import_priority: IOPriority::High,
             export_priority: IOPriority::High,
+            other_priority: IOPriority::High,
         }
     }
 }
@@ -289,6 +293,7 @@ impl IORateLimitConfig {
         limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);
         limiter.set_io_priority(IOType::Import, self.import_priority);
         limiter.set_io_priority(IOType::Export, self.export_priority);
+        limiter.set_io_priority(IOType::Other, self.other_priority);
         limiter
     }
 }

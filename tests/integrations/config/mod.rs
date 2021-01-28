@@ -658,6 +658,7 @@ fn test_serde_custom_tikv_config() {
             load_balance_priority: IOPriority::Low,
             import_priority: IOPriority::Low,
             export_priority: IOPriority::Low,
+            other_priority: IOPriority::Low,
         },
     };
     value.coprocessor = CopConfig {
