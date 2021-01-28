@@ -6,7 +6,7 @@ use std::path::Path;
 
 use engine_rocks::RocksEngine;
 use engine_rocks::RocksSstReader;
-use engine_rocks::RocksSstWriter;
+pub use engine_rocks::RocksSstWriter;
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::KvEngine;
 use engine_traits::SstReader;
