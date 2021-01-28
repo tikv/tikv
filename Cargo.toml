@@ -247,10 +247,10 @@ members = [
   "components/file_system",
   "components/collections",
 
-  "tiflash-proxy",
+  "raftstore-proxy",
   "gen_ffi_interfaces"
 ]
-default-members = ["tiflash-proxy"]
+default-members = ["raftstore-proxy"]
 
 [profile.dev]
 opt-level = 0

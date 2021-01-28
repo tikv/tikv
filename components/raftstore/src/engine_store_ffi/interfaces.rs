@@ -315,12 +315,12 @@ pub mod root {
         }
         #[repr(C)]
         #[derive(Debug)]
-        pub struct TiFlashServer {
+        pub struct EngineStoreServerWrap {
             _unused: [u8; 0],
         }
         #[repr(u32)]
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-        pub enum TiFlashApplyRes {
+        pub enum EngineStoreApplyRes {
             None = 0,
             Persist = 1,
             NotFound = 2,
@@ -379,7 +379,7 @@ pub mod root {
         }
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-        pub enum TiFlashStatus {
+        pub enum EngineStoreServerStatus {
             Idle = 0,
             Running = 1,
             Stopped = 2,
@@ -402,6 +402,18 @@ pub mod root {
         pub struct CppStrWithView {
             pub inner: root::DB::RawCppPtr,
             pub view: root::DB::BaseBuffView,
+        }
+        #[repr(u8)]
+        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+        pub enum HttpRequestStatus {
+            Ok = 0,
+            ErrorParam = 1,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct HttpRequestRes {
+            pub status: root::DB::HttpRequestStatus,
+            pub res: root::DB::CppStrWithView,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -473,7 +485,7 @@ pub mod root {
         }
         #[repr(C)]
         #[derive(Debug)]
-        pub struct TiFlashRaftProxyHelperFFI {
+        pub struct RaftStoreProxyFFIHelper {
             pub proxy_ptr: root::DB::RaftStoreProxyPtr,
             pub fn_handle_get_proxy_status: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -526,53 +538,57 @@ pub mod root {
         pub struct EngineStoreServerHelper {
             pub magic_number: u32,
             pub version: u32,
-            pub inner: *mut root::DB::TiFlashServer,
+            pub inner: *mut root::DB::EngineStoreServerWrap,
             pub fn_gen_cpp_string: ::std::option::Option<
                 unsafe extern "C" fn(arg1: root::DB::BaseBuffView) -> root::DB::RawCppPtr,
             >,
             pub fn_handle_write_raft_cmd: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *const root::DB::TiFlashServer,
+                    arg1: *const root::DB::EngineStoreServerWrap,
                     arg2: root::DB::WriteCmdsView,
                     arg3: root::DB::RaftCmdHeader,
-                ) -> root::DB::TiFlashApplyRes,
+                ) -> root::DB::EngineStoreApplyRes,
             >,
             pub fn_handle_admin_raft_cmd: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *const root::DB::TiFlashServer,
+                    arg1: *const root::DB::EngineStoreServerWrap,
                     arg2: root::DB::BaseBuffView,
                     arg3: root::DB::BaseBuffView,
                     arg4: root::DB::RaftCmdHeader,
-                ) -> root::DB::TiFlashApplyRes,
+                ) -> root::DB::EngineStoreApplyRes,
             >,
             pub fn_atomic_update_proxy: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
-                    arg2: *mut root::DB::TiFlashRaftProxyHelperFFI,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    arg2: *mut root::DB::RaftStoreProxyFFIHelper,
                 ),
             >,
             pub fn_handle_destroy: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer, arg2: u64),
+                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap, arg2: u64),
             >,
             pub fn_handle_ingest_sst: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: root::DB::SSTViewVec,
                     arg3: root::DB::RaftCmdHeader,
-                ) -> root::DB::TiFlashApplyRes,
+                ) -> root::DB::EngineStoreApplyRes,
             >,
             pub fn_handle_check_terminated: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer) -> u8,
+                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap) -> u8,
             >,
             pub fn_handle_compute_store_stats: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer) -> root::DB::StoreStats,
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                ) -> root::DB::StoreStats,
             >,
-            pub fn_handle_get_tiflash_status: ::std::option::Option<
-                unsafe extern "C" fn(arg1: *mut root::DB::TiFlashServer) -> root::DB::TiFlashStatus,
+            pub fn_handle_get_engine_store_server_status: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                ) -> root::DB::EngineStoreServerStatus,
             >,
             pub fn_pre_handle_snapshot: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: root::DB::BaseBuffView,
                     arg3: u64,
                     arg4: root::DB::SSTViewVec,
@@ -582,20 +598,22 @@ pub mod root {
             >,
             pub fn_apply_pre_handled_snapshot: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: root::DB::RawVoidPtr,
                     arg3: root::DB::RawCppPtrType,
                 ),
             >,
-            pub fn_handle_get_table_sync_status: ::std::option::Option<
+            pub fn_handle_http_request: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
-                    arg2: u64,
-                ) -> root::DB::CppStrWithView,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    arg2: root::DB::BaseBuffView,
+                ) -> root::DB::HttpRequestRes,
             >,
+            pub fn_check_http_uri_available:
+                ::std::option::Option<unsafe extern "C" fn(arg1: root::DB::BaseBuffView) -> u8>,
             pub fn_gc_raw_cpp_ptr: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *mut root::DB::TiFlashServer,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: root::DB::RawVoidPtr,
                     arg3: root::DB::RawCppPtrType,
                 ),
@@ -611,7 +629,7 @@ pub mod root {
             >,
         }
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
-        pub const RAFT_STORE_PROXY_VERSION: u32 = 401005;
+        pub const RAFT_STORE_PROXY_VERSION: u32 = 401006;
     }
     pub type __builtin_va_list = [root::__va_list_tag; 1usize];
     #[repr(C)]

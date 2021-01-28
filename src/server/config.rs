@@ -64,8 +64,8 @@ pub struct Config {
     pub advertise_addr: String,
 
     pub engine_addr: String,
-    pub tiflash_version: String,
-    pub tiflash_git_hash: String,
+    pub engine_store_version: String,
+    pub engine_store_git_hash: String,
 
     // These are related to TiKV status.
     pub status_addr: String,
@@ -142,8 +142,8 @@ impl Default for Config {
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             engine_addr: "".to_string(),
-            tiflash_version: "".to_string(),
-            tiflash_git_hash: "".to_string(),
+            engine_store_version: "".to_string(),
+            engine_store_git_hash: "".to_string(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,

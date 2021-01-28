@@ -34,7 +34,7 @@ use crate::store::Callback;
 use crate::store::StoreInfo;
 use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 
-use crate::tiflash_ffi::get_engine_store_server_helper;
+use crate::engine_store_ffi::get_engine_store_server_helper;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use pd_client::metrics::*;

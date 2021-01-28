@@ -105,9 +105,6 @@ export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export PROMETHEUS_METRIC_NAME_PREFIX ?= tiflash_proxy_
-export ENGINE_LABEL_VALUE ?= tiflash
-
 export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
 export DOCKER_IMAGE_TAG ?= "latest"
 
@@ -143,14 +140,8 @@ all: format build test error-code
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
-build_by_type:
-	@echo prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}
-	@echo engine is ${ENGINE_LABEL_VALUE}
-	@echo profile is ${PROXY_PROFILE}
-	cargo build --no-default-features --features "${ENABLE_FEATURES}" --${BUILD_TYPE}
-
 build:
-	@export PROXY_PROFILE=debug; make build_by_type
+	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./build.sh
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -164,12 +155,6 @@ build:
 # enabled (the "sse" option)
 release:
 	./release.sh
-
-upload:
-	if [[ $(shell uname -s) == "Darwin" ]]; then \
-		export PROXY_GIT_HASH=$(shell git log -1 --format="%H"); \
-		curl -F builds/pingcap/tiflash-proxy/$${PROXY_GIT_HASH}/libtiflash_proxy.dylib=@target/debug/libtiflash_proxy.dylib http://fileserver.pingcap.net/upload; \
-	fi;
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.

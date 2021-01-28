@@ -39,7 +39,7 @@ fn gen_ffi_code() {
             Arg::with_name("ffi_tar_file")
                 .long("ffi_tar_file")
                 .help("Sets the target file path of generated FFI rust code")
-                .default_value("components/raftstore/src/tiflash_ffi/interfaces.rs")
+                .default_value("components/raftstore/src/engine_store_ffi/interfaces.rs")
                 .takes_value(true),
         )
         .get_matches();

@@ -258,12 +258,12 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
         config.server.advertise_status_addr = advertise_status_addr.to_owned();
     }
 
-    if let Some(tiflash_version) = matches.value_of("tiflash-version") {
-        config.server.tiflash_version = tiflash_version.to_owned();
+    if let Some(engine_store_version) = matches.value_of("engine-version") {
+        config.server.engine_store_version = engine_store_version.to_owned();
     }
 
-    if let Some(tiflash_git_hash) = matches.value_of("tiflash-git-hash") {
-        config.server.tiflash_git_hash = tiflash_git_hash.to_owned();
+    if let Some(engine_store_git_hash) = matches.value_of("engine-git-hash") {
+        config.server.engine_store_git_hash = engine_store_git_hash.to_owned();
     }
 
     if config.server.engine_addr.is_empty() {

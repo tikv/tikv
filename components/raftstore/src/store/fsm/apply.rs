@@ -63,9 +63,9 @@ use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{Error, Result};
 
 use super::metrics::*;
-use crate::tiflash_ffi::{
-    get_engine_store_server_helper, ColumnFamilyType, RaftCmdHeader, TiFlashApplyRes, WriteCmdType,
-    WriteCmds,
+use crate::engine_store_ffi::{
+    get_engine_store_server_helper, ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader,
+    WriteCmdType, WriteCmds,
 };
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -1157,7 +1157,7 @@ where
                 (
                     cmd_resp::new_error(e),
                     ApplyResult::None,
-                    TiFlashApplyRes::None,
+                    EngineStoreApplyRes::None,
                 )
             }
         };
@@ -1172,11 +1172,11 @@ where
         self.applied_index_term = term;
 
         let need_write_apply_state = match flash_res {
-            TiFlashApplyRes::Persist => true,
-            TiFlashApplyRes::NotFound => {
+            EngineStoreApplyRes::Persist => true,
+            EngineStoreApplyRes::NotFound => {
                 if req.has_admin_request() {
                     error!(
-                        "region not found in tiflash, maybe have exec `RemoveNode` first";
+                        "region not found in engine-store, maybe have exec `RemoveNode` first";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "term" => term,
@@ -1276,7 +1276,11 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>, TiFlashApplyRes)> {
+    ) -> Result<(
+        RaftCmdResponse,
+        ApplyResult<EK::Snapshot>,
+        EngineStoreApplyRes,
+    )> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1292,7 +1296,11 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>, TiFlashApplyRes)> {
+    ) -> Result<(
+        RaftCmdResponse,
+        ApplyResult<EK::Snapshot>,
+        EngineStoreApplyRes,
+    )> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
 
@@ -1349,7 +1357,7 @@ where
         }
 
         let flash_res = if let ApplyResult::WaitMergeSource(_) = &exec_result {
-            TiFlashApplyRes::None
+            EngineStoreApplyRes::None
         } else {
             // hacked by solotzg.
             get_engine_store_server_helper().handle_admin_raft_cmd(
@@ -1364,7 +1372,7 @@ where
         };
 
         match flash_res {
-            TiFlashApplyRes::None => {
+            EngineStoreApplyRes::None => {
                 if cmd_type == AdminCmdType::CompactLog {
                     response = AdminResponse::new();
                     exec_result = ApplyResult::None;
@@ -1388,7 +1396,11 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK, W>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>, TiFlashApplyRes)> {
+    ) -> Result<(
+        RaftCmdResponse,
+        ApplyResult<EK::Snapshot>,
+        EngineStoreApplyRes,
+    )> {
         const NONE_STR: &str = "";
         let requests = req.get_requests();
         let mut ssts = vec![];
@@ -1398,7 +1410,7 @@ where
             match cmd_type {
                 CmdType::Put => {
                     let put = req.get_put();
-                    let cf = crate::tiflash_ffi::name_to_cf(put.get_cf());
+                    let cf = crate::engine_store_ffi::name_to_cf(put.get_cf());
                     let (key, value) = (put.get_key(), put.get_value());
                     if cf != ColumnFamilyType::Lock {
                         self.metrics.size_diff_hint += key.len() as i64 + value.len() as i64;
@@ -1409,7 +1421,7 @@ where
                 }
                 CmdType::Delete => {
                     let del = req.get_delete();
-                    let cf = crate::tiflash_ffi::name_to_cf(del.get_cf());
+                    let cf = crate::engine_store_ffi::name_to_cf(del.get_cf());
                     let key = del.get_key();
                     if cf != ColumnFamilyType::Lock {
                         self.metrics.size_diff_hint -= key.len() as i64;
@@ -1423,7 +1435,7 @@ where
                     ssts.push(req.get_ingest_sst().get_sst().clone());
                 }
                 CmdType::Snap | CmdType::Get | CmdType::DeleteRange => {
-                    // tiflash will drop table, no need DeleteRange
+                    // engine-store will drop table, no need DeleteRange
                     continue;
                 }
                 CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
@@ -1434,8 +1446,8 @@ where
 
         return if !ssts.is_empty() {
             assert_eq!(cmds.len(), 0);
-            match self.handle_ingest_sst_for_tiflash(&ctx, &ssts) {
-                TiFlashApplyRes::None => {
+            match self.handle_ingest_sst_for_engine_store(&ctx, &ssts) {
+                EngineStoreApplyRes::None => {
                     self.pending_clean_ssts.append(&mut ssts);
                     info!(
                         "skip persist for ingest sst";
@@ -1449,10 +1461,10 @@ where
                     Ok((
                         RaftCmdResponse::new(),
                         ApplyResult::None,
-                        TiFlashApplyRes::None,
+                        EngineStoreApplyRes::None,
                     ))
                 }
-                TiFlashApplyRes::NotFound | TiFlashApplyRes::Persist => {
+                EngineStoreApplyRes::NotFound | EngineStoreApplyRes::Persist => {
                     ssts.append(&mut self.pending_clean_ssts);
                     info!(
                         "ingest sst success";
@@ -1466,7 +1478,7 @@ where
                     Ok((
                         RaftCmdResponse::new(),
                         ApplyResult::Res(ExecResult::IngestSst { ssts }),
-                        TiFlashApplyRes::Persist,
+                        EngineStoreApplyRes::Persist,
                     ))
                 }
             }
@@ -1647,11 +1659,11 @@ where
         Ok(resp)
     }
 
-    fn handle_ingest_sst_for_tiflash<W: WriteBatch<EK>>(
+    fn handle_ingest_sst_for_engine_store<W: WriteBatch<EK>>(
         &mut self,
         ctx: &ApplyContext<EK, W>,
         ssts: &Vec<SstMeta>,
-    ) -> TiFlashApplyRes {
+    ) -> EngineStoreApplyRes {
         let mut ssts_wrap = vec![];
         let mut sst_views = vec![];
 
@@ -1676,7 +1688,7 @@ where
 
             ssts_wrap.push((
                 ctx.importer.get_path(sst),
-                crate::tiflash_ffi::name_to_cf(sst.get_cf_name()),
+                crate::engine_store_ffi::name_to_cf(sst.get_cf_name()),
             ));
         }
 
@@ -3542,7 +3554,7 @@ where
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::LogsUpToDate(cul)) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Some(Msg::Noop) => {}
-                Some(Msg::Snapshot(_)) => unreachable!("should not request snapshot from tiflash"),
+                Some(Msg::Snapshot(_)) => unreachable!("should not request snapshot"),
                 Some(Msg::Change {
                     cmd,
                     region_epoch,

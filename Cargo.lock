@@ -3088,6 +3088,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "raftstore-proxy"
+version = "0.0.1"
+dependencies = [
+ "cmd",
+]
+
+[[package]]
 name = "rand"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4371,13 +4378,6 @@ dependencies = [
  "tipb_helper",
  "twoway",
  "uuid",
-]
-
-[[package]]
-name = "tiflash-proxy"
-version = "0.0.1"
-dependencies = [
- "cmd",
 ]
 
 [[package]]

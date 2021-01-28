@@ -5,7 +5,9 @@ use std::process;
 
 use crate::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use clap::{App, Arg};
-use raftstore::tiflash_ffi::{get_engine_store_server_helper, init_engine_store_server_helper};
+use raftstore::engine_store_ffi::{
+    get_engine_store_server_helper, init_engine_store_server_helper,
+};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use tikv::config::TiKvConfig;
@@ -30,8 +32,8 @@ pub unsafe fn run_proxy(
 
     get_engine_store_server_helper().check();
 
-    let matches = App::new("TiFlash Proxy")
-        .about("Proxy for TiFLash to connect TiKV cluster")
+    let matches = App::new("RaftStore Proxy")
+        .about("RaftStore proxy to connect TiKV cluster")
         .author("tongzhigao@pingcap.com")
         .version(crate::proxy_version_info().as_ref())
         .long_version(crate::proxy_version_info().as_ref())
@@ -163,16 +165,16 @@ pub unsafe fn run_proxy(
                 ),
         )
         .arg(
-            Arg::with_name("tiflash-version")
-                .long("tiflash-version")
-                .help("Set tiflash version")
+            Arg::with_name("engine-version")
+                .long("engine-version")
+                .help("Set engine version")
                 .required(true)
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("tiflash-git-hash")
-                .long("tiflash-git-hash")
-                .help("Set tiflash git hash")
+            Arg::with_name("engine-git-hash")
+                .long("engine-git-hash")
+                .help("Set engine git hash")
                 .required(true)
                 .takes_value(true),
         )

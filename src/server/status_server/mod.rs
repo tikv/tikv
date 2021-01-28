@@ -42,7 +42,7 @@ use crate::config::{log_level_serde, ConfigController};
 use collections::HashMap;
 use configuration::Configuration;
 use pd_client::RpcClient;
-use raftstore::tiflash_ffi::get_engine_store_server_helper;
+use raftstore::engine_store_ffi::{get_engine_store_server_helper, HttpRequestStatus};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::logger::set_log_level;
@@ -687,11 +687,7 @@ where
         ))
     }
 
-    pub async fn sync_status(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        lazy_static! {
-            static ref TABLE: Regex = Regex::new(r"/tiflash/sync-status/(?P<id>\d+)").unwrap();
-        }
-
+    pub async fn handle_http_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
         fn err_resp(
             status_code: StatusCode,
             msg: impl Into<Body>,
@@ -699,28 +695,15 @@ where
             Ok(StatusServer::err_response(status_code, msg))
         }
 
-        let vars = match TABLE.captures(req.uri().path()) {
-            Some(vars) => vars,
-            None => {
-                return err_resp(
-                    StatusCode::NOT_FOUND,
-                    format!("path {} not found", req.uri().path()),
-                )
-            }
-        };
+        let res = get_engine_store_server_helper().handle_http_request(req.uri().path());
+        if res.status != HttpRequestStatus::Ok {
+            return err_resp(
+                StatusCode::BAD_REQUEST,
+                format!("error uri path: {}", req.uri().path()),
+            );
+        }
 
-        let table_id: u64 = match vars["id"].parse() {
-            Ok(table_id) => table_id,
-            Err(err) => {
-                return err_resp(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid table id: {}", err),
-                );
-            }
-        };
-
-        let status = get_engine_store_server_helper().handle_get_table_sync_status(table_id);
-        let data = status.view.to_slice().to_vec();
+        let data = res.res.view.to_slice().to_vec();
 
         match Response::builder().body(hyper::Body::from(data)) {
             Ok(resp) => Ok(resp),
@@ -801,13 +784,18 @@ where
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
                             }
-                            (Method::GET, path) if path.starts_with("/tiflash/sync-status") => {
-                                Self::sync_status(req).await
-                            }
                             (Method::GET, "/thread_stats") => Self::thread_stats(req).await,
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
+
+                            (Method::GET, path)
+                                if get_engine_store_server_helper()
+                                    .check_http_uri_available(path) =>
+                            {
+                                Self::handle_http_request(req).await
+                            }
+
                             _ => Ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
                                 "path not found",

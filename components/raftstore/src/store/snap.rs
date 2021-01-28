@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use crate::tiflash_ffi;
+use crate::engine_store_ffi;
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
@@ -359,7 +359,7 @@ pub struct PreHandledSnapshot {
     pub empty: bool,
     pub index: u64,
     pub term: u64,
-    pub inner: tiflash_ffi::RawCppPtr,
+    pub inner: engine_store_ffi::RawCppPtr,
 }
 
 unsafe impl Send for PreHandledSnapshot {}
@@ -376,7 +376,7 @@ impl LockCFFileReader {
     pub fn ffi_get_cf_file_reader(
         path: &str,
         key_mgr: Option<&Arc<DataKeyManager>>,
-    ) -> tiflash_ffi::RawVoidPtr {
+    ) -> engine_store_ffi::RawVoidPtr {
         let file = File::open(path).unwrap();
         let mut decoder: LockCFDecoder = if let Some(key_mgr) = key_mgr {
             let reader = get_decrypter_reader(path, key_mgr).unwrap();
@@ -398,12 +398,12 @@ impl LockCFFileReader {
         (!self.key.is_empty()) as u8
     }
 
-    pub fn ffi_key(&self) -> tiflash_ffi::BaseBuffView {
+    pub fn ffi_key(&self) -> engine_store_ffi::BaseBuffView {
         let ori_key = keys::origin_key(&self.key);
         ori_key.into()
     }
 
-    pub fn ffi_val(&self) -> tiflash_ffi::BaseBuffView {
+    pub fn ffi_val(&self) -> engine_store_ffi::BaseBuffView {
         self.val.as_slice().into()
     }
 
@@ -439,12 +439,12 @@ impl Snap {
 
             sst_views.push((
                 cf_file.path.to_str().unwrap().as_bytes(),
-                tiflash_ffi::name_to_cf(cf_file.cf),
+                engine_store_ffi::name_to_cf(cf_file.cf),
             ));
         }
         let empty = sst_views.is_empty();
 
-        let res = tiflash_ffi::get_engine_store_server_helper()
+        let res = engine_store_ffi::get_engine_store_server_helper()
             .pre_handle_snapshot(&region, peer_id, sst_views, index, term);
 
         PreHandledSnapshot {

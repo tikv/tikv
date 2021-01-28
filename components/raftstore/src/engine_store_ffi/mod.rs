@@ -18,18 +18,17 @@ use std::sync::Arc;
 pub use read_index_helper::{ReadIndex, ReadIndexClient};
 use std::borrow::Borrow;
 
-use crate::store::LockCFFileReader;
-use crate::tiflash_ffi;
-pub use crate::tiflash_ffi::interfaces::root::DB::{
-    BaseBuffView, ColumnFamilyType, CppStrVecView, CppStrWithView, EngineStoreServerHelper,
-    FileEncryptionRes, RaftCmdHeader, RaftProxyStatus, RawCppPtr, RawVoidPtr, SSTReaderPtr,
-    StoreStats, TiFlashApplyRes, TiFlashRaftProxyHelperFFI, TiFlashStatus, WriteCmdType,
-    WriteCmdsView,
+pub use crate::engine_store_ffi::interfaces::root::DB::{
+    BaseBuffView, ColumnFamilyType, CppStrVecView, EngineStoreApplyRes, EngineStoreServerHelper,
+    EngineStoreServerStatus, FileEncryptionRes, HttpRequestRes, HttpRequestStatus, RaftCmdHeader,
+    RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr, RawVoidPtr, SSTReaderPtr, StoreStats,
+    WriteCmdType, WriteCmdsView,
 };
-use crate::tiflash_ffi::interfaces::root::DB::{
+use crate::engine_store_ffi::interfaces::root::DB::{
     ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, SSTReaderInterfaces,
     SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER, RAFT_STORE_PROXY_VERSION,
 };
+use crate::store::LockCFFileReader;
 
 impl From<&[u8]> for BaseBuffView {
     fn from(s: &[u8]) -> Self {
@@ -362,9 +361,9 @@ unsafe extern "C" fn ffi_gc(reader: SSTReaderPtr, type_: ColumnFamilyType) {
     }
 }
 
-impl TiFlashRaftProxyHelperFFI {
+impl RaftStoreProxyFFIHelper {
     pub fn new(proxy: &RaftStoreProxy) -> Self {
-        TiFlashRaftProxyHelperFFI {
+        RaftStoreProxyFFIHelper {
             proxy_ptr: proxy.into(),
             fn_handle_get_proxy_status: Some(ffi_handle_get_proxy_status),
             fn_is_encryption_enabled: Some(ffi_is_encryption_enabled),
@@ -392,10 +391,7 @@ pub struct SSTFileReader {
 }
 
 impl SSTFileReader {
-    fn ffi_get_cf_file_reader(
-        path: &str,
-        key_manager: Option<Arc<DataKeyManager>>,
-    ) -> tiflash_ffi::RawVoidPtr {
+    fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
         let env = get_env(key_manager, None).unwrap();
         let sst_reader = RocksSstReader::open_with_env(path, Some(env)).unwrap();
         sst_reader.verify_checksum().unwrap();
@@ -409,12 +405,12 @@ impl SSTFileReader {
         self.remained as u8
     }
 
-    pub fn ffi_key(&self) -> tiflash_ffi::BaseBuffView {
+    pub fn ffi_key(&self) -> BaseBuffView {
         let ori_key = keys::origin_key(self.iter.key());
         ori_key.into()
     }
 
-    pub fn ffi_val(&self) -> tiflash_ffi::BaseBuffView {
+    pub fn ffi_val(&self) -> BaseBuffView {
         let val = self.iter.value();
         val.into()
     }
@@ -582,10 +578,6 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn handle_get_table_sync_status(&self, table_id: u64) -> CppStrWithView {
-        unsafe { (self.fn_handle_get_table_sync_status.into_inner())(self.inner, table_id) }
-    }
-
     pub fn handle_compute_store_stats(&self) -> StoreStats {
         unsafe { (self.fn_handle_compute_store_stats.into_inner())(self.inner) }
     }
@@ -594,7 +586,7 @@ impl EngineStoreServerHelper {
         &self,
         cmds: &WriteCmds,
         header: RaftCmdHeader,
-    ) -> TiFlashApplyRes {
+    ) -> EngineStoreApplyRes {
         unsafe {
             let res =
                 (self.fn_handle_write_raft_cmd.into_inner())(self.inner, cmds.gen_view(), header);
@@ -602,11 +594,11 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn handle_get_tiflash_status(&self) -> TiFlashStatus {
-        unsafe { (self.fn_handle_get_tiflash_status.into_inner())(self.inner).into() }
+    pub fn handle_get_engine_store_server_status(&self) -> EngineStoreServerStatus {
+        unsafe { (self.fn_handle_get_engine_store_server_status.into_inner())(self.inner).into() }
     }
 
-    pub fn handle_set_proxy(&self, proxy: *const TiFlashRaftProxyHelperFFI) {
+    pub fn handle_set_proxy(&self, proxy: *const RaftStoreProxyFFIHelper) {
         unsafe { (self.fn_atomic_update_proxy.into_inner())(self.inner, proxy as *mut _) }
     }
 
@@ -633,7 +625,7 @@ impl EngineStoreServerHelper {
         req: &raft_cmdpb::AdminRequest,
         resp: &raft_cmdpb::AdminResponse,
         header: RaftCmdHeader,
-    ) -> TiFlashApplyRes {
+    ) -> EngineStoreApplyRes {
         unsafe {
             let req = ProtoMsgBaseBuff::new(req);
             let resp = ProtoMsgBaseBuff::new(resp);
@@ -680,7 +672,7 @@ impl EngineStoreServerHelper {
         &self,
         snaps: Vec<(&[u8], ColumnFamilyType)>,
         header: RaftCmdHeader,
-    ) -> TiFlashApplyRes {
+    ) -> EngineStoreApplyRes {
         let snaps_view = into_sst_views(snaps);
         unsafe {
             let res =
@@ -709,5 +701,13 @@ impl EngineStoreServerHelper {
 
     fn insert_batch_read_index_resp(&self, data: RawVoidPtr, buf: BaseBuffView, region_id: u64) {
         unsafe { (self.fn_insert_batch_read_index_resp.into_inner())(data, buf, region_id) }
+    }
+
+    pub fn handle_http_request(&self, path: &str) -> HttpRequestRes {
+        unsafe { (self.fn_handle_http_request.into_inner())(self.inner, path.as_bytes().into()) }
+    }
+
+    pub fn check_http_uri_available(&self, path: &str) -> bool {
+        unsafe { (self.fn_check_http_uri_available.into_inner())(path.as_bytes().into()) != 0 }
     }
 }
