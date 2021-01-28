@@ -265,7 +265,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(key) = key.to_owned().into_raw() {
+                if let Ok(key) = key.to_raw() {
                     tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
                 }
 
@@ -477,7 +477,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 let mut key_ranges = vec![];
                 for key in &keys {
-                    if let Ok(key) = key.to_owned().into_raw() {
+                    if let Ok(key) = key.to_raw() {
                         key_ranges.push(build_key_range(&key, &key, false));
                     }
                 }
@@ -575,10 +575,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key.to_owned().into_raw() {
+                if let Ok(start_key) = start_key.to_raw() {
                     let mut key = vec![];
                     if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                        if let Ok(end_key) = end_key.to_raw() {
                             key = end_key;
                         }
                     }
@@ -711,7 +711,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let mut key = vec![];
                     if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                        if let Ok(end_key) = end_key.to_raw() {
                             key = end_key;
                         }
                     }

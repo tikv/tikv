@@ -98,7 +98,7 @@ fn test_scan_lock_push_async_commit() {
                 let mut req = RegisterLockObserverRequest::default();
                 req.set_max_ts(ts + 20);
                 let resp = client1.register_lock_observer(&req).unwrap();
-                assert_ne!(resp.error.len(), 0);
+                assert!(!resp.error.is_empty());
             } else {
                 let mut req = ScanLockRequest::default();
                 req.set_context(ctx1);

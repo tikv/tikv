@@ -1257,16 +1257,8 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let start_key = if req.get_start_key().is_empty() {
-        None
-    } else {
-        Some(Key::from_raw(req.get_start_key()))
-    };
-    let end_key = if req.get_end_key().is_empty() {
-        None
-    } else {
-        Some(Key::from_raw(req.get_end_key()))
-    };
+    let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan_lock(
         req.take_context(),
