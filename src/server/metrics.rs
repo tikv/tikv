@@ -232,6 +232,12 @@ lazy_static! {
         exponential_buckets(1f64, 5f64, 10).unwrap()
     )
     .unwrap();
+    pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_info",
+        "Indicate the tikv server info, and the value is the server startup timestamp(s).",
+        &["version", "hash"]
+    )
+    .unwrap();
 }
 
 make_static_metric! {
