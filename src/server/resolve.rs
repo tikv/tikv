@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use kvproto::metapb;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::router::RaftStoreRouter;
@@ -82,7 +81,14 @@ where
 
     fn get_address(&self, store_id: u64) -> Result<String> {
         let pd_client = Arc::clone(&self.pd_client);
-        let mut s = box_try!(pd_client.get_store(store_id));
+        let mut s = match pd_client.get_store(store_id) {
+            Ok(s) => s,
+            Err(pd_client::Error::StoreTombstone(_)) => {
+                RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
+                return Err(box_err!("store {} has been removed", store_id));
+            },
+            Err(e) => return Err(box_err!(e)),
+        };
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
         if state.status().get_mode() == ReplicationMode::DrAutoSync {
@@ -96,10 +102,6 @@ where
         drop(state);
         if let Some(group_id) = group_id {
             self.router.report_resolved(store_id, group_id);
-        }
-        if s.get_state() == metapb::StoreState::Tombstone {
-            RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
-            return Err(box_err!("store {} has been removed", store_id));
         }
         let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
