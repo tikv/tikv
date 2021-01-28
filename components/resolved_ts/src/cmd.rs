@@ -12,12 +12,14 @@ use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteTyp
 pub enum ChangeRow {
     Prewrite {
         key: Key,
-        lock: Lock,
+        start_ts: TimeStamp,
+        lock_type: LockType,
         value: Option<Value>,
     },
     Commit {
         key: Key,
-        write: Write,
+        write_type: WriteType,
+        start_ts: TimeStamp,
         commit_ts: Option<TimeStamp>,
         // In some cases a rollback will be done by just deleting the lock, need to lookup Resolver
         // to untrack lock and get start ts from it.
@@ -25,7 +27,7 @@ pub enum ChangeRow {
     },
     OnePc {
         key: Key,
-        write: Write,
+        write_type: WriteType,
         commit_ts: TimeStamp,
         value: Option<Value>,
     },
@@ -90,14 +92,19 @@ impl ChangeLog {
         changes
             .into_iter()
             .map(|(key, row)| match (row.write, row.lock, row.default) {
-                (Some(write_op), None, default) => {
-                    let (mut commit_ts, write) = write_op.into_put();
+                (Some(KeyOp::Put(mut commit_ts, write)), None, default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
-                        let value = default.map(|v| v.into_put().1);
+                        let Write {
+                            short_value,
+                            start_ts,
+                            write_type,
+                            ..
+                        } = write;
+                        let value = default.map_or_else(|| short_value, |v| Some(v.into_put().1));
                         if is_one_pc {
                             ChangeRow::OnePc {
                                 commit_ts: commit_ts.unwrap_or_default(),
-                                write,
+                                write_type,
                                 value,
                                 key,
                             }
@@ -108,27 +115,36 @@ impl ChangeLog {
                             ChangeRow::Commit {
                                 key,
                                 commit_ts,
-                                write,
+                                start_ts,
+                                write_type,
                                 lack_start_ts: false,
                             }
                         }
                     })
                 }
-                (None, Some(lock_op), default) => match lock_op {
-                    KeyOp::Put(_, lock) => decode_lock(key.as_encoded(), &lock).map(|lock| {
-                        let value = default.map(|v| v.into_put().1);
-                        ChangeRow::Prewrite { key, lock, value }
-                    }),
-                    KeyOp::Delete => {
-                        let write = Write::new(WriteType::Rollback, TimeStamp::zero(), None);
-                        Some(ChangeRow::Commit {
+                (None, Some(KeyOp::Put(_, lock)), default) => decode_lock(key.as_encoded(), &lock)
+                    .map(|lock| {
+                        let Lock {
+                            short_value,
+                            ts,
+                            lock_type,
+                            ..
+                        } = lock;
+                        let value = default.map_or_else(|| short_value, |v| Some(v.into_put().1));
+                        ChangeRow::Prewrite {
                             key,
-                            commit_ts: None,
-                            write,
-                            lack_start_ts: true,
-                        })
-                    }
-                },
+                            start_ts: ts,
+                            lock_type,
+                            value,
+                        }
+                    }),
+                (None, Some(KeyOp::Delete), _) => Some(ChangeRow::Commit {
+                    key,
+                    commit_ts: None,
+                    start_ts: TimeStamp::zero(),
+                    write_type: WriteType::Rollback,
+                    lack_start_ts: true,
+                }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
             .filter_map(|v| v)
@@ -279,56 +295,73 @@ mod tests {
             assert_eq!(rows.len(), 1);
             match i {
                 0 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite { key, lock, .. } => {
+                    ChangeRow::Prewrite {
+                        key,
+                        start_ts,
+                        value,
+                        ..
+                    } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(lock.ts.into_inner(), 1);
-                        assert_eq!(b"v1".to_vec(), lock.short_value.unwrap());
+                        assert_eq!(start_ts.into_inner(), 1);
+                        assert_eq!(b"v1".to_vec(), value.unwrap());
                     }
                     _ => unreachable!(),
                 },
                 1 => match rows.pop().unwrap() {
                     ChangeRow::Commit {
                         key,
-                        write,
+                        start_ts,
+                        write_type,
                         commit_ts,
                         lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(write.start_ts.into_inner(), 1);
+                        assert_eq!(start_ts.into_inner(), 1);
                         assert_eq!(commit_ts.unwrap().into_inner(), 2);
-                        assert_eq!(b"v1".to_vec(), write.short_value.unwrap());
+                        assert_eq!(write_type, WriteType::Put);
                         assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
                 2 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite { key, lock, .. } => {
+                    ChangeRow::Prewrite {
+                        key,
+                        start_ts,
+                        value,
+                        ..
+                    } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(lock.ts.into_inner(), 3);
-                        assert_eq!(b"v2".to_vec(), lock.short_value.unwrap());
+                        assert_eq!(start_ts.into_inner(), 3);
+                        assert_eq!(b"v2".to_vec(), value.unwrap());
                     }
                     _ => unreachable!(),
                 },
                 3 => match rows.pop().unwrap() {
                     ChangeRow::Commit {
                         key,
-                        write,
+                        write_type,
+                        start_ts,
                         commit_ts,
                         lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(write.write_type, WriteType::Rollback);
-                        assert_eq!(write.start_ts.into_inner(), 3);
+                        assert_eq!(write_type, WriteType::Rollback);
+                        assert_eq!(start_ts.into_inner(), 3);
                         assert!(commit_ts.is_none());
                         assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
                 4 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite { key, lock, value } => {
+                    ChangeRow::Prewrite {
+                        key,
+                        start_ts,
+                        value,
+                        ..
+                    } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(lock.ts.into_inner(), 4);
-                        assert!(lock.short_value.is_none());
+                        assert_eq!(start_ts.into_inner(), 4);
+                        assert!(value.is_none());
                         assert_eq!(value, Some(vec![b'v'; 512]));
                     }
                     _ => unreachable!(),
