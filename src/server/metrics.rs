@@ -89,11 +89,48 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+<<<<<<< HEAD
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
         GrpcMsgFailCounterVec,
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]
+=======
+    pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_info",
+        "Indicate the tikv server info, and the value is the server startup timestamp(s).",
+        &["version", "hash"]
+    )
+    .unwrap();
+}
+
+lazy_static! {
+    pub static ref GRPC_MSG_HISTOGRAM_STATIC: GrpcMsgHistogramVec =
+        auto_flush_from!(GRPC_MSG_HISTOGRAM_VEC, GrpcMsgHistogramVec);
+    pub static ref GRPC_MSG_HISTOGRAM_GLOBAL: GrpcMsgHistogramGlobal =
+        GrpcMsgHistogramGlobal::from(&GRPC_MSG_HISTOGRAM_VEC);
+    pub static ref GC_COMMAND_COUNTER_VEC_STATIC: GcCommandCounterVec =
+        auto_flush_from!(GC_COMMAND_COUNTER_VEC, GcCommandCounterVec);
+    pub static ref SNAP_TASK_COUNTER_STATIC: SnapTaskCounterVec =
+        auto_flush_from!(SNAP_TASK_COUNTER, SnapTaskCounterVec);
+    pub static ref GC_GCTASK_COUNTER_STATIC: GcTaskCounterVec =
+        auto_flush_from!(GC_GCTASK_COUNTER_VEC, GcTaskCounterVec);
+    pub static ref GC_GCTASK_FAIL_COUNTER_STATIC: GcTaskFailCounterVec =
+        auto_flush_from!(GC_GCTASK_FAIL_COUNTER_VEC, GcTaskFailCounterVec);
+    pub static ref RESOLVE_STORE_COUNTER_STATIC: ResolveStoreCounterVec =
+        auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
+    pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
+        auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
+        auto_flush_from!(GC_KEYS_COUNTER_VEC, GcKeysCounterVec);
+}
+
+lazy_static! {
+    pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_server_send_snapshot_duration_seconds",
+        "Bucketed histogram of server send snapshots duration",
+        exponential_buckets(0.05, 2.0, 20).unwrap()
+>>>>>>> 0fe01b8da... server: add server info metrics for DBasS (#9582)
     )
     .unwrap();
     pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
