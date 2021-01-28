@@ -419,15 +419,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cache-size"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81d993443a01668ca909379dac9de6e858121d7fb2bc16de939dc166164cac1c"
-dependencies = [
- "raw-cpuid",
-]
-
-[[package]]
 name = "callgrind"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3407,17 +3398,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "raw-cpuid"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4a349ca83373cfa5d6dbb66fd76e58b2cca08da71a5f6400de0a0a6a9bceeaf"
-dependencies = [
- "bitflags",
- "cc",
- "rustc_version",
-]
-
-[[package]]
 name = "rayon"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4849,7 +4829,6 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
- "cache-size",
  "chrono",
  "codec",
  "collections",
