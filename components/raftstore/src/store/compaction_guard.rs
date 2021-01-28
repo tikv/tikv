@@ -100,7 +100,7 @@ pub struct CompactionGuardGenerator {
 }
 
 impl SstPartitioner for CompactionGuardGenerator {
-    fn should_partition(&self, req: &SstPartitionerRequest) -> SstPartitionerResult {
+    fn should_partition(&mut self, req: &SstPartitionerRequest) -> SstPartitionerResult {
         let mut pos = self.pos.get();
         let mut skip_count = 0;
         while pos < self.boundaries.len() && self.boundaries[pos].as_slice() <= req.prev_user_key {
@@ -135,7 +135,7 @@ impl SstPartitioner for CompactionGuardGenerator {
         }
     }
 
-    fn can_do_trivial_move(&self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
+    fn can_do_trivial_move(&mut self, _smallest_key: &[u8], _largest_key: &[u8]) -> bool {
         // Always allow trivial move
         true
     }
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_compaction_guard_should_partition() {
-        let guard = CompactionGuardGenerator {
+        let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
             boundaries: vec![b"bbb".to_vec(), b"ccc".to_vec()],
             min_output_file_size: 8 << 20, // 8MB
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_compaction_guard_should_partition_binary_search() {
-        let guard = CompactionGuardGenerator {
+        let mut guard = CompactionGuardGenerator {
             cf_name: CfNames::default,
             boundaries: vec![
                 b"aaa00".to_vec(),
