@@ -174,6 +174,8 @@ pub struct PeerStat {
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
     pub last_report_ts: UnixSecs,
+    pub approximate_keys: u64,
+    pub approximate_size: u64,
 }
 
 impl Display for Task {
@@ -206,7 +208,7 @@ impl Display for Task {
                 region.get_id(),
                 KeysInfoFormatter(split_keys.iter())
             ),
-            Task::Heartbeat(ref hb_task)  => write!(
+            Task::Heartbeat(ref hb_task) => write!(
                 f,
                 "heartbeat for region {:?}, leader {}",
                 hb_task.region,
@@ -844,16 +846,19 @@ impl<T: PdClient> Runner<T> {
         self.is_hb_receiver_scheduled = true;
     }
 
-    fn handle_read_stats(&mut self, read_stats: ReadStats) {
-        for (region_id, stats) in &read_stats.flows {
+    fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
+        for (region_id, region_info) in read_stats.region_infos.iter_mut() {
             let peer_stat = self
                 .region_peers
                 .entry(*region_id)
                 .or_insert_with(PeerStat::default);
-            peer_stat.read_bytes += stats.read_bytes as u64;
-            peer_stat.read_keys += stats.read_keys as u64;
-            self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
-            self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+            peer_stat.read_bytes += region_info.flow.read_bytes as u64;
+            peer_stat.read_keys += region_info.flow.read_keys as u64;
+            self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
+            self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
+
+            region_info.approximate_key = peer_stat.approximate_keys;
+            region_info.approximate_size = peer_stat.approximate_size;
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
@@ -976,6 +981,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                         .region_peers
                         .entry(hb_task.region.get_id())
                         .or_insert_with(PeerStat::default);
+                    peer_stat.approximate_size = hb_task.approximate_size;
+                    peer_stat.approximate_keys = hb_task.approximate_keys;
                     let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
                     let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
                     let written_bytes_delta = hb_task.written_bytes - peer_stat.last_written_bytes;

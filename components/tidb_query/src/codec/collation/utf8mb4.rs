@@ -7,6 +7,7 @@ use std::str;
 use codec::prelude::*;
 
 use super::*;
+use crate::codec::collation::unicode_ci_data::*;
 use crate::codec::Result;
 
 pub struct CharsetUtf8mb4;
@@ -395,6 +396,111 @@ impl Collator for CollatorUtf8Mb4GeneralCi {
     }
 }
 
+#[inline]
+fn unicode_ci_convert(c: char) -> u128 {
+    let r = c as usize;
+    if r > 0xFFFF {
+        return 0xFFFD;
+    }
+
+    let u = UNICODE_CI_TABLE[r];
+    if u == LONG_RUNE {
+        return map_long_rune(r);
+    }
+
+    u as u128
+}
+
+/// Collator for `utf8mb4_unicode_ci` collation with padding behavior (trims right spaces).
+#[derive(Debug)]
+pub struct CollatorUtf8Mb4UnicodeCi;
+
+impl Collator for CollatorUtf8Mb4UnicodeCi {
+    type Charset = CharsetUtf8mb4;
+
+    #[inline]
+    fn validate(bstr: &[u8]) -> Result<()> {
+        str::from_utf8(bstr)?;
+        Ok(())
+    }
+
+    fn write_sort_key<W: BufferWriter>(writer: &mut W, bstr: &[u8]) -> Result<usize> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        let mut n = 0;
+        for ch in s.chars() {
+            let mut convert = unicode_ci_convert(ch);
+            while convert != 0 {
+                writer.write_u16_be((convert & 0xFFFF) as u16)?;
+                n += 1;
+                convert >>= 16
+            }
+        }
+        Ok(n * std::mem::size_of::<u16>())
+    }
+
+    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+        let mut ca = str::from_utf8(a)?
+            .trim_end_matches(TRIM_PADDING_SPACE)
+            .chars();
+        let mut cb = str::from_utf8(b)?
+            .trim_end_matches(TRIM_PADDING_SPACE)
+            .chars();
+        let mut an = 0;
+        let mut bn = 0;
+
+        loop {
+            if an == 0 {
+                for ach in &mut ca {
+                    an = unicode_ci_convert(ach);
+                    if an != 0 {
+                        break;
+                    }
+                }
+            }
+
+            if bn == 0 {
+                for bch in &mut cb {
+                    bn = unicode_ci_convert(bch);
+                    if bn != 0 {
+                        break;
+                    }
+                }
+            }
+
+            if an == 0 || bn == 0 {
+                return Ok(an.cmp(&bn));
+            }
+
+            if an == bn {
+                an = 0;
+                bn = 0;
+                continue;
+            }
+
+            while an != 0 && bn != 0 {
+                if (an ^ bn) & 0xFFFF == 0 {
+                    an >>= 16;
+                    bn >>= 16;
+                } else {
+                    return Ok((an & 0xFFFF).cmp(&(bn & 0xFFFF)));
+                }
+            }
+        }
+    }
+
+    fn sort_hash<H: Hasher>(state: &mut H, bstr: &[u8]) -> Result<()> {
+        let s = str::from_utf8(bstr)?.trim_end_matches(TRIM_PADDING_SPACE);
+        for ch in s.chars() {
+            let mut convert = unicode_ci_convert(ch);
+            while convert != 0 {
+                (convert & 0xFFFF).hash(state);
+                convert >>= 16;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Collator for utf8mb4_bin collation with padding behavior (trims right spaces).
 #[derive(Debug)]
 pub struct CollatorUtf8Mb4Bin;
@@ -480,43 +586,89 @@ mod tests {
             (Collation::Utf8Mb4Bin, 0),
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4GeneralCi, 2),
+            (Collation::Utf8Mb4UnicodeCi, 3),
         ];
         let cases = vec![
-            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
+            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
             (
                 "a".as_bytes(),
                 "a".as_bytes(),
-                [Ordering::Equal, Ordering::Equal, Ordering::Equal],
+                [
+                    Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
             ),
             (
                 "a".as_bytes(),
                 "a ".as_bytes(),
-                [Ordering::Equal, Ordering::Less, Ordering::Equal],
+                [
+                    Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
             ),
             (
                 "a".as_bytes(),
                 "A ".as_bytes(),
-                [Ordering::Greater, Ordering::Greater, Ordering::Equal],
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
             ),
             (
                 "aa ".as_bytes(),
                 "a a".as_bytes(),
-                [Ordering::Greater, Ordering::Greater, Ordering::Greater],
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
+                ],
             ),
             (
                 "A".as_bytes(),
                 "a\t".as_bytes(),
-                [Ordering::Less, Ordering::Less, Ordering::Less],
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
+                ],
             ),
             (
                 "cAfe".as_bytes(),
                 "café".as_bytes(),
-                [Ordering::Less, Ordering::Less, Ordering::Equal],
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
             ),
             (
                 "cAfe ".as_bytes(),
                 "café".as_bytes(),
-                [Ordering::Less, Ordering::Less, Ordering::Equal],
+                [
+                    Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Equal,
+                    Ordering::Equal,
+                ],
+            ),
+            (
+                "ß".as_bytes(),
+                "ss".as_bytes(),
+                [
+                    Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Less,
+                    Ordering::Equal,
+                ],
             ),
         ];
 
@@ -568,17 +720,33 @@ mod tests {
             (Collation::Utf8Mb4Bin, 0),
             (Collation::Utf8Mb4BinNoPadding, 1),
             (Collation::Utf8Mb4GeneralCi, 2),
+            (Collation::Utf8Mb4UnicodeCi, 3),
         ];
         let cases = vec![
-            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi])
-            ("a", [vec![0x61], vec![0x61], vec![0x00, 0x41]]),
-            ("A ", [vec![0x41], vec![0x41, 0x20], vec![0x00, 0x41]]),
-            ("A", [vec![0x41], vec![0x41], vec![0x00, 0x41]]),
+            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi])
+            (
+                "a",
+                [vec![0x61], vec![0x61], vec![0x00, 0x41], vec![0x0E, 0x33]],
+            ),
+            (
+                "A ",
+                [
+                    vec![0x41],
+                    vec![0x41, 0x20],
+                    vec![0x00, 0x41],
+                    vec![0x0E, 0x33],
+                ],
+            ),
+            (
+                "A",
+                [vec![0x41], vec![0x41], vec![0x00, 0x41], vec![0x0E, 0x33]],
+            ),
             (
                 "😃",
                 [
                     vec![0xF0, 0x9F, 0x98, 0x83],
                     vec![0xF0, 0x9F, 0x98, 0x83],
+                    vec![0xff, 0xfd],
                     vec![0xff, 0xfd],
                 ],
             ),
@@ -600,6 +768,24 @@ mod tests {
                         0x00, 0x42, 0x00, 0x41, 0x00, 0x52, 0x00, 0x20, 0xff, 0xfd, 0x00, 0x20,
                         0x00, 0x42, 0x00, 0x41, 0x00, 0x5a, 0x00, 0x20, 0x26, 0x3, 0x00, 0x20,
                         0x00, 0x51, 0x00, 0x55, 0x00, 0x58,
+                    ],
+                    vec![
+                        0x0E, 0xB9, 0x0F, 0x82, 0x0F, 0x82, 0x02, 0x09, 0x02, 0xC5, 0x02, 0x09,
+                        0x0E, 0x4A, 0x0E, 0x33, 0x0F, 0xC0, 0x02, 0x09, 0xFF, 0xFD, 0x02, 0x09,
+                        0x0E, 0x4A, 0x0E, 0x33, 0x10, 0x6A, 0x02, 0x09, 0x06, 0xFF, 0x02, 0x09,
+                        0x0F, 0xB4, 0x10, 0x1F, 0x10, 0x5A,
+                    ],
+                ],
+            ),
+            (
+                "ﷻ",
+                [
+                    vec![0xEF, 0xB7, 0xBB],
+                    vec![0xEF, 0xB7, 0xBB],
+                    vec![0xFD, 0xFB],
+                    vec![
+                        0x13, 0x5E, 0x13, 0xAB, 0x02, 0x09, 0x13, 0x5E, 0x13, 0xAB, 0x13, 0x50,
+                        0x13, 0xAB, 0x13, 0xB7,
                     ],
                 ],
             ),
