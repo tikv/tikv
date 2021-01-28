@@ -127,13 +127,13 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
+    let total_memory = system.get_total_memory() * KB;
     let used_memory = system.get_used_memory() * KB;
     let free_memory = system.get_free_memory() * KB;
     let total_swap = system.get_total_swap() * KB;
     let used_swap = system.get_used_swap() * KB;
     let free_swap = system.get_free_swap() * KB;
     drop(system);
-    let total_memory = SysQuota::new().memory_limit_in_bytes();
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
     let used_swap_pct = (used_swap as f64) / (total_swap as f64);
