@@ -1360,6 +1360,7 @@ dependencies = [
  "rand",
  "tempfile",
  "tikv_alloc",
+ "tikv_util",
  "variant_count",
 ]
 
@@ -4456,17 +4457,6 @@ dependencies = [
  "tikv_util",
  "tipb",
  "txn_types",
-]
-
-[[package]]
-name = "test_engine_traits"
-version = "0.1.0"
-dependencies = [
- "engine_rocks",
- "engine_traits",
- "slog",
- "slog-global",
- "tempfile",
 ]
 
 [[package]]

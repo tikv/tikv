@@ -1,21 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::IOStats;
+use crate::IOBytes;
 use crate::IOType;
 use std::cell::Cell;
-
-pub struct IOContext;
-
-impl IOContext {
-    pub fn new() -> Self {
-        IOContext {}
-    }
-
-    #[allow(dead_code)]
-    fn delta_and_refresh(&mut self) -> IOStats {
-        IOStats::default()
-    }
-}
 
 pub fn init_io_snooper() -> Result<(), String> {
     Err("IO snooper is not started due to not compiling with BCC".to_string())
@@ -35,4 +22,8 @@ pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
-pub fn flush_io_metrics() {}
+pub(crate) fn flush_io_latency_metrics() {}
+
+pub(crate) fn fetch_io_bytes(_io_type: IOType) -> IOBytes {
+    IOBytes::default()
+}
