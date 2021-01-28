@@ -30,8 +30,9 @@ use engine_rocks::util::{
 };
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE, TTLCompactionFilterFactory, TTLPropertiesCollectorFactory,
+    RocksSstPartitionerFactory, RocksdbLogger, TTLCompactionFilterFactory,
+    TTLPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -553,7 +554,10 @@ impl DefaultCfConfig {
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if enable_ttl {
-            cf_opts.add_table_properties_collector_factory("tikv.ttl-properties-collector", Box::new(TTLPropertiesCollectorFactory{}));
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.ttl-properties-collector",
+                Box::new(TTLPropertiesCollectorFactory {}),
+            );
             cf_opts
                 .set_compaction_filter_factory(
                     "ttl_compaction_filter_factory",
@@ -1106,7 +1110,8 @@ impl DbConfig {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
-                self.defaultcf.build_opt(cache, region_info_accessor, enable_ttl),
+                self.defaultcf
+                    .build_opt(cache, region_info_accessor, enable_ttl),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(

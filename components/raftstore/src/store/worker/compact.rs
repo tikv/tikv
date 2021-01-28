@@ -5,8 +5,10 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
+use engine_rocks::TTLProperties;
 use engine_traits::KvEngine;
-use engine_traits::CF_WRITE;
+use engine_traits::{Range, TableProperties, TablePropertiesCollection, CF_DEFAULT, CF_WRITE};
+use tikv_util::time::UnixSecs;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -28,9 +30,9 @@ pub enum Task {
     },
 
     TTLCheckAndCompact {
-        start_key: Option<Key>,
-        end_key: Option<Key>,
-    }
+        start_key: Key,
+        end_key: Key,
+    },
 }
 
 impl Display for Task {
@@ -78,14 +80,8 @@ impl Display for Task {
                 ref end_key,
             } => f
                 .debug_struct("TTLCheckAndCompact")
-                .field(
-                    "start_key",
-                    &start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
-                )
-                .field(
-                    "end_key",
-                    &end_key.as_ref().map(|k| log_wrappers::Value::key(k)),
-                )
+                .field("start_key", &log_wrappers::Value::key(start_key))
+                .field("end_key", &log_wrappers::Value::key(end_key))
                 .finish(),
         }
     }
@@ -117,46 +113,39 @@ where
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
-        cf_name: &str,
+        cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf_name])
+            .with_label_values(&[cf])
             .start_coarse_timer();
         box_try!(self
             .engine
-            .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,));
+            .compact_range(cf, start_key, end_key, false, 1 /* threads */,));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
-            "cf" => cf_name,
+            "cf" => cf,
             "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
 
-    pub fn compact_files_cf(
-        &mut self,
-        cf_name: &str,
-        files: &[String],
-    ) -> Result<(), Error> {
+    pub fn compact_files_cf(&mut self, cf: &str, files: &[String]) -> Result<(), Error> {
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf_name])
+            .with_label_values(&[cf])
             .start_coarse_timer();
-        box_try!(self
-            .engine
-            .compact_files(cf_name, start_key, end_key, false, 1 /* threads */,));
+        box_try!(self.engine.compact_files_cf(cf, files, None));
         compact_range_timer.observe_duration();
         info!(
             "compact files finished";
-            "range_start" => start_key.map(::log_wrappers::Value::key),
-            "range_end" => end_key.map(::log_wrappers::Value::key),
-            "cf" => cf_name,
+            "files" => ?files,
+            "cf" => cf,
             "time_takes" => ?timer.elapsed(),
         );
         Ok(())
@@ -187,7 +176,8 @@ where
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
-            } => match self.collect_ranges_need_compact(
+            } => match collect_ranges_need_compact(
+                &self.engine,
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
@@ -210,11 +200,48 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
-            Task::TTLCheckAndCompact {
-                start_key,
-                end_key,
-            } => {
-                self.get_compa
+            Task::TTLCheckAndCompact { start_key, end_key } => {
+                let current_ts = UnixSecs::now().into_inner();
+                let range = Range::new(&start_key, &end_key);
+                let collection = match self
+                    .engine
+                    .get_properties_of_tables_in_range(CF_DEFAULT, &[range])
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!(
+                            "execute ttl compact files failed";
+                            "range_start" => log_wrappers::Value::key(&start_key),
+                            "range_end" => log_wrappers::Value::key(&end_key),
+                            "err" => %e,
+                        );
+                        return;
+                    }
+                };
+
+                if collection.is_empty() {
+                    return;
+                }
+
+                let mut files = Vec::new();
+                for (file_name, v) in collection.iter() {
+                    let prop = match TTLProperties::decode(&v.user_collected_properties()) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if prop.max_expire_ts <= current_ts {
+                        files.push(file_name.to_string());
+                    }
+                }
+                if let Err(e) = self.compact_files_cf(CF_DEFAULT, &files) {
+                    error!(
+                        "execute ttl compact files failed";
+                        "range_start" => log_wrappers::Value::key(&start_key),
+                        "range_end" => log_wrappers::Value::key(&end_key),
+                        "files" => ?files,
+                        "err" => %e,
+                    );
+                }
             }
         }
     }

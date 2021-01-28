@@ -47,7 +47,7 @@ use raftstore::{
     store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
 };
 use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
-use tikv_util::time::{UnixSecs, Instant};
+use tikv_util::time::{Instant, UnixSecs};
 
 quick_error! {
     #[derive(Debug)]

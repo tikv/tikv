@@ -26,6 +26,7 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::StateRole;
+use rand::Rng;
 use time::{self, Timespec};
 
 use collections::HashMap;
@@ -305,7 +306,6 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub ttl_check_scheduler: Scheduler<TTLCheckTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SSTImporter>,
@@ -397,8 +397,11 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
-        self.tick_batch[PeerTicks::CHECK_TTL.bits() as usize].wait_duration =
-            self.cfg.ttl_check_tick_interval.0.mul_f64(1.0 + rnd.gen_range(-0.2..=0.2));
+        self.tick_batch[PeerTicks::CHECK_TTL.bits() as usize].wait_duration = self
+            .cfg
+            .ttl_check_tick_interval
+            .0
+            .mul_f64(1.0 + rng.gen_range(-0.2, 0.2));
     }
 }
 

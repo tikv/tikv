@@ -1,15 +1,15 @@
-use std::ffi::CString;
 use std::collections::HashMap;
+use std::ffi::CString;
 
 use crate::{RocksUserCollectedPropertiesNoRc, UserProperties};
-use engine_traits::{DecodeProperties};
 use engine_traits::util::get_expire_ts;
+use engine_traits::DecodeProperties;
 use rocksdb::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
-     CompactionFilterFactory, CompactionFilterContext, CompactionFilter, DBCompactionFilter, new_compaction_filter_raw
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
+    DBCompactionFilter, DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
 };
-use tikv_util::time::UnixSecs;
 use tikv_util::codec::Result;
+use tikv_util::time::UnixSecs;
 
 const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";
@@ -67,7 +67,6 @@ impl CompactionFilter for TTLCompactionFilter {
     }
 }
 
-
 #[derive(Debug, Default)]
 pub struct TTLProperties {
     pub max_expire_ts: u64,
@@ -100,15 +99,21 @@ impl TablePropertiesCollector for TTLPropertiesCollector {
         if entry_type != DBEntryType::Put {
             return;
         }
-        
+
         let expire_ts = get_expire_ts(&value).unwrap_or(0);
         if expire_ts > self.prop.max_expire_ts {
             self.prop.max_expire_ts = expire_ts;
         }
+
+        if self.prop.min_expire_ts == 0 {
+            self.prop.min_expire_ts = expire_ts;
+        } else {
+            self.prop.min_expire_ts = std::cmp::min(self.prop.min_expire_ts, expire_ts);
+        }
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        if self.prop.max_expire_ts == 0 {
+        if self.prop.max_expire_ts == 0 && self.prop.min_expire_ts == 0 {
             return HashMap::default();
         }
         self.prop.encode().0
@@ -119,6 +124,8 @@ pub struct TTLPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for TTLPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TTLPropertiesCollector{ prop: TTLProperties::default() })
+        Box::new(TTLPropertiesCollector {
+            prop: TTLProperties::default(),
+        })
     }
 }

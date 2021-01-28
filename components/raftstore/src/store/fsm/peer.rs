@@ -51,8 +51,8 @@ use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
-    SplitCheckTask,
+    CleanupSSTTask, CleanupTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate,
+    RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
 use crate::store::{
@@ -648,6 +648,7 @@ where
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             PeerTicks::CHECK_TTL => self.on_check_ttl(),
+            _ => unreachable!(),
         }
     }
 
@@ -3814,7 +3815,23 @@ where
     }
 
     fn on_check_ttl(&mut self) {
-        self.ctx.
+        self.register_check_ttl_tick();
+        let task = CompactTask::TTLCheckAndCompact {
+            start_key: enc_start_key(self.fsm.peer.region()),
+            end_key: enc_end_key(self.fsm.peer.region()),
+        };
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::Compact(task))
+        {
+            error!(
+                "failed to schedule check ttl";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+        }
     }
 }
 

@@ -6,7 +6,10 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use engine_traits::{IndexHandle, MvccProperties, DecodeProperties, IndexHandles, Range, KvEngine, TableProperties, TablePropertiesCollection};
+use engine_traits::{
+    DecodeProperties, IndexHandle, IndexHandles, KvEngine, MvccProperties, Range, TableProperties,
+    TablePropertiesCollection,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
