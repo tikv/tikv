@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use engine_traits::CfName;
 use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -214,19 +213,19 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                         let key = key.truncate_ts().unwrap();
                         let mut row = changes.entry(key).or_default();
                         assert!(row.write.is_none());
-                        row.write = Some(KeyOp::Put(Some(ts), value.into()));
+                        row.write = Some(KeyOp::Put(Some(ts), value));
                     }
                     "lock" => {
                         let mut row = changes.entry(key).or_default();
                         assert!(row.lock.is_none());
-                        row.lock = Some(KeyOp::Put(None, value.into()));
+                        row.lock = Some(KeyOp::Put(None, value));
                     }
                     "" | "default" => {
                         let ts = key.decode_ts().unwrap();
                         let key = key.truncate_ts().unwrap();
                         let mut row = changes.entry(key).or_default();
                         assert!(row.default.is_none());
-                        row.default = Some(KeyOp::Put(Some(ts), value.into()));
+                        row.default = Some(KeyOp::Put(Some(ts), value));
                     }
                     other => {
                         panic!("invalid cf {}", other);
