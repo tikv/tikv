@@ -191,8 +191,8 @@ impl Condvar {
         }
     }
 
-    /// Notifies all waiters in queue as till now.
-    pub fn notify_all(&self) {
+    /// Notifies all waiters in queue as till now. Call this with lock held.
+    pub fn notify_all<'a, T>(&self, _guard: &MutexGuard<'a, T>) {
         let empty = self.ready.empty();
         self.ready.append(&self.waiting);
         if empty {
@@ -323,7 +323,7 @@ mod tests {
         }
         {
             let _guard = mu.lock();
-            condv.notify_all();
+            condv.notify_all(&_guard);
         }
         for t in threads {
             t.join().unwrap();

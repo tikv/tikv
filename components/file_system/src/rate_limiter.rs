@@ -3,7 +3,7 @@
 use super::{condvar::Condvar, IOMeasure, IOOp, IOPriority, IOType};
 
 use crossbeam_utils::CachePadded;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -143,7 +143,7 @@ impl RawIORateLimiter {
     }
 
     #[inline]
-    fn refill(&self, locked: &mut RawIORateLimiterProtected, now: Instant) {
+    fn refill(&self, locked: &mut MutexGuard<RawIORateLimiterProtected>, now: Instant) {
         let mut cached_priority_ios_through = [0; IOPriority::VARIANT_COUNT];
         for i in 0..IOPriority::VARIANT_COUNT {
             cached_priority_ios_through[i] = std::cmp::min(
@@ -173,7 +173,7 @@ impl RawIORateLimiter {
             calibrator.reset();
         }
         locked.last_refill_time = now;
-        self.condv.notify_all();
+        self.condv.notify_all(locked);
     }
 
     #[cfg(test)]
