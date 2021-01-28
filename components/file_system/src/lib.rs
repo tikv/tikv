@@ -1,21 +1,26 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
-#![feature(core_intrinsics)]
-extern crate test;
 
 #[macro_use]
 extern crate lazy_static;
+extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod file;
 mod iosnoop;
+mod metrics;
+mod metrics_manager;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
-pub use iosnoop::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext};
-pub use rate_limiter::{get_io_rate_limiter, set_io_rate_limiter, BytesRecorder, IORateLimiter};
+pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
+pub use metrics_manager::{BytesFetcher, MetricsManager};
+pub use rate_limiter::{
+    get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
+    WithIORateLimiter,
+};
 
 pub use std::fs::{
     canonicalize, create_dir, create_dir_all, hard_link, metadata, read_dir, read_link, remove_dir,
@@ -70,6 +75,30 @@ impl WithIOType {
 impl Drop for WithIOType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct IOBytes {
+    read: u64,
+    write: u64,
+}
+
+impl Default for IOBytes {
+    fn default() -> Self {
+        IOBytes { read: 0, write: 0 }
+    }
+}
+
+impl std::ops::Sub for IOBytes {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            read: self.read.saturating_sub(other.read),
+            write: self.write.saturating_sub(other.write),
+        }
     }
 }
 

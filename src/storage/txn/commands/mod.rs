@@ -17,7 +17,6 @@ pub(crate) mod resolve_lock;
 pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
 pub(crate) mod rollback;
-pub(crate) mod scan_lock;
 pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
@@ -34,7 +33,6 @@ pub use resolve_lock::ResolveLock;
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-pub use scan_lock::ScanLock;
 pub use txn_heart_beat::TxnHeartBeat;
 
 pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
@@ -76,7 +74,6 @@ pub enum Command {
     TxnHeartBeat(TxnHeartBeat),
     CheckTxnStatus(CheckTxnStatus),
     CheckSecondaryLocks(CheckSecondaryLocks),
-    ScanLock(ScanLock),
     ResolveLockReadPhase(ResolveLockReadPhase),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
@@ -287,23 +284,6 @@ impl From<CheckSecondaryLocksRequest> for TypedCommand<SecondaryLocksStatus> {
     }
 }
 
-impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
-    fn from(mut req: ScanLockRequest) -> Self {
-        let start_key = if req.get_start_key().is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(req.get_start_key()))
-        };
-
-        ScanLock::new(
-            req.get_max_version().into(),
-            start_key,
-            req.get_limit() as usize,
-            req.take_context(),
-        )
-    }
-}
-
 impl From<ResolveLockRequest> for TypedCommand<()> {
     fn from(mut req: ResolveLockRequest) -> Self {
         let resolve_keys: Vec<Key> = req
@@ -494,7 +474,6 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
@@ -516,7 +495,6 @@ impl Command {
             Command::TxnHeartBeat(t) => t,
             Command::CheckTxnStatus(t) => t,
             Command::CheckSecondaryLocks(t) => t,
-            Command::ScanLock(t) => t,
             Command::ResolveLockReadPhase(t) => t,
             Command::ResolveLock(t) => t,
             Command::ResolveLockLite(t) => t,
@@ -532,7 +510,6 @@ impl Command {
         statistics: &mut Statistics,
     ) -> Result<ProcessResult> {
         match self {
-            Command::ScanLock(t) => t.process_read(snapshot, statistics),
             Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
