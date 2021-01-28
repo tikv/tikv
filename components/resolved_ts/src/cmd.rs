@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
+use engine_traits::CfName;
 use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -19,6 +20,9 @@ pub enum ChangeRow {
         key: Key,
         write: Write,
         commit_ts: Option<TimeStamp>,
+        // In some cases a rollback will be done by just deleting the lock, need to lookup Resolver
+        // to untrack lock and get start ts from it.
+        lack_start_ts: bool,
     },
     OnePc {
         key: Key,
@@ -48,7 +52,8 @@ impl ChangeLog {
                         let flags =
                             WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
                         let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
-                        let rows = Self::encode_rows(request.requests.into(), is_one_pc);
+                        let changes = group_row_changes(request.requests.into());
+                        let rows = Self::encode_rows(changes, is_one_pc);
                         Some(ChangeLog::Rows { index, rows })
                     } else {
                         let mut response = response.take_admin_response();
@@ -82,102 +87,74 @@ impl ChangeLog {
             .collect()
     }
 
-    pub fn encode_rows(requests: Vec<Request>, is_one_pc: bool) -> Vec<ChangeRow> {
-        let mut change_logs: HashMap<Key, ChangeRow> = HashMap::default();
-        let mut pending_default: HashMap<Key, Vec<u8>> = HashMap::default();
-
-        for mut req in requests {
-            if req.get_cmd_type() != CmdType::Put {
-                // Do not log delete requests because they are issued by GC
-                // frequently.
-                if req.get_cmd_type() != CmdType::Delete {
-                    debug!(
-                        "skip other command";
-                        "command" => ?req,
-                    );
-                }
-                continue;
-            }
-            let mut put = req.take_put();
-            match put.cf.as_str() {
-                "write" => match decode_write(put.get_key(), put.get_value()) {
-                    Some(write) => {
-                        // TODO: handle gc_fence here.
-                        let key = Key::from_encoded(put.take_key());
-                        let commit_ts = key.decode_ts().unwrap();
-                        let key = key.truncate_ts().unwrap();
+    fn encode_rows(changes: HashMap<Key, RowChange>, is_one_pc: bool) -> Vec<ChangeRow> {
+        changes
+            .into_iter()
+            .map(|(key, row)| {
+                if row.write.is_some() {
+                    let (mut commit_ts, write) = row.write.unwrap().into_put();
+                    if let Some(write) = decode_write(key.as_encoded(), &write, true) {
+                        let value = row.default.map(|v| v.into_put().1);
                         if is_one_pc {
-                            change_logs.insert(
-                                key.clone(),
-                                ChangeRow::OnePc {
-                                    commit_ts,
-                                    write,
-                                    value: pending_default.remove(&key),
-                                    key,
-                                },
-                            );
+                            Some(ChangeRow::OnePc {
+                                commit_ts: commit_ts.unwrap_or_default(),
+                                write,
+                                value,
+                                key,
+                            })
                         } else {
-                            let commit_ts = if write.write_type == WriteType::Rollback {
-                                None
+                            if write.write_type == WriteType::Rollback {
+                                commit_ts = None;
+                            }
+                            Some(ChangeRow::Commit {
+                                key,
+                                commit_ts,
+                                write,
+                                lack_start_ts: false,
+                            })
+                        }
+                    } else {
+                        None
+                    }
+                } else if row.lock.is_some() {
+                    match row.lock.unwrap() {
+                        KeyOp::Put(_, lock) => {
+                            if let Some(lock) = decode_lock(key.as_encoded(), &lock) {
+                                let value = row.default.map(|v| v.into_put().1);
+                                Some(ChangeRow::Prewrite { key, lock, value })
                             } else {
-                                Some(commit_ts)
-                            };
-                            change_logs.insert(
-                                key.clone(),
-                                ChangeRow::Commit {
-                                    key,
-                                    commit_ts,
-                                    write,
-                                },
-                            );
+                                None
+                            }
+                        }
+                        KeyOp::Delete => {
+                            let write = Write::new(WriteType::Rollback, TimeStamp::zero(), None);
+                            Some(ChangeRow::Commit {
+                                key,
+                                commit_ts: None,
+                                write,
+                                lack_start_ts: true,
+                            })
                         }
                     }
-                    None => continue,
-                },
-                "lock" => match decode_lock(put.get_key(), put.get_value()) {
-                    Some(lock) => {
-                        let key = Key::from_encoded(put.take_key());
-                        let value = pending_default.remove(&key);
-                        let l = change_logs
-                            .insert(key.clone(), ChangeRow::Prewrite { key, lock, value });
-                        assert!(l.is_none());
-                    }
-                    None => continue,
-                },
-                "" | "default" => {
-                    let key = Key::from_encoded(put.take_key());
-                    let start_ts = key.decode_ts().unwrap();
-                    let key = key.truncate_ts().unwrap();
-                    match change_logs.get_mut(&key) {
-                        Some(ChangeRow::Prewrite { value, lock, .. }) => {
-                            assert!(value.is_none());
-                            assert_eq!(start_ts, lock.ts);
-                            *value = Some(put.take_value());
-                        }
-                        Some(ChangeRow::Commit { key, .. }) => {
-                            unreachable!("commit {:?} should take a value", key)
-                        }
-                        Some(ChangeRow::OnePc { write, value, .. }) => {
-                            assert!(value.is_none());
-                            assert_eq!(start_ts, write.start_ts);
-                            *value = Some(put.take_value());
-                        }
-                        None => {
-                            pending_default.insert(key, put.take_value());
-                        }
-                    }
+                } else {
+                    panic!("")
                 }
-                other => {
-                    panic!("invalid cf {}", other);
-                }
-            }
-        }
-        change_logs.into_iter().map(|(_, v)| v).collect()
+            })
+            .filter_map(|v| v)
+            .collect()
     }
 }
 
-pub(crate) fn decode_write(key: &[u8], value: &[u8]) -> Option<Write> {
+pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<Write> {
     let write = WriteRef::parse(value).unwrap().to_owned();
+    // Drop the record it self but keep only the overlapped rollback information if gc_fence exists.
+    if is_apply && write.gc_fence.is_some() {
+        // `gc_fence` is set means the write record has been rewritten.
+        // Currently the only case is writing overlapped_rollback. And in this case
+        assert!(write.has_overlapped_rollback);
+        assert_ne!(write.write_type, WriteType::Rollback);
+        return None;
+    }
     match write.write_type {
         WriteType::Put | WriteType::Delete | WriteType::Rollback => Some(write),
         other => {
@@ -202,6 +179,85 @@ pub(crate) fn decode_lock(key: &[u8], value: &[u8]) -> Option<Lock> {
     }
 }
 
+enum KeyOp {
+    Put(Option<TimeStamp>, Vec<u8>),
+    Delete,
+}
+
+impl KeyOp {
+    fn into_put(self) -> (Option<TimeStamp>, Vec<u8>) {
+        match self {
+            KeyOp::Put(ts, value) => (ts, value),
+            KeyOp::Delete => unreachable!(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct RowChange {
+    write: Option<KeyOp>,
+    lock: Option<KeyOp>,
+    default: Option<KeyOp>,
+}
+
+fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
+    let mut changes: HashMap<Key, RowChange> = HashMap::default();
+    for mut req in requests {
+        match req.get_cmd_type() {
+            CmdType::Put => {
+                let mut put = req.take_put();
+                let key = Key::from_encoded(put.take_key());
+                let value = put.take_value();
+                match put.cf.as_str() {
+                    "write" => {
+                        let ts = key.decode_ts().unwrap();
+                        let key = key.truncate_ts().unwrap();
+                        let mut row = changes.entry(key).or_default();
+                        assert!(row.write.is_none());
+                        row.write = Some(KeyOp::Put(Some(ts), value.into()));
+                    }
+                    "lock" => {
+                        let mut row = changes.entry(key).or_default();
+                        assert!(row.lock.is_none());
+                        row.lock = Some(KeyOp::Put(None, value.into()));
+                    }
+                    "" | "default" => {
+                        let ts = key.decode_ts().unwrap();
+                        let key = key.truncate_ts().unwrap();
+                        let mut row = changes.entry(key).or_default();
+                        assert!(row.default.is_none());
+                        row.default = Some(KeyOp::Put(Some(ts), value.into()));
+                    }
+                    other => {
+                        panic!("invalid cf {}", other);
+                    }
+                }
+            }
+            CmdType::Delete => {
+                let mut delete = req.take_delete();
+                match delete.cf.as_str() {
+                    "lock" => {
+                        let key = Key::from_encoded(delete.take_key());
+                        let mut row = changes.entry(key).or_default();
+                        row.lock = Some(KeyOp::Delete);
+                    }
+                    "" | "default" | "write" => {}
+                    other => {
+                        panic!("invalid cf {}", other);
+                    }
+                }
+            }
+            _ => {
+                debug!(
+                    "skip other command";
+                    "command" => ?req,
+                );
+            }
+        }
+    }
+    changes
+}
+
 #[cfg(test)]
 mod tests {
     use tikv::server::raftkv::modifies_to_requests;
@@ -209,7 +265,7 @@ mod tests {
     use tikv::storage::txn::tests::*;
     use txn_types::{Key, WriteType};
 
-    use super::{ChangeLog, ChangeRow};
+    use super::{group_row_changes, ChangeLog, ChangeRow};
 
     #[test]
     fn test_cmd_encode() {
@@ -227,7 +283,7 @@ mod tests {
         let modifies = engine.take_last_modifies();
         for (i, m) in modifies.into_iter().enumerate() {
             let reqs = modifies_to_requests(m);
-            let mut rows = ChangeLog::encode_rows(reqs, false);
+            let mut rows = ChangeLog::encode_rows(group_row_changes(reqs), false);
             assert_eq!(rows.len(), 1);
             match i {
                 0 => match rows.pop().unwrap() {
@@ -243,11 +299,13 @@ mod tests {
                         key,
                         write,
                         commit_ts,
+                        lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
                         assert_eq!(write.start_ts.into_inner(), 1);
                         assert_eq!(commit_ts.unwrap().into_inner(), 2);
                         assert_eq!(b"v1".to_vec(), write.short_value.unwrap());
+                        assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
@@ -264,11 +322,13 @@ mod tests {
                         key,
                         write,
                         commit_ts,
+                        lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
                         assert_eq!(write.write_type, WriteType::Rollback);
                         assert_eq!(write.start_ts.into_inner(), 3);
                         assert!(commit_ts.is_none());
+                        assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
