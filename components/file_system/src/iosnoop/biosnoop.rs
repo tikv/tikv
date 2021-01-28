@@ -145,15 +145,15 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-pub(crate) fn fetch_io_bytes(io_type: IOType) -> IOBytes {
+pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let mut buf = [0 as u8; std::mem::size_of::<IOType>()];
-            std::ptr::write(buf.as_mut_ptr() as *mut IOType, io_type);
-            if let Ok(e) = ctx.stats_table.get(&mut buf) {
-                let read = std::intrinsics::atomic_load(e.as_ptr() as *const u64) as i64;
-                let write = std::intrinsics::atomic_load((e.as_ptr() as *const u64).add(1)) as i64;
-                return IOBytes { read, write };
+            let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
+            let mut io_type_buf =
+                std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+            if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
+                assert!(e.len() == std::mem::size_of::<IOBytes>());
+                return std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
             }
         }
     }
@@ -243,7 +243,7 @@ macro_rules! flush_io_latency {
     };
 }
 
-pub fn flush_io_latency_metrics() {
+pub(crate) fn flush_io_latency_metrics() {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             flush_io_latency!(ctx.bpf, other);

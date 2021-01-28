@@ -43,14 +43,16 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{IOMeasure, IOOp, IORateLimiter, IOStats, IOType, WithIORateLimiter};
+    use file_system::{
+        IOMeasure, IOOp, IORateLimiter, IORateLimiterStatistics, IOType, WithIORateLimiter,
+    };
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IOStats>, WithIORateLimiter) {
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>, WithIORateLimiter) {
         let limiter = Arc::new(IORateLimiter::new());
         limiter.enable_statistics(true);
         let stats = limiter.statistics();
@@ -82,20 +84,15 @@ mod tests {
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        let flush_bytes = stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes);
-        assert!(flush_bytes > value_size * 2);
-        assert!(flush_bytes < value_size * 3);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) > value_size * 2);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) < value_size * 3);
+        stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        assert!(
-            stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) - flush_bytes
-                > value_size * 2
-        );
-        assert!(
-            stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) - flush_bytes
-                < value_size * 3
-        );
+        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) > value_size * 2);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) < value_size * 3);
+        stats.reset();
         db.c()
             .compact_range(
                 CF_DEFAULT, None,  /*start_key*/

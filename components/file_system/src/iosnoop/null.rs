@@ -22,7 +22,7 @@ pub fn get_io_type() -> IOType {
     IO_TYPE.with(|io_type| io_type.get())
 }
 
-pub fn flush_io_latency_metrics() {}
+pub(crate) fn flush_io_latency_metrics() {}
 
 pub(crate) fn fetch_io_bytes(_io_type: IOType) -> IOBytes {
     IOBytes::default()

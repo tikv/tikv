@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(core_intrinsics)]
-#![feature(option_result_contains)]
 #![feature(test)]
+#![feature(option_result_contains)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -14,15 +13,15 @@ mod condvar;
 mod file;
 mod iosnoop;
 mod metrics;
-mod metrics_task;
+mod metrics_manager;
 mod rate_limiter;
 
 pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
-pub use metrics_task::{BytesFetcher, MetricsTask};
+pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, IORateLimiter, IOStats,
-    WithIORateLimiter,
+    get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, IORateLimiter,
+    IORateLimiterStatistics, WithIORateLimiter,
 };
 
 pub use std::fs::{
@@ -81,10 +80,11 @@ impl Drop for WithIOType {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct IOBytes {
-    read: i64,
-    write: i64,
+    read: u64,
+    write: u64,
 }
 
 impl Default for IOBytes {
@@ -98,8 +98,8 @@ impl std::ops::Sub for IOBytes {
 
     fn sub(self, other: Self) -> Self::Output {
         Self {
-            read: self.read - other.read,
-            write: self.write - other.write,
+            read: self.read.saturating_sub(other.read),
+            write: self.write.saturating_sub(other.write),
         }
     }
 }

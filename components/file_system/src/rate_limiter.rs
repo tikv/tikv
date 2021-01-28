@@ -21,6 +21,62 @@ pub trait BytesCalibrator: Send {
     fn reset(&mut self);
 }
 
+/// Record accumulated bytes through of different types.
+/// Used for testing and metrics.
+#[derive(Debug)]
+pub struct IORateLimiterStatistics {
+    read_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    write_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    read_ios: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    write_ios: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+}
+
+impl IORateLimiterStatistics {
+    pub fn new() -> Self {
+        IORateLimiterStatistics {
+            read_bytes: Default::default(),
+            write_bytes: Default::default(),
+            read_ios: Default::default(),
+            write_ios: Default::default(),
+        }
+    }
+
+    pub fn fetch(&self, io_type: IOType, io_op: IOOp, feature: IOMeasure) -> usize {
+        let io_type_idx = io_type as usize;
+        match (io_op, feature) {
+            (IOOp::Read, IOMeasure::Bytes) => self.read_bytes[io_type_idx].load(Ordering::Relaxed),
+            (IOOp::Write, IOMeasure::Bytes) => {
+                self.write_bytes[io_type_idx].load(Ordering::Relaxed)
+            }
+            (IOOp::Read, IOMeasure::Iops) => self.read_ios[io_type_idx].load(Ordering::Relaxed),
+            (IOOp::Write, IOMeasure::Iops) => self.write_ios[io_type_idx].load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn record(&self, io_type: IOType, io_op: IOOp, bytes: usize) {
+        let io_type_idx = io_type as usize;
+        match io_op {
+            IOOp::Read => {
+                self.read_bytes[io_type_idx].fetch_add(bytes, Ordering::Relaxed);
+                self.read_ios[io_type_idx].fetch_add(1, Ordering::Relaxed);
+            }
+            IOOp::Write => {
+                self.write_bytes[io_type_idx].fetch_add(bytes, Ordering::Relaxed);
+                self.write_ios[io_type_idx].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn reset(&self) {
+        for i in 0..IOType::VARIANT_COUNT {
+            self.read_bytes[i].store(0, Ordering::Relaxed);
+            self.write_bytes[i].store(0, Ordering::Relaxed);
+            self.read_ios[i].store(0, Ordering::Relaxed);
+            self.write_ios[i].store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(10);
 
 #[inline]
@@ -185,57 +241,13 @@ impl RawIORateLimiter {
     }
 }
 
-pub struct IOStats {
-    read_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-    write_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-    read_ios: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-    write_ios: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-}
-
-impl IOStats {
-    pub fn new() -> Self {
-        IOStats {
-            read_bytes: Default::default(),
-            write_bytes: Default::default(),
-            read_ios: Default::default(),
-            write_ios: Default::default(),
-        }
-    }
-
-    pub fn fetch(&self, io_type: IOType, io_op: IOOp, feature: IOMeasure) -> usize {
-        let io_type_idx = io_type as usize;
-        match (io_op, feature) {
-            (IOOp::Read, IOMeasure::Bytes) => self.read_bytes[io_type_idx].load(Ordering::Relaxed),
-            (IOOp::Write, IOMeasure::Bytes) => {
-                self.write_bytes[io_type_idx].load(Ordering::Relaxed)
-            }
-            (IOOp::Read, IOMeasure::Iops) => self.read_ios[io_type_idx].load(Ordering::Relaxed),
-            (IOOp::Write, IOMeasure::Iops) => self.write_ios[io_type_idx].load(Ordering::Relaxed),
-        }
-    }
-
-    pub fn record(&self, io_type: IOType, io_op: IOOp, bytes: usize) {
-        let io_type_idx = io_type as usize;
-        match io_op {
-            IOOp::Read => {
-                self.read_bytes[io_type_idx].fetch_add(bytes, Ordering::Relaxed);
-                self.read_ios[io_type_idx].fetch_add(1, Ordering::Relaxed);
-            }
-            IOOp::Write => {
-                self.write_bytes[io_type_idx].fetch_add(bytes, Ordering::Relaxed);
-                self.write_ios[io_type_idx].fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-}
-
 /// An instance of `IORateLimiter` should be safely shared between threads.
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::VARIANT_COUNT],
     bytes: Option<RawIORateLimiter>,
     ios: Option<RawIORateLimiter>,
     enable_statistics: CachePadded<AtomicBool>,
-    stats: Arc<IOStats>,
+    stats: Arc<IORateLimiterStatistics>,
 }
 
 impl IORateLimiter {
@@ -245,7 +257,7 @@ impl IORateLimiter {
             bytes: Some(RawIORateLimiter::new(DEFAULT_REFILL_PERIOD, 0)),
             ios: None,
             enable_statistics: CachePadded::new(AtomicBool::new(true)),
-            stats: Arc::new(IOStats::new()),
+            stats: Arc::new(IORateLimiterStatistics::new()),
         }
     }
 
@@ -257,7 +269,7 @@ impl IORateLimiter {
         self.priority_map[io_type as usize] = io_priority;
     }
 
-    pub fn statistics(&self) -> Arc<IOStats> {
+    pub fn statistics(&self) -> Arc<IORateLimiterStatistics> {
         self.stats.clone()
     }
 

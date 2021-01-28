@@ -2013,7 +2013,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#29d65899faf79865215c58d56605737d97266a81"
+source = "git+https://github.com/pingcap/kvproto.git#4fb47d0584f214a47ac623e8cc571f1afcd51688"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -4462,18 +4462,6 @@ dependencies = [
  "tikv_util",
  "tipb",
  "txn_types",
-]
-
-[[package]]
-name = "test_engine_traits"
-version = "0.1.0"
-dependencies = [
- "engine_rocks",
- "engine_traits",
- "slog",
- "slog-global",
- "tempfile",
- "tikv_util",
 ]
 
 [[package]]
