@@ -97,10 +97,21 @@ fn test_applied_lock_collector() {
     let wait_for_apply = |cluster: &mut Cluster<_>, region: &metapb::Region| {
         let cluster = &mut *cluster;
         region.get_peers().iter().for_each(|p| {
-            let resp = async_read_on_peer(cluster, p.clone(), region.clone(), b"key", true, true)
-                .recv()
-                .unwrap();
-            assert!(!resp.get_header().has_error(), "{:?}", resp);
+            let mut retry_times = 1;
+            loop {
+                let resp =
+                    async_read_on_peer(cluster, p.clone(), region.clone(), b"key", true, true)
+                        .recv()
+                        .unwrap();
+                if !resp.get_header().has_error() {
+                    return;
+                }
+                if retry_times >= 50 {
+                    panic!("failed to read on {:?}: {:?}", p, resp);
+                }
+                retry_times += 1;
+                sleep_ms(20);
+            }
         });
     };
 
