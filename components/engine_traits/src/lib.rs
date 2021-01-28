@@ -256,13 +256,11 @@
 
 #[macro_use]
 extern crate quick_error;
-extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[cfg(test)]
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
