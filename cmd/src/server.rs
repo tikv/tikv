@@ -473,7 +473,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         gc_worker
-            .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
+            .start_observe_lock_apply(
+                self.coprocessor_host.as_mut().unwrap(),
+                self.concurrency_manager.clone(),
+            )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
