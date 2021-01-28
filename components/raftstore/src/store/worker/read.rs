@@ -22,7 +22,7 @@ use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
     RequestInspector, RequestPolicy,
 };
-use crate::Result;
+use crate::{Error, Result};
 
 use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::lru::LruCache;
@@ -539,7 +539,20 @@ where
                         let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
                         assert!(read_ts > 0);
                         if safe_ts < read_ts {
+                            info!("reject stale read by safe ts"; "tag" => &delegate.tag, "safe ts" => safe_ts, "read ts" => read_ts);
                             self.metrics.rejected_by_safe_timestamp += 1;
+                            let mut response = cmd_resp::new_error(Error::DataIsNotReady(
+                                delegate.region.get_id(),
+                                delegate.peer_id,
+                                delegate.region.get_region_epoch().clone(),
+                                safe_ts,
+                            ));
+                            cmd_resp::bind_term(&mut response, delegate.term);
+                            cb.invoke_read(ReadResponse {
+                                response,
+                                snapshot: None,
+                                txn_extra_op: TxnExtraOp::Noop,
+                            });
                             return;
                         }
                     }
