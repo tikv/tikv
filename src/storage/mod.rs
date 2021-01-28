@@ -691,7 +691,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     pub fn scan_lock(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         max_ts: TimeStamp,
         start_key: Option<Key>,
         end_key: Option<Key>,
@@ -701,6 +701,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
         let concurrency_manager = self.concurrency_manager.clone();
+        // Do not allow replica read for scan_lock.
+        ctx.set_replica_read(false);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -745,25 +747,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     },
                 )?;
 
-                let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
-                    let mut key_range = KeyRange::default();
-                    if let Some(start_key) = &start_key {
-                        key_range.set_start_key(start_key.as_encoded().to_vec());
-                    }
-                    if let Some(end_key) = &end_key {
-                        key_range.set_end_key(end_key.as_encoded().to_vec());
-                    }
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        read_id: None,
-                        start_ts: max_ts,
-                        key_ranges: vec![key_range],
-                    }
-                } else {
-                    SnapContext {
-                        pb_ctx: &ctx,
-                        ..Default::default()
-                    }
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
                 };
 
                 let snapshot =
