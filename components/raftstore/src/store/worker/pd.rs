@@ -674,16 +674,11 @@ where
             stats.get_used_size() + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
 
-        let mut available = if capacity > used_size {
-            capacity - used_size
-        } else {
-            warn!("no available space");
-            0
-        };
-
+        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available here.
-        if available > disk_stats.free_space() {
-            available = disk_stats.free_space();
+        available = cmp::min(available, disk_stats.available_space());
+        if available == 0 {
+            warn!("no available space");
         }
 
         stats.set_available(available);
@@ -971,12 +966,14 @@ where
                     Ok(ts) => {
                         concurrency_manager.update_max_ts(ts);
                         // Set the least significant bit to 1 to mark it as synced.
-                        let old_value = max_ts_sync_status.compare_and_swap(
-                            initial_status,
-                            initial_status | 1,
-                            Ordering::SeqCst,
-                        );
-                        success = old_value == initial_status;
+                        success = max_ts_sync_status
+                            .compare_exchange(
+                                initial_status,
+                                initial_status | 1,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok();
                         break;
                     }
                     Err(e) => {

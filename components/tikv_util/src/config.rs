@@ -79,12 +79,12 @@ impl From<ReadableSize> for ConfigValue {
     }
 }
 
-impl Into<ReadableSize> for ConfigValue {
-    fn into(self) -> ReadableSize {
-        if let ConfigValue::Size(s) = self {
+impl From<ConfigValue> for ReadableSize {
+    fn from(c: ConfigValue) -> ReadableSize {
+        if let ConfigValue::Size(s) = c {
             ReadableSize(s)
         } else {
-            panic!("expect: ConfigValue::Size, got: {:?}", self);
+            panic!("expect: ConfigValue::Size, got: {:?}", c);
         }
     }
 }
@@ -103,9 +103,9 @@ impl From<Option<ReadableSize>> for OptionReadableSize {
     }
 }
 
-impl Into<Option<ReadableSize>> for OptionReadableSize {
-    fn into(self) -> Option<ReadableSize> {
-        self.0
+impl From<OptionReadableSize> for Option<ReadableSize> {
+    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
+        s.0
     }
 }
 
@@ -115,12 +115,12 @@ impl From<OptionReadableSize> for ConfigValue {
     }
 }
 
-impl Into<OptionReadableSize> for ConfigValue {
-    fn into(self) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = self {
+impl From<ConfigValue> for OptionReadableSize {
+    fn from(s: ConfigValue) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = s {
             OptionReadableSize(s.map(ReadableSize))
         } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -301,12 +301,12 @@ impl From<ReadableDuration> for ConfigValue {
     }
 }
 
-impl Into<ReadableDuration> for ConfigValue {
-    fn into(self) -> ReadableDuration {
-        if let ConfigValue::Duration(d) = self {
+impl From<ConfigValue> for ReadableDuration {
+    fn from(d: ConfigValue) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = d {
             ReadableDuration(Duration::from_millis(d))
         } else {
-            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+            panic!("expect: ConfigValue::Duration, got: {:?}", d);
         }
     }
 }

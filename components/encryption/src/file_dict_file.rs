@@ -563,9 +563,10 @@ mod tests {
     }
 
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
-        let mut info = FileInfo::default();
-        info.key_id = id;
-        info.method = compat(method);
-        info
+        FileInfo {
+            key_id: id,
+            method: compat(method),
+            ..Default::default()
+        }
     }
 }

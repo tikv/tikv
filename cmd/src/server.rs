@@ -9,6 +9,7 @@
 //! We keep these components in the `TiKVServer` struct.
 
 use std::{
+    cmp,
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
@@ -68,11 +69,15 @@ use tikv::{
         status_server::StatusServer,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
+    storage::{
+        self,
+        config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
+        mvcc::MvccConsistencyCheckObserver,
+    },
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, VersionTrack},
+    config::{ensure_dir_exist, ReadableSize, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
     worker::{Builder as WorkerBuilder, FutureWorker, Worker},
@@ -207,8 +212,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
-        let region_info_accessor =
-            RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap(), &background_worker);
+        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -359,11 +363,27 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
-        // to compaction when TiKV recover. This file is created in data_dir rather than db_path,
-        // because we must not increase store size of db_path.
+        // to do compaction and region migration when TiKV recover. This file is created in
+        // data_dir rather than db_path, because we must not increase store size of db_path.
+        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
+        let mut capacity = disk_stats.total_space();
+        if self.config.raft_store.capacity.0 > 0 {
+            capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
+        }
         file_system::reserve_space_for_recover(
             &self.config.storage.data_dir,
-            self.config.storage.reserve_space.0,
+            cmp::min(
+                ReadableSize::gb(MAX_RESERVED_SPACE_GB).0,
+                if self.config.storage.reserve_space.0 == 0 {
+                    0
+                } else {
+                    // Max one of configured `reserve_space` and `storage.capacity * 5%`.
+                    cmp::max(
+                        (capacity as f64 * 0.05) as u64,
+                        self.config.storage.reserve_space.0,
+                    )
+                },
+            ),
         )
         .unwrap();
     }
@@ -379,7 +399,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-        .unwrap()
+        .expect("Encryption failed to initialize")
         .map(Arc::new);
     }
 
@@ -585,7 +605,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 &server_config,
                 cop_read_pool_handle,
                 self.concurrency_manager.clone(),
-                self.config.coprocessor.perf_level,
+                engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
             self.router.clone(),
             self.resolver.clone(),
