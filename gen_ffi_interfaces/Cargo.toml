@@ -13,3 +13,4 @@ features = ["which-rustfmt"]
 
 [dependencies]
 walkdir = "2"
+clap = ""
