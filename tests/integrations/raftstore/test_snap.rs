@@ -11,7 +11,7 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOType};
+use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOType, WithIORateLimiter};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
@@ -487,7 +487,7 @@ fn test_request_snapshot_apply_repeatedly() {
 fn test_inspected_snapshot() {
     let limiter = Arc::new(IORateLimiter::new(10000, true));
     let stats = limiter.statistics();
-    set_io_rate_limiter(Some(limiter));
+    let _guard = WithIORateLimiter::new(Some(limiter));
 
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);

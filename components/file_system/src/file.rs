@@ -211,7 +211,7 @@ mod tests {
     fn test_instrumented_file() {
         let limiter = Arc::new(IORateLimiter::new(1, true));
         let stats = limiter.statistics();
-        set_io_rate_limiter(Some(limiter));
+        let _guard = WithIORateLimiter::new(Some(limiter));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");

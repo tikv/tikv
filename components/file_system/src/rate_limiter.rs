@@ -116,3 +116,23 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
         None
     }
 }
+
+pub struct WithIORateLimiter {
+    previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
+}
+
+impl WithIORateLimiter {
+    pub fn new(limiter: Option<Arc<IORateLimiter>>) -> Self {
+        let previous_io_rate_limiter = get_io_rate_limiter();
+        set_io_rate_limiter(limiter);
+        WithIORateLimiter {
+            previous_io_rate_limiter,
+        }
+    }
+}
+
+impl Drop for WithIORateLimiter {
+    fn drop(&mut self) {
+        set_io_rate_limiter(self.previous_io_rate_limiter.take());
+    }
+}
