@@ -1428,6 +1428,7 @@ dependencies = [
  "futures-core",
  "futures-task",
  "futures-util",
+ "num_cpus",
 ]
 
 [[package]]
@@ -1950,7 +1951,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#0e3ce33f29b8be60d24610eb1c4695114de367ca"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-4.0#dfe1b7b9d0dfea83fa357ac6cb2cc6ff43599712"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -2025,7 +2026,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2044,7 +2045,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2058,9 +2059,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.0.25"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb5e43362e38e2bca2fd5f5134c4d4564a23a5c28e9b95411652021a8675ebe"
+checksum = "602113192b08db8f38796c4e85c39e960c145965140e918018bcde1952429655"
 dependencies = [
  "cc",
  "libc",
@@ -3516,7 +3517,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#84369a7eee61422c476fe43835a53dae9490a39b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-4.x#53453446f16a25784ada946db6f35cd876131b2b"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4052,6 +4053,7 @@ dependencies = [
  "error_code",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.7",
  "futures-executor",
  "futures-util",
  "grpcio",

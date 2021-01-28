@@ -318,7 +318,7 @@ where
             "near_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -343,7 +343,7 @@ where
             "near_reverse_load_data_by_write",
         ));
     }
-    statistics.data.processed += 1;
+    statistics.data.processed_keys += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
@@ -383,13 +383,13 @@ where
             user_key.as_encoded(),
         )
     {
-        assert_ge!(
-            after_ts,
-            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-        );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
+                assert_ge!(
+                    after_ts,
+                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+                );
                 ret = Some(write_ref.to_owned());
                 break;
             }
