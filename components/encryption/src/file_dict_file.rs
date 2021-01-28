@@ -114,11 +114,15 @@ impl FileDictionaryFile {
         Ok((file_dict_file, file_dict))
     }
 
+    fn file_path(&self) -> PathBuf {
+        self.base.join(&self.name)
+    }
+
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
     fn rewrite(&mut self) -> Result<()> {
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
         if self.enable_log {
-            let origin_path = self.base.join(&self.name);
+            let origin_path = self.file_path();
             let mut tmp_path = origin_path.clone();
             tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
             let mut tmp_file = OpenOptions::new()
@@ -149,9 +153,7 @@ impl FileDictionaryFile {
 
     /// Recovery from the log file and return `FileDictionary`.
     pub fn recovery(&mut self) -> Result<FileDictionary> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(self.base.join(&self.name))?;
+        let mut f = OpenOptions::new().read(true).open(self.file_path())?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let remained = buf.as_slice();
@@ -191,9 +193,9 @@ impl FileDictionaryFile {
             }
         }
 
-        // If the file dict is empty, it must be deleted which avoids continuing TiKV crashes.
+        // If the file dict is empty, the file dict file must be deleted which avoids continuing TiKV crashes.
         if file_dict.files.is_empty() && !self.base.join(KEY_DICT_NAME).exists() {
-            std::fs::remove_file(self.base.join(&self.name))?;
+            std::fs::remove_file(self.file_path())?;
             return Err(Error::Io(IoError::new(
                 ErrorKind::NotFound,
                 "the file dict is found but empty",
