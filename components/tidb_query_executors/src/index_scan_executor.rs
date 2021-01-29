@@ -22,6 +22,7 @@ use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
 use tidb_query_datatype::codec::datum::decode;
 use DecodeHandleStrategy::*;
+use crate::index_scan_executor::ValueInfo;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -293,6 +294,15 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     }
 }
 
+struct ValueInfo<'a> {
+    tail: &'a [u8],
+    common_handle_bytes: &'a [u8],
+    partition_id_bytes: &'a [u8],
+    restore_values: &'a [u8],
+    restored_v5: bool,
+    tail_len: unsize,
+}
+
 impl IndexScanExecutorImpl {
     #[inline]
     fn decode_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
@@ -512,7 +522,8 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn split_value_data(value: &[u8]) -> Result<(&[u8], &[u8], &[u8], &[u8], bool, usize)> {
+    #[allow(type_complexity)]
+    fn split_value_data(value: &[u8]) -> Result<ValueInfo> {
         let tail_len = value[0] as usize;
         if tail_len > value.len() {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
@@ -553,14 +564,14 @@ impl IndexScanExecutorImpl {
             "".as_bytes()
         };
 
-        Ok((
+        Ok(ValueInfo {
             tail,
             common_handle_bytes,
             partition_id_bytes,
             restore_values,
             restored_v5,
             tail_len,
-        ))
+        })
     }
 
     // Process new layout index values in an extensible way,
@@ -572,7 +583,7 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
-        let (tail, common_handle_bytes, partition_id_bytes, restore_values, restored_v5, tail_len) =
+        let ValueInfo{tail, common_handle_bytes, partition_id_bytes, restore_values, restored_v5, tail_len} =
             Self::split_value_data(value)?;
 
         // Sanity check.
