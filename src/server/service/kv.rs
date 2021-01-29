@@ -1253,6 +1253,36 @@ fn future_batch_get<E: Engine, L: LockManager>(
     }
 }
 
+fn future_scan_lock<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: ScanLockRequest,
+) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+    let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+
+    let v = storage.scan_lock(
+        req.take_context(),
+        req.get_max_version().into(),
+        start_key,
+        end_key,
+        req.get_limit() as usize,
+    );
+
+    async move {
+        let v = v.await;
+        let mut resp = ScanLockResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
@@ -1702,12 +1732,6 @@ txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, Ch
             resp.set_commit_ts(ts.into_inner());
         },
         Ok(SecondaryLocksStatus::RolledBack) => {},
-        Err(e) => resp.set_error(extract_key_error(&e)),
-    }
-});
-txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
-    match v {
-        Ok(locks) => resp.set_locks(locks.into()),
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });

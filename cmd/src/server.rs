@@ -16,6 +16,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -25,11 +26,16 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, MetricsFlusher,
-    RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, RaftEngine, CF_DEFAULT,
+    CF_WRITE,
+};
+use file_system::{
+    set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
+use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
+use futures::stream::StreamExt;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -74,18 +80,17 @@ use tikv::{
         mvcc::MvccConsistencyCheckObserver,
     },
 };
-use tikv_util::config::{ReadableSize, VersionTrack};
 use tikv_util::{
     check_environment_variables,
-    config::ensure_dir_exist,
+    config::{ensure_dir_exist, ReadableSize, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
-    worker::{Builder as WorkerBuilder, FutureWorker, Worker},
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
 
 use crate::{setup::*, signal_handler};
-use tikv_util::worker::LazyWorker;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -110,11 +115,8 @@ pub fn run_tikv(config: TiKvConfig) {
 
     macro_rules! run_impl {
         ($ER: ty) => {{
-            let enable_io_snoop = config.enable_io_snoop;
             let mut tikv = TiKVServer::<$ER>::init(config);
-            if enable_io_snoop {
-                tikv.init_io_snooper();
-            }
+            let fetcher = tikv.init_io_utility();
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -124,7 +126,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let gc_worker = tikv.init_gc_worker();
             let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
-            tikv.init_metrics_flusher();
+            tikv.init_metrics_flusher(fetcher);
             tikv.run_server(server_config);
             tikv.run_status_server();
 
@@ -141,6 +143,8 @@ pub fn run_tikv(config: TiKvConfig) {
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
+
+const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 
 /// A complete TiKV server.
 struct TiKVServer<ER: RaftEngine> {
@@ -473,7 +477,10 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .start()
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         gc_worker
-            .start_observe_lock_apply(self.coprocessor_host.as_mut().unwrap())
+            .start_observe_lock_apply(
+                self.coprocessor_host.as_mut().unwrap(),
+                self.concurrency_manager.clone(),
+            )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -838,25 +845,36 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
     }
 
-    fn init_metrics_flusher(&mut self) {
-        let mut metrics_flusher = Box::new(MetricsFlusher::new(
-            self.engines.as_ref().unwrap().engines.clone(),
-        ));
-
-        // Start metrics flusher
-        if let Err(e) = metrics_flusher.start() {
-            error!(%e; "failed to start metrics flusher");
-        }
-
-        self.to_stop.push(metrics_flusher);
+    fn init_io_utility(&mut self) -> BytesFetcher {
+        let io_snooper_on = self.config.enable_io_snoop
+            && file_system::init_io_snooper()
+                .map_err(|e| error!(%e; "failed to init io snooper"))
+                .is_ok();
+        let (fetcher, limiter) = if io_snooper_on {
+            (BytesFetcher::FromIOSnooper(), IORateLimiter::new(0, false))
+        } else {
+            let limiter = IORateLimiter::new(0, true);
+            (BytesFetcher::FromRateLimiter(limiter.statistics()), limiter)
+        };
+        set_io_rate_limiter(Some(Arc::new(limiter)));
+        fetcher
     }
 
-    fn init_io_snooper(&mut self) {
-        if let Err(e) = file_system::init_io_snooper() {
-            error!(%e; "failed to init io snooper");
-        } else {
-            info!("init io snooper successfully"; "pid" => nix::unistd::getpid().to_string());
-        }
+    fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
+        let handle = self.background_worker.clone_raw_handle();
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
+            .compat();
+        let mut engine_metrics =
+            EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
+        let mut io_metrics = IOMetricsManager::new(fetcher);
+        handle.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                let now = Instant::now();
+                engine_metrics.flush(now);
+                io_metrics.flush(now);
+            }
+        });
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
@@ -1143,12 +1161,6 @@ where
     }
 }
 
-impl<ER: RaftEngine> Stop for MetricsFlusher<RocksEngine, ER> {
-    fn stop(mut self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
 impl Stop for Worker {
     fn stop(self: Box<Self>) {
         Worker::stop(&self);
@@ -1158,5 +1170,31 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
+
+pub struct EngineMetricsManager<R: RaftEngine> {
+    engines: Engines<RocksEngine, R>,
+    last_reset: Instant,
+}
+
+impl<R: RaftEngine> EngineMetricsManager<R> {
+    pub fn new(engines: Engines<RocksEngine, R>) -> Self {
+        EngineMetricsManager {
+            engines,
+            last_reset: Instant::now(),
+        }
+    }
+
+    pub fn flush(&mut self, now: Instant) {
+        self.engines.kv.flush_metrics("kv");
+        self.engines.raft.flush_metrics("raft");
+        if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
+            self.engines.kv.reset_statistics();
+            self.engines.raft.reset_statistics();
+            self.last_reset = now;
+        }
     }
 }
