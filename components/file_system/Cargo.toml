@@ -10,6 +10,7 @@ bcc-iosnoop = ["bcc"]
 [dependencies]
 collections = { path = "../collections" }
 crc32fast = "1.2"
+crossbeam-utils = "0.8.0"
 futures = "0.3"
 fs2 = "0.4"
 lazy_static = "1.3"
@@ -33,4 +34,4 @@ maligned = "0.2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bcc = { version = "0.0.30", optional = true }
-crossbeam-utils = "0.8.0"
+
