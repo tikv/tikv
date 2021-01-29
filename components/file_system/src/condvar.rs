@@ -130,12 +130,14 @@ impl CondvarLinkedList {
     }
 }
 
-/// Un-prioritized conditional variable. Supports both synchronously or
+/// Un-prioritized condition variable. Supports both synchronously or
 /// asynchronously waiting on the same instance.
 /// Current implementation is not ideal because each waiter waits on their
 /// own futex, and each futex has some initialization and destruction overhead.
-/// Although the total amount of waiting tasks is unchanged, meaning we won't
-/// cause more damage than it should to OS-wise performance.
+/// That said, the total amount of waiting tasks is unchanged, meaning we won't
+/// cause more damage than it should to system-wise performance.
+/// Alternative: Sharing one single condvar at the cost of thundering-herd or
+/// out-of-order wakeups.
 #[derive(Debug)]
 pub struct Condvar {
     waiting: CondvarLinkedList,
