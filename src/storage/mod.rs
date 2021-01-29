@@ -1156,16 +1156,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 {
-                    let end_key = match &end_key {
-                        Some(end_key) => end_key.to_vec(),
-                        None => vec![],
-                    };
-                    // TODO: should be fixed
                     tls_collect_qps(
                         ctx.get_region_id(),
                         ctx.get_peer(),
                         &start_key,
-                        &end_key,
+                        end_key.as_ref().unwrap_or(&vec![]),
                         reverse_scan,
                     );
                 }
