@@ -250,8 +250,10 @@
 # compaction-priority = "high"
 # replication-priority = "high"
 # load-balance-priority = "high"
+# gc-priority = "high"
 # import-priority = "high"
 # export-priority = "high"
+# other-priority = "high"
 
 [pd]
 ## PD endpoints.
