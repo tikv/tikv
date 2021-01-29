@@ -2,7 +2,7 @@
 
 use crossbeam::channel;
 use engine_rocks::Compat;
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{PbPeekable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;

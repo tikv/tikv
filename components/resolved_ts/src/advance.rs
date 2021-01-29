@@ -314,16 +314,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             let pd_client = pd_client.clone();
             let security_mgr = security_mgr.clone();
             async move {
-                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
-                    let store = box_try!(pd_client.get_store_async(store_id).await);
-                    let cb = ChannelBuilder::new(env.clone());
-                    let channel = security_mgr.connect(cb, &store.address);
-                    cdc_clients
-                        .lock()
-                        .unwrap()
-                        .insert(store_id, TikvClient::new(channel));
-                }
-                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
+                let client = box_try!(
+                    get_tikv_client(store_id, pd_client, security_mgr, env, cdc_clients).await
+                );
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
                 req.set_ts(min_ts.into_inner());
@@ -361,4 +354,21 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             })
             .collect()
     }
+}
+
+async fn get_tikv_client(
+    store_id: u64,
+    pd_client: Arc<dyn PdClient>,
+    security_mgr: Arc<SecurityManager>,
+    env: Arc<Environment>,
+    cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
+) -> Result<TikvClient> {
+    if let Some(cli) = cdc_clients.lock().unwrap().get(&store_id) {
+        return Ok(cli.clone());
+    }
+    let store = box_try!(pd_client.get_store_async(store_id).await);
+    let channel = security_mgr.connect(ChannelBuilder::new(env), &store.address);
+    let cli = TikvClient::new(channel);
+    cdc_clients.lock().unwrap().insert(store_id, cli.clone());
+    Ok(cli)
 }
