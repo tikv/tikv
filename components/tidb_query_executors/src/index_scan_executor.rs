@@ -583,8 +583,13 @@ impl IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
-        let ValueInfo{tail, common_handle_bytes, partition_id_bytes, restore_values, restored_v5, tail_len} =
-            Self::split_value_data(value)?;
+        let ValueInfo {
+            tail,
+            common_handle_bytes,
+            partition_id_bytes,
+            restore_values,
+            restored_v5,
+            tail_len} = Self::split_value_data(value)?;
 
         // Sanity check.
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
