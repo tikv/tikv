@@ -209,8 +209,9 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let recorder = Arc::new(BytesRecorder::new());
-        set_io_rate_limiter(IORateLimiter::new(1, Some(recorder.clone())));
+        let limiter = Arc::new(IORateLimiter::new(1, true));
+        let stats = limiter.statistics();
+        let _guard = WithIORateLimiter::new(Some(limiter));
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
@@ -221,7 +222,7 @@ mod tests {
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
-                recorder.fetch(IOType::ForegroundWrite, IOOp::Write),
+                stats.fetch(IOType::ForegroundWrite, IOOp::Write),
                 content.len()
             );
         }
@@ -234,7 +235,7 @@ mod tests {
             // read_to_string only exit when file.read() returns zero, which means
             // it requires two EOF reads to finish the call.
             assert_eq!(
-                recorder.fetch(IOType::ForegroundRead, IOOp::Read),
+                stats.fetch(IOType::ForegroundRead, IOOp::Read),
                 content.len() + 2
             );
         }

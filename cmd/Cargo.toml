@@ -15,6 +15,7 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+bcc-iosnoop = ["tikv/bcc-iosnoop"]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
@@ -86,7 +87,7 @@ error_code = { path = "../components/error_code", default-features = false }
 file_system = { path = "../components/file_system" }
 fs2 = "0.4"
 futures = "0.3"
-tokio = { version = "0.2", features = ["rt-threaded"] }
+tokio = { version = "0.2", features = ["rt-threaded", "time"] }
 grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 keys = { path = "../components/keys", default-features = false }
