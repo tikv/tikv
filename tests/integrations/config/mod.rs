@@ -656,6 +656,7 @@ fn test_serde_custom_tikv_config() {
             compaction_priority: IOPriority::Low,
             replication_priority: IOPriority::Low,
             load_balance_priority: IOPriority::Low,
+            gc_priority: IOPriority::Low,
             import_priority: IOPriority::Low,
             export_priority: IOPriority::Low,
             other_priority: IOPriority::Low,

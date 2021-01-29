@@ -292,16 +292,18 @@ impl IORateLimiter {
     /// Requests for token for bytes and potentially update statistics. If this
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
-    pub fn request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
-        let priority = self.priority_map[io_type as usize];
-        if let Some(ios) = &self.ios {
-            ios.request(priority, 1);
+    pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if io_op == IOOp::Write || io_type == IOType::Other {
+            let priority = self.priority_map[io_type as usize];
+            if let Some(ios) = &self.ios {
+                ios.request(priority, 1);
+            }
+            bytes = if let Some(b) = &self.bytes {
+                b.request(priority, bytes)
+            } else {
+                bytes
+            };
         }
-        let bytes = if let Some(b) = &self.bytes {
-            b.request(priority, bytes)
-        } else {
-            bytes
-        };
         if self.enable_statistics.load(Ordering::Relaxed) {
             self.stats.record(io_type, io_op, bytes);
         }
@@ -312,16 +314,18 @@ impl IORateLimiter {
     /// statistics. If this request can not be satisfied, the call is blocked.
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
-    pub async fn async_request(&self, io_type: IOType, io_op: IOOp, bytes: usize) -> usize {
-        let priority = self.priority_map[io_type as usize];
-        if let Some(ios) = &self.ios {
-            ios.async_request(priority, 1).await;
+    pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
+        if io_op == IOOp::Write || io_type == IOType::Other {
+            let priority = self.priority_map[io_type as usize];
+            if let Some(ios) = &self.ios {
+                ios.async_request(priority, 1).await;
+            }
+            bytes = if let Some(b) = &self.bytes {
+                b.async_request(priority, bytes).await
+            } else {
+                bytes
+            };
         }
-        let bytes = if let Some(b) = &self.bytes {
-            b.async_request(priority, bytes).await
-        } else {
-            bytes
-        };
         if self.enable_statistics.load(Ordering::Relaxed) {
             self.stats.record(io_type, io_op, bytes);
         }

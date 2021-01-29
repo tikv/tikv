@@ -38,7 +38,7 @@ use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
 use variant_count::VariantCount;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
     Read,
     Write,
@@ -58,8 +58,9 @@ pub enum IOType {
     Compaction = 4,
     Replication = 5,
     LoadBalance = 6,
-    Import = 7,
-    Export = 8,
+    Gc = 7,
+    Import = 8,
+    Export = 9,
 }
 
 pub struct WithIOType {
