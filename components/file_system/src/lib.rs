@@ -56,6 +56,7 @@ pub enum IOType {
     Compaction,
     Replication,
     LoadBalance,
+    Gc,
     Import,
     Export,
 }
