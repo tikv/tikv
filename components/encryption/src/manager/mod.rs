@@ -118,17 +118,16 @@ impl Dicts {
                 info!("encryption: none of key dictionary and file dictionary are found.");
                 Ok(None)
             }
+            (Ok((file_dict_file, file_dict)), Err(Error::Io(key_err)))
+                if key_err.kind() == ErrorKind::NotFound && file_dict.files.is_empty() =>
+            {
+                std::fs::remove_file(file_dict_file.file_path())?;
+                info!("encryption: file dict is empty and none of key dictionary are found.");
+                return Ok(None);
+            }
             // ...else, return either error.
             (file_dict_file, key_bytes) => {
                 if let Err(key_err) = key_bytes {
-                    let (file_dict_file, file_dict) = file_dict_file.unwrap();
-                    if file_dict.files.is_empty() {
-                        std::fs::remove_file(file_dict_file.file_path())?;
-                        info!(
-                            "encryption: file dict is empty and none of key dictionary are found."
-                        );
-                        return Ok(None);
-                    }
                     error!("encryption: failed to load key dictionary.");
                     Err(key_err)
                 } else {
