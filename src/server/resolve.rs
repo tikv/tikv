@@ -197,7 +197,10 @@ mod tests {
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
             if self.store.get_state() == metapb::StoreState::Tombstone {
                 // Simulate the behavior of `get_store` in pd client.
-                return Err(pd_client::Error::StoreTombstone(format!("{:?}", self.store)));
+                return Err(pd_client::Error::StoreTombstone(format!(
+                    "{:?}",
+                    self.store
+                )));
             }
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
