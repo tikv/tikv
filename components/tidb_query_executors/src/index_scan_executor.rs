@@ -511,20 +511,13 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    // Process new layout index values in an extensible way,
-    // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
-    fn process_kv_general(
-        &mut self,
-        mut key_payload: &[u8],
-        value: &[u8],
-        columns: &mut LazyBatchColumnVec,
-    ) -> Result<()> {
+    #[inline]
+    fn split_value_data(value: &[u8]) -> Result<(&[u8], &[u8], &[u8], &[u8], bool, usize)> {
         let tail_len = value[0] as usize;
         if tail_len > value.len() {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
         }
 
-        // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
         let mut restored_v5 = false;
         let (remaining, tail) = value[1..].split_at(value.len() - 1 - tail_len);
         let (common_handle_bytes, remaining) =
@@ -560,6 +553,28 @@ impl IndexScanExecutorImpl {
             "".as_bytes()
         };
 
+        Ok((
+            tail,
+            common_handle_bytes,
+            partition_id_bytes,
+            restore_values,
+            restored_v5,
+            tail_len,
+        ))
+    }
+
+    // Process new layout index values in an extensible way,
+    // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
+    fn process_kv_general(
+        &mut self,
+        mut key_payload: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
+        let (tail, common_handle_bytes, partition_id_bytes, restore_values, restored_v5, tail_len) =
+            Self::split_value_data(value)?;
+
         // Sanity check.
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
             return Err(other_err!(
@@ -572,18 +587,18 @@ impl IndexScanExecutorImpl {
             if restored_v5 {
                 // Extract the data from key, then use the restore data to get the original data.
                 Self::extract_columns_from_datum_format(
-                    &mut <&[u8]>::clone((&key_payload)),
+                    &mut <&[u8]>::clone(&key_payload),
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
                 self.restore_original_data(restore_values, columns, false)?;
             } else {
-                // 4.0 version format, use the restore data directly.
+                // 4.0 version format, use the restore data directly. The restore data contain all the indexed values.
                 self.extract_columns_from_row_format(restore_values, columns)?;
             }
         } else {
             // No restored data, we should extract the index columns from the key.
             Self::extract_columns_from_datum_format(
-                &mut <&[u8]>::clone((&key_payload)),
+                &mut <&[u8]>::clone(&key_payload),
                 &mut columns[..self.columns_id_without_handle.len()],
             )?;
         }
