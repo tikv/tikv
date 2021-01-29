@@ -92,7 +92,7 @@ impl ChangeLog {
         changes
             .into_iter()
             .map(|(key, row)| match (row.write, row.lock, row.default) {
-                (Some(KeyOp::Put(mut commit_ts, write)), Some(KeyOp::Delete), default) => {
+                (Some(KeyOp::Put(mut commit_ts, write)), _, default) => {
                     decode_write(key.as_encoded(), &write, true).map(|write| {
                         let Write {
                             short_value,
