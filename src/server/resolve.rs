@@ -83,6 +83,8 @@ where
         let pd_client = Arc::clone(&self.pd_client);
         let mut s = match pd_client.get_store(store_id) {
             Ok(s) => s,
+            // `get_store` will filter tombstone store, so here needs to handle
+            // it explicitly.
             Err(pd_client::Error::StoreTombstone(_)) => {
                 RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
                 return Err(box_err!("store {} has been removed", store_id));
