@@ -88,7 +88,7 @@ where
             Err(pd_client::Error::StoreTombstone(_)) => {
                 RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
                 return Err(box_err!("store {} has been removed", store_id));
-            },
+            }
             Err(e) => return Err(box_err!(e)),
         };
         let mut group_id = None;
