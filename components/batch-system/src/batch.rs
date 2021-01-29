@@ -6,7 +6,7 @@
 //! that controls how the former is created or metrics are collected.
 
 use crate::config::Config;
-use crate::fsm::{Fsm, FsmScheduler};
+use crate::fsm::{Fsm, FsmScheduler, Priority};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError};
@@ -158,10 +158,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     }
 
     /// Schedule the normal FSM located at `index`.
-    pub fn reschedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
+    pub fn reschedule(&mut self, router: &NormalScheduler<N, C>, index: usize) {
         let fsm = self.normals.swap_remove(index);
         self.timers.swap_remove(index);
-        router.normal_scheduler.schedule(fsm);
+        router.schedule(fsm);
     }
 
     /// Same as `release`, but working on control FSM.
@@ -229,11 +229,17 @@ pub trait PollHandler<N, C> {
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
+
+    /// The normal-priority handler can not process low-priority fsm.
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
+    }
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
 struct Poller<N: Fsm, C: Fsm, Handler> {
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    second_router: NormalScheduler<N, C>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
@@ -244,6 +250,7 @@ enum ReschedulePolicy {
     Release(usize),
     Remove,
     Schedule,
+    RescheduleOtherPriority,
 }
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
@@ -295,8 +302,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let len = self.handler.handle_normal(p);
                 if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                } else if p.get_priority() != self.handler.get_priority() {
+                    reschedule_fsms.push((i, ReschedulePolicy::RescheduleOtherPriority))
                 } else {
-                    if batch.timers[i].elapsed() >= self.reschedule_duration {
+                    if self.handler.get_priority() != Priority::Low
+                        && batch.timers[i].elapsed() >= self.reschedule_duration
+                    {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -325,6 +336,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 let len = self.handler.handle_normal(&mut batch.normals[fsm_cnt]);
                 if batch.normals[fsm_cnt].is_stopped() {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Remove));
+                } else if batch.normals[fsm_cnt].get_priority() != self.handler.get_priority() {
+                    reschedule_fsms.push((fsm_cnt, ReschedulePolicy::RescheduleOtherPriority))
                 } else if let Some(l) = len {
                     reschedule_fsms.push((fsm_cnt, ReschedulePolicy::Release(l)));
                 }
@@ -338,7 +351,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 match mark {
                     ReschedulePolicy::Release(l) => batch.release(r, l),
                     ReschedulePolicy::Remove => batch.remove(r),
-                    ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
+                    ReschedulePolicy::Schedule => {
+                        batch.reschedule(&self.router.normal_scheduler, r)
+                    }
+                    ReschedulePolicy::RescheduleOtherPriority => {
+                        batch.reschedule(&self.second_router, r)
+                    }
                 }
             }
         }
@@ -350,7 +368,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 pub trait HandlerBuilder<N, C> {
     type Handler: PollHandler<N, C>;
 
-    fn build(&mut self) -> Self::Handler;
+    fn build(&mut self, priority: Priority) -> Self::Handler;
 }
 
 /// A system that can poll FSMs concurrently and in batch.
@@ -362,6 +380,8 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
+    low_receiver: channel::Receiver<FsmTypes<N, C>>,
+    low_scheduler: NormalScheduler<N, C>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
@@ -384,10 +404,11 @@ where
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let handler = builder.build();
+            let handler = builder.build(Priority::Normal);
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
+                second_router: self.low_scheduler.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
                 reschedule_duration: self.reschedule_duration,
@@ -401,6 +422,25 @@ where
                 .unwrap();
             self.workers.push(t);
         }
+        let handler = builder.build(Priority::Low);
+        let mut poller = Poller {
+            router: self.router.clone(),
+            fsm_receiver: self.low_receiver.clone(),
+            second_router: self.router.normal_scheduler.clone(),
+            handler,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+        };
+
+        let t = thread::Builder::new()
+            .name(thd_name!(format!("{}-low", name_prefix)))
+            .spawn(move || {
+                set_io_type(IOType::ForegroundWrite);
+                poller.poll()
+            })
+            .unwrap();
+        self.workers.push(t);
+
         self.name_prefix = Some(name_prefix);
     }
 
@@ -412,6 +452,7 @@ where
         let name_prefix = self.name_prefix.take().unwrap();
         info!("shutdown batch system {}", name_prefix);
         self.router.broadcast_shutdown();
+        self.low_scheduler.shutdown();
         let mut last_error = None;
         for h in self.workers.drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
@@ -441,13 +482,19 @@ pub fn create_system<N: Fsm, C: Fsm>(
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let control_box = BasicMailbox::new(sender, controller);
     let (tx, rx) = channel::unbounded();
+    let (tx2, rx2) = channel::unbounded();
     let normal_scheduler = NormalScheduler { sender: tx.clone() };
+    let low_scheduler = NormalScheduler {
+        sender: tx2.clone(),
+    };
     let control_scheduler = ControlScheduler { sender: tx };
     let router = Router::new(control_box, normal_scheduler, control_scheduler);
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
         receiver: rx,
+        low_receiver: rx2,
+        low_scheduler,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size,
         reschedule_duration: cfg.reschedule_duration.0,

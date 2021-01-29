@@ -15,7 +15,9 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -366,6 +368,7 @@ where
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMeta>,
+    priority: Priority,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -384,6 +387,7 @@ where
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+        priority: Priority,
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
@@ -413,6 +417,7 @@ where
             delete_ssts: vec![],
             store_id,
             pending_create_peers,
+            priority,
         }
     }
 
@@ -625,7 +630,10 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
             _ => {}
         }
     }
+    false
+}
 
+fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
     // Some commands may modify keys covered by the current write batch, so we
     // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
@@ -789,6 +797,8 @@ where
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+
+    priority: Priority,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -816,6 +826,7 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
+            priority: Priority::Normal,
         }
     }
 
@@ -934,8 +945,17 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
+            let low_prioty_request = has_high_latency_operation(&cmd);
+
+            if low_prioty_request
+                || should_write_to_engine(&cmd)
+                || apply_ctx.kv_wb().should_write_to_engine()
+            {
                 apply_ctx.commit(self);
+                if low_prioty_request && apply_ctx.priority != Priority::Low {
+                    self.priority = Priority::Low;
+                    return ApplyResult::Yield;
+                }
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
@@ -3351,6 +3371,10 @@ where
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
+                    // If there is any apply task, we change this fsm to normal-priority.
+                    // When it meets a ingest-request or a delete-range request, it will change to
+                    // low-priority
+                    self.delegate.priority = Priority::Normal;
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -3407,6 +3431,10 @@ where
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    fn get_priority(&self) -> Priority {
+        self.delegate.priority
     }
 }
 
@@ -3535,6 +3563,10 @@ where
             }
         }
     }
+
+    fn get_priority(&self) -> Priority {
+        self.apply_ctx.priority
+    }
 }
 
 pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
@@ -3583,7 +3615,7 @@ where
 {
     type Handler = ApplyPoller<EK, W>;
 
-    fn build(&mut self) -> ApplyPoller<EK, W> {
+    fn build(&mut self, priority: Priority) -> ApplyPoller<EK, W> {
         let cfg = self.cfg.value();
         ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
@@ -3598,6 +3630,7 @@ where
                 &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
+                priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),

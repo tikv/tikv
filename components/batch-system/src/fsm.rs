@@ -12,6 +12,12 @@ const NOTIFYSTATE_IDLE: usize = 1;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Priority {
+    Low,
+    Normal,
+}
+
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
     type Fsm: Fsm;
@@ -43,6 +49,10 @@ pub trait Fsm {
         Self: Sized,
     {
         None
+    }
+
+    fn get_priority(&self) -> Priority {
+        Priority::Normal
     }
 }
 
