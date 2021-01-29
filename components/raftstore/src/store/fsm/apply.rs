@@ -18,7 +18,6 @@ use std::{cmp, usize};
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_traits::util::append_expire_ts;
 use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{
@@ -1349,9 +1348,7 @@ where
     EK: KvEngine,
 {
     fn handle_put<W: WriteBatch<EK>>(&mut self, wb: &mut W, req: &Request) -> Result<Response> {
-        let key = req.get_put().get_key();
-        let mut value = req.get_put().get_value().to_vec();
-        append_expire_ts(&mut value, req.get_put().get_expire_ts());
+        let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
 
@@ -1367,7 +1364,7 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            wb.put_cf(cf, &key, &value).unwrap_or_else(|e| {
+            wb.put_cf(cf, &key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
                     self.tag,
@@ -1378,7 +1375,7 @@ where
                 )
             });
         } else {
-            wb.put(&key, &value).unwrap_or_else(|e| {
+            wb.put(&key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
                     self.tag,

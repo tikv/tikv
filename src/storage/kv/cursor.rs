@@ -56,6 +56,11 @@ impl<I: Iterator> Cursor<I> {
         }
     }
 
+    pub fn into_with<J: Iterator>(self, f: impl FnOnce(I) -> J) -> Cursor<J> {
+        let iter = f(self.iter);
+        Cursor::new(iter, self.scan_mode, self.prefix_seek)
+    }
+
     /// Mark key and value as unread. It will be invoked once cursor is moved.
     #[inline]
     fn mark_unread(&self) {

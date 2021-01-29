@@ -53,6 +53,8 @@ pub struct Config {
     pub enable_async_apply_prewrite: bool,
     #[config(submodule)]
     pub block_cache: BlockCacheConfig,
+    #[config(skip)]
+    pub enable_ttl: bool,
 }
 
 impl Default for Config {
@@ -68,6 +70,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(MIN_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
+            enable_ttl: false,
         }
     }
 }

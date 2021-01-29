@@ -203,7 +203,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {
-        let write = Modify::Put(CF_LOCK, key, lock.to_bytes(), 0);
+        let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
         self.write_size += write.size();
         self.modifies.push(write);
     }
@@ -221,7 +221,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub(crate) fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value, 0);
+        let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
         self.write_size += write.size();
         self.modifies.push(write);
     }
@@ -233,7 +233,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub(crate) fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let write = Modify::Put(CF_WRITE, key.append_ts(ts), value, 0);
+        let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
         self.modifies.push(write);
     }

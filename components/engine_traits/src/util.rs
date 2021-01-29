@@ -31,7 +31,7 @@ pub fn append_expire_ts(value: &mut Vec<u8>, expire_ts: u64) {
 pub fn get_expire_ts(value_with_ttl: &[u8]) -> Result<u64> {
     let len = value_with_ttl.len();
     if len < number::U64_SIZE {
-        return Err(Error::Codec(codec::Error::KeyLength));
+        return Err(Error::Codec(codec::Error::ValueLength));
     }
     let mut ts = &value_with_ttl[len - number::U64_SIZE..];
     Ok(number::decode_u64(&mut ts)?.into())
@@ -40,4 +40,13 @@ pub fn get_expire_ts(value_with_ttl: &[u8]) -> Result<u64> {
 pub fn strip_expire_ts(value_with_ttl: &[u8]) -> &[u8] {
     let len = value_with_ttl.len();
     &value_with_ttl[..len - number::U64_SIZE]
+}
+
+pub fn truncate_expire_ts(value_with_ttl: &mut Vec<u8>) -> Result<()> {
+    let len = value_with_ttl.len();
+    if len < number::U64_SIZE {
+        return Err(Error::Codec(codec::Error::ValueLength));
+    }
+    value_with_ttl.truncate(len - number::U64_SIZE);
+    Ok(())
 }

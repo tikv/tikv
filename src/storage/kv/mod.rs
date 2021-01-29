@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
 use futures::prelude::*;
@@ -62,8 +63,7 @@ impl CbContext {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
-    // cf_name, key, value, ttl
-    Put(CfName, Key, Value, u64),
+    Put(CfName, Key, Value),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
 }
@@ -79,8 +79,15 @@ impl Modify {
 
         match self {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
-            Modify::Put(_, k, v, _) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
+
+    pub fn with_ttl(&mut self, expire_ts: u64) {
+        match self {
+            Modify::Put(_, _, ref mut v) => append_expire_ts(v, expire_ts),
+            _ => {}
         }
     }
 }
@@ -182,7 +189,7 @@ pub trait Engine: Send + Clone + 'static {
     fn put_cf(&self, ctx: &Context, cf: CfName, key: Key, value: Value) -> Result<()> {
         self.write(
             ctx,
-            WriteData::from_modifies(vec![Modify::Put(cf, key, value, 0)]),
+            WriteData::from_modifies(vec![Modify::Put(cf, key, value)]),
         )
     }
 

@@ -40,6 +40,7 @@ pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
 pub mod mvcc;
+pub mod ttl;
 pub mod txn;
 
 mod read_pool;
@@ -54,6 +55,7 @@ pub use self::{
         TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
+    ttl::TTLSnapshot,
     txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
@@ -81,8 +83,7 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::time::Instant;
-use tikv_util::time::ThreadReadId;
+use tikv_util::time::{Instant, ThreadReadId, UnixSecs};
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -127,6 +128,8 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    enable_ttl: bool,
 }
 
 impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
@@ -145,6 +148,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
+            enable_ttl: self.enable_ttl,
         }
     }
 }
@@ -211,6 +215,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             concurrency_manager,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            enable_ttl: config.enable_ttl,
         })
     }
 
@@ -763,27 +768,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    fn raw_get_key_value<S: Snapshot>(
-        snapshot: &S,
-        cf: String,
-        key: Vec<u8>,
-        stats: &mut Statistics,
-    ) -> Result<Option<Vec<u8>>> {
-        let cf = Self::rawkv_cf(&cf)?;
-        // no scan_count for this kind of op.
-
-        let key_len = key.len();
-        snapshot
-            .get_cf(cf, &Key::from_encoded(key))
-            .map(|value| {
-                stats.data.flow_stats.read_keys = 1;
-                stats.data.flow_stats.read_bytes =
-                    key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
-                value
-            })
-            .map_err(Error::from)
-    }
-
     /// Get the value of a raw key.
     pub fn raw_get(
         &self,
@@ -794,6 +778,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -811,10 +796,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let r = Self::raw_get_key_value(&snapshot, cf, key, &mut stats);
+                    let r = store.raw_get_key_value(cf, &Key::from_encoded(key), &mut stats);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -845,6 +832,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
+
         let res = self.read_pool.spawn_handle(
             async move {
                 for get in &gets {
@@ -882,7 +871,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     match snap.await {
                         Ok(snapshot) => {
                             let mut stats = Statistics::default();
-                            results.push(Self::raw_get_key_value(&snapshot, cf, key, &mut stats));
+                            let store = RawStore::new(snapshot, enable_ttl);
+                            let cf = Self::rawkv_cf(&cf)?;
+                            results.push(store.raw_get_key_value(
+                                cf,
+                                &Key::from_encoded(key),
+                                &mut stats,
+                            ));
                             tls_collect_read_flow(ctx.get_region_id(), &stats);
                         }
                         Err(e) => {
@@ -918,6 +913,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -939,6 +935,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
                 {
                     let begin_instant = Instant::now_coarse();
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
@@ -948,18 +945,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
                         .map(|k| {
-                            let v = snapshot.get_cf(cf, &k);
+                            let v = store.raw_get_key_value(cf, &k, &mut stats);
                             (k, v)
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                        .map(|(k, v)| match v {
-                            Ok(Some(v)) => {
-                                stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
-                                Ok((k.into_encoded(), v))
+                        .map(|(k, v)| {
+                            if v.is_ok() {
+                                Ok((k.into_encoded(), v.unwrap().unwrap()))
+                            } else {
+                                Err(v.unwrap_err())
                             }
-                            Err(e) => Err(Error::from(e)),
-                            _ => unreachable!(),
                         })
                         .collect();
 
@@ -997,15 +992,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-
+        let mut m = Modify::Put(Self::rawkv_cf(&cf)?, Key::from_encoded(key), value);
+        if self.enable_ttl {
+            let expire_ts = if ttl == 0 {
+                0
+            } else {
+                ttl + UnixSecs::now().into_inner()
+            };
+            m.with_ttl(expire_ts);
+        }
         self.engine.async_write(
             &ctx,
-            WriteData::from_modifies(vec![Modify::Put(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(key),
-                value,
-                ttl,
-            )]),
+            WriteData::from_modifies(vec![m]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
@@ -1029,9 +1027,21 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
+        let expire_ts = if ttl == 0 {
+            0
+        } else {
+            ttl + UnixSecs::now().into_inner()
+        };
+
         let modifies = pairs
             .into_iter()
-            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v, ttl))
+            .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
+            .map(|mut m| {
+                if self.enable_ttl {
+                    m.with_ttl(expire_ts)
+                }
+                m
+            })
             .collect();
         self.engine.async_write(
             &ctx,
@@ -1118,88 +1128,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
-    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
-    /// `None`, it means unbounded.
-    ///
-    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
-    /// keys will be returned.
-    fn forward_raw_scan(
-        snapshot: &E::Snap,
-        cf: &str,
-        start_key: &Key,
-        end_key: Option<Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
-        let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(start_key, statistics)? {
-            return Ok(vec![]);
-        }
-        let mut pairs = vec![];
-        while cursor.valid()? && pairs.len() < limit {
-            pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
-                if key_only {
-                    vec![]
-                } else {
-                    cursor.value(statistics).to_owned()
-                },
-            )));
-            cursor.next(statistics);
-        }
-        Ok(pairs)
-    }
-
-    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
-    /// `start_key` is `None`, it means it's unbounded.
-    ///
-    /// If `key_only` is true, the value
-    /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    fn reverse_raw_scan(
-        snapshot: &E::Snap,
-        cf: &str,
-        start_key: &Key,
-        end_key: Option<Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
-        let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(start_key, statistics)? {
-            return Ok(vec![]);
-        }
-        let mut pairs = vec![];
-        while cursor.valid()? && pairs.len() < limit {
-            pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
-                if key_only {
-                    vec![]
-                } else {
-                    cursor.value(statistics).to_owned()
-                },
-            )));
-            cursor.prev(statistics);
-        }
-        Ok(pairs)
-    }
-
     /// Scan raw keys in a range.
     ///
     /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
@@ -1223,6 +1151,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1231,6 +1160,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         Some(end_key) => end_key.to_vec(),
                         None => vec![],
                     };
+                    // TODO: should be fixed
                     tls_collect_qps(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1252,34 +1182,37 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
                 {
                     let begin_instant = Instant::now_coarse();
 
+                    let start_key = Key::from_encoded(start_key);
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
                     let result = if reverse_scan {
-                        Self::reverse_raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(start_key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        )
-                        .map_err(Error::from)
+                        store
+                            .reverse_raw_scan(
+                                cf,
+                                &start_key,
+                                end_key.as_ref(),
+                                limit,
+                                &mut statistics,
+                                key_only,
+                            )
+                            .map_err(Error::from)
                     } else {
-                        Self::forward_raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(start_key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        )
-                        .map_err(Error::from)
+                        store
+                            .forward_raw_scan(
+                                cf,
+                                &start_key,
+                                end_key.as_ref(),
+                                limit,
+                                &mut statistics,
+                                key_only,
+                            )
+                            .map_err(Error::from)
                     };
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
@@ -1356,6 +1289,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -1370,6 +1304,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
                 {
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
@@ -1391,21 +1327,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             Some(Key::from_encoded(end_key))
                         };
                         let pairs = if reverse_scan {
-                            Self::reverse_raw_scan(
-                                &snapshot,
+                            store.reverse_raw_scan(
                                 &cf,
                                 &start_key,
-                                end_key,
+                                end_key.as_ref(),
                                 each_limit,
                                 &mut statistics,
                                 key_only,
                             )?
                         } else {
-                            Self::forward_raw_scan(
-                                &snapshot,
+                            store.forward_raw_scan(
                                 &cf,
                                 &start_key,
-                                end_key,
+                                end_key.as_ref(),
                                 each_limit,
                                 &mut statistics,
                                 key_only,
@@ -1444,6 +1378,182 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+}
+
+enum RawStore<S: Snapshot> {
+    Vanilla(RawStoreInner<S>),
+    TTL(RawStoreInner<TTLSnapshot<S>>),
+}
+
+impl<S: Snapshot> RawStore<S> {
+    pub fn new(snapshot: S, enable_ttl: bool) -> Self {
+        if enable_ttl {
+            RawStore::Vanilla(RawStoreInner::new(snapshot))
+        } else {
+            RawStore::TTL(RawStoreInner::new(snapshot.into()))
+        }
+    }
+
+    pub fn raw_get_key_value(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<Vec<u8>>> {
+        match self {
+            RawStore::Vanilla(inner) => inner.raw_get_key_value(cf, key, stats),
+            RawStore::TTL(inner) => inner.raw_get_key_value(cf, key, stats),
+        }
+    }
+
+    pub fn forward_raw_scan(
+        &self,
+        cf: CfName,
+        start_key: &Key,
+        end_key: Option<&Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        match self {
+            RawStore::Vanilla(inner) => {
+                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+            }
+            RawStore::TTL(inner) => {
+                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+            }
+        }
+    }
+
+    pub fn reverse_raw_scan(
+        &self,
+        cf: CfName,
+        start_key: &Key,
+        end_key: Option<&Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        match self {
+            RawStore::Vanilla(inner) => {
+                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+            }
+            RawStore::TTL(inner) => {
+                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+            }
+        }
+    }
+}
+
+struct RawStoreInner<S: Snapshot> {
+    snapshot: S,
+}
+
+impl<S: Snapshot> RawStoreInner<S> {
+    pub fn new(snapshot: S) -> Self {
+        RawStoreInner { snapshot }
+    }
+
+    fn raw_get_key_value(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<Vec<u8>>> {
+        // no scan_count for this kind of op.
+        let key_len = key.as_encoded().len();
+        self.snapshot
+            .get_cf(cf, key)
+            .map(|value| {
+                stats.data.flow_stats.read_keys = 1;
+                stats.data.flow_stats.read_bytes =
+                    key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
+                value
+            })
+            .map_err(Error::from)
+    }
+
+    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
+    /// `None`, it means unbounded.
+    ///
+    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
+    /// keys will be returned.
+    fn forward_raw_scan(
+        &self,
+        cf: CfName,
+        start_key: &Key,
+        end_key: Option<&Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOptions::default();
+        if let Some(end) = end_key {
+            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
+        }
+        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Forward)?;
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.seek(&start_key, statistics)? {
+            return Ok(vec![]);
+        }
+        let mut pairs = vec![];
+        while cursor.valid()? && pairs.len() < limit {
+            pairs.push(Ok((
+                cursor.key(statistics).to_owned(),
+                if key_only {
+                    vec![]
+                } else {
+                    cursor.value(statistics).to_owned()
+                },
+            )));
+            cursor.next(statistics);
+        }
+        Ok(pairs)
+    }
+
+    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
+    /// `start_key` is `None`, it means it's unbounded.
+    ///
+    /// If `key_only` is true, the value
+    /// corresponding to the key will not be read out. Only scanned keys will be returned.
+    fn reverse_raw_scan(
+        &self,
+        cf: CfName,
+        start_key: &Key,
+        end_key: Option<&Key>,
+        limit: usize,
+        statistics: &mut Statistics,
+        key_only: bool,
+    ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOptions::default();
+        if let Some(end) = end_key {
+            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
+        if key_only {
+            option.set_key_only(key_only);
+        }
+        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Backward)?;
+        let statistics = statistics.mut_cf_statistics(cf);
+        if !cursor.reverse_seek(&start_key, statistics)? {
+            return Ok(vec![]);
+        }
+        let mut pairs = vec![];
+        while cursor.valid()? && pairs.len() < limit {
+            pairs.push(Ok((
+                cursor.key(statistics).to_owned(),
+                if key_only {
+                    vec![]
+                } else {
+                    cursor.value(statistics).to_owned()
+                },
+            )));
+            cursor.prev(statistics);
+        }
+        Ok(pairs)
     }
 }
 
