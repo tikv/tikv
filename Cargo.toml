@@ -1,3 +1,8 @@
+# See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
+# Without resolver = 2, using `cargo build --features x` to build `cmd`
+# will _not_ propagate the feature `x` into `cmd`'s direct dependencies.
+cargo-features = ["resolver"]
+
 [package]
 name = "tikv"
 version = "5.0.0-rc.x"
