@@ -136,7 +136,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     return Err(box_err!(
                         "{}th column is missing in datum buffer: {}",
                         i,
-                        hex::encode_upper(key)
+                        log_wrappers::Value::key(key)
                     ));
                 }
                 let (column, remaining) = split_datum(datums, false)?;
@@ -146,8 +146,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     cms.insert(&data);
                 }
             }
-            hist.append(&data);
             if stats_version == ANALYZE_VERSION_V2 {
+                hist.append(&data, true);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
                 } else {
@@ -159,6 +159,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
                     }
                     cur_val = (1, data);
                 }
+            } else {
+                hist.append(&data, false);
             }
         }
 
@@ -338,7 +340,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut EvalContext::default(),
                         &mut data,
                     )?;
-                    pk_builder.append(&data);
+                    pk_builder.append(&data, false);
                 }
                 columns_slice = &columns_slice[1..];
                 columns_info = &columns_info[1..];

@@ -27,6 +27,7 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
+use file_system::{IOType, WithIOType};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
@@ -55,6 +56,7 @@ pub enum Task<S> {
         last_applied_state: RaftApplyState,
         kv_snap: S,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     },
     Apply {
         region_id: u64,
@@ -242,6 +244,7 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
@@ -251,6 +254,7 @@ where
             region_id,
             last_applied_index_term,
             last_applied_state,
+            for_balance,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -277,9 +281,15 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) {
         SNAP_COUNTER.generate.all.inc();
         let start = tikv_util::time::Instant::now();
+        let _io_type_guard = WithIOType::new(if for_balance {
+            IOType::LoadBalance
+        } else {
+            IOType::Replication
+        });
 
         if let Err(e) = self.generate_snap(
             region_id,
@@ -287,6 +297,7 @@ where
             last_applied_state,
             kv_snap,
             notifier,
+            for_balance,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
@@ -373,7 +384,12 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        let _ = status.compare_exchange(
+            JOB_STATUS_PENDING,
+            JOB_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();
@@ -626,6 +642,7 @@ where
                 last_applied_state,
                 kv_snap,
                 notifier,
+                for_balance,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
@@ -639,6 +656,7 @@ where
                         last_applied_state,
                         kv_snap,
                         notifier,
+                        for_balance,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
                 });
@@ -945,6 +963,7 @@ mod tests {
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
                     notifier: tx,
+                    for_balance: false,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();

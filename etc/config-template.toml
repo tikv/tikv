@@ -35,6 +35,10 @@
 ## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
 # log-rotation-size = "300MB"
 
+## Enable io snoop which utilize eBPF to get accurate disk io of TiKV
+## It won't take effect when compiling without BCC_IOSNOOP=1. 
+# enable-io-snoop = true
+
 # Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
@@ -204,6 +208,15 @@
 ## requests. Enabling this can ease reduce latency when apply duration is significant, or reduce
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
+
+## Reserve some space to ensure recovering the store from `no space left` must success. The
+## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## `max(reserve-space, capacity * 5%)` will be reserved exactly.
+##
+## Set it to 0 will cause no space is reserved at all.
+##
+## Generally it's not necessary to change it. This configuration could be deprecated in future.
+# reserve-space = "5GB"
 
 [storage.block-cache]
 ## Whether to create a shared block cache for all RocksDB column families.
@@ -468,13 +481,12 @@
 ##    1 : ReadOnly
 ##    2 : WriteOnly
 ##    3 : AllIo
-## 4. auto_tuned enables dynamic adjustment of rate limit within the range
+## 4. rate-limiter-auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [10MB/s, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = "10GB"
 # rate-limiter-refill-period = "100ms"
 # rate-limiter-mode = 2
-# auto-tuned = true
-
+# rate-limiter-auto-tuned = true
 
 ## Enable or disable the pipelined write.
 # enable-pipelined-write = true
@@ -547,6 +559,12 @@
 ## resources of the system and improving TiKV performance in terms of the current resources.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
 
+## Set zstd compression for the bottommost level.
+## This config overrides compression-per-level. It use zstd for bottommost level to ensure
+## consistent compression ratio, regardless of overall data size. If explicitly setting compression type
+## for the bottommost level is not desired, "disable" should be used.
+# bottommost-level-compression = "zstd"
+
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
 ## the block size specified here corresponds to uncompressed data.
@@ -614,6 +632,8 @@
 # target-file-size-base = "8MB"
 
 ## Max bytes for `compaction.max_compaction_bytes`.
+## If it's necessary to enlarge value of this entry, it's better to also enlarge `reserve-space`
+## in `storage` to ensure that a restarted TiKV instance can perform compactions successfully.
 # max-compaction-bytes = "2GB"
 
 ## There are four different compaction priorities.
@@ -915,6 +935,14 @@
 ## Number of threads to perform backup tasks.
 ## The default value is set to min(CPU_NUM * 0.75, 32).
 # num-threads = 24
+
+## Number of ranges to backup in one batch.
+# batch = 8
+
+## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
+## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
+## little larger).
+# sst-max-size = "144MB"
 
 [pessimistic-txn]
 ## Enable pessimistic transaction

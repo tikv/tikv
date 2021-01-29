@@ -30,6 +30,8 @@ const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
+pub const MIN_YEAR: u32 = 1901;
+pub const MAX_YEAR: u32 = 2155;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -380,7 +382,7 @@ mod parser {
     fn adjust_year(year: u32) -> u32 {
         if year <= 69 {
             2000 + year
-        } else if year >= 70 && year <= 99 {
+        } else if (70..=99).contains(&year) {
             1900 + year
         } else {
             year
@@ -827,7 +829,7 @@ impl TimeArgs {
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
-        if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
+        if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&ts) {
             return handle_invalid_date(ctx, self);
         }
 
@@ -873,7 +875,7 @@ impl Time {
         let hms = (input % 1_000_000) as u32;
 
         let year = ymd / 10_000;
-        let md = ymd % 10_000 as u32;
+        let md = ymd % 10_000_u32;
         let month = md / 100;
         let day = md % 100;
 
@@ -1195,6 +1197,28 @@ impl Time {
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
+    }
+
+    pub fn from_year(
+        ctx: &mut EvalContext,
+        year: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month: 0,
+                day: 0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                micro: 0,
+                fsp,
+                time_type,
+            },
+        )
     }
 
     pub fn round_frac(mut self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
@@ -1783,10 +1807,7 @@ impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }

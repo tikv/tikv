@@ -190,9 +190,9 @@ impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
     }
 }
 
-impl Into<ChunkedVecBytes> for Vec<Option<Bytes>> {
-    fn into(self) -> ChunkedVecBytes {
-        ChunkedVecBytes::from_vec(self)
+impl From<Vec<Option<Bytes>>> for ChunkedVecBytes {
+    fn from(v: Vec<Option<Bytes>>) -> ChunkedVecBytes {
+        ChunkedVecBytes::from_vec(v)
     }
 }
 

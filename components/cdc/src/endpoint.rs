@@ -105,7 +105,7 @@ pub(crate) type OldValueCallback =
     Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub struct OldValueCache {
-    pub cache: LruCache<Key, (Option<OldValue>, MutationType)>,
+    pub cache: LruCache<Key, (OldValue, MutationType)>,
     pub miss_count: usize,
     pub access_count: usize,
 }
@@ -649,9 +649,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.regions = regions;
-        resolved_ts.ts = self.min_resolved_ts.into_inner();
+        let resolved_ts = ResolvedTs {
+            regions,
+            ts: self.min_resolved_ts.into_inner(),
+            ..Default::default()
+        };
 
         let send_cdc_event = |conn: &Conn, event| {
             if let Err(e) = conn.get_sink().try_send(event) {
@@ -702,10 +704,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             // No such downstream registers in the delegate.
             None => return,
         };
-        let mut event = Event::default();
-        event.region_id = region_id;
-        event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts));
-        downstream.sink_event(event);
+        downstream.sink_event(Event {
+            region_id,
+            event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
+            ..Default::default()
+        });
     }
 
     fn register_min_ts_event(&self) {
@@ -835,7 +838,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
-        let region_has_quorum = |region: &Region, stores: Vec<u64>| {
+        let region_has_quorum = |region: &Region, stores: &[u64]| {
             let mut voters = 0;
             let mut incoming_voters = 0;
             let mut demoting_voters = 0;
@@ -846,7 +849,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
 
             region.get_peers().iter().for_each(|peer| {
                 let mut in_resp = false;
-                for store_id in &stores {
+                for store_id in stores {
                     if *store_id == peer.store_id {
                         in_resp = true;
                         break;
@@ -883,6 +886,15 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             has_incoming_majority && has_demoting_majority
         };
 
+        let find_store_id = |region: &Region, peer_id| {
+            for peer in region.get_peers() {
+                if peer.id == peer_id {
+                    return Some(peer.store_id);
+                }
+            }
+            None
+        };
+
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -897,12 +909,16 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             };
             for (region_id, _) in regions {
                 if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader)) = meta.leaders.get(&region_id) {
-                        if leader.store_id != meta.store_id.unwrap() {
+                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
+                        let leader_store_id = find_store_id(&region, *leader_id);
+                        if leader_store_id.is_none() {
+                            continue;
+                        }
+                        if leader_store_id.unwrap() != meta.store_id.unwrap() {
                             continue;
                         }
                         for peer in region.get_peers() {
-                            if peer.store_id == store_id && peer.id == leader.id {
+                            if peer.store_id == store_id && peer.id == *leader_id {
                                 resp_map.entry(region_id).or_default().push(store_id);
                                 continue;
                             }
@@ -910,7 +926,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                                 continue;
                             }
                             let mut leader_info = LeaderInfo::default();
-                            leader_info.set_peer_id(leader.id);
+                            leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
@@ -951,7 +967,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         let resps = futures::future::join_all(stores).await;
         resps
             .into_iter()
-            .filter_map(Result::ok)
+            .filter_map(|resp| match resp {
+                Ok(resp) => Some(resp),
+                Err(e) => {
+                    debug!("cdc check leader error"; "err" =>?e);
+                    None
+                }
+            })
             .map(|(store_id, resp)| {
                 resp.regions
                     .into_iter()
@@ -964,9 +986,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         resp_map
             .into_iter()
             .filter_map(|(region_id, stores)| {
-                if region_has_quorum(&region_map[&region_id], stores) {
+                if region_has_quorum(&region_map[&region_id], &stores) {
                     Some(region_id)
                 } else {
+                    debug!("cdc cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
                     None
                 }
             })
@@ -1225,7 +1248,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T
             .old_value_cache
             .cache
             .iter()
-            .map(|(k, v)| k.as_encoded().len() + v.0.as_ref().map_or(0, |v| v.size()))
+            .map(|(k, v)| k.as_encoded().len() + v.0.size())
             .sum();
         CDC_OLD_VALUE_CACHE_BYTES.set(cache_size as i64);
         CDC_OLD_VALUE_CACHE_ACCESS.add(self.old_value_cache.access_count as i64);
@@ -1366,7 +1389,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -1379,7 +1402,10 @@ mod tests {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&engine, k, v, k, ts);
-            expected_locks.entry(ts).or_default().insert(k.to_vec());
+            expected_locks
+                .entry(ts)
+                .or_default()
+                .insert(k.to_vec().into());
         }
 
         let region = Region::default();
@@ -1466,7 +1492,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1476,12 +1502,12 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         for _ in 0..5 {
-            if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
-                task_rx.recv_timeout(Duration::from_secs(1))
+            if let Ok(Some(Task::Deregister(Deregister::Downstream {
+                err: Some(Error::Request(err)),
+                ..
+            }))) = task_rx.recv_timeout(Duration::from_secs(1))
             {
-                if let Some(Error::Request(err)) = err {
-                    assert!(!err.has_server_is_busy());
-                }
+                assert!(!err.has_server_is_busy());
             }
         }
     }
@@ -1503,7 +1529,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1513,7 +1539,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // duplicate request error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1537,7 +1563,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1580,7 +1606,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1605,7 +1631,7 @@ mod tests {
 
         // Register region 2 to the conn.
         req.set_region_id(2);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1638,7 +1664,7 @@ mod tests {
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1694,7 +1720,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1728,7 +1754,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1771,7 +1797,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,

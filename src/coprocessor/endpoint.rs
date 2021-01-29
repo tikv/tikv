@@ -40,6 +40,7 @@ use txn_types::Lock;
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
+#[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
@@ -67,17 +68,6 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
-}
-
-impl<E: Engine> Clone for Endpoint<E> {
-    fn clone(&self) -> Self {
-        Self {
-            read_pool: self.read_pool.clone(),
-            semaphore: self.semaphore.clone(),
-            concurrency_manager: self.concurrency_manager.clone(),
-            ..*self
-        }
-    }
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -1299,9 +1289,12 @@ mod tests {
             engine,
         ));
 
-        let mut config = Config::default();
-        config.end_point_request_max_handle_duration =
-            ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
+        let config = Config {
+            end_point_request_max_handle_duration: ReadableDuration::millis(
+                (PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2,
+            ),
+            ..Default::default()
+        };
 
         let cm = ConcurrencyManager::new(1.into());
         let cop =
