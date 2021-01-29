@@ -262,9 +262,9 @@ macro_rules! tls_flush_perf_stats {
     };
 }
 
-impl Into<CF> for GcKeysCF {
-    fn into(self) -> CF {
-        match self {
+impl From<GcKeysCF> for CF {
+    fn from(cf: GcKeysCF) -> CF {
+        match cf {
             GcKeysCF::default => CF::default,
             GcKeysCF::lock => CF::lock,
             GcKeysCF::write => CF::write,
@@ -272,9 +272,9 @@ impl Into<CF> for GcKeysCF {
     }
 }
 
-impl Into<ScanKind> for GcKeysDetail {
-    fn into(self) -> ScanKind {
-        match self {
+impl From<GcKeysDetail> for ScanKind {
+    fn from(detail: GcKeysDetail) -> ScanKind {
+        match detail {
             GcKeysDetail::processed_keys => ScanKind::processed_keys,
             GcKeysDetail::get => ScanKind::get,
             GcKeysDetail::next => ScanKind::next,

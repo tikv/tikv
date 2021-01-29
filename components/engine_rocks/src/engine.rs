@@ -174,6 +174,12 @@ impl SyncMutable for RocksEngine {
         self.db.delete_cf(handle, key).map_err(Error::Engine)
     }
 
+    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.db
+            .delete_range(begin_key, end_key)
+            .map_err(Error::Engine)
+    }
+
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
         self.db

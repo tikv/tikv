@@ -5,17 +5,24 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 protobuf-codec = [
+  "encryption/protobuf-codec",
+  "engine_traits/protobuf-codec",
   "keys/protobuf-codec",
-  "txn_types/protobuf-codec",
-  "raft/protobuf-codec",
   "kvproto/protobuf-codec",
+  "raft/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "txn_types/protobuf-codec",
 ]
 prost-codec = [
+  "encryption/prost-codec",
+  "engine_traits/prost-codec",
   "keys/prost-codec",
-  "txn_types/prost-codec",
-  "raft/prost-codec",
   "kvproto/prost-codec",
+  "raft/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
 ]
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
@@ -23,18 +30,19 @@ sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-encryption = { path = "../encryption" }
-engine_traits = { path = "../engine_traits" }
-keys = { path = "../keys" }
+encryption = { path = "../encryption", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+file_system = { path = "../file_system" }
+keys = { path = "../keys", default-features = false }
 num_cpus = "1"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
-collections = { path = "../collections" }
-txn_types = { path = "../txn_types"}
+tikv_util = { path = "../tikv_util", default-features = false }
+collections = { path = "../collections", default-features = false }
+txn_types = { path = "../txn_types", default-features = false}
 lazy_static = "1.4.0"
 log_wrappers = { path = "../log_wrappers" }
 time = "0.1"
