@@ -800,25 +800,27 @@ where
         let (s, pool_len) = {
             let mut pool = self.pool.lock().unwrap();
             if pool.tombstone_stores.contains(&store_id) {
+                let pool_len = pool.connections.len();
+                drop(pool);
+                self.cache.resize(pool_len);
                 return false;
             }
-            (
-                pool.connections
-                    .entry((store_id, conn_id))
-                    .or_insert_with(|| {
-                        let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
-                        let back_end = StreamBackEnd {
-                            store_id,
-                            queue: queue.clone(),
-                            builder: self.builder.clone(),
-                        };
-                        self.future_pool
-                            .spawn(start(back_end, conn_id, self.pool.clone()));
-                        queue
-                    })
-                    .clone(),
-                pool.connections.len(),
-            )
+            let conn = pool
+                .connections
+                .entry((store_id, conn_id))
+                .or_insert_with(|| {
+                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let back_end = StreamBackEnd {
+                        store_id,
+                        queue: queue.clone(),
+                        builder: self.builder.clone(),
+                    };
+                    self.future_pool
+                        .spawn(start(back_end, conn_id, self.pool.clone()));
+                    queue
+                })
+                .clone();
+            (conn, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
