@@ -156,6 +156,47 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
+#[rpn_fn(nullable, raw_varg)]
+#[inline]
+fn json_quote(arg: &[ScalarValueRef]) -> Result<Option<Bytes>> {
+    quote(arg[0].as_bytes())
+}
+
+fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
+    match input {
+        Some(bytes) => {
+            let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
+            result.push(b'\"');
+            for byte in bytes.iter() {
+                if *byte == b'\"' || *byte == b'\\' {
+                    result.push(b'\\');
+                    result.push(*byte)
+                } else if *byte == b'\0' {
+                    result.push(b'\\');
+                    result.push(b'0')
+                } else if *byte == 26u8 {
+                    result.push(b'\\');
+                    result.push(b'Z');
+                } else if *byte == b'\t' {
+                    result.push(b'\\');
+                    result.push(b't')
+                } else if *byte == b'\n' {
+                    result.push(b'\\');
+                    result.push(b'n');
+                } else if *byte == b'\r' {
+                    result.push(b'\\');
+                    result.push(b'r');
+                } else {
+                    result.push(*byte)
+                }
+            }
+            result.push(b'\"');
+            Ok(Some(result))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[rpn_fn(nullable)]
 #[inline]
 fn json_unquote(arg: Option<JsonRef>) -> Result<Option<Bytes>> {
@@ -526,6 +567,47 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonObjectSig);
 
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_json_quote() {
+        let cases = vec![
+            (None, None),
+            (Some(""), Some(r#""""#)),
+            (Some(r#""""#), Some(r#""\"\"""#)),
+            (Some(r#"a"#), Some(r#""a""#)),
+            (Some(r#"3"#), Some(r#""3""#)),
+            (Some(r#"{"a": "b"}"#), Some(r#""{\"a\": \"b\"}""#)),
+            (Some(r#"{"a":     "b"}"#), Some(r#""{\"a\":     \"b\"}""#)),
+            (
+                Some(r#"hello,"quoted string",world"#),
+                Some(r#""hello,\"quoted string\",world""#),
+            ),
+            (
+                Some(r#"hello,"宽字符",world"#),
+                Some(r#""hello,\"宽字符\",world""#),
+            ),
+            (
+                Some(r#"Invalid Json string	is OK"#),
+                Some(r#""Invalid Json string\tis OK""#),
+            ),
+            (Some(r#"1\u2232\u22322"#), Some(r#""1\\u2232\\u22322""#)),
+            (
+                Some("new line \"\r\n\" is ok"),
+                Some(r#""new line \"\r\n\" is ok""#),
+            ),
+        ];
+
+        for (arg, expect_output) in cases {
+            let arg = arg.map(Bytes::from);
+            let expect_output = expect_output.map(Bytes::from);
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::JsonQuoteSig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
         }
     }
 
