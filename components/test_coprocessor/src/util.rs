@@ -65,5 +65,5 @@ pub fn offset_for_column(cols: &[ColumnInfo], col_id: i64) -> i64 {
             return offset as i64;
         }
     }
-    0 as i64
+    0_i64
 }

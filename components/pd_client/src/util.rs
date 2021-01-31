@@ -185,7 +185,7 @@ impl LeaderClient {
         };
 
         let (client, members) = future.await?;
-        fail_point!("leader_client_reconnect");
+        fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
             let start_refresh = Instant::now();
@@ -341,7 +341,6 @@ pub async fn validate_endpoints(
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
-
     let mut members = None;
     let mut cluster_id = None;
     for ep in &cfg.endpoints {
@@ -436,8 +435,11 @@ pub async fn try_connect_leader(
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
-                        resp = Some(r);
-                        break 'outer;
+                        // check whether the response have leader info, otherwise continue to loop the rest members
+                        if r.has_leader() {
+                            resp = Some(r);
+                            break 'outer;
+                        }
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",

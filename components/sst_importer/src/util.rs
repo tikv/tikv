@@ -231,14 +231,16 @@ mod tests {
 
     #[test]
     fn test_prepare_sst_for_ingestion_with_key_manager_plaintext() {
-        let (_tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
         check_prepare_sst_for_ingestion(None, None, Some(&manager), false /*was_encrypted*/);
     }
 
     #[test]
     fn test_prepare_sst_for_ingestion_with_key_manager_encrypted() {
-        let (_tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
         check_prepare_sst_for_ingestion(None, None, Some(&manager), true /*was_encrypted*/);
     }

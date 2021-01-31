@@ -649,9 +649,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
     }
 
     fn broadcast_resolved_ts(&self, regions: Vec<u64>) {
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.regions = regions;
-        resolved_ts.ts = self.min_resolved_ts.into_inner();
+        let resolved_ts = ResolvedTs {
+            regions,
+            ts: self.min_resolved_ts.into_inner(),
+            ..Default::default()
+        };
 
         let send_cdc_event = |conn: &Conn, event| {
             if let Err(e) = conn.get_sink().try_send(event) {
@@ -702,10 +704,11 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             // No such downstream registers in the delegate.
             None => return,
         };
-        let mut event = Event::default();
-        event.region_id = region_id;
-        event.event = Some(Event_oneof_event::ResolvedTs(resolved_ts));
-        downstream.sink_event(event);
+        downstream.sink_event(Event {
+            region_id,
+            event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
+            ..Default::default()
+        });
     }
 
     fn register_min_ts_event(&self) {
@@ -1386,7 +1389,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Vec<u8>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
         // Pessimistic locks should not be tracked
         for i in 0..10 {
@@ -1399,7 +1402,10 @@ mod tests {
             let (k, v) = (&[b'k', i], &[b'v', i]);
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&engine, k, v, k, ts);
-            expected_locks.entry(ts).or_default().insert(k.to_vec());
+            expected_locks
+                .entry(ts)
+                .or_default()
+                .insert(k.to_vec().into());
         }
 
         let region = Region::default();
@@ -1486,7 +1492,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1496,12 +1502,12 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         for _ in 0..5 {
-            if let Ok(Some(Task::Deregister(Deregister::Downstream { err, .. }))) =
-                task_rx.recv_timeout(Duration::from_secs(1))
+            if let Ok(Some(Task::Deregister(Deregister::Downstream {
+                err: Some(Error::Request(err)),
+                ..
+            }))) = task_rx.recv_timeout(Duration::from_secs(1))
             {
-                if let Some(Error::Request(err)) = err {
-                    assert!(!err.has_server_is_busy());
-                }
+                assert!(!err.has_server_is_busy());
             }
         }
     }
@@ -1523,7 +1529,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 1, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1533,7 +1539,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // duplicate request error.
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 2, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1557,7 +1563,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 1);
 
         // Compatibility error.
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1600,7 +1606,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1625,7 +1631,7 @@ mod tests {
 
         // Register region 2 to the conn.
         req.set_region_id(2);
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         ep.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -1658,7 +1664,7 @@ mod tests {
         let conn_id = conn.get_id();
         ep.run(Task::OpenConn { conn });
         req.set_region_id(3);
-        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 3, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,
@@ -1714,7 +1720,7 @@ mod tests {
         let mut req = ChangeDataRequest::default();
         req.set_region_id(1);
         let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         let downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1748,7 +1754,7 @@ mod tests {
         }
         assert_eq!(ep.capture_regions.len(), 0);
 
-        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch.clone(), 0, conn_id, true);
         let new_downstream_id = downstream.get_id();
         ep.run(Task::Register {
             request: req.clone(),
@@ -1791,7 +1797,7 @@ mod tests {
         assert_eq!(ep.capture_regions.len(), 0);
 
         // Stale deregister should be filtered.
-        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id);
+        let downstream = Downstream::new("".to_string(), region_epoch, 0, conn_id, true);
         ep.run(Task::Register {
             request: req,
             downstream,

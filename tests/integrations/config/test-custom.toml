@@ -77,6 +77,7 @@ scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
+reserve-space = "10GB"
 
 [storage.block-cache]
 shared = true
@@ -115,7 +116,7 @@ raft-engine-purge-interval = "20m"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
-region-split-check-diff = "6MB"
+region-split-check-diff = "20MB"
 region-compact-check-interval = "12s"
 clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234

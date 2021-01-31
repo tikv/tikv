@@ -4,7 +4,7 @@ use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
@@ -26,12 +26,13 @@ use tikv_util::worker::{LazyWorker, Worker};
 use tikv_util::Either;
 
 use super::load_statistics::*;
+use super::metrics::SERVER_INFO_GAUGE_VEC;
 use super::raft_client::{ConnectionBuilder, RaftClient};
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
-use super::{Config, Result};
+use super::{Config, Error, Result};
 use crate::read_pool::ReadPool;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -244,6 +245,18 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             });
         };
 
+        let startup_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Other(box_err!("Clock may have gone backwards")))?
+            .as_secs();
+
+        SERVER_INFO_GAUGE_VEC
+            .with_label_values(&[
+                &("v".to_owned() + env!("CARGO_PKG_VERSION")),
+                option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
+            ])
+            .set(startup_ts as i64);
+
         info!("TiKV is ready to serve");
         Ok(())
     }
@@ -408,8 +421,10 @@ mod tests {
     // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
-        let mut cfg = Config::default();
-        cfg.addr = "127.0.0.1:0".to_owned();
+        let cfg = Config {
+            addr: "127.0.0.1:0".to_owned(),
+            ..Default::default()
+        };
 
         let storage = TestStorageBuilder::new(DummyLockManager {})
             .build()

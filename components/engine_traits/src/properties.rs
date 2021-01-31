@@ -59,9 +59,10 @@ impl IndexHandles {
             let klen = number::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let mut v = IndexHandle::default();
-            v.size = number::decode_u64(&mut buf)?;
-            v.offset = number::decode_u64(&mut buf)?;
+            let v = IndexHandle {
+                size: number::decode_u64(&mut buf)?,
+                offset: number::decode_u64(&mut buf)?,
+            };
             res.insert(k, v);
         }
         Ok(IndexHandles(res))

@@ -1034,10 +1034,9 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
-            |resp| {
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some($p(resp));
-                res
+            |resp| batch_commands_response::Response {
+                cmd: Some($p(resp)),
+                ..Default::default()
             }
         };
     }
@@ -1248,6 +1247,36 @@ fn future_batch_get<E: Engine, L: LockManager>(
                     pair.set_error(key_error);
                     resp.mut_pairs().push(pair);
                 }
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_scan_lock<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: ScanLockRequest,
+) -> impl Future<Output = ServerResult<ScanLockResponse>> {
+    let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
+    let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
+
+    let v = storage.scan_lock(
+        req.take_context(),
+        req.get_max_version().into(),
+        start_key,
+        end_key,
+        req.get_limit() as usize,
+    );
+
+    async move {
+        let v = v.await;
+        let mut resp = ScanLockResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(locks) => resp.set_locks(locks.into()),
+                Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
         Ok(resp)
@@ -1619,7 +1648,11 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
     match v {
-        Ok(Ok(res)) => resp.set_values(res.into_vec().into()),
+        Ok(Ok(res)) => {
+            let (values, not_founds) = res.into_values_and_not_founds();
+            resp.set_values(values.into());
+            resp.set_not_founds(not_founds);
+        },
         Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
     }
 });
@@ -1702,12 +1735,6 @@ txn_command_future!(future_check_secondary_locks, CheckSecondaryLocksRequest, Ch
         Err(e) => resp.set_error(extract_key_error(&e)),
     }
 });
-txn_command_future!(future_scan_lock, ScanLockRequest, ScanLockResponse, (v, resp) {
-    match v {
-        Ok(locks) => resp.set_locks(locks.into()),
-        Err(e) => resp.set_error(extract_key_error(&e)),
-    }
-});
 txn_command_future!(future_mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse, (v, resp) {
     match v {
         Ok(mvcc) => resp.set_info(mvcc.into_proto()),
@@ -1769,8 +1796,10 @@ fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionE
     if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
         // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
         let mut region_error = RegionError::default();
-        let mut region_not_found = RegionNotFound::default();
-        region_not_found.region_id = region_id;
+        let region_not_found = RegionNotFound {
+            region_id,
+            ..Default::default()
+        };
         region_error.set_region_not_found(region_not_found);
         return region_error;
     }

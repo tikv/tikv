@@ -843,7 +843,7 @@ impl Column {
         let mut col = Column::new(tp, length);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
-        let null_length = (col.length + 7) / 8 as usize;
+        let null_length = (col.length + 7) / 8_usize;
         if col.null_cnt > 0 {
             col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {

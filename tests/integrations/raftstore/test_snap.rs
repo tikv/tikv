@@ -11,7 +11,7 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use file_system::{set_io_rate_limiter, BytesRecorder, IOOp, IORateLimiter, IOType};
+use file_system::{IOOp, IORateLimiter, IOType, WithIORateLimiter};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
@@ -485,8 +485,9 @@ fn test_request_snapshot_apply_repeatedly() {
 
 #[test]
 fn test_inspected_snapshot() {
-    let recorder = Arc::new(BytesRecorder::new());
-    set_io_rate_limiter(IORateLimiter::new(10000, Some(recorder.clone())));
+    let limiter = Arc::new(IORateLimiter::new(10000, true));
+    let stats = limiter.statistics();
+    let _guard = WithIORateLimiter::new(Some(limiter));
 
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
@@ -502,19 +503,19 @@ fn test_inspected_snapshot() {
     // Sleep for a while to ensure all logs are compacted.
     std::thread::sleep(Duration::from_millis(100));
 
-    assert_eq!(recorder.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_eq!(recorder.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
+    assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
     // Let store 3 inform leader to generate a snapshot.
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    assert_ne!(recorder.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_ne!(recorder.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IOType::Replication, IOOp::Read), 0);
+    assert_ne!(stats.fetch(IOType::Replication, IOOp::Write), 0);
 
     pd_client.must_remove_peer(1, new_peer(2, 2));
-    assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_eq!(recorder.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
+    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
     pd_client.must_add_peer(1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
-    assert_ne!(recorder.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_ne!(recorder.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
+    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
 }

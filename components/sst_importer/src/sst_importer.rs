@@ -95,6 +95,10 @@ impl SSTImporter {
         }
     }
 
+    pub fn exist(&self, meta: &SstMeta) -> bool {
+        self.dir.exist(meta).unwrap_or(false)
+    }
+
     // Downloads an SST file from an external storage.
     //
     // This method is blocking. It performs the following transformations before
@@ -625,7 +629,7 @@ impl ImportDir {
         ImportFile::create(meta.clone(), path, key_manager)
     }
 
-    fn delete_file(&self, path: &PathBuf, key_manager: Option<&DataKeyManager>) -> Result<()> {
+    fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
             fs::remove_file(&path)?;
             if let Some(manager) = key_manager {
@@ -642,6 +646,11 @@ impl ImportDir {
         self.delete_file(&path.temp, manager)?;
         self.delete_file(&path.clone, manager)?;
         Ok(path)
+    }
+
+    fn exist(&self, meta: &SstMeta) -> Result<bool> {
+        let path = self.join(meta)?;
+        Ok(path.save.exists())
     }
 
     fn ingest<E: KvEngine>(
@@ -789,10 +798,9 @@ impl ImportFile {
         }
         fs::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
-            manager.link_file(
-                self.path.temp.to_str().unwrap(),
-                self.path.save.to_str().unwrap(),
-            )?;
+            let tmp_str = self.path.temp.to_str().unwrap();
+            let save_str = self.path.save.to_str().unwrap();
+            manager.link_file(tmp_str, save_str)?;
             manager.delete_file(self.path.temp.to_str().unwrap())?;
         }
         Ok(())
@@ -839,7 +847,7 @@ impl fmt::Debug for ImportFile {
 
 const SST_SUFFIX: &str = ".sst";
 
-fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
+pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}{}",
         UuidBuilder::from_slice(meta.get_uuid())?.build(),
@@ -1059,9 +1067,8 @@ mod tests {
         assert!(!path.exists());
         if let Some(manager) = key_manager {
             let info = manager.get_file(path.to_str().unwrap()).unwrap();
-            // the returned encryption info must be the default value
+            assert!(info.is_empty());
             assert_eq!(info.method, EncryptionMethod::Plaintext);
-            assert!(info.key.is_empty() && info.iv.is_empty());
         }
     }
 
@@ -1077,7 +1084,8 @@ mod tests {
 
     fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
         // test with tde
-        let (tmp_dir, key_manager) = new_test_key_manager(None, None, None, None);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         assert!(key_manager.is_ok());
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }

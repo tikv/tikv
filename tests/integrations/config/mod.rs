@@ -160,7 +160,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_diff: ReadableSize::mb(20),
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
@@ -637,7 +637,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
-        reserve_space: ReadableSize::gb(2),
+        reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
@@ -738,7 +738,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
             last = Some(a);
         }
         second.map_or(0, |(i, _)| i)
-    };
+    }
     let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
     let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
     if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {
