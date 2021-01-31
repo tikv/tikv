@@ -32,7 +32,6 @@ pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestE
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
-use crate::storage::mvcc;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
@@ -292,10 +291,8 @@ quick_error! {
         EmptyRequest {
             display("an empty request")
         }
-        Mvcc(err: mvcc::Error) {
-            from()
-            cause(err)
-            display("{}", err)
+        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
+            display("key is locked (backoff or cleanup) {:?}", info)
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
@@ -317,7 +314,7 @@ impl ErrorInner {
             ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
-            ErrorInner::Mvcc(ref e) => Some(ErrorInner::Mvcc(e.maybe_clone()?)),
+            ErrorInner::KeyIsLocked(ref info) => Some(ErrorInner::KeyIsLocked(info.clone())),
             ErrorInner::Other(_) => None,
         }
     }
@@ -368,7 +365,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self.0.as_ref() {
             ErrorInner::Request(e) => e.error_code(),
-            ErrorInner::Mvcc(e) => e.error_code(),
+            ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,

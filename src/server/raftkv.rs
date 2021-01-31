@@ -32,7 +32,6 @@ use crate::storage::kv::{
     ExtCallback, Iterator as EngineIterator, Modify, SnapContext, Snapshot as EngineSnapshot,
     WriteData,
 };
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
 use raftstore::{
     coprocessor::dispatcher::BoxReadIndexObserver,
@@ -97,10 +96,9 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-        KvError(box KvErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => {
+        KvError(box KvErrorInner::KeyIsLocked(_)) => {
             RequestStatusKind::err_leader_memory_lock_check
         }
-        KvError(box KvErrorInner::Mvcc(_)) => RequestStatusKind::err_other,
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
@@ -457,7 +455,7 @@ where
                         .unwrap_or(false)
                     {
                         let locked = r[0].take_read_index().take_locked();
-                        MvccError::from(MvccErrorInner::KeyIsLocked(locked)).into()
+                        KvError::from(KvErrorInner::KeyIsLocked(locked))
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
