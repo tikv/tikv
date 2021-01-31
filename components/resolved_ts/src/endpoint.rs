@@ -229,13 +229,21 @@ where
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
-            let reader = store_meta.readers.get(&region_id).expect("");
-            debug!(
-                "register observe region";
-                "store id" => ?store_meta.store_id.clone(),
-                "region" => ?region
-            );
-            ObserveRegion::new(region.clone(), reader.safe_ts.clone())
+            if let Some(reader) = store_meta.readers.get(&region_id) {
+                info!(
+                    "register observe region";
+                    "store id" => ?store_meta.store_id.clone(),
+                    "region" => ?region
+                );
+                ObserveRegion::new(region.clone(), reader.safe_ts.clone())
+            } else {
+                warn!(
+                    "try register unexit region";
+                    "store id" => ?store_meta.store_id.clone(),
+                    "region" => ?region,
+                );
+                return;
+            }
         };
         let observe_id = observe_region.observe_id;
         let cancelled = match observe_region.resolver_status {
@@ -284,7 +292,7 @@ where
                 resolver_status,
                 ..
             } = observe_region;
-            debug!("deregister observe region"; "store id" => ?self.store_meta.lock().unwrap().store_id, "region" => ?region);
+            info!("deregister observe region"; "store id" => ?self.store_meta.lock().unwrap().store_id, "region" => ?region);
             let region_id = region.id;
             if let Err(e) = self.raft_router.significant_send(
                 region_id,

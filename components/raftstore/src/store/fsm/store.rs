@@ -2444,7 +2444,10 @@ impl RegionReadProgress {
     }
 
     pub fn update_applied(&self, applied: u64) {
-        let mut pending_ts = self.pending_ts.lock().unwrap();
+        self.update_applied_internal(applied, &mut self.pending_ts.lock().unwrap());
+    }
+
+    fn update_applied_internal(&self, applied: u64, pending_ts: &mut VecDeque<(u64, u64)>) {
         let mut ts_to_update = self.safe_ts.load(Ordering::Relaxed);
         while let Some((idx, ts)) = pending_ts.pop_front() {
             if applied < idx {
@@ -2495,9 +2498,9 @@ impl RegionReadProgress {
 
     // Reset `safe_ts` to min(`source_safe_ts`, `safe_ts`)
     pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
-        let _guard = self.pending_ts.lock().unwrap();
+        let mut pending_ts = self.pending_ts.lock().unwrap();
         // Clear all pending ts before `merge_index`
-        self.update_applied(merge_index - 1);
+        self.update_applied_internal(merge_index - 1, &mut pending_ts);
         // Update `last_merge_index` to `merge_index`
         self.last_merge_index.store(merge_index, Ordering::Relaxed);
         // Reset target region's `safe_ts`
