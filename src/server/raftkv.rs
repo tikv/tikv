@@ -6,7 +6,7 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     mem,
 };
-use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
@@ -14,7 +14,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
 use engine_traits::{CfName, KvEngine};
 use engine_traits::{
-    IterOptions, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions, Snapshot,
+    MvccProperties, MvccPropertiesExt,
     TablePropertiesExt,
 };
 use kvproto::kvrpcpb::Context;
@@ -24,18 +24,18 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use super::metrics::*;
 use crate::storage::kv::{
     write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Iterator as EngineIterator, Modify, SnapContext, Snapshot as EngineSnapshot,
+    ExtCallback, Modify, SnapContext,
     WriteData,
 };
 use crate::storage::{self, kv};
 use raftstore::{
     coprocessor::dispatcher::BoxReadIndexObserver,
-    store::{RegionIterator, RegionSnapshot},
+    store::{RegionSnapshot},
 };
 use raftstore::{
     coprocessor::Coprocessor,
@@ -114,12 +114,6 @@ impl From<Error> for kv::Error {
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
-    }
-}
-
-impl From<RaftServerError> for KvError {
-    fn from(e: RaftServerError) -> KvError {
-        KvError(Box::new(KvErrorInner::Request(e.into())))
     }
 }
 
@@ -510,118 +504,6 @@ where
         let end = keys::data_end_key(end);
         self.engine
             .get_mvcc_properties_cf(cf, safe_point, &start, &end)
-    }
-}
-
-impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type Iter = RegionIterator<S>;
-
-    fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
-            "injected error for get"
-        )));
-        let v = box_try!(self.get_value(key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_cf(&self, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
-        fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
-            "injected error for get_cf"
-        )));
-        let v = box_try!(self.get_value_cf_opt(&opts, cf, key.as_encoded()));
-        Ok(v.map(|v| v.to_vec()))
-    }
-
-    fn iter(&self, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
-        fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
-            "injected error for iter"
-        )));
-        Ok(RegionSnapshot::iter(self, iter_opt))
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
-        fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
-            "injected error for iter_cf"
-        )));
-        RegionSnapshot::iter_cf(self, cf, iter_opt).map_err(kv::Error::from)
-    }
-
-    #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
-        Some(self.get_start_key())
-    }
-
-    #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
-        Some(self.get_end_key())
-    }
-
-    #[inline]
-    fn get_data_version(&self) -> Option<u64> {
-        self.get_apply_index().ok()
-    }
-
-    fn is_max_ts_synced(&self) -> bool {
-        self.max_ts_sync_status
-            .as_ref()
-            .map(|v| v.load(Ordering::SeqCst) & 1 == 1)
-            .unwrap_or(false)
-    }
-}
-
-impl<S: Snapshot> EngineIterator for RegionIterator<S> {
-    fn next(&mut self) -> kv::Result<bool> {
-        RegionIterator::next(self).map_err(KvError::from)
-    }
-
-    fn prev(&mut self) -> kv::Result<bool> {
-        RegionIterator::prev(self).map_err(KvError::from)
-    }
-
-    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek", |_| Err(box_err!(
-            "injected error for iter_seek"
-        )));
-        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
-    }
-
-    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
-        fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
-            "injected error for iter_seek_for_prev"
-        )));
-        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
-    }
-
-    fn seek_to_first(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_first(self).map_err(KvError::from)
-    }
-
-    fn seek_to_last(&mut self) -> kv::Result<bool> {
-        RegionIterator::seek_to_last(self).map_err(KvError::from)
-    }
-
-    fn valid(&self) -> kv::Result<bool> {
-        RegionIterator::valid(self).map_err(KvError::from)
-    }
-
-    fn validate_key(&self, key: &Key) -> kv::Result<()> {
-        self.should_seekable(key.as_encoded()).map_err(From::from)
-    }
-
-    fn key(&self) -> &[u8] {
-        RegionIterator::key(self)
-    }
-
-    fn value(&self) -> &[u8] {
-        RegionIterator::value(self)
     }
 }
 

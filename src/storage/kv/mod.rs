@@ -9,6 +9,7 @@ mod cursor;
 pub mod metrics;
 mod mock_engine;
 mod perf_context;
+mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
 mod test_engine_builder;
