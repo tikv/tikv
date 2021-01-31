@@ -12,7 +12,7 @@ use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WR
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
-use crate::storage::kv::{
+use crate::{
     Callback as EngineCallback, CbContext, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
@@ -288,7 +288,7 @@ pub mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
-    use crate::storage::{Cursor, ScanMode};
+    use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
 
     #[test]

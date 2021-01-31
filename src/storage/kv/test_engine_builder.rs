@@ -74,8 +74,8 @@ impl TestEngineBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::super::perf_context::PerfStatisticsInstant;
-    use super::super::tests::*;
+    use super::super::PerfStatisticsInstant;
+    use tikv_kv::tests::*;
     use super::super::CfStatistics;
     use super::*;
     use crate::storage::{Cursor, CursorBuilder, ScanMode};

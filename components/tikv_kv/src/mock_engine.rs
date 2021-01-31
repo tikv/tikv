@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use crate::storage::kv::{Callback, ExtCallback, Modify, SnapContext, WriteData};
-use crate::storage::kv::{Engine, RocksEngine};
+use crate::{Callback, ExtCallback, Modify, SnapContext, WriteData};
+use crate::{Engine, RocksEngine};
 use kvproto::kvrpcpb::Context;
 use std::collections::LinkedList;
 use std::sync::{Arc, Mutex};
