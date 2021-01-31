@@ -130,7 +130,11 @@ fn init_regexp_utf8_data(expr: &mut Expr) -> Result<Option<Regex>> {
     let tree_node = &mut children[1];
     match tree_node.get_tp() {
         ExprType::Bytes | ExprType::String => {
-            match Regex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+            let val = match String::from_utf8(tree_node.take_val()) {
+                Ok(val) => val,
+                Err(_) => return Ok(None),
+            };
+            match Regex::new(val.as_ref()) {
                 Ok(regex) => Ok(Some(regex)),
                 Err(_) => Ok(None),
             }
@@ -148,7 +152,11 @@ fn init_regexp_data(expr: &mut Expr) -> Result<Option<BytesRegex>> {
     let tree_node = &mut children[1];
     match tree_node.get_tp() {
         ExprType::Bytes | ExprType::String => {
-            match BytesRegex::new(String::from_utf8(tree_node.take_val()).unwrap().as_ref()) {
+            let val = match String::from_utf8(tree_node.take_val()) {
+                Ok(val) => val,
+                Err(_) => return Ok(None),
+            };
+            match BytesRegex::new(val.as_ref()) {
                 Ok(regex) => Ok(Some(regex)),
                 Err(_) => Ok(None),
             }
