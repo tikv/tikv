@@ -11,6 +11,7 @@ mod mock_engine;
 mod perf_context;
 mod rocksdb_engine;
 mod stats;
+mod test_engine_builder;
 
 use std::cell::UnsafeCell;
 use std::fmt;
@@ -29,10 +30,11 @@ pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapsh
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot};
 pub use self::stats::{
     CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
+pub use self::test_engine_builder::TestEngineBuilder;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use into_other::IntoOther;
 use tikv_util::time::ThreadReadId;
