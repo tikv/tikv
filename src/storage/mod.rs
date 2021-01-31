@@ -71,7 +71,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
+use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
     CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
@@ -1864,7 +1864,7 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE, ALL_CFS};
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
@@ -2384,7 +2384,7 @@ mod tests {
         };
         let engine = {
             let path = "".to_owned();
-            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfs = ALL_CFS.to_vec();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![

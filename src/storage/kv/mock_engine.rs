@@ -2,7 +2,7 @@
 
 use super::Result;
 use crate::storage::kv::{Callback, ExtCallback, Modify, SnapContext, WriteData};
-use crate::storage::{Engine, RocksEngine};
+use crate::storage::kv::{Engine, RocksEngine};
 use kvproto::kvrpcpb::Context;
 use std::collections::LinkedList;
 use std::sync::{Arc, Mutex};
