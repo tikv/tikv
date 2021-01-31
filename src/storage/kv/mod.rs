@@ -6,6 +6,7 @@
 
 mod btree_engine;
 mod cursor;
+pub mod metrics;
 mod mock_engine;
 mod perf_context;
 mod rocksdb_engine;
