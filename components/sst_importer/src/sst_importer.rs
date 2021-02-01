@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::marker::Unpin;
 use std::ops::Bound;
@@ -27,7 +26,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{block_on_external_io, create_storage, url_of_backend, READ_BUF_SIZE};
-use file_system::sync_dir;
+use file_system::{sync_dir, File, OpenOptions};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
@@ -248,6 +247,7 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
+        // we don't need to inspect memory reads.
         let env = get_env(self.key_manager.clone(), None /*base_env*/)?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
@@ -326,7 +326,7 @@ impl SSTImporter {
         })()?;
 
         if let Some(range) = direct_retval {
-            fs::rename(&path.temp, &path.save)?;
+            file_system::rename(&path.temp, &path.save)?;
             if let Some(key_manager) = &self.key_manager {
                 let temp_str = path
                     .temp
@@ -403,7 +403,7 @@ impl SSTImporter {
             }
         }
 
-        let _ = fs::remove_file(&path.temp);
+        let _ = file_system::remove_file(&path.temp);
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
@@ -548,7 +548,7 @@ impl<E: KvEngine> SSTWriter<E> {
 
     // move file from temp to save.
     fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
-        fs::rename(&import_path.temp, &import_path.save)?;
+        file_system::rename(&import_path.temp, &import_path.save)?;
         if let Some(key_manager) = key_manager {
             let temp_str = import_path
                 .temp
@@ -591,13 +591,13 @@ impl ImportDir {
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         let clone_dir = root_dir.join(Self::CLONE_DIR);
         if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)?;
+            file_system::remove_dir_all(&temp_dir)?;
         }
         if clone_dir.exists() {
-            fs::remove_dir_all(&clone_dir)?;
+            file_system::remove_dir_all(&clone_dir)?;
         }
-        fs::create_dir_all(&temp_dir)?;
-        fs::create_dir_all(&clone_dir)?;
+        file_system::create_dir_all(&temp_dir)?;
+        file_system::create_dir_all(&clone_dir)?;
         Ok(ImportDir {
             root_dir,
             temp_dir,
@@ -631,7 +631,7 @@ impl ImportDir {
 
     fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
-            fs::remove_file(&path)?;
+            file_system::remove_file(&path)?;
             if let Some(manager) = key_manager {
                 manager.delete_file(path.to_str().unwrap())?;
             }
@@ -687,7 +687,7 @@ impl ImportDir {
 
     fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         let mut ssts = Vec::new();
-        for e in fs::read_dir(&self.root_dir)? {
+        for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
             if !e.file_type()?.is_file() {
                 continue;
@@ -796,7 +796,7 @@ impl ImportFile {
                 "finalize SST write cache",
             ));
         }
-        fs::rename(&self.path.temp, &self.path.save)?;
+        file_system::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
             let tmp_str = self.path.temp.to_str().unwrap();
             let save_str = self.path.save.to_str().unwrap();
@@ -812,7 +812,7 @@ impl ImportFile {
             if let Some(ref manager) = self.key_manager {
                 manager.delete_file(self.path.temp.to_str().unwrap())?;
             }
-            fs::remove_file(&self.path.temp)?;
+            file_system::remove_file(&self.path.temp)?;
         }
         Ok(())
     }
@@ -1679,7 +1679,7 @@ mod tests {
     #[test]
     fn test_download_sst_invalid() {
         let ext_sst_dir = tempfile::tempdir().unwrap();
-        fs::write(ext_sst_dir.path().join("sample.sst"), b"not an SST file").unwrap();
+        file_system::write(ext_sst_dir.path().join("sample.sst"), b"not an SST file").unwrap();
         let mut meta = SstMeta::default();
         meta.set_uuid(vec![0u8; 16]);
         let importer_dir = tempfile::tempdir().unwrap();

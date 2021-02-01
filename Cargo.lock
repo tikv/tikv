@@ -1125,6 +1125,7 @@ dependencies = [
  "error_code",
  "fail",
  "failure",
+ "file_system",
  "futures 0.3.7",
  "futures-util",
  "hex 0.4.2",

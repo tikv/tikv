@@ -10,6 +10,7 @@ use std::sync::Arc;
 use fs2::FileExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
+#[derive(Debug)]
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
