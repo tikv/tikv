@@ -184,7 +184,16 @@ where
             Some(c) => c,
             None => return true,
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
+        if check_need_gc(safe_point, self.cfg.ratio_threshold, &props) {
+            info!(
+                "range needs GC";
+                "start" => hex::encode_upper(start_key),
+                "end" => hex::encode_upper(end_key),
+                "props" => ?props,
+            );
+            return true;
+        }
+        false
     }
 
     /// Cleans up outdated data.
