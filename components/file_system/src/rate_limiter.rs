@@ -12,7 +12,7 @@ use tikv_util::time::Instant;
 /// Used to calibrate actual IO throughput.
 /// A naive implementation would be deducing disk IO based on empirical ratio
 /// with respect to hardware environment.
-pub trait BytesCalibrator: Send {
+pub trait BytesCalibrator: Send + std::fmt::Debug {
     /// Calibrate estimation of throughput of current epoch. This methods can
     /// be called several times before a reset.
     /// Returned value must be no larger than `before_calibration`.
@@ -84,6 +84,7 @@ fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usiz
     (ios_per_sec as f64 * refill_period.as_secs_f64()) as usize
 }
 
+#[derive(Debug)]
 struct RawIORateLimiterProtected {
     last_refill_time: Instant,
     calibrator: Option<Box<dyn BytesCalibrator>>,
@@ -91,6 +92,7 @@ struct RawIORateLimiterProtected {
 
 /// Limit total IO flow below provided threshold by throttling low-priority IOs.
 /// Rate limit is disabled when total IO threshold is set to zero.
+#[derive(Debug)]
 struct RawIORateLimiter {
     refill_period: Duration,
     priority_ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
@@ -242,6 +244,7 @@ impl RawIORateLimiter {
 }
 
 /// An instance of `IORateLimiter` should be safely shared between threads.
+#[derive(Debug)]
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::VARIANT_COUNT],
     bytes: Option<RawIORateLimiter>,
@@ -293,7 +296,7 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write || io_type == IOType::Other {
+        if io_op == IOOp::Write || io_type == IOType::Export {
             let priority = self.priority_map[io_type as usize];
             if let Some(ios) = &self.ios {
                 ios.request(priority, 1);
@@ -315,7 +318,7 @@ impl IORateLimiter {
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write || io_type == IOType::Other {
+        if io_op == IOOp::Write || io_type == IOType::Export {
             let priority = self.priority_map[io_type as usize];
             if let Some(ios) = &self.ios {
                 ios.async_request(priority, 1).await;
@@ -349,21 +352,28 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     }
 }
 
-pub struct WithIORateLimiter {
+pub struct WithIORateLimit {
     previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
-impl WithIORateLimiter {
-    pub fn new(limiter: Option<Arc<IORateLimiter>>) -> Self {
+impl WithIORateLimit {
+    pub fn new(bytes_per_sec: usize) -> (Self, Arc<IORateLimiterStatistics>) {
         let previous_io_rate_limiter = get_io_rate_limiter();
-        set_io_rate_limiter(limiter);
-        WithIORateLimiter {
-            previous_io_rate_limiter,
-        }
+        let limiter = Arc::new(IORateLimiter::new());
+        limiter.set_io_rate_limit(IOMeasure::Bytes, bytes_per_sec);
+        limiter.enable_statistics(true);
+        let stats = limiter.statistics();
+        set_io_rate_limiter(Some(limiter));
+        (
+            WithIORateLimit {
+                previous_io_rate_limiter,
+            },
+            stats,
+        )
     }
 }
 
-impl Drop for WithIORateLimiter {
+impl Drop for WithIORateLimit {
     fn drop(&mut self) {
         set_io_rate_limiter(self.previous_io_rate_limiter.take());
     }

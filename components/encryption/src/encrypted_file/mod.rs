@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{rename, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
 
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
@@ -27,7 +27,7 @@ pub struct EncryptedFile<'a> {
 impl<'a> EncryptedFile<'a> {
     /// New an `EncryptedFile`.
     ///
-    /// It's different from `std::fs::File`, it does not hold a reference
+    /// It's different from `file_system::File`, it does not hold a reference
     /// to the file or open the file, util we actually read or write.
     pub fn new(base: &'a Path, name: &'a str) -> EncryptedFile<'a> {
         EncryptedFile { base, name }

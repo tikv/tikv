@@ -10,6 +10,7 @@ use std::sync::Arc;
 use fs2::FileExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
+#[derive(Debug)]
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
@@ -209,12 +210,7 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let limiter = Arc::new(IORateLimiter::new());
-        limiter.enable_statistics(true);
-        // make sure only grant 1 byte pre request, to avoid interference from prefetching
-        limiter.set_io_rate_limit(IOMeasure::Bytes, 100);
-        let stats = limiter.statistics();
-        let _guard = WithIORateLimiter::new(Some(limiter));
+        let (_guard, stats) = WithIORateLimit::new(100);
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");

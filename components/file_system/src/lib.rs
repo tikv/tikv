@@ -21,7 +21,7 @@ pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
     get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, IORateLimiter,
-    IORateLimiterStatistics, WithIORateLimiter,
+    IORateLimiterStatistics, WithIORateLimit,
 };
 
 pub use std::fs::{
