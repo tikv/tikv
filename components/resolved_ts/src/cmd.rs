@@ -8,7 +8,7 @@ use raftstore::errors::Error as RaftStoreError;
 use tikv::server::raftkv::WriteBatchFlags;
 use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ChangeRow {
     Prewrite {
         key: Key,
@@ -265,10 +265,16 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
 
 #[cfg(test)]
 mod tests {
+    use concurrency_manager::ConcurrencyManager;
     use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
+    use tikv::storage::lock_manager::DummyLockManager;
+    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn};
+    use tikv::storage::txn::commands::one_pc_commit_ts;
     use tikv::storage::txn::tests::*;
-    use txn_types::{Key, WriteType};
+    use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
+    use tikv::storage::Engine;
+    use txn_types::{Key, LockType, WriteType};
 
     use super::{group_row_changes, ChangeLog, ChangeRow};
 
@@ -284,82 +290,112 @@ mod tests {
         must_rollback(&engine, b"k1", 3);
 
         must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
+        must_commit(&engine, b"k1", 4, 5);
 
-        let modifies = engine.take_last_modifies();
-        for (i, m) in modifies.into_iter().enumerate() {
-            let reqs = modifies_to_requests(m);
-            let mut rows = ChangeLog::encode_rows(group_row_changes(reqs), false);
-            assert_eq!(rows.len(), 1);
-            match i {
-                0 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite {
-                        key,
-                        start_ts,
-                        value,
-                        ..
-                    } => {
-                        assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(start_ts.into_inner(), 1);
-                        assert_eq!(b"v1".to_vec(), value.unwrap());
-                    }
-                    _ => unreachable!(),
-                },
-                1 => match rows.pop().unwrap() {
-                    ChangeRow::Commit {
-                        key,
-                        start_ts,
-                        write_type,
-                        commit_ts,
-                    } => {
-                        assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(start_ts.unwrap().into_inner(), 1);
-                        assert_eq!(commit_ts.unwrap().into_inner(), 2);
-                        assert_eq!(write_type, WriteType::Put);
-                    }
-                    _ => unreachable!(),
-                },
-                2 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite {
-                        key,
-                        start_ts,
-                        value,
-                        ..
-                    } => {
-                        assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(start_ts.into_inner(), 3);
-                        assert_eq!(b"v2".to_vec(), value.unwrap());
-                    }
-                    _ => unreachable!(),
-                },
-                3 => match rows.pop().unwrap() {
-                    ChangeRow::Commit {
-                        key,
-                        write_type,
-                        start_ts,
-                        commit_ts,
-                    } => {
-                        assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(write_type, WriteType::Rollback);
-                        assert_eq!(start_ts.unwrap().into_inner(), 3);
-                        assert!(commit_ts.is_none());
-                    }
-                    _ => unreachable!(),
-                },
-                4 => match rows.pop().unwrap() {
-                    ChangeRow::Prewrite {
-                        key,
-                        start_ts,
-                        value,
-                        ..
-                    } => {
-                        assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(start_ts.into_inner(), 4);
-                        assert_eq!(value, Some(vec![b'v'; 512]));
-                    }
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
+        must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
+        must_rollback(&engine, b"k1", 5);
+
+        let k1 = Key::from_raw(b"k1");
+        let rows: Vec<_> = engine
+            .take_last_modifies()
+            .into_iter()
+            .flat_map(|m| {
+                let reqs = modifies_to_requests(m);
+                ChangeLog::encode_rows(group_row_changes(reqs), false)
+            })
+            .collect();
+
+        let expected = vec![
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 1.into(),
+                value: Some(b"v1".to_vec()),
+                lock_type: LockType::Put,
+            },
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: Some(1.into()),
+                commit_ts: Some(2.into()),
+                write_type: WriteType::Put,
+            },
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 3.into(),
+                value: Some(b"v2".to_vec()),
+                lock_type: LockType::Put,
+            },
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: Some(3.into()),
+                commit_ts: None,
+                write_type: WriteType::Rollback,
+            },
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 4.into(),
+                value: Some(vec![b'v'; 512]),
+                lock_type: LockType::Put,
+            },
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: Some(4.into()),
+                commit_ts: Some(5.into()),
+                write_type: WriteType::Put,
+            },
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 5.into(),
+                value: Some(b"v3".to_vec()),
+                lock_type: LockType::Put,
+            },
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: None,
+                commit_ts: None,
+                write_type: WriteType::Rollback,
+            },
+        ];
+        assert_eq!(rows, expected);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm);
+        prewrite(
+            &mut txn,
+            &TransactionProperties {
+                start_ts: 10.into(),
+                kind: TransactionKind::Optimistic(false),
+                commit_kind: CommitKind::OnePc(50.into()),
+                primary: b"k1",
+                txn_size: 2,
+                lock_ttl: 2000,
+                min_commit_ts: 10.into(),
+                need_old_value: false,
+            },
+            Mutation::Put((k1.clone(), b"v4".to_vec())),
+            &None,
+            false,
+        )
+        .unwrap();
+        one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);
+        write(&engine, &Default::default(), txn.into_modifies());
+        let one_pc_row = engine
+            .take_last_modifies()
+            .into_iter()
+            .flat_map(|m| {
+                let reqs = modifies_to_requests(m);
+                ChangeLog::encode_rows(group_row_changes(reqs), true)
+            })
+            .last()
+            .unwrap();
+        assert_eq!(
+            one_pc_row,
+            ChangeRow::OnePc {
+                key: k1,
+                write_type: WriteType::Put,
+                commit_ts: 10.into(),
+                value: Some(b"v4".to_vec()),
             }
-        }
+        )
     }
 }
