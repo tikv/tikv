@@ -3884,7 +3884,7 @@ mod tests {
         for op in &[CmdType::Get, CmdType::Snap] {
             let mut req = req.clone();
             let mut request = raft_cmdpb::Request::default();
-            request.set_cmd_type(op);
+            request.set_cmd_type(*op);
             req.set_requests(vec![request].into());
             req.mut_header().set_read_ts(1);
             table.push((req, RequestPolicy::StaleRead));
