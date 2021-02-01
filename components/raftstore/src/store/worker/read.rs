@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,8 +24,8 @@ use crate::store::{
 };
 use crate::Result;
 
-use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
@@ -143,10 +143,63 @@ pub struct ReadDelegate {
     last_valid_ts: Timespec,
 
     tag: String,
-    invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
     pub safe_ts: Arc<AtomicU64>,
+
+    // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
+    // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
+    track_ver: TrackVer,
+}
+
+impl Drop for ReadDelegate {
+    fn drop(&mut self) {
+        // call `inc` to notify the source `ReadDelegate` is dropped
+        self.track_ver.inc();
+    }
+}
+
+#[derive(Debug)]
+struct TrackVer {
+    version: Arc<AtomicU64>,
+    local_ver: u64,
+    // source set to `true` means the `TrackVer` is created by `TrackVer::new` instead
+    // of `TrackVer::clone`, more specific, only the `ReadDelegate` created by `ReadDelegate::new`
+    // will have source `TrackVer` and be able to increase `TrackVer::version`, because these
+    // `ReadDelegate` are store at `StoreMeta` and only them will invoke `ReadDelegate::update`
+    source: bool,
+}
+
+impl TrackVer {
+    fn new() -> TrackVer {
+        TrackVer {
+            version: Arc::new(AtomicU64::from(0)),
+            local_ver: 0,
+            source: true,
+        }
+    }
+
+    // Take `&mut self` to prevent calling `inc` and `clone` at the same time
+    fn inc(&mut self) {
+        // Only the source `TrackVer` can increase version
+        if self.source {
+            self.version.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn any_new(&self) -> bool {
+        self.version.load(Ordering::Relaxed) > self.local_ver
+    }
+}
+
+impl Clone for TrackVer {
+    fn clone(&self) -> Self {
+        TrackVer {
+            version: Arc::clone(&self.version),
+            local_ver: self.version.load(Ordering::Relaxed),
+            source: false,
+        }
+    }
 }
 
 impl ReadDelegate {
@@ -162,23 +215,20 @@ impl ReadDelegate {
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
-            invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
             safe_ts: peer.read_progress.get_safe_ts(),
+            track_ver: TrackVer::new(),
         }
     }
 
-    pub fn mark_invalid(&self) {
-        self.invalid.store(true, Ordering::Release);
-    }
-
-    pub fn fresh_valid_ts(&mut self) {
+    fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
     }
 
     pub fn update(&mut self, progress: Progress) {
         self.fresh_valid_ts();
+        self.track_ver.inc();
         match progress {
             Progress::Region(region) => {
                 self.region = Arc::new(region);
@@ -266,7 +316,8 @@ where
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
-    delegates: HashMap<u64, Option<ReadDelegate>>,
+    // The use of `Arc` here is a workaround, see the comment at `get_delegate`
+    delegates: LruCache<u64, Arc<ReadDelegate>>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
@@ -315,7 +366,7 @@ where
             cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
         }
     }
 
@@ -351,7 +402,45 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    fn pre_propose_raft_command(&mut self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
+    // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
+    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
+    // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
+    // make the logic clear
+    fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
+        match self.delegates.get(&region_id) {
+            // The local `ReadDelegate` is up to date
+            Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
+            _ => {
+                debug!("update local read delegate"; "region_id" => region_id);
+                self.metrics.rejected_by_cache_miss += 1;
+
+                let (meta_len, meta_reader) = {
+                    let meta = self.store_meta.lock().unwrap();
+                    (
+                        meta.readers.len(),
+                        meta.readers.get(&region_id).cloned().map(Arc::new),
+                    )
+                };
+
+                // Remove the stale delegate
+                self.delegates.remove(&region_id);
+                self.delegates.resize(meta_len);
+                match meta_reader {
+                    Some(reader) => {
+                        self.delegates.insert(region_id, Arc::clone(&reader));
+                        Some(reader)
+                    }
+                    None => None,
+                }
+            }
+        }
+    }
+
+    fn pre_propose_raft_command(
+        &mut self,
+        req: &RaftCmdRequest,
+    ) -> Result<Option<Arc<ReadDelegate>>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -367,22 +456,14 @@ where
 
         // Check region id.
         let region_id = req.get_header().get_region_id();
-        let delegate = match self.delegates.get_mut(&region_id) {
-            Some(delegate) => match delegate.take() {
-                Some(d) => d,
-                None => return Ok(None),
-            },
+        let delegate = match self.get_delegate(region_id) {
+            Some(d) => d,
             None => {
-                self.metrics.rejected_by_cache_miss += 1;
-                debug!("rejected by cache miss"; "region_id" => region_id);
+                self.metrics.rejected_by_no_region += 1;
+                debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
         };
-
-        if delegate.invalid.load(Ordering::Acquire) {
-            self.delegates.remove(&region_id);
-            return Ok(None);
-        }
 
         fail_point!("localreader_on_find_delegate");
 
@@ -429,73 +510,48 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        let region_id = req.get_header().get_region_id();
-        loop {
-            match self.pre_propose_raft_command(&req) {
-                Ok(Some(delegate)) => {
-                    let snapshot_ts = match read_id.as_mut() {
-                        // If this peer became Leader not long ago and just after the cached
-                        // snapshot was created, this snapshot can not see all data of the peer.
-                        Some(id) => {
-                            if id.create_time <= delegate.last_valid_ts {
-                                id.create_time = monotonic_raw_now();
-                            }
-                            id.create_time
+        match self.pre_propose_raft_command(&req) {
+            Ok(Some(delegate)) => {
+                let snapshot_ts = match read_id.as_mut() {
+                    // If this peer became Leader not long ago and just after the cached
+                    // snapshot was created, this snapshot can not see all data of the peer.
+                    Some(id) => {
+                        if id.create_time <= delegate.last_valid_ts {
+                            id.create_time = monotonic_raw_now();
                         }
-                        None => monotonic_raw_now(),
-                    };
-                    if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
-                        // Cache snapshot_time for remaining requests in the same batch.
-                        let mut response = self.execute(&req, &delegate.region, None, read_id);
-                        // Leader can read local if and only if it is in lease.
-                        cmd_resp::bind_term(&mut response.response, delegate.term);
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
-                        }
-                        response.txn_extra_op = delegate.txn_extra_op.load();
-                        cb.invoke_read(response);
-                        self.delegates.insert(region_id, Some(delegate));
-                        return;
+                        id.create_time
                     }
-                    break;
-                }
-                // It can not handle the request, forwards to raftstore.
-                Ok(None) => {
-                    if self.delegates.get(&region_id).is_some() {
-                        break;
+                    None => monotonic_raw_now(),
+                };
+                // Leader can read local if and only if it is in lease.
+                if delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                    // Cache snapshot_time for remaining requests in the same batch.
+                    let mut response = self.execute(&req, &delegate.region, None, read_id);
+                    cmd_resp::bind_term(&mut response.response, delegate.term);
+                    if let Some(snap) = response.snapshot.as_mut() {
+                        snap.max_ts_sync_status = Some(delegate.max_ts_sync_status.clone());
                     }
-                    let meta = self.store_meta.lock().unwrap();
-                    match meta.readers.get(&region_id).cloned() {
-                        Some(reader) => {
-                            self.delegates.insert(region_id, Some(reader));
-                        }
-                        None => {
-                            self.metrics.rejected_by_no_region += 1;
-                            debug!("rejected by no region"; "region_id" => region_id);
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let mut response = cmd_resp::new_error(e);
-                    if let Some(Some(ref delegate)) = self.delegates.get(&region_id) {
-                        cmd_resp::bind_term(&mut response, delegate.term);
-                    }
-                    cb.invoke_read(ReadResponse {
-                        response,
-                        snapshot: None,
-                        txn_extra_op: TxnExtraOp::Noop,
-                    });
-                    self.delegates.remove(&region_id);
-                    return;
+                    response.txn_extra_op = delegate.txn_extra_op.load();
+                    cb.invoke_read(response);
+                } else {
+                    // Forward to raftstore.
+                    self.redirect(RaftCommand::new(req, cb));
                 }
             }
+            // Forward to raftstore.
+            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Err(e) => {
+                let mut response = cmd_resp::new_error(e);
+                if let Some(ref delegate) = self.delegates.get(&req.get_header().get_region_id()) {
+                    cmd_resp::bind_term(&mut response, delegate.term);
+                }
+                cb.invoke_read(ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+            }
         }
-        // Remove delegate for updating it by next cmd execution.
-        self.delegates.remove(&region_id);
-        // Forward to raftstore.
-        let cmd = RaftCommand::new(req, cb);
-        self.redirect(cmd);
     }
 
     /// If read requests are received at the same RPC request, we can create one snapshot for all
@@ -531,7 +587,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
         }
@@ -804,6 +860,7 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_no_region, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
+        assert!(reader.delegates.get(&1).is_none());
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -819,10 +876,10 @@ mod tests {
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
-                invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 safe_ts: Arc::new(AtomicU64::new(0)),
+                track_ver: TrackVer::new(),
             };
             meta.readers.insert(1, read_delegate);
         }
@@ -831,7 +888,6 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
         assert_eq!(reader.metrics.rejected_by_appiled_term, 1);
-        assert!(reader.delegates.get(&1).is_none());
 
         // Make the applied_index_term matches current term.
         let pg = Progress::applied_index_term(term6);
@@ -845,7 +901,7 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
-        let region = region1;
+        let region = region1.clone();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -900,13 +956,11 @@ mod tests {
             })),
         );
         assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         must_redirect(&mut reader, &rx, cmd_read_quorum);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
         // Term mismatch.
         let mut cmd_term = cmd.clone();
@@ -921,7 +975,6 @@ mod tests {
             })),
         );
         assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 6);
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -930,7 +983,6 @@ mod tests {
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
         assert_eq!(reader.metrics.rejected_by_epoch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 7);
 
         // Expire lease manually, and it can not be renewed.
         let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
@@ -941,7 +993,6 @@ mod tests {
             reader.metrics.rejected_by_lease_expire,
             previous_lease_rejection + 1
         );
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 8);
 
         // Channel full.
         reader.propose_raft_command(None, cmd.clone(), Callback::None);
@@ -960,7 +1011,7 @@ mod tests {
 
         // Reject by term mismatch in lease.
         let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
-        let mut cmd9 = cmd;
+        let mut cmd9 = cmd.clone();
         cmd9.mut_header().set_term(term6 + 3);
         {
             let mut meta = store_meta.lock().unwrap();
@@ -990,5 +1041,97 @@ mod tests {
             reader.metrics.rejected_by_term_mismatch,
             previous_term_rejection + 1,
         );
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
+
+        // Stale local ReadDelegate
+        cmd.mut_header().mut_region_epoch().set_version(4);
+        region1.mut_region_epoch().set_version(4);
+        let pg = Progress::region(region1);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(pg);
+        }
+        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        must_not_redirect(&mut reader, &rx, task);
+        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
+
+        let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
+        assert!(reader.get_delegate(1).is_some());
+
+        // dropping the non-source `reader` will not make other readers invalid
+        drop(reader_clone);
+        assert!(reader.get_delegate(1).is_some());
+
+        // drop the source `reader`
+        store_meta.lock().unwrap().readers.remove(&1).unwrap();
+        // the invalid delegate should be removed
+        assert!(reader.get_delegate(1).is_none());
+    }
+
+    #[test]
+    fn test_read_delegate_cache_update() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", store_id, store_meta.clone());
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: Arc::new(region.clone()),
+                peer_id: 1,
+                term: 1,
+                applied_index_term: 1,
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                max_ts_sync_status: Arc::new(AtomicU64::new(0)),
+                track_ver: TrackVer::new(),
+            };
+            meta.readers.insert(1, read_delegate);
+        }
+
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(&*d.region, &region);
+        assert_eq!(d.term, 1);
+        assert_eq!(d.applied_index_term, 1);
+        assert!(d.leader_lease.is_none());
+        drop(d);
+
+        {
+            region.mut_region_epoch().set_version(10);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::region(region.clone()));
+        }
+        assert_eq!(&*reader.get_delegate(1).unwrap().region, &region);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(Progress::term(2));
+        }
+        assert_eq!(reader.get_delegate(1).unwrap().term, 2);
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(Progress::applied_index_term(2));
+        }
+        assert_eq!(reader.get_delegate(1).unwrap().applied_index_term, 2);
+
+        {
+            let mut lease = Lease::new(Duration::seconds(1)); // 1s is long enough.
+            let remote = lease.maybe_new_remote_lease(3).unwrap();
+            let pg = Progress::leader_lease(remote);
+            let mut meta = store_meta.lock().unwrap();
+            meta.readers.get_mut(&1).unwrap().update(pg);
+        }
+        let d = reader.get_delegate(1).unwrap();
+        assert_eq!(d.leader_lease.clone().unwrap().term(), 3);
     }
 }

@@ -386,7 +386,7 @@ where
             .snapshot_on_kv_engine(start_key.as_encoded(), &[])
             .unwrap();
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false, IsolationLevel::Si);
-        let (locks, _) = reader.scan_locks(Some(start_key), |l| l.ts <= max_ts, limit)?;
+        let (locks, _) = reader.scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)?;
 
         let mut lock_infos = Vec::with_capacity(locks.len());
         for (key, lock) in locks {
@@ -651,6 +651,11 @@ where
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>, // Store safe point here.
     ) -> Result<()> {
+        assert!(
+            cfg.self_store_id > 0,
+            "AutoGcConfig::self_store_id shouldn't be 0"
+        );
+
         let kvdb = self.engine.kv_engine();
         let cfg_mgr = self.config_manager.clone();
         let feature_gate = self.feature_gate.clone();
@@ -687,9 +692,13 @@ where
     pub fn start_observe_lock_apply(
         &mut self,
         coprocessor_host: &mut CoprocessorHost<RocksEngine>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
-        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        let collector = Arc::new(AppliedLockCollector::new(
+            coprocessor_host,
+            concurrency_manager,
+        )?);
         self.applied_lock_collector = Some(collector);
         Ok(())
     }

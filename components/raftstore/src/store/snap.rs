@@ -256,7 +256,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
 }
 
 fn calc_checksum_and_size(
-    path: &PathBuf,
+    path: &Path,
     encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<(u32, u64)> {
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
@@ -270,7 +270,7 @@ fn calc_checksum_and_size(
     Ok((checksum, size))
 }
 
-fn check_file_size(got_size: u64, expected_size: u64, path: &PathBuf) -> RaftStoreResult<()> {
+fn check_file_size(got_size: u64, expected_size: u64, path: &Path) -> RaftStoreResult<()> {
     if got_size != expected_size {
         return Err(box_err!(
             "invalid size {} for snapshot cf file {}, expected {}",
@@ -285,7 +285,7 @@ fn check_file_size(got_size: u64, expected_size: u64, path: &PathBuf) -> RaftSto
 fn check_file_checksum(
     got_checksum: u32,
     expected_checksum: u32,
-    path: &PathBuf,
+    path: &Path,
 ) -> RaftStoreResult<()> {
     if got_checksum != expected_checksum {
         return Err(box_err!(
@@ -299,7 +299,7 @@ fn check_file_checksum(
 }
 
 fn check_file_size_and_checksum(
-    path: &PathBuf,
+    path: &Path,
     expected_size: u64,
     expected_checksum: u32,
     encryption_key_manager: Option<&Arc<DataKeyManager>>,
@@ -1075,7 +1075,6 @@ impl Drop for Snap {
         // cleanup if data corruption happens and any file goes missing
         if !self.exists() {
             self.delete();
-            return;
         }
     }
 }
@@ -1470,7 +1469,8 @@ impl SnapManagerCore {
             let dst = cf_file.path.to_str().unwrap();
             // It's ok that the cf file is moved but machine fails before `mgr.rename_file`
             // because without metadata file, saved cf files are nothing.
-            mgr.rename_file(src, dst)?;
+            mgr.link_file(src, dst)?;
+            mgr.delete_file(src)?;
         }
         let (checksum, size) = calc_checksum_and_size(&cf_file.path, mgr)?;
         cf_file.checksum = checksum;

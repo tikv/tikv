@@ -178,17 +178,7 @@ fn test_node_merge_with_slow_learner() {
     (0..50).for_each(|i| cluster.must_put(b"k2", format!("v{}", i).as_bytes()));
 
     // Wait to trigger compact raft log
-    let timer = Instant::now();
-    loop {
-        let state2 = cluster.truncated_state(right.get_id(), 1);
-        if state1.get_index() != state2.get_index() {
-            break;
-        }
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log compaction not finish after 3 seconds.");
-        }
-        sleep_ms(10);
-    }
+    cluster.wait_log_truncated(right.get_id(), 1, state1.get_index() + 1);
     cluster.clear_send_filters();
     cluster.must_put(b"k6", b"v6");
     must_get_equal(&cluster.get_engine(2), b"k6", b"v6");

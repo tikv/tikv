@@ -1002,6 +1002,14 @@ where
         ))
     }
 
+    pub fn has_gen_snap_task(&self) -> bool {
+        self.gen_snap_task.borrow().is_some()
+    }
+
+    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
+        self.gen_snap_task.get_mut()
+    }
+
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
     }
@@ -1289,18 +1297,24 @@ where
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
-                if status.compare_and_swap(
-                    JOB_STATUS_PENDING,
-                    JOB_STATUS_CANCELLING,
-                    Ordering::SeqCst,
-                ) == JOB_STATUS_PENDING
+                if status
+                    .compare_exchange(
+                        JOB_STATUS_PENDING,
+                        JOB_STATUS_CANCELLING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
                 {
                     true
-                } else if status.compare_and_swap(
-                    JOB_STATUS_RUNNING,
-                    JOB_STATUS_CANCELLING,
-                    Ordering::SeqCst,
-                ) == JOB_STATUS_RUNNING
+                } else if status
+                    .compare_exchange(
+                        JOB_STATUS_RUNNING,
+                        JOB_STATUS_CANCELLING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
                 {
                     return false;
                 } else {
@@ -1518,6 +1532,7 @@ pub fn do_snapshot<E>(
     region_id: u64,
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
+    for_balance: bool,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1586,6 +1601,7 @@ where
         &mut snap_data,
         &mut stat,
     )?;
+    snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
@@ -1597,8 +1613,10 @@ where
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<W: RaftLogBatch>(raft_wb: &mut W, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftLocalState::default();
-    raft_state.last_index = RAFT_INIT_LOG_INDEX;
+    let mut raft_state = RaftLocalState {
+        last_index: RAFT_INIT_LOG_INDEX,
+        ..Default::default()
+    };
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
     raft_wb.put_raft_state(region_id, &raft_state)?;
@@ -2478,10 +2496,8 @@ mod tests {
 
     #[test]
     fn test_sync_log() {
-        let mut tbl = vec![];
-
         // Do not sync empty entrise.
-        tbl.push((Entry::default(), false));
+        let mut tbl = vec![(Entry::default(), false)];
 
         // Sync if sync_log is set.
         let mut e = Entry::default();

@@ -70,7 +70,7 @@ impl<'a> EncryptedFile<'a> {
             .create(true)
             .write(true)
             .open(&tmp_path)
-            .unwrap();
+            .unwrap_or_else(|_| panic!("EncryptedFile::write {}", &tmp_path.to_str().unwrap()));
 
         // Encrypt the content.
         let encrypted_content = master_key
