@@ -190,7 +190,7 @@ impl RoleObserver for CdcObserver {
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
@@ -215,7 +215,7 @@ impl RegionChangeObserver for CdcObserver {
                 let deregister = Deregister::Region {
                     region_id,
                     observe_id,
-                    err: CdcError::Request(store_err.into()),
+                    err: CdcError::request(store_err.into()),
                 };
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("schedule cdc task failed"; "error" => ?e);
