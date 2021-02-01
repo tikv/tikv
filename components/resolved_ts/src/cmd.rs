@@ -19,11 +19,10 @@ pub enum ChangeRow {
     Commit {
         key: Key,
         write_type: WriteType,
-        start_ts: TimeStamp,
-        commit_ts: Option<TimeStamp>,
         // In some cases a rollback will be done by just deleting the lock, need to lookup Resolver
         // to untrack lock and get start ts from it.
-        lack_start_ts: bool,
+        start_ts: Option<TimeStamp>,
+        commit_ts: Option<TimeStamp>,
     },
     OnePc {
         key: Key,
@@ -100,7 +99,7 @@ impl ChangeLog {
                             write_type,
                             ..
                         } = write;
-                        let value = default.map_or_else(|| short_value, |v| Some(v.into_put().1));
+                        let value = default.map_or(short_value, |v| Some(v.into_put().1));
                         if is_one_pc {
                             ChangeRow::OnePc {
                                 commit_ts: commit_ts.unwrap_or_default(),
@@ -115,9 +114,8 @@ impl ChangeLog {
                             ChangeRow::Commit {
                                 key,
                                 commit_ts,
-                                start_ts,
+                                start_ts: Some(start_ts),
                                 write_type,
-                                lack_start_ts: false,
                             }
                         }
                     })
@@ -130,7 +128,7 @@ impl ChangeLog {
                             lock_type,
                             ..
                         } = lock;
-                        let value = default.map_or_else(|| short_value, |v| Some(v.into_put().1));
+                        let value = default.map_or(short_value, |v| Some(v.into_put().1));
                         ChangeRow::Prewrite {
                             key,
                             start_ts: ts,
@@ -141,9 +139,8 @@ impl ChangeLog {
                 (None, Some(KeyOp::Delete), _) => Some(ChangeRow::Commit {
                     key,
                     commit_ts: None,
-                    start_ts: TimeStamp::zero(),
+                    start_ts: None,
                     write_type: WriteType::Rollback,
-                    lack_start_ts: true,
                 }),
                 other => panic!("unexpected row pattern {:?}", other),
             })
@@ -313,13 +310,11 @@ mod tests {
                         start_ts,
                         write_type,
                         commit_ts,
-                        lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
-                        assert_eq!(start_ts.into_inner(), 1);
+                        assert_eq!(start_ts.unwrap().into_inner(), 1);
                         assert_eq!(commit_ts.unwrap().into_inner(), 2);
                         assert_eq!(write_type, WriteType::Put);
-                        assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
@@ -342,13 +337,11 @@ mod tests {
                         write_type,
                         start_ts,
                         commit_ts,
-                        lack_start_ts,
                     } => {
                         assert_eq!(key, Key::from_raw(b"k1"));
                         assert_eq!(write_type, WriteType::Rollback);
-                        assert_eq!(start_ts.into_inner(), 3);
+                        assert_eq!(start_ts.unwrap().into_inner(), 3);
                         assert!(commit_ts.is_none());
-                        assert!(!lack_start_ts);
                     }
                     _ => unreachable!(),
                 },
