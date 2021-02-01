@@ -26,9 +26,15 @@ pub enum Error {
     #[fail(display = "Mvcc error {}", _0)]
     Mvcc(MvccError),
     #[fail(display = "Request error {:?}", _0)]
-    Request(ErrorHeader),
+    Request(Box<ErrorHeader>),
     #[fail(display = "Engine traits error {}", _0)]
     EngineTraits(EngineTraitsError),
+}
+
+impl Error {
+    pub fn request(err: ErrorHeader) -> Error {
+        Error::Request(Box::new(err))
+    }
 }
 
 macro_rules! impl_from {
@@ -65,8 +71,8 @@ impl Error {
             ))))
             | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                 box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            ))))
-            | Error::Request(e) => e,
+            )))) => e,
+            Error::Request(e) => e.as_ref().clone(),
             other => {
                 let mut e = ErrorHeader::default();
                 e.set_message(format!("{:?}", other));

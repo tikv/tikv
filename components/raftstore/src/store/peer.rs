@@ -3881,7 +3881,7 @@ mod tests {
         }
 
         // Stale read
-        for op in vec![CmdType::Get, CmdType::Snap] {
+        for op in &[CmdType::Get, CmdType::Snap] {
             let mut req = req.clone();
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
