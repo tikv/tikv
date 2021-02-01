@@ -19,7 +19,6 @@ use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_L
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
-use crate::index_scan_executor::ValueInfo;
 use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
 use tidb_query_datatype::codec::datum::decode;
 use DecodeHandleStrategy::*;
@@ -300,7 +299,7 @@ struct ValueInfo<'a> {
     partition_id_bytes: &'a [u8],
     restore_values: &'a [u8],
     restored_v5: bool,
-    tail_len: unsize,
+    tail_len: usize,
 }
 
 impl IndexScanExecutorImpl {
@@ -522,7 +521,6 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    #[allow(type_complexity)]
     fn split_value_data(value: &[u8]) -> Result<ValueInfo> {
         let tail_len = value[0] as usize;
         if tail_len > value.len() {
