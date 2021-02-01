@@ -25,8 +25,9 @@ pub use crate::engine_store_ffi::interfaces::root::DB::{
     WriteCmdType, WriteCmdsView,
 };
 use crate::engine_store_ffi::interfaces::root::DB::{
-    ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, SSTReaderInterfaces,
-    SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER, RAFT_STORE_PROXY_VERSION,
+    ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawCppStringPtr,
+    SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
+    RAFT_STORE_PROXY_VERSION,
 };
 use crate::store::LockCFFileReader;
 
@@ -156,17 +157,17 @@ impl FileEncryptionInfoRaw {
             method: EncryptionMethod::Unknown.into(),
             key: std::ptr::null_mut(),
             iv: std::ptr::null_mut(),
-            erro_msg: std::ptr::null_mut(),
+            error_msg: std::ptr::null_mut(),
         }
     }
 
-    fn error(erro_msg: RawVoidPtr) -> Self {
+    fn error(error_msg: RawCppStringPtr) -> Self {
         FileEncryptionInfoRaw {
             res: FileEncryptionRes::Error,
             method: EncryptionMethod::Unknown.into(),
             key: std::ptr::null_mut(),
             iv: std::ptr::null_mut(),
-            erro_msg,
+            error_msg,
         }
     }
 
@@ -176,7 +177,7 @@ impl FileEncryptionInfoRaw {
             method: f.method.into(),
             key: get_engine_store_server_helper().gen_cpp_string(&f.key),
             iv: get_engine_store_server_helper().gen_cpp_string(&f.iv),
-            erro_msg: std::ptr::null_mut(),
+            error_msg: std::ptr::null_mut(),
         }
     }
 }
@@ -691,8 +692,8 @@ impl EngineStoreServerHelper {
         unsafe { (self.fn_handle_check_terminated.into_inner())(self.inner) != 0 }
     }
 
-    fn gen_cpp_string(&self, buff: &[u8]) -> RawVoidPtr {
-        unsafe { (self.fn_gen_cpp_string.into_inner())(buff.into()).into_raw() }
+    fn gen_cpp_string(&self, buff: &[u8]) -> RawCppStringPtr {
+        unsafe { (self.fn_gen_cpp_string.into_inner())(buff.into()).into_raw() as RawCppStringPtr }
     }
 
     fn gen_batch_read_index_res(&self, cap: u64) -> RawVoidPtr {

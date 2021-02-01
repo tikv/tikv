@@ -288,6 +288,12 @@ pub mod root {
             Write = 1,
             Default = 2,
         }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RawCppString {
+            _unused: [u8; 0],
+        }
+        pub type RawCppStringPtr = *mut root::DB::RawCppString;
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
         pub enum FileEncryptionRes {
@@ -309,9 +315,9 @@ pub mod root {
         pub struct FileEncryptionInfoRaw {
             pub res: root::DB::FileEncryptionRes,
             pub method: root::DB::EncryptionMethod,
-            pub key: root::DB::RawVoidPtr,
-            pub iv: root::DB::RawVoidPtr,
-            pub erro_msg: root::DB::RawVoidPtr,
+            pub key: root::DB::RawCppStringPtr,
+            pub iv: root::DB::RawCppStringPtr,
+            pub error_msg: root::DB::RawCppStringPtr,
         }
         #[repr(C)]
         #[derive(Debug)]
