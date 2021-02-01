@@ -19,10 +19,10 @@ use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_L
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
+use crate::index_scan_executor::ValueInfo;
 use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
 use tidb_query_datatype::codec::datum::decode;
 use DecodeHandleStrategy::*;
-use crate::index_scan_executor::ValueInfo;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
 
@@ -589,7 +589,8 @@ impl IndexScanExecutorImpl {
             partition_id_bytes,
             restore_values,
             restored_v5,
-            tail_len} = Self::split_value_data(value)?;
+            tail_len,
+        } = Self::split_value_data(value)?;
 
         // Sanity check.
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
