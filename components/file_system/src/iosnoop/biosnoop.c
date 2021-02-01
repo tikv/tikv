@@ -42,7 +42,7 @@ BPF_HISTOGRAM(flush_read_latency, int, 25);
 BPF_HISTOGRAM(compaction_read_latency, int, 25);
 BPF_HISTOGRAM(replication_read_latency, int, 25);
 BPF_HISTOGRAM(load_balance_read_latency, int, 25);
-BPF_HISTOGRAM(gc_read_read_latency, int, 25);
+BPF_HISTOGRAM(gc_read_latency, int, 25);
 BPF_HISTOGRAM(import_read_latency, int, 25);
 BPF_HISTOGRAM(export_read_latency, int, 25);
 
