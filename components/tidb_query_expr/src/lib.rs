@@ -445,6 +445,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
+        ScalarFuncSig::RegexpSig => regexp_fn_meta(),
+        ScalarFuncSig::RegexpUtf8Sig => regexp_utf8_fn_meta(),
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
