@@ -1400,6 +1400,7 @@ where
                     ctx.ssts.insert(cf, vec![s.clone()]);
                 }
             }
+            ctx.delete_ssts.append(&mut ssts.clone());
         }
 
         let mut resp = RaftCmdResponse::default();
@@ -1413,7 +1414,6 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
