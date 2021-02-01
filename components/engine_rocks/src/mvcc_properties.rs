@@ -78,12 +78,14 @@ impl MvccPropertiesExt for RocksEngine {
                 level_0_set.insert(file_name.to_owned());
             }
         }
+        info!("L0 files: {:?}", level_0_set);
 
         let mut props = MvccProperties::new();
         for (k, v) in collection.iter() {
             if ignore_level_0 {
                 let file_name = k.split('/').last().unwrap();
                 if level_0_set.contains(file_name) {
+                    info!("ignored L0 file: {:?}", file_name);
                     // Skip files at level 0.
                     continue;
                 }
