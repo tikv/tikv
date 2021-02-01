@@ -254,7 +254,7 @@ impl Delegate {
                     "conn_id" => ?downstream.get_conn_id(),
                     "req_id" => downstream.req_id,
                     "err" => ?e);
-                let err = Error::Request(e.into());
+                let err = Error::request(e.into());
                 let change_data_error = self.error_event(err);
                 downstream.sink_event(change_data_error);
                 return false;
@@ -451,7 +451,7 @@ impl Delegate {
             } else {
                 let err_header = response.mut_header().take_error();
                 self.mark_failed();
-                return Err(Error::Request(err_header));
+                return Err(Error::request(err_header));
             }
         }
         Ok(())
@@ -756,7 +756,7 @@ impl Delegate {
             _ => return Ok(()),
         };
         self.mark_failed();
-        Err(Error::Request(store_err.into()))
+        Err(Error::request(store_err.into()))
     }
 }
 
@@ -918,7 +918,7 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Enable is disabled by any error.
@@ -926,13 +926,13 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.stop(Error::Request(err_header));
+        delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 

@@ -555,7 +555,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 })),
             },
         ) {
-            deregister_downstream(Error::Request(e.into()));
+            deregister_downstream(Error::request(e.into()));
             return;
         }
         self.workers.spawn(async move {
@@ -811,7 +811,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                         let deregister = Deregister::Region {
                             observe_id,
                             region_id,
-                            err: Error::Request(e.into()),
+                            err: Error::request(e.into()),
                         };
                         if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
                             error!("schedule cdc task failed"; "error" => ?e);
@@ -1042,7 +1042,7 @@ impl Initializer {
             let deregister = Deregister::Region {
                 region_id: self.region_id,
                 observe_id: self.observe_id,
-                err: Error::Request(err),
+                err: Error::request(err),
             };
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("schedule cdc task failed"; "error" => ?e);
@@ -1742,7 +1742,7 @@ mod tests {
             region_id: 1,
             downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         loop {
@@ -1774,7 +1774,7 @@ mod tests {
             region_id: 1,
             downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
@@ -1784,7 +1784,7 @@ mod tests {
             region_id: 1,
             downstream_id: new_downstream_id,
             conn_id,
-            err: Some(Error::Request(err_header.clone())),
+            err: Some(Error::request(err_header.clone())),
         };
         ep.run(Task::Deregister(deregister));
         let cdc_event = rx.recv_timeout(Duration::from_millis(500)).unwrap();
@@ -1815,7 +1815,7 @@ mod tests {
             region_id: 1,
             // A stale ObserveID (different from the actual one).
             observe_id: ObserveID::new(),
-            err: Error::Request(err_header),
+            err: Error::request(err_header),
         };
         ep.run(Task::Deregister(deregister));
         match rx.recv_timeout(Duration::from_millis(500)) {
