@@ -37,6 +37,7 @@ num = { version = "0.3", default-features = false }
 num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"
+regex = "1.1"
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
