@@ -12,8 +12,8 @@ use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_traits::{
-    EngineFileSystemInspector, Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable,
-    Peekable, ReadOptions, SeekKey, WriteBatch, WriteBatchExt,
+    Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
+    WriteBatch, WriteBatchExt,
 };
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -104,8 +104,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env =
-            get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), None).unwrap();
+        let env = get_inspected_env(None).unwrap();
         db_opts.set_env(env);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,

@@ -20,7 +20,10 @@ use tokio::time::timeout;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_rocks::{encryption::get_env, RocksSstReader};
+use engine_rocks::{
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    RocksSstReader,
+};
 use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
@@ -247,8 +250,8 @@ impl SSTImporter {
 
         // now validate the SST file.
         let path_str = path.temp.to_str().unwrap();
-        // we don't need to inspect memory reads.
-        let env = get_env(self.key_manager.clone(), None /*base_env*/)?;
+        let env = get_encrypted_env(self.key_manager.clone(), None /*base_env*/)?;
+        let env = get_inspected_env(Some(env))?;
         // Use abstracted SstReader after Env is abstracted.
         let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
         sst_reader.verify_checksum()?;
@@ -982,7 +985,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let env = get_env(key_manager.clone(), None /*base_env*/).unwrap();
+        let env = get_encrypted_env(key_manager.clone(), None /*base_env*/).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
