@@ -9,7 +9,9 @@ use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    DeleteStrategy, MiscExt, MvccPropertiesExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{FeatureGate, PdClient};
@@ -176,7 +178,8 @@ where
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let props = match self
             .engine
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key)
+            .kv_engine()
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key, true)
         {
             Some(c) => c,
             None => return true,

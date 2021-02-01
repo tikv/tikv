@@ -3,7 +3,7 @@
 use std::cmp;
 use txn_types::TimeStamp;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MvccProperties {
     pub min_ts: TimeStamp,     // The minimal timestamp.
     pub max_ts: TimeStamp,     // The maximal timestamp.
@@ -45,5 +45,6 @@ pub trait MvccPropertiesExt {
         safe_point: TimeStamp,
         start_key: &[u8],
         end_key: &[u8],
+        ignore_level_0: bool,
     ) -> Option<MvccProperties>;
 }

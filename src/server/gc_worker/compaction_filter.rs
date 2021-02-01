@@ -723,8 +723,8 @@ pub mod tests {
     use engine_rocks::util::get_cf_handle;
     use engine_rocks::{RocksEngine, RocksIngestExternalFileOptions, RocksSstWriterBuilder};
     use engine_traits::{
-        ImportExt, IngestExternalFileOptions, IterOptions, Iterable, MiscExt, Peekable, SstWriter,
-        SstWriterBuilder, SyncMutable,
+        ImportExt, IngestExternalFileOptions, IterOptions, Iterable, MiscExt, MvccPropertiesExt,
+        Peekable, SstWriter, SstWriterBuilder, SyncMutable,
     };
     use tikv_util::config::VersionTrack;
 
@@ -984,6 +984,27 @@ pub mod tests {
         for commit_ts in &[205, 215, 225, 235] {
             must_get(&engine, b"zkey", commit_ts, &value);
         }
+    }
+
+    #[test]
+    fn test_get_mvcc_properties_without_level_0() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let raw_engine = engine.get_rocksdb();
+
+        must_prewrite_put(&engine, b"zkey", b"zvalue1", b"zkey", 101);
+        must_commit(&engine, b"zkey", 101, 102);
+        must_prewrite_put(&engine, b"zkey", b"zvalue2", b"zkey", 103);
+        must_commit(&engine, b"zkey", 103, 104);
+        must_prewrite_put(&engine, b"zkey", b"zvalue3", b"zkey", 105);
+        must_commit(&engine, b"zkey", 105, 106);
+        raw_engine.flush_cf(CF_WRITE, true).unwrap();
+
+        // New flushed SST files will at level 0, should be ignored correctly.
+        let props = raw_engine.get_mvcc_properties_cf(CF_WRITE, 300.into(), b"zk", b"zz", true);
+        assert_eq!(props.unwrap(), MvccProperties::new());
+
+        let props = raw_engine.get_mvcc_properties_cf(CF_WRITE, 300.into(), b"zk", b"zz", false);
+        assert_ne!(props.unwrap(), MvccProperties::new());
     }
 
     // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction filters,

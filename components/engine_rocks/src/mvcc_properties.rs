@@ -1,10 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::util::get_cf_handle;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::{
     DecodeProperties, MvccProperties, MvccPropertiesExt, Result, TableProperties,
     TablePropertiesCollection, TablePropertiesExt,
 };
+use std::collections::HashSet;
 use txn_types::TimeStamp;
 
 pub(crate) const PROP_NUM_ERRORS: &str = "tikv.num_errors";
@@ -56,13 +58,37 @@ impl MvccPropertiesExt for RocksEngine {
         safe_point: TimeStamp,
         start_key: &[u8],
         end_key: &[u8],
+        ignore_level_0: bool,
     ) -> Option<MvccProperties> {
         let collection = match self.get_range_properties_cf(cf, &start_key, &end_key) {
             Ok(c) if !c.is_empty() => c,
             _ => return None,
         };
+
+        let mut level_0_set = HashSet::new();
+        if ignore_level_0 {
+            let raw = self.as_inner();
+            let cf_handle = get_cf_handle(raw, cf).unwrap();
+            let metadata = raw.get_column_family_meta_data(cf_handle);
+            let level_0_meta = metadata.get_levels().into_iter().next().unwrap();
+            let level_0_vec = level_0_meta.get_files();
+            for file_meta in level_0_vec {
+                let file_path = file_meta.get_name();
+                let file_name = file_path.split('/').last().unwrap();
+                level_0_set.insert(file_name.to_owned());
+            }
+        }
+
         let mut props = MvccProperties::new();
-        for (_, v) in collection.iter() {
+        for (k, v) in collection.iter() {
+            if ignore_level_0 {
+                let file_name = k.split('/').last().unwrap();
+                if level_0_set.contains(file_name) {
+                    // Skip files at level 0.
+                    continue;
+                }
+            }
+
             let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
                 Ok(m) => m,
                 Err(_) => return None,

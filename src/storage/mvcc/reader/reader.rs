@@ -818,7 +818,7 @@ mod tests {
         let end = keys::data_end_key(region.get_end_key());
         let props = db
             .c()
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end);
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start, &end, true);
         if let Some(props) = props.as_ref() {
             assert_eq!(check_need_gc(safe_point, 1.0, &props), need_gc);
         }
