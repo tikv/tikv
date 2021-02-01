@@ -2488,11 +2488,6 @@ impl RegionReadProgress {
         }
         queue.push_back(item);
     }
-
-    // Return the number of the pending (index, ts) item
-    fn pending_ts_num(&self) -> usize {
-        self.pending_ts.lock().unwrap().len()
-    }
 }
 
 #[cfg(test)]
@@ -2553,6 +2548,11 @@ mod tests {
 
     #[test]
     fn test_region_read_progress() {
+        // Return the number of the pending (index, ts) item
+        fn pending_ts_num(rrp: &RegionReadProgress) -> usize {
+            rrp.pending_ts.lock().unwrap().len()
+        }
+
         let cap = 10;
         let rrp = RegionReadProgress::new(10, cap);
         for i in 1..=20 {
@@ -2560,18 +2560,18 @@ mod tests {
         }
         // `safe_ts` update according to its `applied_index`
         assert_eq!(rrp.safe_ts(), 10);
-        assert_eq!(rrp.pending_ts_num(), 10);
+        assert_eq!(pending_ts_num(&rrp), 10);
 
         rrp.update_applied(20);
         assert_eq!(rrp.safe_ts(), 20);
-        assert_eq!(rrp.pending_ts_num(), 0);
+        assert_eq!(pending_ts_num(&rrp), 0);
 
         for i in 100..200 {
             rrp.forward_safe_ts(i, i);
         }
         assert_eq!(rrp.safe_ts(), 20);
         // the number of pending item should not exceed `cap`
-        assert_eq!(rrp.pending_ts_num(), cap);
+        assert_eq!(pending_ts_num(&rrp), cap);
 
         // `safe_ts` will not update because previous items are dropped
         rrp.update_applied(200 - (cap as u64) - 1);
@@ -2580,29 +2580,29 @@ mod tests {
         // `applied_index` large than all pending items will clear all pending items
         rrp.update_applied(200);
         assert_eq!(rrp.safe_ts(), 199);
-        assert_eq!(rrp.pending_ts_num(), 0);
+        assert_eq!(pending_ts_num(&rrp), 0);
 
         // pending item can be updated instead of adding a new one
         rrp.forward_safe_ts(300, 300);
-        assert_eq!(rrp.pending_ts_num(), 1);
+        assert_eq!(pending_ts_num(&rrp), 1);
         rrp.forward_safe_ts(200, 400);
-        assert_eq!(rrp.pending_ts_num(), 1);
+        assert_eq!(pending_ts_num(&rrp), 1);
         rrp.forward_safe_ts(300, 500);
-        assert_eq!(rrp.pending_ts_num(), 1);
+        assert_eq!(pending_ts_num(&rrp), 1);
         rrp.forward_safe_ts(301, 600);
-        assert_eq!(rrp.pending_ts_num(), 2);
+        assert_eq!(pending_ts_num(&rrp), 2);
         // `safe_ts` will update to 500 instead of 300
         rrp.update_applied(300);
         assert_eq!(rrp.safe_ts(), 500);
         rrp.update_applied(301);
         assert_eq!(rrp.safe_ts(), 600);
-        assert_eq!(rrp.pending_ts_num(), 0);
+        assert_eq!(pending_ts_num(&rrp), 0);
 
         // stale item will be ignored
         rrp.forward_safe_ts(300, 500);
         rrp.forward_safe_ts(301, 600);
         rrp.forward_safe_ts(400, 0);
         rrp.forward_safe_ts(0, 700);
-        assert_eq!(rrp.pending_ts_num(), 0);
+        assert_eq!(pending_ts_num(&rrp), 0);
     }
 }
