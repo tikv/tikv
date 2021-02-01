@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use pd_client::ClusterVersion;
+use pd_client::FeatureGate;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc};
@@ -15,9 +15,9 @@ use raftstore::store::util::find_peer;
 
 use super::config::GcWorkerConfigManager;
 use super::gc_worker::{sync_gc, GcSafePointProvider, GcTask};
-use super::{is_compaction_filter_allowd, Result};
+use super::{is_compaction_filter_allowed, Result};
 
-const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
+const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
 const BEGIN_KEY: &[u8] = b"";
 
@@ -231,7 +231,7 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
     gc_manager_ctx: GcManagerContext,
 
     cfg_tracker: GcWorkerConfigManager,
-    cluster_version: ClusterVersion,
+    feature_gate: FeatureGate,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
@@ -240,7 +240,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         safe_point: Arc<AtomicU64>,
         worker_scheduler: FutureScheduler<GcTask>,
         cfg_tracker: GcWorkerConfigManager,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     ) -> GcManager<S, R> {
         GcManager {
             cfg,
@@ -249,7 +249,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
             cfg_tracker,
-            cluster_version,
+            feature_gate,
         }
     }
 
@@ -307,7 +307,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.
-            if !is_compaction_filter_allowd(&*self.cfg_tracker.value(), &self.cluster_version) {
+            if !is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
                 set_status_metrics(GcManagerState::Working);
                 self.gc_a_round()?;
                 if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -425,15 +425,16 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
         // Records how many region we have GC-ed.
         let mut processed_regions = 0;
 
-        info!(
-            "gc_worker: start auto gc"; "safe_point" => self.curr_safe_point()
-        );
+        info!("gc_worker: auto gc starts"; "safe_point" => self.curr_safe_point());
 
         // The following loop iterates all regions whose leader is on this TiKV and does GC on them.
         // At the same time, check whether safe_point is updated periodically. If it's updated,
         // rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
+            if is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
+                return Ok(());
+            }
 
             // Check the current GC progress and determine if we are going to rewind or we have
             // finished the round of GC.
@@ -442,9 +443,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                     // We have worked to the end and we need to rewind. Restart from beginning.
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
-                    info!(
-                        "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
-                    );
+                    info!("gc_worker: auto gc rewinds"; "processed_regions" => processed_regions);
 
                     processed_regions = 0;
                     // Set the metric to zero to show that rewinding has happened.
@@ -465,9 +464,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
                 if finished {
                     // We have worked to the end of the TiKV or our progress has reached `end`, and we
                     // don't need to rewind. In this case, the round of GC has finished.
-                    info!(
-                        "gc_worker: finished auto gc"; "processed_regions" => processed_regions
-                    );
+                    info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
                     return Ok(());
                 }
             }
@@ -533,8 +530,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
             None => return Ok(None),
         };
 
-        let hex_start = hex::encode_upper(&start);
-        let hex_end = hex::encode_upper(&end);
+        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(

@@ -7,6 +7,7 @@ use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 
@@ -33,6 +34,8 @@ const SLOG_CHANNEL_SIZE: usize = 10240;
 const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
+static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
+
 pub fn init_log<D>(
     drain: D,
     level: Level,
@@ -45,6 +48,9 @@ where
     D: Drain + Send + 'static,
     <D as Drain>::Err: std::fmt::Display,
 {
+    // Set the initial log level used by the Drains
+    LOG_LEVEL.store(level.as_usize(), Ordering::Relaxed);
+
     // Only for debug purpose, so use environment instead of configuration file.
     if let Ok(extra_modules) = env::var("TIKV_DISABLE_LOG_TARGETS") {
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
@@ -235,6 +241,14 @@ pub fn convert_log_level_to_slog_level(lv: log::Level) -> Level {
     }
 }
 
+pub fn get_log_level() -> Option<Level> {
+    Level::from_usize(LOG_LEVEL.load(Ordering::Relaxed))
+}
+
+pub fn set_log_level(new_level: Level) {
+    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst)
+}
+
 pub struct TikvFormat<D>
 where
     D: Decorator,
@@ -259,18 +273,22 @@ where
     type Err = io::Error;
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        self.decorator.with_record(record, values, |decorator| {
-            write_log_header(decorator, record)?;
-            write_log_msg(decorator, record)?;
-            write_log_fields(decorator, record, values)?;
+        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
+            self.decorator.with_record(record, values, |decorator| {
+                write_log_header(decorator, record)?;
+                write_log_msg(decorator, record)?;
+                write_log_fields(decorator, record, values)?;
 
-            decorator.start_whitespace()?;
-            writeln!(decorator)?;
+                decorator.start_whitespace()?;
+                writeln!(decorator)?;
 
-            decorator.flush()?;
+                decorator.flush()?;
 
-            Ok(())
-        })
+                Ok(())
+            })?;
+        }
+
+        Ok(())
     }
 }
 
@@ -336,15 +354,17 @@ where
     type Err = slog::Never;
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if let Err(e) = self.0.log(record, values) {
-            let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
-            fatal_drainer.log(record, values).unwrap();
-            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
-            slog::slog_crit!(
-                fatal_logger,
-                "logger encountered error";
-                "err" => %e,
-            );
+        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
+            if let Err(e) = self.0.log(record, values) {
+                let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
+                fatal_drainer.log(record, values).unwrap();
+                let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+                slog::slog_crit!(
+                    fatal_logger,
+                    "logger encountered error";
+                    "err" => %e,
+                );
+            }
         }
         Ok(())
     }
@@ -642,7 +662,7 @@ mod tests {
             "is_true" => true,
             "is_false" => false,
             "is_None" => none,
-            "u8" => 34 as u8,
+            "u8" => 34_u8,
             "str_array" => ?["💖",
                 "�",
                 "☺☻☹",

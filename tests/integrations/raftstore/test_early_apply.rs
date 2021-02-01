@@ -67,11 +67,10 @@ where
 
 /// Test whether system can recover from mismatched raft state and apply state.
 ///
-/// If TiKV is not shutdown gracefully, apply state may go ahead of raft
+/// If TiKV is shutdown, apply state may go ahead of raft
 /// state. TiKV should be able to recognize the situation and start normally.
 fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.early_apply = true;
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
@@ -137,7 +136,6 @@ fn test_all_node_crash() {
 #[test]
 fn test_update_internal_apply_index() {
     let mut cluster = new_node_cluster(0, 4);
-    cluster.cfg.raft_store.early_apply = true;
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster);
@@ -174,7 +172,7 @@ fn test_update_internal_apply_index() {
     let resp = read_on_peer(
         &mut cluster,
         new_peer(3, 3),
-        region.clone(),
+        region,
         b"k1",
         true,
         Duration::from_secs(3),

@@ -5,8 +5,8 @@ use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
 use crate::{util, RocksSstWriter};
 use engine_traits::{
-    CFHandleExt, CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions,
-    Iterable, Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder,
+    CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
+    Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
     WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
@@ -81,21 +81,20 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            let handle = self.cf_handle(cf)?;
             let mut opt = RocksIngestExternalFileOptions::new();
             opt.move_files(true);
-            self.ingest_external_file_cf(handle, &opt, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
                 wb.delete_cf(cf, key)?;
                 if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    self.write(&wb)?;
+                    wb.write()?;
                     wb.clear();
                 }
             }
             if wb.count() > 0 {
-                self.write(&wb)?;
+                wb.write()?;
             }
         }
         Ok(())
@@ -116,13 +115,13 @@ impl RocksEngine {
         while it_valid {
             wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                self.write(&wb)?;
+                wb.write()?;
                 wb.clear();
             }
             it_valid = it.next()?;
         }
         if wb.count() > 0 {
-            self.write(&wb)?;
+            wb.write()?;
         }
         self.sync_wal()?;
         Ok(())
@@ -179,7 +178,7 @@ impl MiscExt for RocksEngine {
                 for r in ranges.iter() {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
-                self.write(&wb)?;
+                wb.write()?;
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {
@@ -300,6 +299,34 @@ impl MiscExt for RocksEngine {
             s => s,
         }
     }
+
+    fn get_total_sst_files_size_cf(&self, cf: &str) -> Result<Option<u64>> {
+        const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(self
+            .as_inner()
+            .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
+    }
+
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
+        Ok(crate::properties::get_range_entries_and_versions(
+            self, cf, start, end,
+        ))
+    }
+
+    fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
+        let handle = util::get_cf_handle(self.as_inner(), cf)?;
+        Ok(crate::util::get_cf_num_files_at_level(
+            self.as_inner(),
+            &handle,
+            level,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -331,9 +358,8 @@ mod tests {
 
     fn test_delete_all_in_range(
         strategy: DeleteStrategy,
-        origin_keys: Vec<Vec<u8>>,
-        start: &[u8],
-        end: &[u8],
+        origin_keys: &[Vec<u8>],
+        ranges: &[Range],
     ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
@@ -352,10 +378,11 @@ mod tests {
         let mut wb = db.write_batch();
         let ts: u8 = 12;
         let keys: Vec<_> = origin_keys
-            .into_iter()
-            .map(|mut k| {
-                k.append(&mut vec![ts; 8]);
-                k
+            .iter()
+            .map(|k| {
+                let mut k2 = k.clone();
+                k2.append(&mut vec![ts; 8]);
+                k2
             })
             .collect();
 
@@ -368,16 +395,19 @@ mod tests {
                 wb.put_cf(cf, k, v).unwrap();
             }
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        // Delete all in [start, end).
-        db.delete_all_in_range(strategy, &[Range::new(start, end)])
-            .unwrap();
-        let kvs_left: Vec<_> = kvs
-            .into_iter()
-            .filter(|k| k.0 < start || k.0 >= end)
-            .collect();
+        // Delete all in ranges.
+        db.delete_all_in_range(strategy, ranges).unwrap();
+
+        let mut kvs_left: Vec<_> = kvs;
+        for r in ranges {
+            kvs_left = kvs_left
+                .into_iter()
+                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
+                .collect();
+        }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -390,7 +420,30 @@ mod tests {
             b"k3".to_vec(),
             b"k4".to_vec(),
         ];
-        test_delete_all_in_range(DeleteStrategy::DeleteByRange, data, b"k1", b"k4");
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByRange,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
     }
 
     #[test]
@@ -402,7 +455,30 @@ mod tests {
             b"k3".to_vec(),
             b"k4".to_vec(),
         ];
-        test_delete_all_in_range(DeleteStrategy::DeleteByKey, data, b"k1", b"k4");
+        // Single range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4")],
+        );
+        // Two ranges without overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k0", b"k1"), Range::new(b"k3", b"k4")],
+        );
+        // Two ranges with overlap.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k3"), Range::new(b"k2", b"k4")],
+        );
+        // One range contains the other range.
+        test_delete_all_in_range(
+            DeleteStrategy::DeleteByKey,
+            &data,
+            &[Range::new(b"k1", b"k4"), Range::new(b"k2", b"k3")],
+        );
     }
 
     #[test]
@@ -417,13 +493,17 @@ mod tests {
         for i in 1000..5000 {
             data.push(i.to_string().as_bytes().to_vec());
         }
-        let start = data[2].clone();
-        let end = data[3000].clone();
         test_delete_all_in_range(
             DeleteStrategy::DeleteByWriter { sst_path },
-            data,
-            &start,
-            &end,
+            &data,
+            &[
+                Range::new(&data[2], &data[499]),
+                Range::new(&data[502], &data[999]),
+                Range::new(&data[1002], &data[1999]),
+                Range::new(&data[1499], &data[2499]),
+                Range::new(&data[2502], &data[3999]),
+                Range::new(&data[3002], &data[3499]),
+            ],
         );
     }
 
@@ -489,7 +569,7 @@ mod tests {
             )
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.
-        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1 as f64);
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
         let cf = "default";
         let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
         let db = Arc::new(db);
@@ -506,7 +586,7 @@ mod tests {
         for &(k, v) in kvs.as_slice() {
             wb.put_cf(cf, k, v).unwrap();
         }
-        db.write(&wb).unwrap();
+        wb.write().unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

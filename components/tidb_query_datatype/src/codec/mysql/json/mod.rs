@@ -203,6 +203,20 @@ impl<'a> JsonRef<'a> {
     pub(crate) fn get_str(&self) -> Result<&'a str> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
+
+    // Return whether the value is zero.
+    // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
+    pub(crate) fn is_zero(&self) -> bool {
+        match self.get_type() {
+            JsonType::Object => false,
+            JsonType::Array => false,
+            JsonType::Literal => false,
+            JsonType::I64 => self.get_i64() == 0,
+            JsonType::U64 => self.get_u64() == 0,
+            JsonType::Double => self.get_double() == 0f64,
+            JsonType::String => false,
+        }
+    }
 }
 
 /// Json implements type json used in tikv by Binary Json.
@@ -222,7 +236,8 @@ use std::fmt::{Display, Formatter};
 
 impl Display for Json {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        let s = serde_json::to_string(&self.as_ref()).unwrap();
+        write!(f, "{}", s)
     }
 }
 
@@ -230,7 +245,7 @@ impl Json {
     /// Creates a new JSON from the type and encoded bytes
     pub fn new(tp: JsonType, value: Vec<u8>) -> Self {
         Self {
-            type_code: tp.into(),
+            type_code: tp,
             value,
         }
     }
@@ -301,7 +316,7 @@ impl Json {
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs<'a>(entries: Vec<(&[u8], JsonRef<'a>)>) -> Result<Self> {
+    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef)>) -> Result<Self> {
         let mut value = vec![];
         value.write_json_obj_from_keys_values(entries)?;
         Ok(Self::new(JsonType::Object, value))
@@ -331,7 +346,7 @@ impl Json {
     }
 }
 
-/// Create JSON arrayy by given elements
+/// Create JSON array by given elements
 /// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
@@ -384,7 +399,9 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
-            JsonType::Array | JsonType::Object => 0f64,
+            JsonType::Array | JsonType::Object => ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
+                .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
             JsonType::I64 => self.get_i64() as f64,
             JsonType::Double => self.get_double(),
@@ -467,10 +484,7 @@ impl ConvertTo<Json> for Duration {
 
 impl crate::codec::data_type::AsMySQLBool for Json {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
         Ok(false)
     }
@@ -482,6 +496,7 @@ mod tests {
 
     use std::sync::Arc;
 
+    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use crate::expr::{EvalConfig, EvalContext};
 
     #[test]
@@ -559,6 +574,28 @@ mod tests {
                 (get - exp).abs() < std::f64::EPSILON,
                 "json.as_f64 get: {}, exp: {}",
                 get,
+                exp
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_err_when_json_array_or_object_to_real() {
+        let test_cases = vec![
+            ("{}", ERR_TRUNCATE_WRONG_VALUE),
+            ("[]", ERR_TRUNCATE_WRONG_VALUE),
+        ];
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let result: Result<f64> = json.convert(&mut ctx);
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.code(),
+                exp,
+                "json.as_f64 get: {}, exp: {}",
+                err.code(),
                 exp
             );
         }

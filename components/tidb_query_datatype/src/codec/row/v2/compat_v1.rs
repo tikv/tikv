@@ -16,7 +16,7 @@ fn decode_v2_u64(v: &[u8]) -> Result<u64> {
         1 => Ok(u64::from(v[0])),
         2 => Ok(u64::from(NumberCodec::decode_u16_le(v))),
         4 => Ok(u64::from(NumberCodec::decode_u32_le(v))),
-        8 => Ok(u64::from(NumberCodec::decode_u64_le(v))),
+        8 => Ok(NumberCodec::decode_u64_le(v)),
         _ => Err(Error::InvalidDataType(
             "Failed to decode row v2 data as u64".to_owned(),
         )),
@@ -294,8 +294,8 @@ mod tests {
     fn test_duration() {
         let mut ctx = EvalContext::default();
         let cases = vec![
-            Duration::parse(&mut ctx, b"31 11:30:45.123", 4).unwrap(),
-            Duration::parse(&mut ctx, b"-11:30:45.9233456", 4).unwrap(),
+            Duration::parse(&mut ctx, "31 11:30:45.123", 4).unwrap(),
+            Duration::parse(&mut ctx, "-11:30:45.9233456", 4).unwrap(),
         ];
 
         let mut ctx = EvalContext::default();

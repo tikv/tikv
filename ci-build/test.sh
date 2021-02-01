@@ -1,36 +1,42 @@
 #!/usr/bin/env bash
 # Copyright 2016 TiKV Project Authors
 
-set -o pipefail
+set -eo pipefail
 
 panic() {
-    echo -e "$@" >&1
+    echo -e "$@" >&2
     exit 1
 }
 
-if [[ "$SKIP_FORMAT_CHECK" != "true" ]]; then
+# Move to project root
+cd "$(dirname "$0")/.."
+
+if [[ -z "$SKIP_FORMAT_CHECK" ]]; then
     make format
-    git diff-index --quiet HEAD -- || (git diff; panic "\e[35mplease make format before creating a pr!!!\e[0m")
+    git diff-index --quiet HEAD -- || (git --no-pager diff; panic "\e[35mplease 'make format' before creating a pr!!!\e[0m")
 fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 
-export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
     export RUST_TEST_THREADS=2
 fi
 export RUSTFLAGS=-Dwarnings
 
-make clippy || panic "\e[35mplease fix the errors!!!\e[0m"
+make clippy || panic "\e[35mplease fix the 'make clippy' errors!!!\e[0m"
 
-if [[ "$SKIP_TESTS" != "true" ]]; then
+set +e
+export LOG_FILE=tests.log
+if [[ -z "$SKIP_TESTS" ]]; then
     make test 2>&1 | tee tests.out
 else
     EXTRA_CARGO_ARGS="--no-run" make test
     exit $?
 fi
 status=$?
-git diff-index --quiet HEAD -- || echo "\e[35mplease run tests before creating a pr!!!\e[0m"
+if [[ -z "$SKIP_CHECK_DIRTY_TESTS" ]]; then
+    git diff-index --quiet HEAD -- || echo "\e[35mplease run 'make test' before creating a pr!!!\e[0m"
+fi
 for case in `cat tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")

@@ -10,7 +10,6 @@ use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader};
-use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 use std::string::ToString;
 use std::sync::Arc;
@@ -30,6 +29,7 @@ use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{Engines, RaftEngine};
+use file_system::calc_crc32;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::encryptionpb::EncryptionMethod;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -45,7 +45,7 @@ use security::{SecurityConfig, SecurityManager};
 use std::pin::Pin;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv_util::{escape, file::calc_crc32, unescape};
+use tikv_util::{escape, unescape};
 use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -73,7 +73,7 @@ fn new_debug_executor(
             let key_manager =
                 DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .unwrap()
-                    .map(|key_manager| Arc::new(key_manager));
+                    .map(Arc::new);
             let cache = cfg.storage.block_cache.build_shared_cache();
             let shared_block_cache = cache.is_some();
             let env = get_env(key_manager, None).unwrap();
@@ -103,7 +103,7 @@ fn new_debug_executor(
             if !cfg.raft_engine.enable {
                 let mut raft_db_opts = cfg.raftdb.build_opt();
                 raft_db_opts.set_env(env);
-                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache, None);
+                let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
                 let raft_db = engine_rocks::raw_util::new_engine_opt(
                     &raft_path,
                     raft_db_opts,
@@ -487,7 +487,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -528,7 +528,7 @@ trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -924,8 +924,8 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client =
-            RpcClient::new(pd_cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {
             Ok(Some(region)) => region,
@@ -1033,7 +1033,8 @@ fn main() {
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
-    let version_info = tikv::tikv_version_info();
+    let build_timestamp = option_env!("TIKV_BUILD_TIME");
+    let version_info = tikv::tikv_version_info(build_timestamp);
 
     let mut app = App::new("TiKV Control (tikv-ctl)")
         .about("A tool for interacting with TiKV deployments.")
@@ -1858,7 +1859,7 @@ fn main() {
         v1!("{}", escape(&from_hex(hex).unwrap()));
         return;
     } else if let Some(escaped) = matches.value_of("escaped-to-hex") {
-        v1!("{}", hex::encode_upper(unescape(escaped)));
+        v1!("{}", log_wrappers::hex_encode_upper(unescape(escaped)));
         return;
     } else if let Some(encoded) = matches.value_of("decode") {
         match Key::from_encoded(unescape(encoded)).into_raw() {
@@ -1957,7 +1958,7 @@ fn main() {
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
             let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
-            let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+            let cfs = matches.values_of("cf").unwrap().collect();
             let from_key = matches.value_of("from").map(|k| unescape(k));
             let to_key = matches.value_of("to").map(|k| unescape(k));
             let threads = value_t_or_exit!(matches.value_of("threads"), u32);
@@ -2016,7 +2017,7 @@ fn main() {
             let _ = app.print_help();
         }
     } else if let Some(matches) = matches.subcommand_matches("size") {
-        let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
+        let cfs = matches.values_of("cf").unwrap().collect();
         if let Some(id) = matches.value_of("region") {
             debug_executor.dump_region_size(id.parse().unwrap(), cfs);
         } else {
@@ -2026,7 +2027,7 @@ fn main() {
         let from = unescape(matches.value_of("from").unwrap());
         let to = matches
             .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
+            .map_or_else(Vec::new, |to| unescape(to));
         let limit = matches
             .value_of("limit")
             .map_or(0, |s| s.parse().expect("parse u64"));
@@ -2034,7 +2035,7 @@ fn main() {
             ve1!(r#"please pass "to" or "limit""#);
             process::exit(-1);
         }
-        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
+        let cfs = matches.values_of("show-cf").unwrap().collect();
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
@@ -2046,7 +2047,7 @@ fn main() {
         debug_executor.raw_scan(&from, &to, limit, cf);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
-        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
+        let cfs = matches.values_of("show-cf").unwrap().collect();
         let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
         let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
         debug_executor.dump_mvccs_infos(from, vec![], 0, cfs, start_ts, commit_ts);
@@ -2083,9 +2084,11 @@ fn main() {
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
         if let Some(pd_urls) = matches.values_of("pd") {
-            let pd_urls = Vec::from_iter(pd_urls.map(ToOwned::to_owned));
-            let mut cfg = PdConfig::default();
-            cfg.endpoints = pd_urls;
+            let pd_urls = pd_urls.map(ToOwned::to_owned).collect();
+            let cfg = PdConfig {
+                endpoints: pd_urls,
+                ..Default::default()
+            };
             if let Err(e) = cfg.validate() {
                 panic!("invalid pd configuration: {:?}", e);
             }
@@ -2118,7 +2121,11 @@ fn main() {
                 .map(str::parse)
                 .collect::<Result<Vec<_>, _>>()
                 .expect("parse regions fail");
-            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
+            let pd_urls = matches
+                .values_of("pd")
+                .unwrap()
+                .map(ToOwned::to_owned)
+                .collect();
             let mut cfg = PdConfig::default();
             v1!(
                 "Recover regions: {:?}, pd: {:?}, read_only: {}",
@@ -2145,8 +2152,14 @@ fn main() {
             ve1!("{}", matches.usage());
         }
     } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
-        let mut pd_cfg = PdConfig::default();
-        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
+        let pd_cfg = PdConfig {
+            endpoints: matches
+                .values_of("pd")
+                .unwrap()
+                .map(ToOwned::to_owned)
+                .collect(),
+            ..Default::default()
+        };
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.recreate_region(mgr, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
@@ -2159,7 +2172,7 @@ fn main() {
         let config_value = matches.value_of("config_value").unwrap();
         debug_executor.modify_tikv_config(config_name, config_value);
     } else if let Some(matches) = matches.subcommand_matches("metrics") {
-        let tags = Vec::from_iter(matches.values_of("tag").unwrap());
+        let tags = matches.values_of("tag").unwrap().collect();
         debug_executor.dump_metrics(tags)
     } else if let Some(matches) = matches.subcommand_matches("region-properties") {
         let region_id = value_t_or_exit!(matches.value_of("region"), u64);
@@ -2262,17 +2275,16 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let key_path = matches.value_of("key_path");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
-        return Arc::new(SecurityManager::new(&cfg).unwrap());
-    }
-
     if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
-        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-            panic!("CA certificate and private key should all be set.");
-        }
-        cfg.ca_path = ca_path.unwrap().to_owned();
-        cfg.cert_path = cert_path.unwrap().to_owned();
-        cfg.key_path = key_path.unwrap().to_owned();
+        cfg.ca_path = ca_path
+            .expect("CA path should be set when cert path or key path is set.")
+            .to_owned();
+        cfg.cert_path = cert_path
+            .expect("cert path should be set when CA path or key path is set.")
+            .to_owned();
+        cfg.key_path = key_path
+            .expect("key path should be set when cert path or CA path is set.")
+            .to_owned();
     }
 
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
@@ -2299,7 +2311,7 @@ fn get_pd_rpc_client(pd: &str, mgr: Arc<SecurityManager>) -> RpcClient {
     let mut cfg = PdConfig::default();
     cfg.endpoints.push(pd.to_owned());
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
 fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
@@ -2367,22 +2379,25 @@ fn compact_whole_cluster(
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
-        let h = thread::spawn(move || {
-            tikv_alloc::add_thread_memory_accessor();
-            let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
-            for cf in cfs {
-                debug_executor.compact(
-                    Some(&addr),
-                    db_type,
-                    cf.as_str(),
-                    from.clone(),
-                    to.clone(),
-                    threads,
-                    bottommost,
-                );
-            }
-            tikv_alloc::remove_thread_memory_accessor();
-        });
+        let h = thread::Builder::new()
+            .name(format!("compact-{}", addr))
+            .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
+                for cf in cfs {
+                    debug_executor.compact(
+                        Some(&addr),
+                        db_type,
+                        cf.as_str(),
+                        from.clone(),
+                        to.clone(),
+                        threads,
+                        bottommost,
+                    );
+                }
+                tikv_alloc::remove_thread_memory_accessor();
+            })
+            .unwrap();
         handles.push(h);
     }
 
@@ -2415,7 +2430,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     args.insert(0, "ldb".to_owned());
     let key_manager = DataKeyManager::from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
-        .map(|key_manager| Arc::new(key_manager));
+        .map(Arc::new);
     let env = get_env(key_manager, None).unwrap();
     let mut opts = cfg.rocksdb.build_opt();
     opts.set_env(env);

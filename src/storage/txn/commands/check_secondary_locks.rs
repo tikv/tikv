@@ -2,16 +2,15 @@
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    txn::make_rollback, LockType, MvccTxn, SecondaryLockStatus, TimeStamp, TxnCommitRecord,
-};
+use crate::storage::mvcc::{txn::make_rollback, LockType, MvccTxn, TimeStamp, TxnCommitRecord};
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::types::SecondaryLocksStatus;
 use crate::storage::{ProcessResult, Snapshot};
-use txn_types::{Key, WriteType};
+use txn_types::{Key, Lock, WriteType};
 
 command! {
     /// Check secondary locks of an async commit transaction.
@@ -38,6 +37,13 @@ impl CommandExt for CheckSecondaryLocks {
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
+}
+
+#[derive(Debug, PartialEq)]
+enum SecondaryLockStatus {
+    Locked(Lock),
+    Committed(TimeStamp),
+    RolledBack,
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
@@ -150,6 +156,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -173,7 +180,7 @@ pub mod tests {
         expect_status: SecondaryLocksStatus,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let lock_ts = lock_ts.into();
         let cm = ConcurrencyManager::new(lock_ts);
         let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -189,7 +196,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -208,7 +215,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(1.into());
 
         let check_secondary = |key, ts| {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
             let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -224,7 +231,7 @@ pub mod tests {
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
-                        pipelined_pessimistic_lock: false,
+                        async_apply_prewrite: false,
                     },
                 )
                 .unwrap();
@@ -326,6 +333,6 @@ pub mod tests {
             SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock);
+        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock, Some(0));
     }
 }

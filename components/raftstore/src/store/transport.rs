@@ -11,13 +11,15 @@ use std::sync::mpsc;
 pub trait Transport: Send + Clone {
     fn send(&mut self, msg: RaftMessage) -> Result<()>;
 
+    fn need_flush(&self) -> bool;
+
     fn flush(&mut self);
 }
 
 /// Routes message to target region.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait CasualRouter<EK>
+pub trait CasualRouter<EK>: Send
 where
     EK: KvEngine,
 {
@@ -35,7 +37,7 @@ where
 /// Routes message to store FSM.
 ///
 /// Messages are not guaranteed to be delivered by this trait.
-pub trait StoreRouter<EK>
+pub trait StoreRouter<EK>: Send
 where
     EK: KvEngine,
 {

@@ -8,8 +8,8 @@ use time::Duration as TimeDuration;
 use crate::{coprocessor, Result};
 use batch_system::Config as BatchSystemConfig;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration};
-use engine_rocks::config as rocks_config;
-use engine_rocks::PerfLevel;
+use engine_traits::config as engine_config;
+use engine_traits::PerfLevel;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 lazy_static! {
@@ -161,9 +161,6 @@ pub struct Config {
     pub future_poll_size: usize,
     #[config(hidden)]
     pub hibernate_regions: bool,
-    pub hibernate_timeout: ReadableDuration,
-    #[config(hidden)]
-    pub early_apply: bool,
     #[doc(hidden)]
     #[config(hidden)]
     pub dev_assert: bool,
@@ -185,7 +182,7 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
-    #[serde(with = "rocks_config::perf_level_serde")]
+    #[serde(with = "engine_config::perf_level_serde")]
     #[config(skip)]
     pub perf_level: PerfLevel,
 }
@@ -230,7 +227,7 @@ impl Default for Config {
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
-            leader_transfer_max_log_lag: 10,
+            leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
@@ -250,8 +247,6 @@ impl Default for Config {
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
             hibernate_regions: true,
-            hibernate_timeout: ReadableDuration::minutes(10),
-            early_apply: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -581,6 +576,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["hibernate_regions"])
+            .set((self.hibernate_regions as i32).into());
     }
 
     fn write_change_into_metrics(change: ConfigChange) {

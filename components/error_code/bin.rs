@@ -19,10 +19,7 @@ fn main() {
     err_codes
         .into_iter()
         .flatten()
-        .map(|c| {
-            let s = toml::to_string_pretty(c).unwrap();
-            format!("[error.{}]\n{}\n", c.code, s.as_str())
-        })
+        .map(|c| format!("[\"{}\"]\nerror = '''\n{}\n'''\n\n", c.code, c.code))
         .for_each(|s| {
             f.write_all(s.as_bytes()).unwrap();
         });

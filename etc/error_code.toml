@@ -1,545 +1,550 @@
-[error.KV-Codec-Io]
-error = 'KV-Codec-Io'
-description = ''
-workaround = ''
-
-[error.KV-Codec-BadPadding]
-error = 'KV-Codec-BadPadding'
-description = ''
-workaround = ''
-
-[error.KV-Codec-KeyLength]
-error = 'KV-Codec-KeyLength'
-description = ''
-workaround = ''
-
-[error.KV-Codec-KeyNotFound]
-error = 'KV-Codec-KeyNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-Locked]
-error = 'KV-Coprocessor-Locked'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-DeadlineExceeded]
-error = 'KV-Coprocessor-DeadlineExceeded'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-MaxPendingTasksExceeded]
-error = 'KV-Coprocessor-MaxPendingTasksExceeded'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-InvalidDataType]
-error = 'KV-Coprocessor-InvalidDataType'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-Encoding]
-error = 'KV-Coprocessor-Encoding'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-ColumnOffset]
-error = 'KV-Coprocessor-ColumnOffset'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-UnknownSignature]
-error = 'KV-Coprocessor-UnknownSignature'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-Eval]
-error = 'KV-Coprocessor-Eval'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-StorageError]
-error = 'KV-Coprocessor-StorageError'
-description = ''
-workaround = ''
-
-[error.KV-Coprocessor-InvalidCharacterString]
-error = 'KV-Coprocessor-InvalidCharacterString'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-Rocks]
-error = 'KV-Encryption-Rocks'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-IO]
-error = 'KV-Encryption-IO'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-Crypter]
-error = 'KV-Encryption-Crypter'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-Proto]
-error = 'KV-Encryption-Proto'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-UnknownEncryption]
-error = 'KV-Encryption-UnknownEncryption'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-WrongMasterKey]
-error = 'KV-Encryption-WrongMasterKey'
-description = ''
-workaround = ''
-
-[error.KV-Encryption-BothMasterKeyFail]
-error = 'KV-Encryption-BothMasterKeyFail'
-description = ''
-workaround = ''
-
-[error.KV-Engine-Engine]
-error = 'KV-Engine-Engine'
-description = ''
-workaround = ''
-
-[error.KV-Engine-NotInRange]
-error = 'KV-Engine-NotInRange'
-description = ''
-workaround = ''
-
-[error.KV-Engine-Protobuf]
-error = 'KV-Engine-Protobuf'
-description = ''
-workaround = ''
-
-[error.KV-Engine-IO]
-error = 'KV-Engine-IO'
-description = ''
-workaround = ''
-
-[error.KV-Engine-CFName]
-error = 'KV-Engine-CFName'
-description = ''
-workaround = ''
-
-[error.KV-Engine-Codec]
-error = 'KV-Engine-Codec'
-description = ''
-workaround = ''
-
-[error.KV-Engine-DataLoss]
-error = 'KV-Engine-DataLoss'
-description = ''
-workaround = ''
-
-[error.KV-Engine-DataCompacted]
-error = 'KV-Engine-DataCompacted'
-description = ''
-workaround = ''
-
-[error.KV-PD-IO]
-error = 'KV-PD-IO'
-description = ''
-workaround = ''
-
-[error.KV-PD-ClusterBootstraped]
-error = 'KV-PD-ClusterBootstraped'
-description = ''
-workaround = ''
-
-[error.KV-PD-ClusterNotBootstraped]
-error = 'KV-PD-ClusterNotBootstraped'
-description = ''
-workaround = ''
-
-[error.KV-PD-Imcompatible]
-error = 'KV-PD-Imcompatible'
-description = ''
-workaround = ''
-
-[error.KV-PD-gRPC]
-error = 'KV-PD-gRPC'
-description = ''
-workaround = ''
-
-[error.KV-PD-RegionNotFound]
-error = 'KV-PD-RegionNotFound'
-description = ''
-workaround = ''
-
-[error.KV-PD-StoreTombstone]
-error = 'KV-PD-StoreTombstone'
-description = ''
-workaround = ''
-
-[error.KV-PD-Unknown]
-error = 'KV-PD-Unknown'
-description = ''
-workaround = ''
-
-[error.KV-Raft-Io]
-error = 'KV-Raft-Io'
-description = ''
-workaround = ''
-
-[error.KV-Raft-Store]
-error = 'KV-Raft-Store'
-description = ''
-workaround = ''
-
-[error.KV-Raft-StepLocalMsg]
-error = 'KV-Raft-StepLocalMsg'
-description = ''
-workaround = ''
-
-[error.KV-Raft-StepPeerNotFound]
-error = 'KV-Raft-StepPeerNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Raft-ProposalDropped]
-error = 'KV-Raft-ProposalDropped'
-description = ''
-workaround = ''
-
-[error.KV-Raft-ConfigInvalid]
-error = 'KV-Raft-ConfigInvalid'
-description = ''
-workaround = ''
-
-[error.KV-Raft-CodecError]
-error = 'KV-Raft-CodecError'
-description = ''
-workaround = ''
-
-[error.KV-Raft-Exists]
-error = 'KV-Raft-Exists'
-description = ''
-workaround = ''
-
-[error.KV-Raft-NotExists]
-error = 'KV-Raft-NotExists'
-description = ''
-workaround = ''
-
-[error.KV-Raft-RequestSnapshotDropped]
-error = 'KV-Raft-RequestSnapshotDropped'
-description = ''
-workaround = ''
-
-[error.KV-Raft-ConfChangeError]
-error = 'KV-Raft-ConfChangeError'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-EntryTooLarge]
-error = 'KV-Raftstore-EntryTooLarge'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-NotLeader]
-error = 'KV-Raftstore-NotLeader'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-StoreNotMatch]
-error = 'KV-Raftstore-StoreNotMatch'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-RegionNotFound]
-error = 'KV-Raftstore-RegionNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-RegionNotInitialized]
-error = 'KV-Raftstore-RegionNotInitialized'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-KeyNotInRegion]
-error = 'KV-Raftstore-KeyNotInRegion'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-StaleCommand]
-error = 'KV-Raftstore-StaleCommand'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-Transport]
-error = 'KV-Raftstore-Transport'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-Coprocessor]
-error = 'KV-Raftstore-Coprocessor'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-IO]
-error = 'KV-Raftstore-IO'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-Protobuf]
-error = 'KV-Raftstore-Protobuf'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-AddressParse]
-error = 'KV-Raftstore-AddressParse'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-Timeout]
-error = 'KV-Raftstore-Timeout'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-EpochNotMatch]
-error = 'KV-Raftstore-EpochNotMatch'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-Unknown]
-error = 'KV-Raftstore-Unknown'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-ServerIsBusy]
-error = 'KV-Raftstore-ServerIsBusy'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-SnapAbort]
-error = 'KV-Raftstore-SnapAbort'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-SnapTooMany]
-error = 'KV-Raftstore-SnapTooMany'
-description = ''
-workaround = ''
-
-[error.KV-Raftstore-SnapUnknown]
-error = 'KV-Raftstore-SnapUnknown'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-Io]
-error = 'KV-SSTImporter-Io'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-gRPC]
-error = 'KV-SSTImporter-gRPC'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-Uuid]
-error = 'KV-SSTImporter-Uuid'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-Future]
-error = 'KV-SSTImporter-Future'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-RocksDB]
-error = 'KV-SSTImporter-RocksDB'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-ParseIntError]
-error = 'KV-SSTImporter-ParseIntError'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-FileExists]
-error = 'KV-SSTImporter-FileExists'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-FileCorrupted]
-error = 'KV-SSTImporter-FileCorrupted'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-InvalidSSTPath]
-error = 'KV-SSTImporter-InvalidSSTPath'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-InvalidChunk]
-error = 'KV-SSTImporter-InvalidChunk'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-Engine]
-error = 'KV-SSTImporter-Engine'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-CannotReadExternalStorage]
-error = 'KV-SSTImporter-CannotReadExternalStorage'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-WrongKeyPrefix]
-error = 'KV-SSTImporter-WrongKeyPrefix'
-description = ''
-workaround = ''
-
-[error.KV-SSTImporter-BadFormat]
-error = 'KV-SSTImporter-BadFormat'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Timeout]
-error = 'KV-Storage-Timeout'
-description = ''
-workaround = ''
-
-[error.KV-Storage-EmptyRequest]
-error = 'KV-Storage-EmptyRequest'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Closed]
-error = 'KV-Storage-Closed'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Io]
-error = 'KV-Storage-Io'
-description = ''
-workaround = ''
-
-[error.KV-Storage-SchedTooBusy]
-error = 'KV-Storage-SchedTooBusy'
-description = ''
-workaround = ''
-
-[error.KV-Storage-GcWorkerTooBusy]
-error = 'KV-Storage-GcWorkerTooBusy'
-description = ''
-workaround = ''
-
-[error.KV-Storage-KeyTooLarge]
-error = 'KV-Storage-KeyTooLarge'
-description = ''
-workaround = ''
-
-[error.KV-Storage-InvalidCF]
-error = 'KV-Storage-InvalidCF'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Protobuf]
-error = 'KV-Storage-Protobuf'
-description = ''
-workaround = ''
-
-[error.KV-Storage-INVALIDTXNTSO]
-error = 'KV-Storage-INVALIDTXNTSO'
-description = ''
-workaround = ''
-
-[error.KV-Storage-InvalidReqRange]
-error = 'KV-Storage-InvalidReqRange'
-description = ''
-workaround = ''
-
-[error.KV-Storage-BadFormatLock]
-error = 'KV-Storage-BadFormatLock'
-description = ''
-workaround = ''
-
-[error.KV-Storage-BadFormatWrite]
-error = 'KV-Storage-BadFormatWrite'
-description = ''
-workaround = ''
-
-[error.KV-Storage-KeyIsLocked]
-error = 'KV-Storage-KeyIsLocked'
-description = ''
-workaround = ''
-
-[error.KV-Storage-MaxTimestampNotSynced]
-error = 'KV-Storage-MaxTimestampNotSynced'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Committed]
-error = 'KV-Storage-Committed'
-description = ''
-workaround = ''
-
-[error.KV-Storage-PessimisticLockRolledBack]
-error = 'KV-Storage-PessimisticLockRolledBack'
-description = ''
-workaround = ''
-
-[error.KV-Storage-TxnLockNotFound]
-error = 'KV-Storage-TxnLockNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Storage-TxnNotFound]
-error = 'KV-Storage-TxnNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Storage-LockTypeNotMatch]
-error = 'KV-Storage-LockTypeNotMatch'
-description = ''
-workaround = ''
-
-[error.KV-Storage-WriteConflict]
-error = 'KV-Storage-WriteConflict'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Deadlock]
-error = 'KV-Storage-Deadlock'
-description = ''
-workaround = ''
-
-[error.KV-Storage-AlreadyExist]
-error = 'KV-Storage-AlreadyExist'
-description = ''
-workaround = ''
-
-[error.KV-Storage-DefaultNotFound]
-error = 'KV-Storage-DefaultNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Storage-CommitTsExpired]
-error = 'KV-Storage-CommitTsExpired'
-description = ''
-workaround = ''
-
-[error.KV-Storage-KeyVersion]
-error = 'KV-Storage-KeyVersion'
-description = ''
-workaround = ''
-
-[error.KV-Storage-PessimisticLockNotFound]
-error = 'KV-Storage-PessimisticLockNotFound'
-description = ''
-workaround = ''
-
-[error.KV-Storage-Unknown]
-error = 'KV-Storage-Unknown'
-description = ''
-workaround = ''
+["KV:Codec:Io"]
+error = '''
+KV:Codec:Io
+'''
+
+["KV:Codec:BadPadding"]
+error = '''
+KV:Codec:BadPadding
+'''
+
+["KV:Codec:KeyLength"]
+error = '''
+KV:Codec:KeyLength
+'''
+
+["KV:Codec:KeyNotFound"]
+error = '''
+KV:Codec:KeyNotFound
+'''
+
+["KV:Coprocessor:Locked"]
+error = '''
+KV:Coprocessor:Locked
+'''
+
+["KV:Coprocessor:DeadlineExceeded"]
+error = '''
+KV:Coprocessor:DeadlineExceeded
+'''
+
+["KV:Coprocessor:MaxPendingTasksExceeded"]
+error = '''
+KV:Coprocessor:MaxPendingTasksExceeded
+'''
+
+["KV:Coprocessor:InvalidDataType"]
+error = '''
+KV:Coprocessor:InvalidDataType
+'''
+
+["KV:Coprocessor:Encoding"]
+error = '''
+KV:Coprocessor:Encoding
+'''
+
+["KV:Coprocessor:ColumnOffset"]
+error = '''
+KV:Coprocessor:ColumnOffset
+'''
+
+["KV:Coprocessor:UnknownSignature"]
+error = '''
+KV:Coprocessor:UnknownSignature
+'''
+
+["KV:Coprocessor:Eval"]
+error = '''
+KV:Coprocessor:Eval
+'''
+
+["KV:Coprocessor:StorageError"]
+error = '''
+KV:Coprocessor:StorageError
+'''
+
+["KV:Coprocessor:InvalidCharacterString"]
+error = '''
+KV:Coprocessor:InvalidCharacterString
+'''
+
+["KV:Encryption:Rocks"]
+error = '''
+KV:Encryption:Rocks
+'''
+
+["KV:Encryption:IO"]
+error = '''
+KV:Encryption:IO
+'''
+
+["KV:Encryption:Crypter"]
+error = '''
+KV:Encryption:Crypter
+'''
+
+["KV:Encryption:Proto"]
+error = '''
+KV:Encryption:Proto
+'''
+
+["KV:Encryption:UnknownEncryption"]
+error = '''
+KV:Encryption:UnknownEncryption
+'''
+
+["KV:Encryption:WrongMasterKey"]
+error = '''
+KV:Encryption:WrongMasterKey
+'''
+
+["KV:Encryption:BothMasterKeyFail"]
+error = '''
+KV:Encryption:BothMasterKeyFail
+'''
+
+["KV:Engine:Engine"]
+error = '''
+KV:Engine:Engine
+'''
+
+["KV:Engine:NotInRange"]
+error = '''
+KV:Engine:NotInRange
+'''
+
+["KV:Engine:Protobuf"]
+error = '''
+KV:Engine:Protobuf
+'''
+
+["KV:Engine:IO"]
+error = '''
+KV:Engine:IO
+'''
+
+["KV:Engine:CFName"]
+error = '''
+KV:Engine:CFName
+'''
+
+["KV:Engine:Codec"]
+error = '''
+KV:Engine:Codec
+'''
+
+["KV:Engine:DataLoss"]
+error = '''
+KV:Engine:DataLoss
+'''
+
+["KV:Engine:DataCompacted"]
+error = '''
+KV:Engine:DataCompacted
+'''
+
+["KV:PD:IO"]
+error = '''
+KV:PD:IO
+'''
+
+["KV:PD:ClusterBootstraped"]
+error = '''
+KV:PD:ClusterBootstraped
+'''
+
+["KV:PD:ClusterNotBootstraped"]
+error = '''
+KV:PD:ClusterNotBootstraped
+'''
+
+["KV:PD:Imcompatible"]
+error = '''
+KV:PD:Imcompatible
+'''
+
+["KV:PD:gRPC"]
+error = '''
+KV:PD:gRPC
+'''
+
+["KV:PD:RegionNotFound"]
+error = '''
+KV:PD:RegionNotFound
+'''
+
+["KV:PD:StoreTombstone"]
+error = '''
+KV:PD:StoreTombstone
+'''
+
+["KV:PD:Unknown"]
+error = '''
+KV:PD:Unknown
+'''
+
+["KV:Raft:Io"]
+error = '''
+KV:Raft:Io
+'''
+
+["KV:Raft:Store"]
+error = '''
+KV:Raft:Store
+'''
+
+["KV:Raft:StepLocalMsg"]
+error = '''
+KV:Raft:StepLocalMsg
+'''
+
+["KV:Raft:StepPeerNotFound"]
+error = '''
+KV:Raft:StepPeerNotFound
+'''
+
+["KV:Raft:ProposalDropped"]
+error = '''
+KV:Raft:ProposalDropped
+'''
+
+["KV:Raft:ConfigInvalid"]
+error = '''
+KV:Raft:ConfigInvalid
+'''
+
+["KV:Raft:CodecError"]
+error = '''
+KV:Raft:CodecError
+'''
+
+["KV:Raft:Exists"]
+error = '''
+KV:Raft:Exists
+'''
+
+["KV:Raft:NotExists"]
+error = '''
+KV:Raft:NotExists
+'''
+
+["KV:Raft:RequestSnapshotDropped"]
+error = '''
+KV:Raft:RequestSnapshotDropped
+'''
+
+["KV:Raft:ConfChangeError"]
+error = '''
+KV:Raft:ConfChangeError
+'''
+
+["KV:Raftstore:EntryTooLarge"]
+error = '''
+KV:Raftstore:EntryTooLarge
+'''
+
+["KV:Raftstore:NotLeader"]
+error = '''
+KV:Raftstore:NotLeader
+'''
+
+["KV:Raftstore:StoreNotMatch"]
+error = '''
+KV:Raftstore:StoreNotMatch
+'''
+
+["KV:Raftstore:RegionNotFound"]
+error = '''
+KV:Raftstore:RegionNotFound
+'''
+
+["KV:Raftstore:RegionNotInitialized"]
+error = '''
+KV:Raftstore:RegionNotInitialized
+'''
+
+["KV:Raftstore:KeyNotInRegion"]
+error = '''
+KV:Raftstore:KeyNotInRegion
+'''
+
+["KV:Raftstore:StaleCommand"]
+error = '''
+KV:Raftstore:StaleCommand
+'''
+
+["KV:Raftstore:Transport"]
+error = '''
+KV:Raftstore:Transport
+'''
+
+["KV:Raftstore:Coprocessor"]
+error = '''
+KV:Raftstore:Coprocessor
+'''
+
+["KV:Raftstore:IO"]
+error = '''
+KV:Raftstore:IO
+'''
+
+["KV:Raftstore:Protobuf"]
+error = '''
+KV:Raftstore:Protobuf
+'''
+
+["KV:Raftstore:AddressParse"]
+error = '''
+KV:Raftstore:AddressParse
+'''
+
+["KV:Raftstore:Timeout"]
+error = '''
+KV:Raftstore:Timeout
+'''
+
+["KV:Raftstore:EpochNotMatch"]
+error = '''
+KV:Raftstore:EpochNotMatch
+'''
+
+["KV:Raftstore:Unknown"]
+error = '''
+KV:Raftstore:Unknown
+'''
+
+["KV:Raftstore:ServerIsBusy"]
+error = '''
+KV:Raftstore:ServerIsBusy
+'''
+
+["KV:Raftstore:SnapAbort"]
+error = '''
+KV:Raftstore:SnapAbort
+'''
+
+["KV:Raftstore:SnapTooMany"]
+error = '''
+KV:Raftstore:SnapTooMany
+'''
+
+["KV:Raftstore:SnapUnknown"]
+error = '''
+KV:Raftstore:SnapUnknown
+'''
+
+["KV:SSTImporter:Io"]
+error = '''
+KV:SSTImporter:Io
+'''
+
+["KV:SSTImporter:gRPC"]
+error = '''
+KV:SSTImporter:gRPC
+'''
+
+["KV:SSTImporter:Uuid"]
+error = '''
+KV:SSTImporter:Uuid
+'''
+
+["KV:SSTImporter:Future"]
+error = '''
+KV:SSTImporter:Future
+'''
+
+["KV:SSTImporter:RocksDB"]
+error = '''
+KV:SSTImporter:RocksDB
+'''
+
+["KV:SSTImporter:ParseIntError"]
+error = '''
+KV:SSTImporter:ParseIntError
+'''
+
+["KV:SSTImporter:FileExists"]
+error = '''
+KV:SSTImporter:FileExists
+'''
+
+["KV:SSTImporter:FileCorrupted"]
+error = '''
+KV:SSTImporter:FileCorrupted
+'''
+
+["KV:SSTImporter:InvalidSSTPath"]
+error = '''
+KV:SSTImporter:InvalidSSTPath
+'''
+
+["KV:SSTImporter:InvalidChunk"]
+error = '''
+KV:SSTImporter:InvalidChunk
+'''
+
+["KV:SSTImporter:Engine"]
+error = '''
+KV:SSTImporter:Engine
+'''
+
+["KV:SSTImporter:CannotReadExternalStorage"]
+error = '''
+KV:SSTImporter:CannotReadExternalStorage
+'''
+
+["KV:SSTImporter:WrongKeyPrefix"]
+error = '''
+KV:SSTImporter:WrongKeyPrefix
+'''
+
+["KV:SSTImporter:BadFormat"]
+error = '''
+KV:SSTImporter:BadFormat
+'''
+
+["KV:Storage:Timeout"]
+error = '''
+KV:Storage:Timeout
+'''
+
+["KV:Storage:EmptyRequest"]
+error = '''
+KV:Storage:EmptyRequest
+'''
+
+["KV:Storage:Closed"]
+error = '''
+KV:Storage:Closed
+'''
+
+["KV:Storage:Io"]
+error = '''
+KV:Storage:Io
+'''
+
+["KV:Storage:SchedTooBusy"]
+error = '''
+KV:Storage:SchedTooBusy
+'''
+
+["KV:Storage:GcWorkerTooBusy"]
+error = '''
+KV:Storage:GcWorkerTooBusy
+'''
+
+["KV:Storage:KeyTooLarge"]
+error = '''
+KV:Storage:KeyTooLarge
+'''
+
+["KV:Storage:InvalidCF"]
+error = '''
+KV:Storage:InvalidCF
+'''
+
+["KV:Storage:Protobuf"]
+error = '''
+KV:Storage:Protobuf
+'''
+
+["KV:Storage:INVALIDTXNTSO"]
+error = '''
+KV:Storage:INVALIDTXNTSO
+'''
+
+["KV:Storage:InvalidReqRange"]
+error = '''
+KV:Storage:InvalidReqRange
+'''
+
+["KV:Storage:BadFormatLock"]
+error = '''
+KV:Storage:BadFormatLock
+'''
+
+["KV:Storage:BadFormatWrite"]
+error = '''
+KV:Storage:BadFormatWrite
+'''
+
+["KV:Storage:KeyIsLocked"]
+error = '''
+KV:Storage:KeyIsLocked
+'''
+
+["KV:Storage:MaxTimestampNotSynced"]
+error = '''
+KV:Storage:MaxTimestampNotSynced
+'''
+
+["KV:Storage:Committed"]
+error = '''
+KV:Storage:Committed
+'''
+
+["KV:Storage:PessimisticLockRolledBack"]
+error = '''
+KV:Storage:PessimisticLockRolledBack
+'''
+
+["KV:Storage:TxnLockNotFound"]
+error = '''
+KV:Storage:TxnLockNotFound
+'''
+
+["KV:Storage:TxnNotFound"]
+error = '''
+KV:Storage:TxnNotFound
+'''
+
+["KV:Storage:LockTypeNotMatch"]
+error = '''
+KV:Storage:LockTypeNotMatch
+'''
+
+["KV:Storage:WriteConflict"]
+error = '''
+KV:Storage:WriteConflict
+'''
+
+["KV:Storage:Deadlock"]
+error = '''
+KV:Storage:Deadlock
+'''
+
+["KV:Storage:AlreadyExist"]
+error = '''
+KV:Storage:AlreadyExist
+'''
+
+["KV:Storage:DefaultNotFound"]
+error = '''
+KV:Storage:DefaultNotFound
+'''
+
+["KV:Storage:CommitTsExpired"]
+error = '''
+KV:Storage:CommitTsExpired
+'''
+
+["KV:Storage:KeyVersion"]
+error = '''
+KV:Storage:KeyVersion
+'''
+
+["KV:Storage:PessimisticLockNotFound"]
+error = '''
+KV:Storage:PessimisticLockNotFound
+'''
+
+["KV:Storage:CommitTsTooLarge"]
+error = '''
+KV:Storage:CommitTsTooLarge
+'''
+
+["KV:Storage:Unknown"]
+error = '''
+KV:Storage:Unknown
+'''
 

@@ -90,7 +90,7 @@ pub fn commit<S: Snapshot>(
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
-            write = write.set_overlapped_rollback(true);
+            write = write.set_overlapped_rollback(true, None);
             break;
         }
     }
@@ -109,6 +109,12 @@ pub mod tests {
     use txn_types::TimeStamp;
 
     #[cfg(test)]
+    use crate::storage::txn::tests::{
+        must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
+    };
+
+    #[cfg(test)]
     use crate::storage::{
         mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
     };
@@ -120,7 +126,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
@@ -134,8 +140,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
@@ -219,9 +224,11 @@ pub mod tests {
             ts(20, 0),
             ts(20, 0),
             true,
+            false,
+            false,
             uncommitted(100, ts(20, 1)),
         );
-        // The the min_commit_ts should be ts(20, 1)
+        // The min_commit_ts should be ts(20, 1)
         must_err(&engine, k, ts(10, 0), ts(15, 0));
         must_err(&engine, k, ts(10, 0), ts(20, 0));
         must_succeed(&engine, k, ts(10, 0), ts(20, 1));
@@ -234,6 +241,8 @@ pub mod tests {
             ts(40, 0),
             ts(40, 0),
             true,
+            false,
+            false,
             uncommitted(100, ts(40, 1)),
         );
         must_succeed(&engine, k, ts(30, 0), ts(50, 0));
@@ -247,6 +256,8 @@ pub mod tests {
             ts(70, 0),
             ts(70, 0),
             true,
+            false,
+            false,
             uncommitted(100, ts(70, 1)),
         );
         must_prewrite_put_impl(
@@ -261,7 +272,7 @@ pub mod tests {
             ts(60, 0),
             1,
             ts(60, 1),
-            false,
+            TimeStamp::zero(),
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);

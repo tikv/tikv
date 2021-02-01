@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# 
+#
 # This script makes sure tests binary are linked to jemalloc and release binaries
 # utilize sse4.2 extensions.
 #
@@ -75,7 +75,7 @@ def check_tests(features):
         return
     else:
         print("Checking bins for jemalloc")
-    start = time.clock()
+    start = time.time()
     for line in sys.stdin.readlines():
         if not line.startswith('{'):
             continue
@@ -83,7 +83,7 @@ def check_tests(features):
         data = json.loads(line)
         if not data.get("executable"):
             continue
-        
+
         executable = data["executable"]
         name = executable.rsplit("/", 1)[1]
         if name.split('-')[0] in WHITE_LIST:
@@ -93,7 +93,7 @@ def check_tests(features):
         pr("Checking binary %s" % name)
         check_jemalloc(executable)
     pr("")
-    print("Done, takes %.2fs." % (time.clock() - start))
+    print("Done, takes %.2fs." % (time.time() - start))
 
 def check_release(enabled_features, args):
     checked_features = []

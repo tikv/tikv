@@ -127,13 +127,13 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
+    let total_memory = system.get_total_memory() * KB;
     let used_memory = system.get_used_memory() * KB;
     let free_memory = system.get_free_memory() * KB;
     let total_swap = system.get_total_swap() * KB;
     let used_swap = system.get_used_swap() * KB;
     let free_swap = system.get_free_swap() * KB;
     drop(system);
-    let total_memory = SysQuota::new().memory_limit_in_bytes();
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
     let used_swap_pct = (used_swap as f64) / (total_swap as f64);
@@ -307,12 +307,12 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     ];
     // cache
     let caches = vec![
-        ("l1-cache-size", cache_size::l1_cache_size()),
-        ("l1-cache-line-size", cache_size::l1_cache_line_size()),
-        ("l2-cache-size", cache_size::l2_cache_size()),
-        ("l2-cache-line-size", cache_size::l2_cache_line_size()),
-        ("l3-cache-size", cache_size::l3_cache_size()),
-        ("l3-cache-line-size", cache_size::l3_cache_line_size()),
+        ("l1-cache-size", cache_size(1)),
+        ("l1-cache-line-size", cache_line_size(1)),
+        ("l2-cache-size", cache_size(2)),
+        ("l2-cache-line-size", cache_line_size(2)),
+        ("l3-cache-size", cache_size(3)),
+        ("l3-cache-line-size", cache_line_size(3)),
     ];
     for cache in caches.into_iter() {
         if let Some(v) = cache.1 {
@@ -362,14 +362,14 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
             (
                 "fstype",
                 std::str::from_utf8(disk.get_file_system())
-                    .unwrap_or_else(|_| "unkonwn")
+                    .unwrap_or("unkonwn")
                     .to_string(),
             ),
             (
                 "path",
                 disk.get_mount_point()
                     .to_str()
-                    .unwrap_or_else(|| "unknown")
+                    .unwrap_or("unknown")
                     .to_string(),
             ),
             ("total", total.to_string()),
@@ -387,12 +387,7 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         }
         let mut item = ServerInfoItem::default();
         item.set_tp("disk".to_string());
-        item.set_name(
-            disk.get_name()
-                .to_str()
-                .unwrap_or_else(|| "disk")
-                .to_string(),
-        );
+        item.set_name(disk.get_name().to_str().unwrap_or("disk").to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
     }
@@ -462,6 +457,9 @@ pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
     item.set_name("sysctl".to_string());
     item.set_pairs(pairs.into());
     collector.push(item);
+    if let Some(item) = get_transparent_hugepage() {
+        collector.push(item);
+    }
 }
 
 /// Returns system wide configuration
@@ -482,6 +480,22 @@ fn get_sysctl_list() -> HashMap<String, String> {
             Some((name, content.trim().to_string()))
         })
         .collect()
+}
+
+fn get_transparent_hugepage() -> Option<ServerInfoItem> {
+    if let Ok(content) = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled") {
+        let mut pairs = vec![];
+        let mut pair = ServerInfoPair::default();
+        pair.set_key("transparent_hugepage_enabled".to_string());
+        pair.set_value(content.trim().to_string());
+        pairs.push(pair);
+        let mut item = ServerInfoItem::default();
+        item.set_tp("system".to_string());
+        item.set_name("kernel".to_string());
+        item.set_pairs(pairs.into());
+        return Some(item);
+    }
+    None
 }
 
 /// process_info collects all process list
@@ -639,6 +653,10 @@ mod tests {
             let item = collector
                 .iter()
                 .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl");
+            assert_ne!(item.count(), 0);
+            let item = collector
+                .iter()
+                .filter(|x| x.get_tp() == "system" && x.get_name() == "kernel");
             assert_ne!(item.count(), 0);
         }
     }

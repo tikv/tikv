@@ -30,6 +30,8 @@ const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
 const COMPLETE_COMPONENTS_LEN: usize = 7;
+pub const MIN_YEAR: u32 = 1901;
+pub const MAX_YEAR: u32 = 2155;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -115,7 +117,7 @@ fn chrono_datetime<T: TimeZone>(
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
         .and_then(|datetime| time_zone.from_local_datetime(&datetime).earliest())
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 #[inline]
@@ -131,7 +133,7 @@ fn chrono_naive_datetime(
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
-        .ok_or_else(|| Error::truncated())
+        .ok_or_else(Error::truncated)
 }
 
 /// Round `frac` with `fsp`, return if there is a carry and the result.
@@ -380,7 +382,7 @@ mod parser {
     fn adjust_year(year: u32) -> u32 {
         if year <= 69 {
             2000 + year
-        } else if year >= 70 && year <= 99 {
+        } else if (70..=99).contains(&year) {
             1900 + year
         } else {
             year
@@ -505,6 +507,55 @@ mod parser {
         }
     }
 
+    pub fn parse_from_decimal(
+        ctx: &mut EvalContext,
+        input: &Decimal,
+        time_type: TimeType,
+        fsp: u8,
+        round: bool,
+    ) -> Option<Time> {
+        let decimal_as_string = input.to_string();
+        let components = split_components(decimal_as_string.as_str())?;
+        match components.len() {
+            1 | 2 => {
+                let result: i64 = components[0].convert(ctx).ok()?;
+                let whole_time = parse_from_i64(ctx, result, time_type, fsp)?;
+                let mut whole = [
+                    whole_time.get_year(),
+                    whole_time.get_month(),
+                    whole_time.get_day(),
+                    whole_time.get_hour(),
+                    whole_time.get_minute(),
+                    whole_time.get_second(),
+                    0,
+                ];
+
+                let (carry, frac) = if let Some(frac) = components.get(1) {
+                    // If we have a fractional part,
+                    // we expect the `whole` is in format: `yymmddhhmmss/yyyymmddhhmmss`,
+                    // which match the `whole` part length from 9 to 14.
+                    // Otherwise, the fractional part is meaningless.
+                    if components[0].len() >= 9 && components[0].len() <= 14 {
+                        parse_frac(frac, fsp, round)?
+                    } else {
+                        (false, 0)
+                    }
+                } else {
+                    (false, 0)
+                };
+
+                whole[6] = frac;
+                let mut parts = whole;
+                if carry {
+                    round_components(&mut parts)?;
+                }
+
+                Time::from_slice(ctx, &parts, time_type, fsp)
+            }
+            _ => None,
+        }
+    }
+
     /// Try to parse a `i64` into a `Time` with the given type and fsp
     pub fn parse_from_i64(
         ctx: &mut EvalContext,
@@ -522,7 +573,7 @@ mod parser {
         let aligned = match input {
             101..=691_231 => (input + 20_000_000) * 1_000_000,
             700_101..=991_231 => (input + 19_000_000) * 1_000_000,
-            10_000_101..=99_991_231 => input * 1_000_000,
+            991_232..=99_991_231 => input * 1_000_000,
             101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
             700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
             1_000_000_000_000..=std::i64::MAX => input,
@@ -570,6 +621,16 @@ impl Time {
         fsp: i8,
     ) -> Result<Time> {
         parser::parse_from_i64(ctx, input, time_type, check_fsp(fsp)?)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_from_decimal(
+        ctx: &mut EvalContext,
+        input: &Decimal,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_decimal(ctx, input, time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -768,7 +829,7 @@ impl TimeArgs {
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
-        if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
+        if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&ts) {
             return handle_invalid_date(ctx, self);
         }
 
@@ -814,7 +875,7 @@ impl Time {
         let hms = (input % 1_000_000) as u32;
 
         let year = ymd / 10_000;
-        let md = ymd % 10_000 as u32;
+        let md = ymd % 10_000_u32;
         let month = md / 100;
         let day = md % 100;
 
@@ -1005,6 +1066,16 @@ impl Time {
     }
 
     #[inline]
+    pub fn maximize_fsp(&mut self) {
+        self.set_fsp(super::MAX_FSP as u8);
+    }
+
+    #[inline]
+    pub fn minimize_fsp(&mut self) {
+        self.set_fsp(super::MIN_FSP as u8);
+    }
+
+    #[inline]
     pub fn get_time_type(self) -> TimeType {
         let ft = self.get_fsp_tt();
 
@@ -1126,6 +1197,28 @@ impl Time {
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
+    }
+
+    pub fn from_year(
+        ctx: &mut EvalContext,
+        year: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month: 0,
+                day: 0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                micro: 0,
+                fsp,
+                time_type,
+            },
+        )
     }
 
     pub fn round_frac(mut self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
@@ -1714,10 +1807,7 @@ impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }
@@ -1792,6 +1882,7 @@ mod tests {
             ("2059-12-31 00:00:00", 591_231),
             ("1970-01-01 00:00:00", 700_101),
             ("1999-12-31 00:00:00", 991_231),
+            ("1000-01-00 00:00:00", 10_000_100),
             ("2000-01-01 00:00:00", 101_000_000),
             ("2069-12-31 23:59:59", 691_231_235_959),
             ("1970-01-01 00:00:00", 700_101_000_000),
@@ -1806,17 +1897,46 @@ mod tests {
             assert_eq!(actual.to_string(), expected);
         }
 
-        let should_fail = vec![
-            -1111,
-            1,
-            100,
-            700_100,
-            10_000_100,
-            100_000_000,
-            100_000_101_000_000,
-        ];
+        let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
             assert!(Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_decimal() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05 00:00:00", "305", 0),
+            ("2000-12-03 00:00:00", "1203", 0),
+            ("2003-12-05 00:00:00.0", "31205", 1),
+            ("2007-01-18 00:00:00.00", "070118", 2),
+            ("0101-12-09 00:00:00.000", "1011209.333", 3),
+            ("2017-01-18 00:00:00.0000", "20170118.123", 4),
+            ("2012-12-31 11:30:45.12335", "121231113045.123345", 5),
+            ("2012-12-31 11:30:45.123345", "20121231113045.123345", 6),
+            ("2012-12-31 11:30:46.00000", "121231113045.9999999", 5),
+            ("2017-01-05 08:40:59.5756", "170105084059.575601", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input, fsp) in cases {
+            let input: Decimal = input.parse().unwrap();
+            let actual = Time::parse_from_decimal(&mut ctx, &input, TimeType::DateTime, fsp, true)?;
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+        for case in should_fail {
+            let case: Decimal = case.parse().unwrap();
+            assert!(
+                Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).is_err()
+            );
         }
         Ok(())
     }
@@ -2351,7 +2471,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2464,7 +2584,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2472,7 +2592,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2489,14 +2609,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2513,7 +2633,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2521,11 +2641,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())
@@ -2646,6 +2766,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_convert_to_f64() {
         let cases = vec![
             ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),

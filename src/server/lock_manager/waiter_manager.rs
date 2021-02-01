@@ -9,7 +9,7 @@ use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
 };
-use tikv_util::collections::HashMap;
+use collections::HashMap;
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 
 use std::cell::RefCell;
@@ -1021,9 +1021,11 @@ pub mod tests {
         let detect_worker = FutureWorker::new("dummy-deadlock");
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
-        let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = ReadableDuration::millis(wait_for_lock_timeout);
-        cfg.wake_up_delay_duration = ReadableDuration::millis(wake_up_delay_duration);
+        let cfg = Config {
+            wait_for_lock_timeout: ReadableDuration::millis(wait_for_lock_timeout),
+            wake_up_delay_duration: ReadableDuration::millis(wake_up_delay_duration),
+            ..Default::default()
+        };
         let mut waiter_mgr_worker = FutureWorker::new("test-waiter-manager");
         let waiter_mgr_runner =
             WaiterManager::new(Arc::new(AtomicUsize::new(0)), detector_scheduler, &cfg);
@@ -1298,7 +1300,7 @@ pub mod tests {
             .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
         let hashes: Vec<u64> = (0..1000).collect();
         b.iter(|| {
-            test::black_box(|| waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into()));
+            waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into());
         });
     }
 }

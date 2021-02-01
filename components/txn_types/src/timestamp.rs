@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
-use tikv_util::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimeStamp(u64);
@@ -101,7 +101,7 @@ pub enum TsSet {
     Empty,
     /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
     /// converting a `Vec` into a `HashSet`.
-    Vec(Arc<Vec<TimeStamp>>),
+    Vec(Arc<[TimeStamp]>),
     /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
     Set(Arc<HashSet<TimeStamp>>),
 }
@@ -122,7 +122,7 @@ impl TsSet {
             TsSet::Empty
         } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
             // If there are too few elements in `ts`, use Vec directly instead of making a Set.
-            TsSet::Vec(Arc::new(ts))
+            TsSet::Vec(ts.into())
         } else {
             TsSet::Set(Arc::new(ts.into_iter().collect()))
         }
@@ -149,7 +149,7 @@ impl TsSet {
         if ts.is_empty() {
             TsSet::Empty
         } else {
-            TsSet::Vec(Arc::new(ts))
+            TsSet::Vec(ts.into())
         }
     }
 
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(s, TsSet::Empty);
 
         let s = TsSet::from_u64s(vec![1, 2]);
-        assert_eq!(s, TsSet::Vec(Arc::new(vec![1.into(), 2.into()])));
+        assert_eq!(s, TsSet::Vec(vec![1.into(), 2.into()].into()));
         assert!(s.contains(1.into()));
         assert!(s.contains(2.into()));
         assert!(!s.contains(3.into()));
@@ -220,6 +220,6 @@ mod tests {
         assert!(!s.contains((TS_SET_USE_VEC_LIMIT as u64 + 1).into()));
 
         let s = TsSet::vec(big_ts_list.clone());
-        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
+        assert_eq!(s, TsSet::Vec(big_ts_list.into()));
     }
 }

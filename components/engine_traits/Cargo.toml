@@ -5,23 +5,37 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 protobuf-codec = [
+  "error_code/protobuf-codec",
   "raft/protobuf-codec",
   "kvproto/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "txn_types/protobuf-codec",
 ]
 prost-codec = [
+  "error_code/prost-codec",
   "raft/prost-codec",
   "kvproto/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
 ]
 
 [dependencies]
-error_code = { path = "../error_code" }
+error_code = { path = "../error_code", default-features = false }
+file_system = { path = "../file_system" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
 quick-error = "1.2.3"
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
+serde = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
+
+[dev-dependencies]
+toml = "0.5"
+serde_derive = "1.0"

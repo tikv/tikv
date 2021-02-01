@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use super::metrics::*;
@@ -11,12 +11,11 @@ use super::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
     RegionChangeEvent, RegionChangeObserver, Result, RoleObserver,
 };
+use collections::HashMap;
 use engine_traits::KvEngine;
 use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::collections::HashMap;
-use tikv_util::timer::Timer;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
@@ -108,8 +107,8 @@ impl Display for RegionInfoQuery {
             } => write!(
                 f,
                 "GetRegionsInRange(start_key: {}, end_key: {})",
-                hex::encode_upper(start_key),
-                hex::encode_upper(end_key)
+                &log_wrappers::Value::key(start_key),
+                &log_wrappers::Value::key(end_key)
             ),
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -467,9 +466,7 @@ impl Runnable for RegionCollector {
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl RunnableWithTimer for RegionCollector {
-    type TimeoutTask = ();
-
-    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+    fn on_timeout(&mut self) {
         let mut count = 0;
         let mut leader = 0;
         for r in self.regions.values() {
@@ -484,14 +481,21 @@ impl RunnableWithTimer for RegionCollector {
         REGION_COUNT_GAUGE_VEC
             .with_label_values(&["leader"])
             .set(leader);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    }
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(METRICS_FLUSH_INTERVAL)
     }
 }
 
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
+    // We use a dedicated worker for region info accessor. If we later want to share a worker with
+    // other tasks, we must make sure the other tasks don't block on flush or compaction, which
+    // may cause a deadlock between the flush or compaction task, and the region info accessor task
+    // fired by compaction guard from the RocksDB compaction thread.
+    // https://github.com/tikv/tikv/issues/9044
+    worker: Worker,
     scheduler: Scheduler<RegionInfoQuery>,
 }
 
@@ -501,30 +505,16 @@ impl RegionInfoAccessor {
     /// in different places, just clone it, and their contents are shared.
     pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
         let worker = WorkerBuilder::new("region-collector-worker").create();
-        let scheduler = worker.scheduler();
-
+        let scheduler = worker.start_with_timer("region-collector-worker", RegionCollector::new());
         register_region_event_listener(host, scheduler.clone());
 
-        Self {
-            worker: Arc::new(Mutex::new(worker)),
-            scheduler,
-        }
-    }
-
-    /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
-    pub fn start(&self) {
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
-        self.worker
-            .lock()
-            .unwrap()
-            .start_with_timer(RegionCollector::new(), timer)
-            .unwrap();
+        Self { worker, scheduler }
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
     pub fn stop(&self) {
-        self.worker.lock().unwrap().stop().unwrap().join().unwrap();
+        self.scheduler.stop();
+        self.worker.stop();
     }
 
     /// Gets all content from the collection. Only used for testing.
@@ -604,6 +594,27 @@ impl RegionInfoProvider for RegionInfoAccessor {
                     )
                 })
             })
+    }
+}
+
+// Use in tests only.
+pub struct MockRegionInfoProvider(Mutex<Vec<Region>>);
+
+impl MockRegionInfoProvider {
+    pub fn new(regions: Vec<Region>) -> Self {
+        MockRegionInfoProvider(Mutex::new(regions))
+    }
+}
+
+impl Clone for MockRegionInfoProvider {
+    fn clone(&self) -> Self {
+        MockRegionInfoProvider::new(self.0.lock().unwrap().clone())
+    }
+}
+
+impl RegionInfoProvider for MockRegionInfoProvider {
+    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+        Ok(self.0.lock().unwrap().clone())
     }
 }
 

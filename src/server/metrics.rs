@@ -203,6 +203,12 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_server_info",
+        "Indicate the tikv server info, and the value is the server startup timestamp(s).",
+        &["version", "hash"]
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -361,6 +367,7 @@ make_auto_flush_static_metric! {
         err_stale_command,
         err_store_not_match,
         err_raft_entry_too_large,
+        err_leader_memory_lock_check,
     }
 
     pub label_enum RequestTypeKind {

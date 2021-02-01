@@ -4,8 +4,10 @@ use super::ErrorCodeExt;
 use kvproto::errorpb;
 
 define_error_codes!(
-    "KV-Raftstore-",
+    "KV:Raftstore:",
 
+    PROPOSAL_IN_MERGING_MODE => ("ProposalInMergingMode", "", ""),
+    READ_INDEX_NOT_READY => ("ReadIndexNotReady", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
     STORE_NOT_MATCH => ("StoreNotMatch", "", ""),
@@ -46,6 +48,10 @@ impl ErrorCodeExt for errorpb::Error {
             STORE_NOT_MATCH
         } else if self.has_raft_entry_too_large() {
             ENTRY_TOO_LARGE
+        } else if self.has_read_index_not_ready() {
+            READ_INDEX_NOT_READY
+        } else if self.has_proposal_in_merging_mode() {
+            PROPOSAL_IN_MERGING_MODE
         } else {
             UNKNOWN
         }

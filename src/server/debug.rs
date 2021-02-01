@@ -12,9 +12,9 @@ use engine_rocks::{Compat, RocksEngine, RocksEngineIterator, RocksWriteBatch};
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, Peekable, RaftEngine,
     RangePropertiesExt, SeekKey, TableProperties, TablePropertiesCollection, TablePropertiesExt,
-    WriteOptions,
+    WriteBatch, WriteOptions,
 };
-use engine_traits::{Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{MvccProperties, Range, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
@@ -24,13 +24,13 @@ use raft::{self, RawNode};
 
 use crate::config::ConfigController;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use engine_rocks::properties::MvccProperties;
+use collections::HashSet;
+use engine_rocks::RocksMvccProperties;
 use raftstore::coprocessor::get_region_approximate_middle;
 use raftstore::store::util as raftstore_util;
 use raftstore::store::PeerStorage;
 use raftstore::store::{write_initial_apply_state, write_initial_raft_state, write_peer_state};
 use tikv_util::codec::bytes;
-use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
@@ -343,7 +343,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(&wb, &write_opts));
+            box_try!(wb.write_opt(&write_opts));
         }
         Ok(errors)
     }
@@ -377,7 +377,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        db.write_opt(&wb, &write_opts).unwrap();
+        wb.write_opt(&write_opts).unwrap();
         Ok(errors)
     }
 
@@ -437,8 +437,8 @@ impl<ER: RaftEngine> Debugger<ER> {
                     v1!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
-                        hex::encode_upper(&start_key),
-                        hex::encode_upper(&end_key)
+                        log_wrappers::Value::key(&start_key),
+                        log_wrappers::Value::key(&end_key)
                     );
 
                     let result = recover_mvcc_for_range(
@@ -486,7 +486,8 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut iter = box_try!(self.engines.kv.iterator_cf_opt(CF_RAFT, readopts));
         iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
-        let fake_snap_worker = Worker::new("fake-snap-worker");
+        let fake_worker = Worker::new("fake-snap-worker");
+        let fake_snap_worker = fake_worker.lazy_build("fake-snap");
 
         let check_value = |value: &[u8]| -> Result<()> {
             let mut local_state = RegionLocalState::default();
@@ -617,7 +618,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
+        box_try!(wb.write_opt(&write_opts));
         Ok(())
     }
 
@@ -692,7 +693,7 @@ impl<ER: RaftEngine> Debugger<ER> {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(&kv_wb, &write_opts));
+        box_try!(kv_wb.write_opt(&write_opts));
         box_try!(self.engines.raft.consume(&mut raft_wb, true));
         Ok(())
     }
@@ -781,7 +782,7 @@ fn dump_mvcc_properties(db: &Arc<DB>, start: &[u8], end: &[u8]) -> Result<Vec<(S
     let mut mvcc_properties = MvccProperties::new();
     for (_, v) in collection.iter() {
         num_entries += v.num_entries();
-        let mvcc = box_try!(MvccProperties::decode(&v.user_collected_properties()));
+        let mvcc = box_try!(RocksMvccProperties::decode(&v.user_collected_properties()));
         mvcc_properties.add(&mvcc);
     }
 
@@ -843,7 +844,7 @@ fn recover_mvcc_for_range(
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.c().write_opt(&wb, &write_opts));
+            box_try!(wb.write_opt(&write_opts));
         } else {
             v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
@@ -992,7 +993,7 @@ impl MvccChecker {
                             "thread {}: LOCK {} is less than WRITE ts, key: {}, {}: {}, commit_ts: {}",
                             self.thread_index,
                             kind,
-                            hex::encode_upper(key),
+                            log_wrappers::Value::key(key),
                             kind,
                             l.ts,
                             commit_ts
@@ -1015,7 +1016,7 @@ impl MvccChecker {
                             v1!(
                                 "thread {}: no corresponding DEFAULT record for LOCK, key: {}, lock_ts: {}",
                                 self.thread_index,
-                                hex::encode_upper(key),
+                                log_wrappers::Value::key(key),
                                 l.ts
                             );
                             self.delete(wb, CF_LOCK, key, None)?;
@@ -1055,7 +1056,7 @@ impl MvccChecker {
                 v1!(
                     "thread {}: orphan DEFAULT record, key: {}, start_ts: {}",
                     self.thread_index,
-                    hex::encode_upper(key),
+                    log_wrappers::Value::key(key),
                     default.unwrap()
                 );
                 self.delete(wb, CF_DEFAULT, key, default)?;
@@ -1067,7 +1068,7 @@ impl MvccChecker {
                     v1!(
                         "thread {}: no corresponding DEFAULT record for WRITE, key: {}, start_ts: {}, commit_ts: {}",
                         self.thread_index,
-                        hex::encode_upper(key),
+                        log_wrappers::Value::key(key),
                         w.start_ts,
                         commit_ts
                     );
@@ -1219,7 +1220,7 @@ fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
 mod tests {
     use std::sync::Arc;
 
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
@@ -1228,7 +1229,7 @@ mod tests {
     use crate::storage::mvcc::{Lock, LockType};
     use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::RocksEngine;
-    use engine_traits::{CFHandleExt, Mutable, SyncMutable};
+    use engine_traits::{Mutable, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &Arc<DB>, region_id: u64, stores: &[u64]) -> Region {
@@ -1655,11 +1656,10 @@ mod tests {
                     let peers = peers
                         .iter()
                         .enumerate()
-                        .map(|(i, &sid)| {
-                            let mut peer = Peer::default();
-                            peer.id = i as u64;
-                            peer.store_id = sid;
-                            peer
+                        .map(|(i, &sid)| Peer {
+                            id: i as u64,
+                            store_id: sid,
+                            ..Default::default()
                         })
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
@@ -1699,8 +1699,8 @@ mod tests {
             mock_region_state(&mut wb2, 13, &[]);
         }
 
-        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
+        wb1.write_opt(&WriteOptions::new()).unwrap();
+        wb2.write_opt(&WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
@@ -1732,11 +1732,7 @@ mod tests {
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine
-                .as_inner()
-                .delete_cf(cf_raft.as_inner(), &key)
-                .unwrap();
+            engine.delete_cf(CF_RAFT, &key).unwrap();
         };
 
         let mut region = Region::default();
@@ -1765,7 +1761,7 @@ mod tests {
         enum Expect {
             Keep,
             Remove,
-        };
+        }
         // test check CF_LOCK.
         default.extend(vec![
             // key, start_ts, check
@@ -1908,12 +1904,12 @@ mod tests {
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
-        db.c().write(&wb).unwrap();
+        wb.write().unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
         let mut wb = db.c().write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
-        db.c().write(&wb).unwrap();
+        wb.write().unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -1957,7 +1953,7 @@ mod tests {
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(&wb).unwrap();
+        wb.write().unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(

@@ -10,11 +10,12 @@ use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
 use super::mysql::{
-    self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
-    JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
+    self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
+    JsonDecoder, JsonEncoder, PathExpression, Set, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::Result;
 use crate::codec::convert::{ConvertTo, ToInt};
+use crate::codec::data_type::AsMySQLBool;
 use crate::expr::EvalContext;
 use codec::byte::{CompactByteCodec, MemComparableByteCodec};
 use codec::number::{self, NumberCodec};
@@ -47,6 +48,8 @@ pub enum Datum {
     Dec(Decimal),
     Time(Time),
     Json(Json),
+    Enum(Enum),
+    Set(Set),
     Min,
     Max,
 }
@@ -129,6 +132,8 @@ impl Display for Datum {
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
             Datum::Time(t) => write!(f, "Time({})", t),
             Datum::Json(ref j) => write!(f, "Json({})", j.to_string()),
+            Datum::Enum(ref e) => write!(f, "Enum({})", e.to_string()),
+            Datum::Set(ref s) => write!(f, "Set({})", s.to_string()),
             Datum::Min => write!(f, "MIN"),
             Datum::Max => write!(f, "MAX"),
         }
@@ -192,6 +197,8 @@ impl Datum {
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
+            Datum::Enum(ref e) => self.cmp_enum(ctx, e),
+            Datum::Set(ref s) => self.cmp_set(ctx, s),
         }
     }
 
@@ -235,6 +242,8 @@ impl Datum {
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(t) => cmp_f64(t.convert(ctx)?, f),
             Datum::Json(_) => Ok(Ordering::Less),
+            Datum::Enum(_) => Ok(Ordering::Less),
+            Datum::Set(_) => Ok(Ordering::Less),
         }
     }
 
@@ -255,7 +264,8 @@ impl Datum {
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
-                let d2 = Duration::parse(ctx, bs, MAX_FSP)?;
+                let s = str::from_utf8(bs)?;
+                let d2 = Duration::parse(ctx, s, MAX_FSP)?;
                 Ok(d.cmp(&d2))
             }
             _ => {
@@ -285,7 +295,8 @@ impl Datum {
         match *self {
             Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
-                let d2 = Duration::parse(ctx, bs, MAX_FSP)?;
+                let s = str::from_utf8(bs)?;
+                let d2 = Duration::parse(ctx, s, MAX_FSP)?;
                 Ok(d2.cmp(&d))
             }
             _ => self.cmp_f64(ctx, d.to_secs_f64()),
@@ -331,6 +342,26 @@ impl Datum {
         Ok(order)
     }
 
+    fn cmp_enum(&self, _ctx: &mut EvalContext, v: &Enum) -> Result<Ordering> {
+        let order = match *self {
+            // FIXME: cmp only care about enum value here, should we take data into consideration?
+            Datum::Enum(ref e) => e.cmp(v),
+            _ => unimplemented!(),
+        };
+
+        Ok(order)
+    }
+
+    fn cmp_set(&self, _ctx: &mut EvalContext, v: &Set) -> Result<Ordering> {
+        let order = match *self {
+            // FIXME: cmp only care about set value here, should we take data into consideration?
+            Datum::Set(ref e) => e.cmp(v),
+            _ => unimplemented!(),
+        };
+
+        Ok(order)
+    }
+
     /// `into_bool` converts self to a bool.
     /// source function name is `ToBool`.
     pub fn into_bool(self, ctx: &mut EvalContext) -> Result<Option<bool>> {
@@ -344,6 +375,7 @@ impl Datum {
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Json(j) => Some(j.as_ref().as_mysql_bool(ctx)?),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -361,6 +393,8 @@ impl Datum {
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
             Datum::Json(ref d) => d.to_string(),
+            Datum::Enum(ref e) => e.to_string(),
+            Datum::Set(ref s) => s.to_string(),
             ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)
@@ -431,6 +465,8 @@ impl Datum {
             | Datum::Bytes(_)
             | Datum::Dec(_)
             | Datum::Json(_)
+            | Datum::Enum(_)
+            | Datum::Set(_)
             | Datum::Max
             | Datum::Min
             | Datum::Null => 0,
@@ -969,6 +1005,9 @@ pub trait DatumEncoder:
                     self.write_u8(JSON_FLAG)?;
                     self.write_json(j.as_ref())?;
                 }
+                //TODO: implement datum write here.
+                Datum::Enum(_) => unimplemented!(),
+                Datum::Set(_) => unimplemented!(),
             }
         }
         Ok(())
@@ -1012,6 +1051,9 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
                 Datum::Json(ref d) => d.as_ref().binary_len(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
+                // TODO: implement here after we implement datum write
+                Datum::Enum(_) => unimplemented!(),
+                Datum::Set(_) => unimplemented!(),
             }
         })
         .sum()
@@ -1095,7 +1137,7 @@ pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
             return Err(box_err!(
                 "The {}th slice are missing in the datum buffer: {}",
                 i,
-                hex::encode_upper(origin)
+                log_wrappers::Value::value(origin)
             ));
         }
         let (_, remaining) = split_datum(buf, false)?;
@@ -1762,7 +1804,7 @@ mod tests {
                 Some(true),
             ),
             (
-                Duration::parse(&mut EvalContext::default(), b"11:11:11.999999", MAX_FSP)
+                Duration::parse(&mut EvalContext::default(), "11:11:11.999999", MAX_FSP)
                     .unwrap()
                     .into(),
                 Some(true),
@@ -1772,6 +1814,32 @@ mod tests {
                 Some(false),
             ),
             (Datum::Dec(0u64.into()), Some(false)),
+            // Test Json
+            (Json::from_i64(1).unwrap().into(), Some(true)),
+            (Json::from_i64(0).unwrap().into(), Some(false)),
+            (Json::from_u64(1u64).unwrap().into(), Some(true)),
+            (Json::from_u64(0u64).unwrap().into(), Some(false)),
+            (
+                Json::from_f64(std::f64::consts::PI).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_f64(0.0).unwrap().into(), Some(false)),
+            (
+                Json::from_string("0".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (
+                Json::from_string("aaabbb".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_bool(true).unwrap().into(), Some(true)),
+            (Json::from_bool(false).unwrap().into(), Some(true)),
+            (
+                Json::from_string("".to_string()).unwrap().into(),
+                Some(true),
+            ),
+            (Json::from_array(vec![]).unwrap().into(), Some(true)),
+            (Json::from_kv_pairs(vec![]).unwrap().into(), Some(true)),
         ];
 
         for (d, b) in tests {
@@ -1939,7 +2007,7 @@ mod tests {
                 20121231113045f64,
             ),
             (
-                Datum::Dur(Duration::parse(&mut EvalContext::default(), b"11:30:45", 0).unwrap()),
+                Datum::Dur(Duration::parse(&mut EvalContext::default(), "11:30:45", 0).unwrap()),
                 f64::from(113045),
             ),
             (
@@ -1975,7 +2043,7 @@ mod tests {
             ),
             (
                 Datum::Dur(
-                    Duration::parse(&mut EvalContext::default(), b"11:30:45.999", 0).unwrap(),
+                    Duration::parse(&mut EvalContext::default(), "11:30:45.999", 0).unwrap(),
                 ),
                 113046,
             ),

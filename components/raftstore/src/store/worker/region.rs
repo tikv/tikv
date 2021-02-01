@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
+use engine_traits::{KvEngine, Mutable, WriteBatch};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -27,7 +27,7 @@ use crate::store::{
 use yatp::pool::{Builder, ThreadPool};
 use yatp::task::future::TaskCell;
 
-use tikv_util::timer::Timer;
+use file_system::{IOType, WithIOType};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
@@ -35,7 +35,12 @@ use super::metrics::*;
 const GENERATE_POOL_SIZE: usize = 2;
 
 // used to periodically check whether we should delete a stale peer's range in region runner
-pub const STALE_PEER_CHECK_INTERVAL: u64 = 10_000; // 10000 milliseconds
+
+#[cfg(test)]
+pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
+
+#[cfg(not(test))]
+pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
 
 // used to periodically check whether schedule pending applies in region runner
 pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
@@ -51,6 +56,7 @@ pub enum Task<S> {
         last_applied_state: RaftApplyState,
         kv_snap: S,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     },
     Apply {
         region_id: u64,
@@ -212,12 +218,11 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<EK, ER, R>
+struct SnapContext<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
-    engines: Engines<EK, ER>,
+    engine: EK,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -226,10 +231,9 @@ where
     router: R,
 }
 
-impl<EK, ER, R> SnapContext<EK, ER, R>
+impl<EK, R> SnapContext<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -240,15 +244,17 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
-            &self.engines.kv,
+            &self.engine,
             kv_snap,
             region_id,
             last_applied_index_term,
             last_applied_state,
+            for_balance,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -275,9 +281,15 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
     ) {
         SNAP_COUNTER.generate.all.inc();
         let start = tikv_util::time::Instant::now();
+        let _io_type_guard = WithIOType::new(if for_balance {
+            IOType::LoadBalance
+        } else {
+            IOType::Replication
+        });
 
         if let Err(e) = self.generate_snap(
             region_id,
@@ -285,6 +297,7 @@ where
             last_applied_state,
             kv_snap,
             notifier,
+            for_balance,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
@@ -301,7 +314,7 @@ where
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -323,7 +336,7 @@ where
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -346,7 +359,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engines.kv.clone(),
+            db: self.engine.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -354,11 +367,11 @@ where
         };
         s.apply(options)?;
 
-        let mut wb = self.engines.kv.write_batch();
+        let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(&wb).unwrap_or_else(|e| {
+        wb.write().unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -371,7 +384,12 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
+        let _ = status.compare_exchange(
+            JOB_STATUS_PENDING,
+            JOB_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
         SNAP_COUNTER.apply.all.inc();
         // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
         // let timer = apply_histogram.start_coarse_timer();
@@ -402,15 +420,13 @@ where
 
     /// Cleans up the data within the range.
     fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         self.delete_all_in_range(ranges)?;
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -427,8 +443,7 @@ where
             return Ok(());
         }
         let oldest_sequence = self
-            .engines
-            .kv
+            .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut ranges = Vec::with_capacity(overlap_ranges.len());
@@ -448,8 +463,7 @@ where
                   "end_key" => log_wrappers::Value::key(end_key));
             ranges.push(Range::new(start_key, end_key));
         }
-        self.engines
-            .kv
+        self.engine
             .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -475,7 +489,7 @@ where
             );
         }
 
-        let seq = self.engines.kv.get_latest_sequence_number();
+        let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
     }
@@ -485,8 +499,7 @@ where
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
         let oldest_sequence = self
-            .engines
-            .kv
+            .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut cleanup_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -528,12 +541,7 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self
-                .engines
-                .kv
-                .ingest_maybe_slowdown_writes(cf)
-                .expect("cf")
-            {
+            if self.engine.ingest_maybe_slowdown_writes(cf).expect("cf") {
                 return true;
             }
         }
@@ -541,7 +549,7 @@ where
     }
 
     fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
-        for cf in self.engines.kv.cf_names() {
+        for cf in self.engine.cf_names() {
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
@@ -551,45 +559,45 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engines.kv.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
         }
 
         Ok(())
     }
 }
 
-pub struct Runner<EK, ER, R>
+pub struct Runner<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<EK, ER, R>,
+    ctx: SnapContext<EK, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
+    clean_stale_tick: usize,
+    clean_stale_check_interval: Duration,
 }
 
-impl<EK, ER, R> Runner<EK, ER, R>
+impl<EK, R> Runner<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     pub fn new(
-        engines: Engines<EK, ER>,
+        engine: EK,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-    ) -> Runner<EK, ER, R> {
+    ) -> Runner<EK, R> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(GENERATE_POOL_SIZE)
                 .build_future_pool(),
             ctx: SnapContext {
-                engines,
+                engine,
                 mgr,
                 batch_size,
                 use_delete_range,
@@ -598,20 +606,9 @@ where
                 router,
             },
             pending_applies: VecDeque::new(),
+            clean_stale_tick: 0,
+            clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
         }
-    }
-
-    pub fn new_timer(&self) -> Timer<Event> {
-        let mut timer = Timer::new(2);
-        timer.add_task(
-            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            Event::CheckApply,
-        );
-        timer.add_task(
-            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Event::CheckStalePeer,
-        );
-        timer
     }
 
     /// Tries to apply pending tasks if there is some.
@@ -630,10 +627,9 @@ where
     }
 }
 
-impl<EK, ER, R> Runnable for Runner<EK, ER, R>
+impl<EK, R> Runnable for Runner<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
     type Task = Task<EK::Snapshot>;
@@ -646,6 +642,7 @@ where
                 last_applied_state,
                 kv_snap,
                 notifier,
+                for_balance,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
@@ -659,6 +656,7 @@ where
                         last_applied_state,
                         kv_snap,
                         notifier,
+                        for_balance,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
                 });
@@ -697,37 +695,22 @@ where
     }
 }
 
-/// Region related timeout event
-pub enum Event {
-    CheckStalePeer,
-    CheckApply,
-}
-
-impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
+impl<EK, R> RunnableWithTimer for Runner<EK, R>
 where
     EK: KvEngine,
-    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    type TimeoutTask = Event;
-
-    fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
-        match event {
-            Event::CheckApply => {
-                self.handle_pending_applies();
-                timer.add_task(
-                    Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-                    Event::CheckApply,
-                );
-            }
-            Event::CheckStalePeer => {
-                self.ctx.clean_stale_ranges();
-                timer.add_task(
-                    Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-                    Event::CheckStalePeer,
-                );
-            }
+    fn on_timeout(&mut self) {
+        self.handle_pending_applies();
+        self.clean_stale_tick += 1;
+        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
+            self.ctx.clean_stale_ranges();
+            self.clean_stale_tick = 0;
         }
+    }
+
+    fn get_interval(&self) -> Duration {
+        self.clean_stale_check_interval
     }
 }
 
@@ -744,20 +727,19 @@ mod tests {
     use crate::store::snap::tests::get_test_db_for_regions;
     use crate::store::worker::RegionRunner;
     use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine_rocks::raw::ColumnFamilyOptions;
-    use engine_rocks::RocksEngine;
+    use engine_test::ctor::CFOptions;
+    use engine_test::ctor::ColumnFamilyOptions;
+    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
+    use engine_traits::KvEngine;
     use engine_traits::{
-        CFHandleExt, CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatchExt,
+        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
     };
-    use engine_traits::{Engines, KvEngine};
     use engine_traits::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
     use raft::eraftpb::Entry;
     use tempfile::Builder;
-    use tikv_util::timer::Timer;
-    use tikv_util::worker::Worker;
+    use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::Event;
     use super::PendingDeleteRanges;
     use super::Task;
 
@@ -848,18 +830,20 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("region-worker");
+        let bg_worker = Worker::new("region-worker");
+        let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let (router, _) = mpsc::sync_channel(11);
-        let runner = RegionRunner::new(
-            engines,
+        let mut runner = RegionRunner::new(
+            engine.kv.clone(),
             mgr,
             0,
             false,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
+        runner.clean_stale_check_interval = Duration::from_millis(100);
+
         let mut ranges = vec![];
         for i in 0..10 {
             let mut key = b"k0".to_vec();
@@ -887,9 +871,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
-        worker.start_with_timer(runner, timer).unwrap();
+        worker.start_with_timer(runner);
         thread::sleep(Duration::from_millis(20));
         drop(snap);
         thread::sleep(Duration::from_millis(200));
@@ -911,12 +893,12 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            engine_rocks::raw_util::CFOptions::new("default", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("write", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("lock", cf_opts.clone()),
-            engine_rocks::raw_util::CFOptions::new("raft", cf_opts.clone()),
+            CFOptions::new("default", cf_opts.clone()),
+            CFOptions::new("write", cf_opts.clone()),
+            CFOptions::new("lock", cf_opts.clone()),
+            CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = engine_rocks::raw_util::CFOptions::new(CF_DEFAULT, cf_opts);
+        let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -929,51 +911,47 @@ mod tests {
 
         for cf_name in engine.kv.cf_names() {
             for i in 0..6 {
-                let cf = engine.kv.cf_handle(cf_name).unwrap();
                 engine.kv.put_cf(cf_name, &[i], &[i]).unwrap();
                 engine.kv.put_cf(cf_name, &[i + 1], &[i + 1]).unwrap();
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    engine_rocks::util::get_cf_num_files_at_level(
-                        &engine.kv.as_inner(),
-                        cf.as_inner(),
-                        0
-                    )
-                    .unwrap(),
+                    engine
+                        .kv
+                        .get_cf_num_files_at_level(cf_name, 0)
+                        .unwrap()
+                        .unwrap(),
                     u64::from(i) + 1
                 );
             }
         }
 
-        let engines = Engines::new(engine.kv.clone(), engine.raft.clone());
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        let mut worker = Worker::new("snap-manager");
+        let bg_worker = Worker::new("snap-manager");
+        let mut worker = bg_worker.lazy_build("snapshot-worker");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engines.clone(),
+            engine.kv.clone(),
             mgr,
             0,
             true,
-            CoprocessorHost::<RocksEngine>::default(),
+            CoprocessorHost::<KvTestEngine>::default(),
             router,
         );
-        let mut timer = Timer::new(1);
-        timer.add_task(Duration::from_millis(100), Event::CheckApply);
-        worker.start_with_timer(runner, timer).unwrap();
+        worker.start_with_timer(runner);
 
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot
             let (tx, rx) = mpsc::sync_channel(1);
-            let apply_state: RaftApplyState = engines
+            let apply_state: RaftApplyState = engine
                 .kv
                 .get_msg_cf(CF_RAFT, &keys::apply_state_key(id))
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
-            let entry = engines
+            let entry = engine
                 .raft
                 .get_msg::<Entry>(&keys::raft_log_key(id, idx))
                 .unwrap()
@@ -981,10 +959,11 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: engines.kv.snapshot(),
+                    kv_snap: engine.kv.snapshot(),
                     last_applied_index_term: entry.get_term(),
                     last_applied_state: apply_state,
                     notifier: tx,
+                    for_balance: false,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
@@ -1012,7 +991,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(CF_RAFT, &region_key, &region_state).unwrap();
-            engine.kv.write(&wb).unwrap();
+            wb.write().unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
@@ -1039,19 +1018,26 @@ mod tests {
                 }
             }
         };
-        let cf = engine.kv.cf_handle(CF_DEFAULT).unwrap().as_inner();
 
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             6
         );
 
         // compact all files to the bottomest level
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
 
@@ -1061,7 +1047,11 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             2
         );
 
@@ -1069,31 +1059,51 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // compact all files to the bottomest level
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
 
@@ -1103,21 +1113,33 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             4
         );
 
         // make sure have checked pending applies
         engine.kv.compact_files_in_range(None, None, None).unwrap();
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            engine_rocks::util::get_cf_num_files_at_level(engine.kv.as_inner(), cf, 0).unwrap(),
+            engine
+                .kv
+                .get_cf_num_files_at_level(CF_DEFAULT, 0)
+                .unwrap()
+                .unwrap(),
             2
         );
     }

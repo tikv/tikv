@@ -4,7 +4,9 @@ mod backward;
 mod forward;
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::DATA_PREFIX_KEY;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, TsSet, Value, Write, WriteRef, WriteType};
 
 use self::backward::BackwardKvScanner;
@@ -353,23 +355,50 @@ pub fn has_data_in_range<S: Snapshot>(
     right: &Key,
     statistic: &mut CfStatistics,
 ) -> Result<bool> {
-    let iter_opt = IterOptions::new(None, None, true);
+    let iter_opt = IterOptions::new(
+        None,
+        Some(KeyBuilder::from_slice(
+            right.as_encoded(),
+            DATA_PREFIX_KEY.len(),
+            0,
+        )),
+        true,
+    )
+    .set_max_skippable_internal_keys(100);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
-    if iter.seek(left, statistic)? {
-        if iter.key(statistic) < right.as_encoded().as_slice() {
+    match iter.seek(left, statistic) {
+        Ok(valid) => {
+            if valid && iter.key(statistic) < right.as_encoded().as_slice() {
+                return Ok(true);
+            }
+        }
+        Err(e)
+            if e.to_string()
+                .contains("Result incomplete: Too many internal keys skipped") =>
+        {
             return Ok(true);
+        }
+        err @ Err(_) => {
+            err?;
         }
     }
     Ok(false)
 }
 
 /// Seek for the next valid (write type == Put or Delete) write record.
-/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record.
+///
+/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
+/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
+/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
+/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
+/// will be left remain on it.
 pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
+    gc_fence_limit: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Option<Write>>
 where
@@ -382,13 +411,16 @@ where
             user_key.as_encoded(),
         )
     {
-        assert_ge!(
-            after_ts,
-            Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
-        );
         let write_ref = WriteRef::parse(write_cursor.value(&mut statistics.write))?;
+        if !write_ref.check_gc_fence_as_latest_version(gc_fence_limit) {
+            break;
+        }
         match write_ref.write_type {
             WriteType::Put | WriteType::Delete => {
+                assert_ge!(
+                    after_ts,
+                    Key::decode_ts_from(write_cursor.key(&mut statistics.write))?
+                );
                 ret = Some(write_ref.to_owned());
                 break;
             }
@@ -402,19 +434,28 @@ where
 }
 
 /// Seek for the last written value.
-/// The write cursor must indicate a data key of the user key of which ts >= after_ts.
+/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
 /// Return None if cannot find any valid write record or found a delete record.
+///
+/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
+/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
+/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
+/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
+/// will be left remain on it.
 pub fn seek_for_valid_value<I>(
     write_cursor: &mut Cursor<I>,
     default_cursor: &mut Cursor<I>,
     user_key: &Key,
     after_ts: TimeStamp,
+    gc_fence_limit: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Option<Value>>
 where
     I: Iterator,
 {
-    if let Some(write) = seek_for_valid_write(write_cursor, user_key, after_ts, statistics)? {
+    if let Some(write) =
+        seek_for_valid_write(write_cursor, user_key, after_ts, gc_fence_limit, statistics)?
+    {
         if write.write_type == WriteType::Put {
             let value = if let Some(v) = write.short_value {
                 v
@@ -436,7 +477,6 @@ mod tests {
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::tests::*;
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-    use kvproto::kvrpcpb::Context;
 
     // Collect data from the scanner and assert it equals to `expected`, which is a collection of
     // (raw_key, value).
@@ -478,7 +518,7 @@ mod tests {
 
         let test_scanner_result =
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
-                let snapshot = engine.snapshot(&Context::default()).unwrap();
+                let snapshot = engine.snapshot(Default::default()).unwrap();
 
                 let scanner = ScannerBuilder::new(snapshot, SCAN_TS, desc)
                     .build()
@@ -558,7 +598,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
         must_prewrite_put(&engine, &[4], b"a", &[4], 105);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut expected_result = vec![
             (vec![0], Some(vec![b'v', 0])),
@@ -639,7 +679,7 @@ mod tests {
             expected_result = expected_result.into_iter().rev().collect();
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let scanner = ScannerBuilder::new(snapshot, 65.into(), desc)
             .bypass_locks(bypass_locks)
             .build()
@@ -662,7 +702,7 @@ mod tests {
         expected_met_newer_ts_data: bool,
     ) {
         let mut scanner = ScannerBuilder::new(
-            engine.snapshot(&Context::default()).unwrap(),
+            engine.snapshot(Default::default()).unwrap(),
             scanner_ts.into(),
             desc,
         )

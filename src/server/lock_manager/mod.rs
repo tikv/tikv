@@ -12,7 +12,7 @@ pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -26,11 +26,12 @@ use crate::storage::{
 };
 use raftstore::coprocessor::CoprocessorHost;
 
+use collections::HashSet;
+use crossbeam::utils::CachePadded;
 use engine_rocks::RocksEngine;
 use parking_lot::Mutex;
 use pd_client::PdClient;
 use security::SecurityManager;
-use tikv_util::collections::HashSet;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
 
@@ -56,7 +57,9 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<Vec<Mutex<HashSet<TimeStamp>>>>,
+    detected: Arc<[CachePadded<Mutex<HashSet<TimeStamp>>>]>,
+
+    pipelined: Arc<AtomicBool>,
 }
 
 impl Clone for LockManager {
@@ -68,16 +71,17 @@ impl Clone for LockManager {
             detector_scheduler: self.detector_scheduler.clone(),
             waiter_count: self.waiter_count.clone(),
             detected: self.detected.clone(),
+            pipelined: self.pipelined.clone(),
         }
     }
 }
 
 impl LockManager {
-    pub fn new() -> Self {
+    pub fn new(pipelined: bool) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
         let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
-        detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()));
+        detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()).into());
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
@@ -85,7 +89,8 @@ impl LockManager {
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            detected: Arc::new(detected),
+            detected: detected.into(),
+            pipelined: Arc::new(AtomicBool::new(pipelined)),
         }
     }
 
@@ -189,11 +194,10 @@ impl LockManager {
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
-    pub fn deadlock_service(&self, security_mgr: Arc<SecurityManager>) -> DeadlockService {
+    pub fn deadlock_service(&self) -> DeadlockService {
         DeadlockService::new(
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
-            security_mgr,
         )
     }
 
@@ -201,7 +205,12 @@ impl LockManager {
         LockManagerConfigManager::new(
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
+            self.pipelined.clone(),
         )
+    }
+
+    pub fn get_pipelined(&self) -> Arc<AtomicBool> {
+        self.pipelined.clone()
     }
 
     fn add_to_detected(&self, txn_ts: TimeStamp) {
@@ -291,10 +300,13 @@ mod tests {
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::default();
 
-        let mut lock_mgr = LockManager::new();
-        let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = ReadableDuration::millis(3000);
-        cfg.wake_up_delay_duration = ReadableDuration::millis(100);
+        let mut lock_mgr = LockManager::new(false);
+        let cfg = Config {
+            wait_for_lock_timeout: ReadableDuration::millis(3000),
+            wake_up_delay_duration: ReadableDuration::millis(100),
+            ..Default::default()
+        };
+
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(
@@ -460,7 +472,7 @@ mod tests {
 
     #[bench]
     fn bench_lock_mgr_clone(b: &mut test::Bencher) {
-        let lock_mgr = LockManager::new();
+        let lock_mgr = LockManager::new(false);
         b.iter(|| {
             test::black_box(lock_mgr.clone());
         });

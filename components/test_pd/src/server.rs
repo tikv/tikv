@@ -278,7 +278,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 }
             });
             let mut sink = sink.sink_map_err(PdError::from);
-            sink.send_all(&mut stream).await.unwrap();
+            let _ = sink.send_all(&mut stream).await;
             let _ = sink.close().await;
         });
     }
@@ -425,5 +425,32 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
         unimplemented!()
+    }
+
+    fn sync_max_ts(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: SyncMaxTsRequest,
+        _sink: UnarySink<SyncMaxTsResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn split_regions(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::SplitRegionsRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::SplitRegionsResponse>,
+    ) {
+        todo!()
+    }
+
+    fn get_dc_location_info(
+        &mut self,
+        _: grpcio::RpcContext<'_>,
+        _: kvproto::pdpb::GetDcLocationInfoRequest,
+        _: grpcio::UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
+    ) {
+        todo!()
     }
 }

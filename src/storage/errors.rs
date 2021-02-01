@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Types for storage related errors and associated helper methods.
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
@@ -16,6 +17,8 @@ use txn_types::{KvPair, TimeStamp};
 
 quick_error! {
     #[derive(Debug)]
+    /// Detailed errors for storage operations. This enum also unifies code for basic error
+    /// handling functionality in a single place instead of being spread out.
     pub enum ErrorInner {
         Engine(err: kv::Error) {
             from()
@@ -60,6 +63,7 @@ quick_error! {
     }
 }
 
+/// Errors for storage module. Wrapper type of `ErrorInner`.
 pub struct Error(pub Box<ErrorInner>);
 
 impl fmt::Debug for Error {
@@ -112,6 +116,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
+/// Tags of errors for storage module.
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
@@ -151,6 +156,8 @@ impl Display for ErrorHeaderKind {
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
+/// Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader
@@ -173,6 +180,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     }
 }
 
+/// Get the metric tag of the error in the protobuf message.
+/// Returns "other" if no match found.
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
 }
@@ -234,7 +243,13 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
         )))))
-        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))) => {
+        | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            box EngineErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
+        )))))
+        | Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))
+        | Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        ))))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
@@ -310,6 +325,13 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
             key_error.set_commit_ts_expired(commit_ts_expired);
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::CommitTsTooLarge { min_commit_ts, .. },
+        ))))) => {
+            let mut commit_ts_too_large = kvrpcpb::CommitTsTooLarge::default();
+            commit_ts_too_large.set_commit_ts(min_commit_ts.into_inner());
+            key_error.set_commit_ts_too_large(commit_ts_too_large);
+        }
         _ => {
             error!(?err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
@@ -320,28 +342,31 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
 
 pub fn extract_kv_pairs(res: Result<Vec<Result<KvPair>>>) -> Vec<kvrpcpb::KvPair> {
     match res {
-        Ok(res) => res
-            .into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = kvrpcpb::KvPair::default();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = kvrpcpb::KvPair::default();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
+        Ok(res) => map_kv_pairs(res),
         Err(e) => {
             let mut pair = kvrpcpb::KvPair::default();
             pair.set_error(extract_key_error(&e));
             vec![pair]
         }
     }
+}
+
+pub fn map_kv_pairs(r: Vec<Result<KvPair>>) -> Vec<kvrpcpb::KvPair> {
+    r.into_iter()
+        .map(|r| match r {
+            Ok((key, value)) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_key(key);
+                pair.set_value(value);
+                pair
+            }
+            Err(e) => {
+                let mut pair = kvrpcpb::KvPair::default();
+                pair.set_error(extract_key_error(&e));
+                pair
+            }
+        })
+        .collect()
 }
 
 pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError> {

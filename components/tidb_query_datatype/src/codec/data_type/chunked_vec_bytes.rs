@@ -21,36 +21,6 @@ pub struct ChunkedVecBytes {
 /// Otherwise, contents of the `Bytes` are stored, and `var_offset` indicates the starting
 /// position of each element.
 impl ChunkedVecBytes {
-    impl_chunked_vec_common! { Bytes }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            data: Vec::with_capacity(capacity),
-            bitmap: BitVec::with_capacity(capacity),
-            var_offset: vec![0],
-            length: 0,
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<Option<Bytes>> {
-        let mut x = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            x.push(self.get(i).map(|x| x.to_owned()));
-        }
-        x
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    #[inline]
-    pub fn push_data(&mut self, mut value: Bytes) {
-        self.bitmap.push(true);
-        self.data.append(&mut value);
-        self.finish_append();
-    }
-
     #[inline]
     pub fn push_data_ref(&mut self, value: BytesRef) {
         self.bitmap.push(true);
@@ -65,12 +35,6 @@ impl ChunkedVecBytes {
     }
 
     #[inline]
-    pub fn push_null(&mut self) {
-        self.bitmap.push(false);
-        self.finish_append();
-    }
-
-    #[inline]
     pub fn push_ref(&mut self, value: Option<BytesRef>) {
         if let Some(x) = value {
             self.push_data_ref(x);
@@ -78,32 +42,6 @@ impl ChunkedVecBytes {
             self.push_null();
         }
     }
-
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len() {
-            self.data.truncate(self.var_offset[len]);
-            self.bitmap.truncate(len);
-            self.var_offset.truncate(len + 1);
-            self.length = len;
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.data.capacity().max(self.length)
-    }
-
-    pub fn append(&mut self, other: &mut Self) {
-        self.data.append(&mut other.data);
-        self.bitmap.append(&mut other.bitmap);
-        let var_offset_last = *self.var_offset.last().unwrap();
-        for i in 1..other.var_offset.len() {
-            self.var_offset.push(other.var_offset[i] + var_offset_last);
-        }
-        self.length += other.length;
-        other.var_offset = vec![0];
-        other.length = 0;
-    }
-
     #[inline]
     pub fn get(&self, idx: usize) -> Option<BytesRef> {
         assert!(idx < self.len());
@@ -116,6 +54,69 @@ impl ChunkedVecBytes {
 
     pub fn into_writer(self) -> BytesWriter {
         BytesWriter { chunked_vec: self }
+    }
+}
+
+impl ChunkedVec<Bytes> for ChunkedVecBytes {
+    impl_chunked_vec_common! { Bytes }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+            bitmap: BitVec::with_capacity(capacity),
+            var_offset: vec![0],
+            length: 0,
+        }
+    }
+
+    #[inline]
+    fn push_data(&mut self, mut value: Bytes) {
+        self.bitmap.push(true);
+        self.data.append(&mut value);
+        self.finish_append();
+    }
+
+    #[inline]
+    fn push_null(&mut self) {
+        self.bitmap.push(false);
+        self.finish_append();
+    }
+
+    fn len(&self) -> usize {
+        self.length
+    }
+
+    fn truncate(&mut self, len: usize) {
+        if len < self.len() {
+            self.data.truncate(self.var_offset[len]);
+            self.bitmap.truncate(len);
+            self.var_offset.truncate(len + 1);
+            self.length = len;
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.data.capacity().max(self.length)
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.data.append(&mut other.data);
+        self.bitmap.append(&mut other.bitmap);
+        let var_offset_last = *self.var_offset.last().unwrap();
+        for i in 1..other.var_offset.len() {
+            self.var_offset.push(other.var_offset[i] + var_offset_last);
+        }
+        self.length += other.length;
+        other.var_offset = vec![0];
+        other.length = 0;
+    }
+
+    fn to_vec(&self) -> Vec<Option<Bytes>> {
+        let mut x = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            x.push(self.get(i).map(|x| x.to_owned()));
+        }
+        x
     }
 }
 
@@ -173,17 +174,6 @@ impl<'a> PartialBytesWriter {
     }
 }
 
-impl ChunkedVec<Bytes> for ChunkedVecBytes {
-    fn chunked_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(capacity)
-    }
-
-    #[inline]
-    fn chunked_push(&mut self, value: Option<Bytes>) {
-        self.push(value)
-    }
-}
-
 impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
     #[inline]
     fn get_option_ref(self, idx: usize) -> Option<BytesRef<'a>> {
@@ -200,9 +190,9 @@ impl<'a> ChunkRef<'a, BytesRef<'a>> for &'a ChunkedVecBytes {
     }
 }
 
-impl Into<ChunkedVecBytes> for Vec<Option<Bytes>> {
-    fn into(self) -> ChunkedVecBytes {
-        ChunkedVecBytes::from_vec(self)
+impl From<Vec<Option<Bytes>>> for ChunkedVecBytes {
+    fn from(v: Vec<Option<Bytes>>) -> ChunkedVecBytes {
+        ChunkedVecBytes::from_vec(v)
     }
 }
 
@@ -349,25 +339,25 @@ mod tests {
             None,
         ];
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = writer.write(test_bytes[i].to_owned());
+            let guard = writer.write(test_byte.to_owned());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
 
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = writer.write(test_bytes[i].clone());
+            let guard = writer.write(test_byte.clone());
             chunked_vec = guard.into_inner();
         }
         assert_eq!(chunked_vec.to_vec(), test_bytes);
 
         let mut chunked_vec = ChunkedVecBytes::with_capacity(0);
-        for i in 0..test_bytes.len() {
+        for test_byte in test_bytes {
             let writer = chunked_vec.into_writer();
-            let guard = match test_bytes[i].clone() {
+            let guard = match test_byte.clone() {
                 Some(x) => {
                     let mut writer = writer.begin();
                     writer.partial_write(x.as_slice());

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
+use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -19,7 +20,6 @@ use raftstore::store::{
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
 
@@ -79,10 +79,24 @@ impl Filter for MessageTypeNotifier {
     }
 
     fn after(&self, _: Result<()>) -> Result<()> {
-        while self.pending_notify.load(Ordering::SeqCst) > 0 {
-            debug!("notify {:?}", self.message_type);
-            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            let _ = self.notifier.lock().unwrap().send(());
+        let mut n = self.pending_notify.load(Ordering::SeqCst);
+        loop {
+            if n == 0 {
+                break;
+            }
+
+            match self.pending_notify.compare_exchange_weak(
+                n,
+                n - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    let _ = self.notifier.lock().unwrap().send(());
+                    n -= 1;
+                }
+                Err(v) => n = v,
+            }
         }
         Ok(())
     }
@@ -184,6 +198,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
+    }
+
+    fn need_flush(&self) -> bool {
+        self.ch.need_flush()
     }
 
     fn flush(&mut self) {
@@ -374,7 +392,10 @@ impl Filter for RegionPacketFilter {
                         if left == 0 {
                             break false;
                         }
-                        if count.compare_and_swap(left, left - 1, Ordering::SeqCst) == left {
+                        if count
+                            .compare_exchange(left, left - 1, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                        {
                             break true;
                         }
                     },
@@ -517,8 +538,12 @@ impl Filter for CollectSnapshotFilter {
                 }
             };
             if is_pending {
-                self.dropped
-                    .compare_and_swap(false, true, Ordering::Relaxed);
+                let _ = self.dropped.compare_exchange(
+                    false,
+                    true,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
                 pending_msg.insert(from_peer_id, msg);
                 let sender = self.pending_count_sender.lock().unwrap();
                 sender.send(pending_msg.len()).unwrap();
@@ -528,10 +553,13 @@ impl Filter for CollectSnapshotFilter {
         }
         // Deliver those pending snapshots if there are more than 1.
         if pending_msg.len() > 1 {
-            self.dropped
-                .compare_and_swap(true, false, Ordering::Relaxed);
+            let _ =
+                self.dropped
+                    .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed);
             msgs.extend(pending_msg.drain().map(|(_, v)| v));
-            self.stale.compare_and_swap(false, true, Ordering::Relaxed);
+            let _ = self
+                .stale
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed);
         }
         msgs.extend(to_send);
         check_messages(msgs)
@@ -539,8 +567,9 @@ impl Filter for CollectSnapshotFilter {
 
     fn after(&self, res: Result<()>) -> Result<()> {
         if res.is_err() && self.dropped.load(Ordering::Relaxed) {
-            self.dropped
-                .compare_and_swap(true, false, Ordering::Relaxed);
+            let _ =
+                self.dropped
+                    .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed);
             Ok(())
         } else {
             res
@@ -704,7 +733,8 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
     fn after(&self, res: Result<()>) -> Result<()> {
         let dropped = self
             .dropped
-            .compare_and_swap(true, false, Ordering::Relaxed);
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok();
         if res.is_err() && dropped {
             Ok(())
         } else {

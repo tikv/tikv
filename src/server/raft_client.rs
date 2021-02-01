@@ -3,6 +3,7 @@
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
+use collections::{HashMap, HashSet};
 use crossbeam::queue::{ArrayQueue, PushError};
 use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
@@ -27,7 +28,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem, result};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -800,25 +800,27 @@ where
         let (s, pool_len) = {
             let mut pool = self.pool.lock().unwrap();
             if pool.tombstone_stores.contains(&store_id) {
+                let pool_len = pool.connections.len();
+                drop(pool);
+                self.cache.resize(pool_len);
                 return false;
             }
-            (
-                pool.connections
-                    .entry((store_id, conn_id))
-                    .or_insert_with(|| {
-                        let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
-                        let back_end = StreamBackEnd {
-                            store_id,
-                            queue: queue.clone(),
-                            builder: self.builder.clone(),
-                        };
-                        self.future_pool
-                            .spawn(start(back_end, conn_id, self.pool.clone()));
-                        queue
-                    })
-                    .clone(),
-                pool.connections.len(),
-            )
+            let conn = pool
+                .connections
+                .entry((store_id, conn_id))
+                .or_insert_with(|| {
+                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let back_end = StreamBackEnd {
+                        store_id,
+                        queue: queue.clone(),
+                        builder: self.builder.clone(),
+                    };
+                    self.future_pool
+                        .spawn(start(back_end, conn_id, self.pool.clone()));
+                    queue
+                })
+                .clone();
+            (conn, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(
@@ -885,6 +887,10 @@ where
         }
         self.cache.remove(&(store_id, conn_id));
         Err(DiscardReason::Disconnected)
+    }
+
+    pub fn need_flush(&self) -> bool {
+        !self.need_flush.is_empty()
     }
 
     /// Flushes all buffered messages.

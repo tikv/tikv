@@ -214,18 +214,13 @@ mod tests {
     use super::super::size::tests::must_split_at;
     use crate::coprocessor::{Config, CoprocessorHost};
     use crate::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use engine_rocks::properties::{
-        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-    };
-    use engine_rocks::raw::DB;
-    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions, Writable};
-    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
-    use engine_rocks::Compat;
+    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_traits::{KvEngine, MiscExt, SyncMutable};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
-    use std::sync::{mpsc, Arc};
+    use std::sync::mpsc;
     use std::u64;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
@@ -233,9 +228,7 @@ mod tests {
 
     use super::*;
 
-    fn put_data(engine: &DB, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
-        let write_cf = engine.cf_handle(CF_WRITE).unwrap();
-        let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
+    fn put_data(engine: &impl KvEngine, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
         let write_value = if fill_short_value {
             Write::new(
                 WriteType::Put,
@@ -256,12 +249,12 @@ mod tests {
                         .append_ts(2.into())
                         .as_encoded(),
                 );
-                engine.put_cf(write_cf, &key, &write_value).unwrap();
-                engine.put_cf(default_cf, &key, &[0; 1024]).unwrap();
+                engine.put_cf(CF_WRITE, &key, &write_value).unwrap();
+                engine.put_cf(CF_DEFAULT, &key, &[0; 1024]).unwrap();
             }
             // Flush to generate SST files, so that properties can be utilized.
-            engine.flush_cf(write_cf, true).unwrap();
-            engine.flush_cf(default_cf, true).unwrap();
+            engine.flush_cf(CF_WRITE, true).unwrap();
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
             start_idx = batch_idx;
         }
     }
@@ -271,15 +264,12 @@ mod tests {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-
+        let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -290,17 +280,15 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut cfg = Config::default();
-        cfg.region_max_keys = 100;
-        cfg.region_split_keys = 80;
-        cfg.batch_split_limit = 5;
+        let cfg = Config {
+            region_max_keys: 100,
+            region_split_keys: 80,
+            batch_split_limit: 5,
+            ..Default::default()
+        };
 
-        let mut runnable = SplitCheckRunner::new(
-            engine.c().clone(),
-            tx.clone(),
-            CoprocessorHost::new(tx),
-            cfg,
-        );
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
@@ -379,14 +367,11 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
@@ -398,19 +383,17 @@ mod tests {
             let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
                 .as_ref()
                 .to_bytes();
-            let write_cf = db.cf_handle(CF_WRITE).unwrap();
-            db.put_cf(write_cf, &key, &write_v).unwrap();
-            db.flush_cf(write_cf, true).unwrap();
+            db.put_cf(CF_WRITE, &key, &write_v).unwrap();
+            db.flush_cf(CF_WRITE, true).unwrap();
 
             let default_v = vec![0; vlen as usize];
-            let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-            db.put_cf(default_cf, &key, &default_v).unwrap();
-            db.flush_cf(default_cf, true).unwrap();
+            db.put_cf(CF_DEFAULT, &key, &default_v).unwrap();
+            db.flush_cf(CF_DEFAULT, true).unwrap();
         }
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
+        let range_keys = get_region_approximate_keys(&db, &region, 0).unwrap();
         assert_eq!(range_keys, cases.len() as u64);
     }
 
@@ -424,19 +407,12 @@ mod tests {
         let db_opts = DBOptions::new();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         let cfs_opts = LARGE_CFS
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let db =
-            Arc::new(engine_rocks::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
-        let write_cf = db.cf_handle(CF_WRITE).unwrap();
-        let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
         // size >= 4194304 will insert a new point in range properties
         // 3 points will be inserted into range properties
         let cases = [("a", 4194304), ("b", 4194304), ("c", 4194304)];
@@ -449,14 +425,14 @@ mod tests {
             let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
                 .as_ref()
                 .to_bytes();
-            db.put_cf(write_cf, &key, &write_v).unwrap();
+            db.put_cf(CF_WRITE, &key, &write_v).unwrap();
 
             let default_v = vec![0; vlen as usize];
-            db.put_cf(default_cf, &key, &default_v).unwrap();
+            db.put_cf(CF_DEFAULT, &key, &default_v).unwrap();
         }
         // only flush once, so that mvcc properties will insert one point only
-        db.flush_cf(write_cf, true).unwrap();
-        db.flush_cf(default_cf, true).unwrap();
+        db.flush_cf(CF_WRITE, true).unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
 
         // range properties get 0, mvcc properties get 3
         let mut region = Region::default();
@@ -464,13 +440,13 @@ mod tests {
         region.set_start_key(b"b1".to_vec());
         region.set_end_key(b"b2".to_vec());
         region.mut_peers().push(Peer::default());
-        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
+        let range_keys = get_region_approximate_keys(&db, &region, 0).unwrap();
         assert_eq!(range_keys, 0);
 
         // range properties get 1, mvcc properties get 3
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"c".to_vec());
-        let range_keys = get_region_approximate_keys(db.c(), &region, 0).unwrap();
+        let range_keys = get_region_approximate_keys(&db, &region, 0).unwrap();
         assert_eq!(range_keys, 1);
     }
 }

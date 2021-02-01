@@ -100,13 +100,23 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                         resp.set_region_error(err);
                     } else {
                         match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
+                            Ok((val, statistics, perf_statistics_delta)) => {
+                                let scan_detail_v2 =
+                                    resp.mut_exec_details_v2().mut_scan_detail_v2();
+                                statistics.write_scan_detail(scan_detail_v2);
+                                perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                                match val {
+                                    Some(val) => resp.set_value(val),
+                                    None => resp.set_not_found(true),
+                                }
+                            }
                             Err(e) => resp.set_error(extract_key_error(&e)),
                         }
                     }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    let res = batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                        ..Default::default()
+                    };
                     if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
@@ -119,8 +129,10 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                 } else if let Err(e) = e {
                     resp.set_error(extract_key_error(&e));
                 }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                let res = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
+                    ..Default::default()
+                };
                 for req in requests {
                     if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
@@ -160,8 +172,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                             Err(e) => resp.set_error(format!("{}", e)),
                         }
                     }
-                    let mut res = batch_commands_response::Response::default();
-                    res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                    let res = batch_commands_response::Response {
+                        cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
+                        ..Default::default()
+                    };
                     if tx.send_and_notify((req, res)).is_err() {
                         error!("KvService response batch commands fail");
                     }
@@ -174,8 +188,10 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager>(
                 } else if let Err(e) = e {
                     resp.set_error(format!("{}", e));
                 }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                let res = batch_commands_response::Response {
+                    cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
+                    ..Default::default()
+                };
                 for req in requests {
                     if tx.send_and_notify((req, res.clone())).is_err() {
                         error!("KvService response batch commands fail");
