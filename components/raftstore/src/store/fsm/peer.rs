@@ -1226,7 +1226,13 @@ where
 
         let result = self.fsm.peer.step(self.ctx, msg.take_message());
 
-        if msg_type == MessageType::MsgHeartbeat && msg_term == self.fsm.peer.term() {
+        if msg_type == MessageType::MsgHeartbeat
+            && msg_term == self.fsm.peer.term()
+            && !util::is_epoch_stale(
+                msg.get_region_epoch(),
+                self.fsm.peer.region().get_region_epoch(),
+            )
+        {
             self.fsm
                 .peer
                 .read_progress
