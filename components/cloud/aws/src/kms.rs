@@ -13,7 +13,7 @@ use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tikv_util::box_err;
 use tokio::runtime::Runtime;
 
-use encryption::{
+use cloud::encryption::{
     DataKeyPair, EncryptedKey, Error, KeyId, KmsConfig, KmsProvider, PlainKey, Result,
 };
 
@@ -184,7 +184,7 @@ mod tests {
     use rusoto_credential::StaticProvider;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     // use rusoto_mock::MockRequestDispatcher;
-    use encryption::KmsConfig;
+    use cloud::encryption::KmsConfig;
     use rusoto_mock::MockRequestDispatcher;
     use tokio::runtime::{Builder, Runtime};
 

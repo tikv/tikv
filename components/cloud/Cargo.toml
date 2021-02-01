@@ -1,0 +1,20 @@
+[package]
+name = "cloud"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+    "external_storage/protobuf-codec",
+    "encryption/protobuf-codec",
+]
+prost-codec = [
+    "external_storage/prost-codec",
+    "encryption/prost-codec",
+]
+
+[dependencies]
+encryption = { path = "../encryption", default-features = false }
+external_storage = { path = "../external_storage", default-features = false }

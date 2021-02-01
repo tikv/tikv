@@ -256,6 +256,7 @@ members = [
   "components/pd_client",
   "components/external_storage",
   "components/external_storage/export",
+  "components/cloud",
   "components/cloud/gcp",
   "components/cloud/aws",
   "components/backup",

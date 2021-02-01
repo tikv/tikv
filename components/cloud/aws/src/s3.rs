@@ -20,7 +20,6 @@ use rusoto_s3::*;
 use tikv_util::stream::{block_on_external_io, error_stream, retry};
 use external_storage::{
     empty_to_none, none_to_empty, BucketConf, ExternalStorage,
-};
 pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 
 #[derive(Clone)]

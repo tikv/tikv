@@ -173,8 +173,7 @@ name = "aws"
 version = "0.0.1"
 dependencies = [
  "bytes 0.5.3",
- "encryption",
- "external_storage",
+ "cloud",
  "futures 0.3.7",
  "futures-util",
  "grpcio",
@@ -588,6 +587,14 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
+]
+
+[[package]]
+name = "cloud"
+version = "0.0.1"
+dependencies = [
+ "encryption",
+ "external_storage",
 ]
 
 [[package]]
@@ -1652,7 +1659,7 @@ dependencies = [
 name = "gcp"
 version = "0.0.1"
 dependencies = [
- "external_storage",
+ "cloud",
  "futures-util",
  "http",
  "hyper",
