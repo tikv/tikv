@@ -111,11 +111,16 @@ impl FileDictionaryFile {
         Ok((file_dict_file, file_dict))
     }
 
+    /// Get the file path.
+    pub fn file_path(&self) -> PathBuf {
+        self.base.join(&self.name)
+    }
+
     /// Rewrite the log file to reduce file size and reduce the time of next recovery.
     fn rewrite(&mut self) -> Result<()> {
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
         if self.enable_log {
-            let origin_path = self.base.join(&self.name);
+            let origin_path = self.file_path();
             let mut tmp_path = origin_path.clone();
             tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
             let mut tmp_file = OpenOptions::new()
@@ -146,9 +151,7 @@ impl FileDictionaryFile {
 
     /// Recovery from the log file and return `FileDictionary`.
     pub fn recovery(&mut self) -> Result<FileDictionary> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(self.base.join(&self.name))?;
+        let mut f = OpenOptions::new().read(true).open(self.file_path())?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         let remained = buf.as_slice();
@@ -187,6 +190,7 @@ impl FileDictionaryFile {
                 }
             }
         }
+
         self.file_dict = file_dict.clone();
         Ok(file_dict)
     }
@@ -224,33 +228,6 @@ impl FileDictionaryFile {
 
             self.removed += 1;
             self.file_size += bytes.len();
-            self.check_compact()?;
-        } else {
-            self.rewrite()?;
-        }
-        self.update_metrics();
-        Ok(())
-    }
-
-    /// Replace existed file entry with new file information.
-    ///
-    /// Warning: `self.write(file_dict)` must be called before.
-    pub fn replace(&mut self, src_name: &str, dst_name: &str, info: FileInfo) -> Result<()> {
-        assert_ne!(src_name, dst_name);
-        self.file_dict.files.remove(src_name);
-        self.file_dict
-            .files
-            .insert(dst_name.to_owned(), info.clone());
-        if self.enable_log {
-            let file = self.append_file.as_mut().unwrap();
-            let mut bytes1 = Self::convert_record_to_bytes(dst_name, LogRecord::INSERT(info))?;
-            let bytes2 = Self::convert_record_to_bytes(src_name, LogRecord::REMOVE)?;
-            bytes1.extend_from_slice(&bytes2);
-            file.write_all(&bytes1)?;
-            file.sync_all()?;
-
-            self.removed += 1;
-            self.file_size += bytes1.len();
             self.check_compact()?;
         } else {
             self.rewrite()?;
@@ -406,9 +383,8 @@ mod tests {
         assert_eq!(*file_dict.files.get("info3").unwrap(), info3);
         assert_eq!(file_dict.files.len(), 2);
 
-        file_dict_file
-            .replace("info3", "info5", info5.clone())
-            .unwrap();
+        file_dict_file.insert("info5", &info5).unwrap();
+        file_dict_file.remove("info3").unwrap();
 
         let file_dict = file_dict_file.recovery().unwrap();
         assert_eq!(file_dict.files.get("info1"), None);
@@ -532,9 +508,10 @@ mod tests {
             file_dict.insert(&"f1".to_owned(), &info1).unwrap();
             file_dict.insert(&"f2".to_owned(), &info2).unwrap();
             file_dict.insert(&"f3".to_owned(), &info3).unwrap();
-            file_dict
-                .replace(&"f3".to_owned(), &"f4".to_owned(), info4.clone())
-                .unwrap();
+
+            file_dict.insert("f4", &info4).unwrap();
+            file_dict.remove("f3").unwrap();
+
             file_dict.remove(&"f2".to_owned()).unwrap();
         }
         // Try open as v1 file. Should fail.
@@ -590,9 +567,10 @@ mod tests {
     }
 
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
-        let mut info = FileInfo::default();
-        info.key_id = id;
-        info.method = compat(method);
-        info
+        FileInfo {
+            key_id: id,
+            method: compat(method),
+            ..Default::default()
+        }
     }
 }

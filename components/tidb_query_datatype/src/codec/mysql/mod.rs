@@ -16,7 +16,7 @@ fn check_fsp(fsp: i8) -> Result<u8> {
     if fsp == UNSPECIFIED_FSP {
         return Ok(DEFAULT_FSP as u8);
     }
-    if fsp > MAX_FSP || fsp < MIN_FSP {
+    if !(MIN_FSP..=MAX_FSP).contains(&fsp) {
         return Err(invalid_type!("Invalid fsp {}", fsp));
     }
     Ok(fsp as u8)

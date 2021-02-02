@@ -466,8 +466,9 @@ fn test_read_index_stale_in_suspect_lease() {
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
+    // Stop log compaction to transfer leader with filter easier.
+    configure_for_request_snapshot(&mut cluster);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();

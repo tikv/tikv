@@ -589,7 +589,7 @@ impl IntWithSign {
 
 fn is_valid_base(base: IntWithSign) -> bool {
     let IntWithSign(num, _) = base;
-    num >= 2 && num <= 36
+    (2..=36).contains(&num)
 }
 
 fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
@@ -1643,7 +1643,7 @@ mod tests {
     #[test]
     fn test_truncate_int() {
         let tests = vec![
-            (1028 as i64, 0 as i64, false, 1028 as i64),
+            (1028_i64, 0_i64, false, 1028_i64),
             (1028, 5, false, 1028),
             (1028, -2, false, 1000),
             (1028, 309, false, 1028),

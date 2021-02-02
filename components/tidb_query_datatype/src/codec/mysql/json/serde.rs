@@ -84,21 +84,21 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::none().map_err(de::Error::custom)?)
+        Json::none().map_err(de::Error::custom)
     }
 
     fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_bool(v).map_err(de::Error::custom)?)
+        Json::from_bool(v).map_err(de::Error::custom)
     }
 
     fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_i64(v).map_err(de::Error::custom)?)
+        Json::from_i64(v).map_err(de::Error::custom)
     }
 
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
@@ -116,14 +116,14 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::from_f64(v).map_err(de::Error::custom)?)
+        Json::from_f64(v).map_err(de::Error::custom)
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(Json::from_string(String::from(v)).map_err(de::Error::custom)?)
+        Json::from_string(String::from(v)).map_err(de::Error::custom)
     }
 
     fn visit_seq<M>(self, mut seq: M) -> Result<Self::Value, M::Error>
@@ -135,7 +135,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
         while let Some(v) = seq.next_element()? {
             value.push(v);
         }
-        Ok(Json::from_array(value).map_err(de::Error::custom)?)
+        Json::from_array(value).map_err(de::Error::custom)
     }
 
     fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
@@ -146,7 +146,7 @@ impl<'de> Visitor<'de> for JsonVisitor {
         while let Some((key, value)) = access.next_entry()? {
             map.insert(key, value);
         }
-        Ok(Json::from_object(map).map_err(de::Error::custom)?)
+        Json::from_object(map).map_err(de::Error::custom)
     }
 }
 

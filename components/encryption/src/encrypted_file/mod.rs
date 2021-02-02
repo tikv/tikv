@@ -16,7 +16,7 @@ use crate::Result;
 mod header;
 pub use header::*;
 
-pub const TMP_FILE_SUFFIX: &str = ".tmp";
+pub const TMP_FILE_SUFFIX: &str = "tmp";
 
 /// An file encrypted by master key.
 pub struct EncryptedFile<'a> {
@@ -70,7 +70,7 @@ impl<'a> EncryptedFile<'a> {
             .create(true)
             .write(true)
             .open(&tmp_path)
-            .unwrap();
+            .unwrap_or_else(|_| panic!("EncryptedFile::write {}", &tmp_path.to_str().unwrap()));
 
         // Encrypt the content.
         let encrypted_content = master_key

@@ -51,6 +51,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
             txn_size,
             lock_ttl,
             min_commit_ts,
+            need_old_value: false,
         },
         mutation,
         &secondary_keys,
@@ -236,6 +237,7 @@ fn default_txn_props(
         txn_size: 0,
         lock_ttl: 0,
         min_commit_ts: TimeStamp::default(),
+        need_old_value: false,
     }
 }
 fn must_prewrite_put_err_impl<E: Engine>(

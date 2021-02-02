@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use crate::store::{CasualMessage, CasualRouter};
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
+use file_system::{IOType, WithIOType};
 use tikv_util::time::Duration;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -145,6 +146,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
+        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         self.tasks.push(task);
         if self.tasks.len() < MAX_GC_REGION_BATCH {
             return;

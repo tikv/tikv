@@ -2,7 +2,10 @@
 
 use std::{fs::File, io::Write, time::Duration};
 
-use encryption::{DataKeyManager, EncryptionConfig, FileConfig, MasterKeyConfig, Result};
+use encryption::{
+    create_backend, DataKeyManager, DataKeyManagerArgs, EncryptionConfig, FileConfig,
+    MasterKeyConfig, Result,
+};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::config::ReadableDuration;
 
@@ -33,23 +36,23 @@ pub fn new_file_security_config(dir: &tempfile::TempDir) -> EncryptionConfig {
 }
 
 pub fn new_test_key_manager(
-    temp: Option<tempfile::TempDir>,
+    tmp_dir: &tempfile::TempDir,
     method: Option<EncryptionMethod>,
     master_key: Option<MasterKeyConfig>,
     previous_master_key: Option<MasterKeyConfig>,
-) -> (tempfile::TempDir, Result<Option<DataKeyManager>>) {
-    let tmp = temp.unwrap_or_else(|| tempfile::TempDir::new().unwrap());
-    let default_config = new_test_file_master_key(&tmp);
+) -> Result<Option<DataKeyManager>> {
+    let default_config = new_test_file_master_key(tmp_dir);
     let master_key = master_key.unwrap_or_else(|| default_config.clone());
     let previous_master_key = previous_master_key.unwrap_or(default_config);
-    let manager = DataKeyManager::new(
-        &master_key,
-        &previous_master_key,
-        method.unwrap_or(EncryptionMethod::Aes256Ctr),
-        Duration::from_secs(60),
-        true, /*enable_file_dictionary_log*/
-        2,    /*file_dictionary_rewrite_threshold*/
-        tmp.path().as_os_str().to_str().unwrap(),
-    );
-    (tmp, manager)
+    DataKeyManager::new(
+        create_backend(&master_key)?,
+        &*create_backend(&previous_master_key)?,
+        DataKeyManagerArgs {
+            method: method.unwrap_or(EncryptionMethod::Aes256Ctr),
+            rotation_period: Duration::from_secs(60),
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 2,
+            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+        },
+    )
 }
