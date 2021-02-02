@@ -541,7 +541,7 @@ impl IndexScanExecutorImpl {
             let original_data = if is_bin_collation {
                 // _bin collation, we need to combine data from key and value to form the original data.
 
-                // Unwrap as checked by `top_data.read_datum()? == Datum::Null`
+                // Unwrap as checked by `decoded_value.read_datum() == Datum::Null`
                 let truncate_str = decoded_value.as_string()?.unwrap();
 
                 let space_num_data = row
