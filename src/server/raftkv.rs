@@ -10,8 +10,11 @@ use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
 use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{CfName, IterOptions, KvEngine, Peekable, ReadOptions, Snapshot, CF_DEFAULT};
+use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
+use engine_traits::{
+    CfName, IterOptions, KvEngine, MvccProperties, MvccPropertiesExt, Peekable, ReadOptions,
+    Snapshot, TablePropertiesExt, CF_DEFAULT,
+};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -19,7 +22,7 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TxnExtra, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -516,6 +519,33 @@ where
 
     fn release_snapshot(&self) {
         self.router.release_snapshot_cache();
+    }
+
+    fn get_properties_cf(
+        &self,
+        cf: CfName,
+        start: &[u8],
+        end: &[u8],
+    ) -> kv::Result<RocksTablePropertiesCollection> {
+        let start = keys::data_key(start);
+        let end = keys::data_end_key(end);
+        self.engine
+            .get_range_properties_cf(cf, &start, &end)
+            .map_err(|e| e.into())
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        cf: CfName,
+        safe_point: TimeStamp,
+        start: &[u8],
+        end: &[u8],
+        ignore_level_0: bool,
+    ) -> Option<MvccProperties> {
+        let start = keys::data_key(start);
+        let end = keys::data_end_key(end);
+        self.engine
+            .get_mvcc_properties_cf(cf, safe_point, &start, &end, ignore_level_0)
     }
 }
 

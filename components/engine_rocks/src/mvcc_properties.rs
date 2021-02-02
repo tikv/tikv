@@ -70,7 +70,7 @@ impl MvccPropertiesExt for RocksEngine {
             let raw = self.as_inner();
             let cf_handle = get_cf_handle(raw, cf).unwrap();
             let metadata = raw.get_column_family_meta_data(cf_handle);
-            let level_0_meta = metadata.get_levels().into_iter().next().unwrap();
+            let level_0_meta = metadata.get_level(0);
             let level_0_vec = level_0_meta.get_files();
             for file_meta in level_0_vec {
                 let file_path = file_meta.get_name();

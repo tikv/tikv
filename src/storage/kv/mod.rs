@@ -16,8 +16,10 @@ use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use engine_traits::{CfName, CF_DEFAULT};
-use engine_traits::{IterOptions, KvEngine as LocalEngine, ReadOptions};
+use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::{
+    CfName, IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions, CF_DEFAULT,
+};
 use futures::prelude::*;
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ExtraOp as TxnExtraOp, KeyRange};
@@ -190,6 +192,30 @@ pub trait Engine: Send + Clone + 'static {
 
     fn delete_cf(&self, ctx: &Context, cf: CfName, key: Key) -> Result<()> {
         self.write(ctx, WriteData::from_modifies(vec![Modify::Delete(cf, key)]))
+    }
+
+    fn get_properties(&self, start: &[u8], end: &[u8]) -> Result<RocksTablePropertiesCollection> {
+        self.get_properties_cf(CF_DEFAULT, start, end)
+    }
+
+    fn get_properties_cf(
+        &self,
+        _: CfName,
+        _start: &[u8],
+        _end: &[u8],
+    ) -> Result<RocksTablePropertiesCollection> {
+        Err(box_err!("no user properties"))
+    }
+
+    fn get_mvcc_properties_cf(
+        &self,
+        _: CfName,
+        _safe_point: TimeStamp,
+        _start: &[u8],
+        _end: &[u8],
+        _ignore_level_0: bool,
+    ) -> Option<MvccProperties> {
+        None
     }
 }
 
