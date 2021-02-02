@@ -14,19 +14,15 @@ use security::SecurityConfig;
 use uuid::Uuid;
 
 use test_raftstore::*;
+use tikv::config::TiKvConfig;
 use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
-pub fn new_cluster(security_conf: Option<SecurityConfig>) -> (Cluster<ServerCluster>, Context) {
+pub fn new_cluster(cfg: TiKvConfig) -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
-    let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
-    cluster.cfg.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
-    cluster.cfg.server.grpc_concurrency = 1;
-    if let Some(cfg) = security_conf {
-        cluster.cfg.security = cfg;
-    }
+    cluster.cfg = cfg;
     cluster.run();
 
     let region_id = 1;
@@ -40,10 +36,18 @@ pub fn new_cluster(security_conf: Option<SecurityConfig>) -> (Cluster<ServerClus
     (cluster, ctx)
 }
 
-fn open_cluster_and_tikv_import_client(
-    security_cfg: Option<SecurityConfig>,
+pub fn open_cluster_and_tikv_import_client(
+    cfg: Option<TiKvConfig>,
 ) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
-    let (cluster, ctx) = new_cluster(security_cfg.clone());
+    let cfg = cfg.unwrap_or_else(|| {
+        let mut config = TiKvConfig::default();
+        let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
+        config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
+        config.server.grpc_concurrency = 1;
+        config
+    });
+
+    let (cluster, ctx) = new_cluster(cfg.clone());
 
     let ch = {
         let env = Arc::new(Environment::new(1));
@@ -53,7 +57,7 @@ fn open_cluster_and_tikv_import_client(
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
             .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
 
-        if security_cfg.is_some() {
+        if cfg.security != SecurityConfig::default() {
             let creds = test_util::new_channel_cred();
             builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
         } else {
@@ -82,8 +86,12 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     let encryption_cfg = test_util::new_file_security_config(&tmp_dir);
     let mut security = test_util::new_security_cfg(None);
     security.encryption = encryption_cfg;
-
-    let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(security));
+    let mut config = TiKvConfig::default();
+    let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
+    config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
+    config.server.grpc_concurrency = 1;
+    config.security = security;
+    let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     (tmp_dir, cluster, ctx, tikv, import)
 }
 
