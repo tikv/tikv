@@ -5,10 +5,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_rocks::TTLProperties;
-use engine_traits::KvEngine;
-use engine_traits::{Range, TableProperties, TablePropertiesCollection, CF_DEFAULT, CF_WRITE};
-use tikv_util::time::UnixSecs;
+use engine_traits::{CF_WRITE, KvEngine};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -27,11 +24,6 @@ pub enum Task {
         ranges: Vec<Key>,              // Ranges need to check
         tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
         tombstones_percent_threshold: u64,
-    },
-
-    TTLCheckAndCompact {
-        start_key: Key,
-        end_key: Key,
     },
 }
 
@@ -74,14 +66,6 @@ impl Display for Task {
                     "tombstones_percent_threshold",
                     &tombstones_percent_threshold,
                 )
-                .finish(),
-            Task::TTLCheckAndCompact {
-                ref start_key,
-                ref end_key,
-            } => f
-                .debug_struct("TTLCheckAndCompact")
-                .field("start_key", &log_wrappers::Value::key(start_key))
-                .field("end_key", &log_wrappers::Value::key(end_key))
                 .finish(),
         }
     }
@@ -129,22 +113,6 @@ where
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
-            "cf" => cf,
-            "time_takes" => ?timer.elapsed(),
-        );
-        Ok(())
-    }
-
-    pub fn compact_files_cf(&mut self, cf: &str, files: &[String]) -> Result<(), Error> {
-        let timer = Instant::now();
-        let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf])
-            .start_coarse_timer();
-        box_try!(self.engine.compact_files_cf(cf, files, None));
-        compact_range_timer.observe_duration();
-        info!(
-            "compact files finished";
-            "files" => ?files,
             "cf" => cf,
             "time_takes" => ?timer.elapsed(),
         );
@@ -200,49 +168,6 @@ where
                 }
                 Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
-            Task::TTLCheckAndCompact { start_key, end_key } => {
-                let current_ts = UnixSecs::now().into_inner();
-                let range = Range::new(&start_key, &end_key);
-                let collection = match self
-                    .engine
-                    .get_properties_of_tables_in_range(CF_DEFAULT, &[range])
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!(
-                            "execute ttl compact files failed";
-                            "range_start" => log_wrappers::Value::key(&start_key),
-                            "range_end" => log_wrappers::Value::key(&end_key),
-                            "err" => %e,
-                        );
-                        return;
-                    }
-                };
-
-                if collection.is_empty() {
-                    return;
-                }
-
-                let mut files = Vec::new();
-                for (file_name, v) in collection.iter() {
-                    let prop = match TTLProperties::decode(&v.user_collected_properties()) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    if prop.max_expire_ts <= current_ts {
-                        files.push(file_name.to_string());
-                    }
-                }
-                if let Err(e) = self.compact_files_cf(CF_DEFAULT, &files) {
-                    error!(
-                        "execute ttl compact files failed";
-                        "range_start" => log_wrappers::Value::key(&start_key),
-                        "range_end" => log_wrappers::Value::key(&end_key),
-                        "files" => ?files,
-                        "err" => %e,
-                    );
-                }
-            }
         }
     }
 }

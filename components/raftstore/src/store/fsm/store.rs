@@ -26,7 +26,6 @@ use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLoc
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::StateRole;
-use rand::Rng;
 use time::{self, Timespec};
 
 use collections::HashMap;
@@ -384,7 +383,6 @@ where
     }
 
     pub fn update_ticks_timeout(&mut self) {
-        let mut rng = rand::thread_rng();
         self.tick_batch[PeerTicks::RAFT.bits() as usize].wait_duration =
             self.cfg.raft_base_tick_interval.0;
         self.tick_batch[PeerTicks::RAFT_LOG_GC.bits() as usize].wait_duration =
@@ -397,11 +395,6 @@ where
             self.cfg.peer_stale_state_check_interval.0;
         self.tick_batch[PeerTicks::CHECK_MERGE.bits() as usize].wait_duration =
             self.cfg.merge_check_tick_interval.0;
-        self.tick_batch[PeerTicks::CHECK_TTL.bits() as usize].wait_duration = self
-            .cfg
-            .ttl_check_tick_interval
-            .0
-            .mul_f64(1.0 + rng.gen_range(-0.2, 0.2));
     }
 }
 

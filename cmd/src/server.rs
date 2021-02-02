@@ -10,6 +10,7 @@
 
 use std::{
     cmp,
+    time::Duration,
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
@@ -62,6 +63,7 @@ use tikv::{
         config::Config as ServerConfig,
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
+        ttl_checker::TTLChecker,
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -70,6 +72,7 @@ use tikv::{
     },
     storage::{
         self,
+        Engine,
         config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
         mvcc::MvccConsistencyCheckObserver,
     },
@@ -121,8 +124,7 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_encryption();
             let engines = tikv.init_raw_engines();
             tikv.init_engines(engines);
-            let gc_worker = tikv.init_gc_worker();
-            let server_config = tikv.init_servers(&gc_worker);
+            let server_config = tikv.init_servers();
             tikv.register_services();
             tikv.init_metrics_flusher();
             tikv.run_server(server_config);
@@ -484,11 +486,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_servers(
         &mut self,
-        gc_worker: &GcWorker<
-            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
-            RaftRouter<RocksEngine, ER>,
-        >,
     ) -> Arc<ServerConfig> {
+        let gc_worker = self.init_gc_worker();
+        let ttl_checker = TTLChecker::new(
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.region_info_accessor.clone(),
+            Duration::from_secs(3600),
+        );
+    
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
 
         // Create cdc.

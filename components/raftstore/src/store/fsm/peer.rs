@@ -51,7 +51,7 @@ use crate::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_learner, KeysInfoFormatter};
 use crate::store::worker::{
-    CleanupSSTTask, CleanupTask, CompactTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate,
+    CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate,
     RegionTask, SplitCheckTask,
 };
 use crate::store::PdTask;
@@ -647,7 +647,6 @@ where
             PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
             PeerTicks::CHECK_MERGE => self.on_check_merge(),
             PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
-            PeerTicks::CHECK_TTL => self.on_check_ttl(),
             _ => unreachable!(),
         }
     }
@@ -658,7 +657,6 @@ where
         self.register_pd_heartbeat_tick();
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
-        self.register_check_ttl_tick();
         self.on_check_merge();
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
@@ -3808,30 +3806,6 @@ where
 
     fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(PeerTicks::CHECK_PEER_STALE_STATE)
-    }
-
-    fn register_check_ttl_tick(&mut self) {
-        self.schedule_tick(PeerTicks::CHECK_TTL)
-    }
-
-    fn on_check_ttl(&mut self) {
-        self.register_check_ttl_tick();
-        let task = CompactTask::TTLCheckAndCompact {
-            start_key: enc_start_key(self.fsm.peer.region()),
-            end_key: enc_end_key(self.fsm.peer.region()),
-        };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::Compact(task))
-        {
-            error!(
-                "failed to schedule check ttl";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "err" => %e,
-            );
-        }
     }
 }
 
