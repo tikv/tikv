@@ -176,21 +176,12 @@ where
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let props = match self
             .engine
-            .get_mvcc_properties_cf(CF_WRITE, safe_point, &start_key, &end_key, true)
+            .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key, true)
         {
             Some(c) => c,
             None => return true,
         };
-        if check_need_gc(safe_point, self.cfg.ratio_threshold, &props) {
-            info!(
-                "range needs GC";
-                "start" => hex::encode_upper(start_key),
-                "end" => hex::encode_upper(end_key),
-                "props" => ?props,
-            );
-            return true;
-        }
-        false
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
     }
 
     /// Cleans up outdated data.
