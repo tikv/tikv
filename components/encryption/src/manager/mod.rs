@@ -123,7 +123,7 @@ impl Dicts {
             {
                 std::fs::remove_file(file_dict_file.file_path())?;
                 info!("encryption: file dict is empty and none of key dictionary are found.");
-                return Ok(None);
+                Ok(None)
             }
             // ...else, return either error.
             (file_dict_file, key_bytes) => {
