@@ -681,20 +681,7 @@ pub fn substring_index(
 #[inline]
 pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    let left = match str::from_utf8(left) {
-        Ok(left) => left,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let right = match str::from_utf8(right) {
-        Ok(right) => right,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let order = if C::IS_CASE_INSENSITIVE {
-        left.to_lowercase().cmp(&right.to_lowercase())
-    } else {
-        left.cmp(&right)
-    };
-    Ok(Some(match order {
+    Ok(Some(match C::sort_compare(left, right).unwrap() {
         Less => -1,
         Equal => 0,
         Greater => 1,
