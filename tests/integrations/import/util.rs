@@ -85,11 +85,6 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     let encryption_cfg = test_util::new_file_security_config(&tmp_dir);
     let mut security = test_util::new_security_cfg(None);
     security.encryption = encryption_cfg;
-<<<<<<< HEAD
-
-    let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(security));
-    return (tmp_dir, cluster, ctx, tikv, import);
-=======
     let mut config = TiKvConfig::default();
     let cleanup_interval = Duration::from_millis(CLEANUP_SST_MILLIS);
     config.raft_store.cleanup_import_sst_interval.0 = cleanup_interval;
@@ -97,7 +92,6 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
     config.security = security;
     let (cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     (tmp_dir, cluster, ctx, tikv, import)
->>>>>>> af4432fb1... importer: fix test_ingest_sst (#9617)
 }
 
 pub fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
