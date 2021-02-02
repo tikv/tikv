@@ -681,7 +681,7 @@ pub fn substring_index(
 #[inline]
 pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(Some(match C::sort_compare(left, right).unwrap() {
+    Ok(Some(match C::sort_compare(left, right)? {
         Less => -1,
         Equal => 0,
         Greater => 1,
