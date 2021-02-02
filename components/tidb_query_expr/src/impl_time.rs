@@ -44,6 +44,20 @@ pub fn date_format(
     Ok(Some(t.unwrap().into_bytes()))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn date(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+
+    let mut res = *t;
+    res.set_time_type(TimeType::Date)?;
+    Ok(Some(res))
+}
+
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_with_mode(
@@ -874,6 +888,27 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig)
                 .unwrap();
             assert_eq!(output, None, "{:?} {:?}", date, format);
+        }
+    }
+
+    #[test]
+    fn test_date() {
+        let cases = vec![
+            ("2011-11-11", Some("2011-11-11")),
+            ("2011-11-11 10:10:10", Some("2011-11-11")),
+            ("0000-00-00 00:00:00", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (date, expect) in cases {
+            let date = Some(DateTime::parse_datetime(&mut ctx, date, MAX_FSP, true).unwrap());
+            let expect =
+                expect.map(|expect| Time::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(date)
+                .evaluate(ScalarFuncSig::Date)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", date);
         }
     }
 

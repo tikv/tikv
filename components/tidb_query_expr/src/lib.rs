@@ -601,6 +601,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::Date => date_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
