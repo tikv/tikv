@@ -159,10 +159,47 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
 #[rpn_fn(writer)]
 #[inline]
 fn json_quote(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    let str = String::from_utf8(input.to_vec()).map_err(tidb_query_datatype::codec::Error::from)?;
-    let result =
-        Bytes::from(serde_json::to_string(&str).map_err(tidb_query_datatype::codec::Error::from)?);
-    Ok(writer.write(Some(result)))
+    Ok(writer.write(quote(input)?))
+}
+
+fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
+    let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
+    result.push(b'\"');
+    for byte in bytes.iter() {
+        if *byte == b'\"' || *byte == b'\\' {
+            result.push(b'\\');
+            result.push(*byte)
+        } else if *byte == b'\x07' {
+            // \a alert
+            result.push(b'\\');
+            result.push(b'a');
+        } else if *byte == b'\x08' {
+            // \b backspace
+            result.push(b'\\');
+            result.push(b'b')
+        } else if *byte == b'\x0c' {
+            // \f form feed
+            result.push(b'\\');
+            result.push(b'f')
+        } else if *byte == b'\n' {
+            result.push(b'\\');
+            result.push(b'n');
+        } else if *byte == b'\r' {
+            result.push(b'\\');
+            result.push(b'r');
+        } else if *byte == b'\t' {
+            result.push(b'\\');
+            result.push(b't')
+        } else if *byte == b'\x0b' {
+            // \v vertical tab
+            result.push(b'\\');
+            result.push(b'v')
+        } else {
+            result.push(*byte)
+        }
+    }
+    result.push(b'\"');
+    Ok(Some(result))
 }
 
 #[rpn_fn(nullable)]
@@ -557,8 +594,8 @@ mod tests {
                 Some(r#""hello,\"宽字符\",world""#),
             ),
             (
-                Some(r#"Invalid Json string	is OK"#),
-                Some(r#""Invalid Json string\tis OK""#),
+                Some(r#""Invalid Json string	is OK"#),
+                Some(r#""\"Invalid Json string\tis OK""#),
             ),
             (Some(r#"1\u2232\u22322"#), Some(r#""1\\u2232\\u22322""#)),
             (
