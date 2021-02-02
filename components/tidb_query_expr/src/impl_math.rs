@@ -465,15 +465,13 @@ pub fn round_dec(arg: &Decimal) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
-    let x = arg0;
-    let d = arg1;
-    Ok(Some(if *d >= 0 {
-        *x
-    } else if *d <= -(I64_TEN_POWS.len() as i64) {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -(I64_TEN_POWS.len() as i64) {
         0
     } else {
-        let shift = I64_TEN_POWS[-*d as usize];
-        *x / shift * shift
+        let shift = I64_TEN_POWS[-*arg1 as usize];
+        *arg0 / shift * shift
     }))
 }
 
@@ -486,16 +484,13 @@ pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
-    let x = arg0;
-    let d = arg1;
-    Ok(Some(if *d >= 0 {
-        *x
-    } else if *d <= -(I64_TEN_POWS.len() as i64) {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -(I64_TEN_POWS.len() as i64) {
         0
     } else {
-        let x = *x as u64;
-        let shift = U64_TEN_POWS[-*d as usize];
-        (x / shift * shift) as Int
+        let shift = U64_TEN_POWS[-*arg1 as usize];
+        ((*arg0 as u64) / shift * shift) as Int
     }))
 }
 
@@ -508,22 +503,19 @@ pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
-    let d = arg1;
-    let d = if *d >= 0 {
-        (*d).min(i64::from(i32::max_value())) as i32
+    let d = if *arg1 >= 0 {
+        (*arg1).min(i64::from(i32::max_value())) as i32
     } else {
-        (*d).max(i64::from(i32::min_value())) as i32
+        (*arg1).max(i64::from(i32::min_value())) as i32
     };
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
     let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 fn truncate_real(x: Real, d: i32) -> Real {
@@ -541,25 +533,22 @@ fn truncate_real(x: Real, d: i32) -> Real {
 #[inline]
 #[rpn_fn]
 pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
-    let x = arg0;
-    let d = *arg1;
-    let d = if d >= 0 {
-        d.min(127) as i8
+    let d = if *arg1 >= 0 {
+        *arg1.min(&127) as i8
     } else {
-        d.max(-128) as i8
+        *arg1.max(&-128) as i8
     };
 
-    let res: codec::Result<Decimal> = x.to_owned().round(d, RoundMode::Truncate).into();
+    let res: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
     Ok(Some(res?))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn truncate_decimal_with_uint(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
-    let x = arg0;
     let d = (*arg1 as u64).min(127) as i8;
 
-    let res: codec::Result<Decimal> = x.to_owned().round(d, RoundMode::Truncate).into();
+    let res: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
     Ok(Some(res?))
 }
 
