@@ -156,45 +156,13 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
-#[rpn_fn(nullable, raw_varg)]
+#[rpn_fn(writer)]
 #[inline]
-fn json_quote(arg: &[ScalarValueRef]) -> Result<Option<Bytes>> {
-    quote(arg[0].as_bytes())
-}
-
-fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
-    match input {
-        Some(bytes) => {
-            let mut result = Vec::with_capacity(bytes.len() * 2 + 2);
-            result.push(b'\"');
-            for byte in bytes.iter() {
-                if *byte == b'\"' || *byte == b'\\' {
-                    result.push(b'\\');
-                    result.push(*byte)
-                } else if *byte == b'\0' {
-                    result.push(b'\\');
-                    result.push(b'0')
-                } else if *byte == 26u8 {
-                    result.push(b'\\');
-                    result.push(b'Z');
-                } else if *byte == b'\t' {
-                    result.push(b'\\');
-                    result.push(b't')
-                } else if *byte == b'\n' {
-                    result.push(b'\\');
-                    result.push(b'n');
-                } else if *byte == b'\r' {
-                    result.push(b'\\');
-                    result.push(b'r');
-                } else {
-                    result.push(*byte)
-                }
-            }
-            result.push(b'\"');
-            Ok(Some(result))
-        }
-        _ => Ok(None),
-    }
+fn json_quote(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let str = String::from_utf8(input.to_vec()).map_err(tidb_query_datatype::codec::Error::from)?;
+    let result =
+        Bytes::from(serde_json::to_string(&str).map_err(tidb_query_datatype::codec::Error::from)?);
+    Ok(writer.write(Some(result)))
 }
 
 #[rpn_fn(nullable)]
