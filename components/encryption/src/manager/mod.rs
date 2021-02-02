@@ -118,6 +118,13 @@ impl Dicts {
                 info!("encryption: none of key dictionary and file dictionary are found.");
                 Ok(None)
             }
+            (Ok((file_dict_file, file_dict)), Err(Error::Io(key_err)))
+                if key_err.kind() == ErrorKind::NotFound && file_dict.files.is_empty() =>
+            {
+                std::fs::remove_file(file_dict_file.file_path())?;
+                info!("encryption: file dict is empty and none of key dictionary are found.");
+                Ok(None)
+            }
             // ...else, return either error.
             (file_dict_file, key_bytes) => {
                 if let Err(key_err) = key_bytes {
@@ -730,6 +737,10 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    lazy_static::lazy_static! {
+        static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
+    }
+
     fn new_mock_backend() -> Box<MockBackend> {
         Box::new(MockBackend::default())
     }
@@ -849,6 +860,8 @@ mod tests {
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
     fn test_key_manager_rotate_master_key() {
+        let mut _guard = LOCK_FOR_GAUGE.lock().unwrap();
+
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
@@ -879,6 +892,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate_master_key_rewrite_failure() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
@@ -1186,5 +1200,29 @@ mod tests {
             assert!(value.was_exposed);
         }
         assert!(count >= 101);
+    }
+
+    #[test]
+    fn test_master_key_failure_and_succeed() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+
+        let wrong_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: true,
+            ..MockBackend::default()
+        });
+        let right_key = Box::new(MockBackend {
+            is_wrong_master_key: true,
+            encrypt_fail: false,
+            ..MockBackend::default()
+        });
+        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+
+        let result = new_key_manager(&tmp_dir, None, wrong_key, &*previous);
+        // When the master key is invalid, the key manager left a empty file dict and return errors.
+        assert!(result.is_err());
+        let result = new_key_manager(&tmp_dir, None, right_key, &*previous);
+        assert!(result.is_ok());
     }
 }

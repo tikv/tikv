@@ -609,6 +609,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Substring3Args => substring_3_args_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::Date => date_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::DayOfWeek => day_of_week_fn_meta(),
@@ -622,6 +623,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ToSeconds => to_seconds_fn_meta(),
         ScalarFuncSig::DateDiff => date_diff_fn_meta(),
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
+        ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
