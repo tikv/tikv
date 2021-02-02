@@ -95,6 +95,16 @@ impl LazyBatchColumnVec {
         }
     }
 
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &LazyBatchColumn> {
+        self.columns.iter()
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LazyBatchColumn> {
+        self.columns.iter_mut()
+    }
+
     /// Returns maximum encoded size.
     // TODO: Move to other place.
     pub fn maximum_encoded_size(&self, logical_rows: &[usize], output_offsets: &[u32]) -> usize {
@@ -237,5 +247,23 @@ impl Index<RangeFrom<usize>> for LazyBatchColumnVec {
 impl IndexMut<RangeFrom<usize>> for LazyBatchColumnVec {
     fn index_mut(&mut self, index: RangeFrom<usize>) -> &mut Self::Output {
         &mut self.columns[index.start..]
+    }
+}
+
+impl<'a> IntoIterator for &'a LazyBatchColumnVec {
+    type Item = &'a LazyBatchColumn;
+    type IntoIter = std::slice::Iter<'a, LazyBatchColumn>;
+
+    fn into_iter(self) -> std::slice::Iter<'a, LazyBatchColumn> {
+        self.columns.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut LazyBatchColumnVec {
+    type Item = &'a mut LazyBatchColumn;
+    type IntoIter = std::slice::IterMut<'a, LazyBatchColumn>;
+
+    fn into_iter(self) -> std::slice::IterMut<'a, LazyBatchColumn> {
+        self.columns.iter_mut()
     }
 }

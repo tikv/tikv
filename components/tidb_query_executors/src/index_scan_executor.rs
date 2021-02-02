@@ -12,15 +12,16 @@ use super::util::scan_executor::*;
 use crate::interface::*;
 use codec::number::NumberCodec;
 use codec::prelude::NumberDecoder;
+use itertools::izip;
 use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use tidb_query_datatype::codec::row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder};
 use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
-use tidb_query_datatype::codec::{datum, table, Datum};
+use tidb_query_datatype::codec::{datum, datum::DatumDecoder, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
 use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
-use tidb_query_datatype::codec::datum::decode;
 use DecodeHandleStrategy::*;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
@@ -337,8 +338,6 @@ impl IndexScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::row::v2::{RowSlice, V1CompatibleEncoder};
-
         let row = RowSlice::from_bytes(value)?;
         for (idx, col_id) in self.columns_id_without_handle.iter().enumerate() {
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
@@ -445,76 +444,61 @@ impl IndexScanExecutorImpl {
     // 2. Skip if the `sort key` is NULL, because the original data must be NULL.
     // 3. Depend on the collation if `_bin` or not. Process them differently to get the correct original data.
     // 4. Write the original data into the column, we need to make sure pop() is called.
-    fn restore_original_data(
-        &mut self,
+    fn restore_original_data<'a>(
+        &self,
         restored_values: &[u8],
-        columns: &mut LazyBatchColumnVec,
-        for_common_handle: bool,
+        column_iter: impl Iterator<Item = (&'a FieldType, &'a i64, &'a mut LazyBatchColumn)>,
     ) -> Result<()> {
-        use tidb_query_datatype::codec::row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder};
 
-        let (start, end) = if for_common_handle {
-            (self.columns_id_without_handle.len(), self.schema.len())
-        } else {
-            (0, self.columns_id_without_handle.len())
-        };
-
-        for i in start..end {
-            let ft: &dyn FieldTypeAccessor = &self.schema[i];
-            if !ft.need_restored_data() {
+        for (field_type, column_id, column) in column_iter {
+            if !field_type.need_restored_data() {
                 continue;
             }
-
-            let top_data = columns[i as usize].raw().top();
-            if decode(&mut top_data.as_slice()).unwrap()[0] == Datum::Null {
-                continue;
-            }
-
-            let id = if for_common_handle {
-                self.columns_id_for_common_handle[i - self.columns_id_without_handle.len()]
-            } else {
-                self.columns_id_without_handle[i]
-            };
-            let original_data;
-            let row = RowSlice::from_bytes(restored_values)?;
-            if ft
+            let is_bin_collation = field_type
                 .collation()
                 .map(|col| col == Collation::Utf8Mb4Bin)
-                .unwrap_or(false)
-            {
-                // _bin collation, we need to combine data from key and value to form the original data.
-                let truncate_data = columns[i].mut_raw().pop();
-                let decode_result = decode(&mut truncate_data.as_slice()).unwrap();
-                let truncate_str = decode_result[0].as_string().unwrap().unwrap();
+                .unwrap_or(false);
 
-                let space_num;
-                if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
-                    let space_num_data = &row.values()[start..offset];
-                    space_num = decode_v2_u64(space_num_data).unwrap();
-                } else {
-                    return Err(other_err!("Unexpected missing column {}", id));
-                }
-
-                // Form the original data.
-                original_data = [
-                    truncate_str.as_ref(),
-                    std::iter::repeat(PADDING_SPACE)
-                        .take(space_num as usize)
-                        .collect::<String>()
-                        .as_bytes(),
-                ]
-                .concat();
-            } else {
-                if let Some((start, offset)) = row.search_in_non_null_ids(id)? {
-                    original_data = row.values()[start..offset].to_vec();
-                } else {
-                    return Err(other_err!("Unexpected missing column {}", id));
-                }
-                columns[i].mut_raw().pop();
+            assert!(!column.is_empty());
+            let mut last_value = column.raw().last().unwrap();
+            let decoded_value = last_value.read_datum()?;
+            if !last_value.is_empty() {
+                return Err(other_err!("Unexpected extra bytes {:?}", hex::encode(last_value)));
+            }
+            if decoded_value == Datum::Null {
+                continue;
             }
 
-            let mut buffer_to_write = columns[i as usize].mut_raw().begin_concat_extend();
-            buffer_to_write.write_v2_as_datum(&original_data, &self.schema[i])?;
+            let row = RowSlice::from_bytes(restored_values)?;
+            let original_data = if is_bin_collation {
+                // _bin collation, we need to combine data from key and value to form the original data.
+
+                // unwrap: checked by `top_data.read_datum()? == Datum::Null`
+                let decoded_value = column.mut_raw().pop().unwrap();
+                let decoded_value = decoded_value.as_slice().read_datum()?;
+                let truncate_str = decoded_value.as_string()?.unwrap();
+
+                let space_num_data = row
+                    .get_non_null(*column_id)?
+                    .ok_or_else(|| other_err!("Unexpected missing column {}", column_id))?;
+                let space_num = decode_v2_u64(space_num_data)?;
+
+                // Form the original data.
+                truncate_str
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(PADDING_SPACE as _).take(space_num as _))
+                    .collect::<Vec<_>>()
+            } else {
+                let original_data = row
+                    .get_non_null(*column_id)?
+                    .ok_or_else(|| other_err!("Unexpected missing column {}", column_id))?;
+                column.mut_raw().pop();
+                original_data.to_vec()
+            };
+
+            let mut buffer_to_write = column.mut_raw().begin_concat_extend();
+            buffer_to_write.write_v2_as_datum(&original_data, field_type)?;
         }
 
         Ok(())
@@ -605,7 +589,15 @@ impl IndexScanExecutorImpl {
                     &mut <&[u8]>::clone(&key_payload),
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
-                self.restore_original_data(restore_values, columns, false)?;
+                let limit = self.columns_id_without_handle.len();
+                self.restore_original_data(
+                    restore_values,
+                    izip!(
+                        &self.schema[..limit],
+                        &self.columns_id_without_handle,
+                        &mut columns[..limit],
+                    ),
+                )?;
             } else {
                 // 4.0 version format, use the restore data directly. The restore data contain all the indexed values.
                 self.extract_columns_from_row_format(restore_values, columns)?;
@@ -654,7 +646,15 @@ impl IndexScanExecutorImpl {
                     )?;
                 }
                 // Restored the original data in common handle if necessary.
-                self.restore_original_data(restore_values, columns, true)?;
+                let skip = self.columns_id_without_handle.len();
+                self.restore_original_data(
+                    restore_values,
+                    izip!(
+                        &self.schema[skip..],
+                        &self.columns_id_for_common_handle,
+                        &mut columns[skip..],
+                    ),
+                )?;
             }
         }
 
@@ -1693,7 +1693,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1708,7 +1708,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1741,7 +1741,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1756,7 +1756,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1791,7 +1791,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1809,7 +1809,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1850,15 +1850,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1878,15 +1878,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1922,7 +1922,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1937,7 +1937,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1970,7 +1970,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -1988,7 +1988,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -2023,7 +2023,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -2041,7 +2041,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(columns[1].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -2083,15 +2083,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -2111,15 +2111,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(columns[3].decoded().to_int_vec().last().unwrap(), &Some(1));
@@ -2203,27 +2203,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2243,27 +2243,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
 
@@ -2317,27 +2317,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2357,27 +2357,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
 
@@ -2431,27 +2431,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2471,27 +2471,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
 
@@ -2545,27 +2545,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2585,27 +2585,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
 
@@ -2659,27 +2659,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2699,27 +2699,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
 
@@ -2788,43 +2788,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[6].raw().top().as_slice()).unwrap()[0],
+            columns[6].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[7].raw().top().as_slice()).unwrap()[0],
+            columns[7].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[8].raw().top().as_slice()).unwrap()[0],
+            columns[8].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[9].raw().top().as_slice()).unwrap()[0],
+            columns[9].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         idx_exe
@@ -2847,43 +2847,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            decode(&mut columns[0].raw().top().as_slice()).unwrap()[0],
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[1].raw().top().as_slice()).unwrap()[0],
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[2].raw().top().as_slice()).unwrap()[0],
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[3].raw().top().as_slice()).unwrap()[0],
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[4].raw().top().as_slice()).unwrap()[0],
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[5].raw().top().as_slice()).unwrap()[0],
+            columns[5].raw().last().unwrap().read_datum().unwrap(),
             Datum::I64(1)
         );
         assert_eq!(
-            decode(&mut columns[6].raw().top().as_slice()).unwrap()[0],
+            columns[6].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[7].raw().top().as_slice()).unwrap()[0],
+            columns[7].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[8].raw().top().as_slice()).unwrap()[0],
+            columns[8].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("a ".as_bytes().to_vec())
         );
         assert_eq!(
-            decode(&mut columns[9].raw().top().as_slice()).unwrap()[0],
+            columns[9].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
         );
     }

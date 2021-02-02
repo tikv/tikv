@@ -112,23 +112,24 @@ impl BufferVec {
 
     /// Removes the last buffer if there is any.
     #[inline]
-    pub fn pop(&mut self) -> Vec<u8> {
+    pub fn pop(&mut self) -> Option<Vec<u8>> {
         if let Some(offset) = self.offsets.pop() {
-            let res = self.data[offset..].to_vec();
+            let res = self.data.get(offset..).map(Vec::from);
             self.data.truncate(offset);
             return res;
+        } else {
+            None
         }
-        vec![]
     }
 
     /// Get the last buffer if there is any.
     #[inline]
-    pub fn top(&self) -> Vec<u8> {
+    pub fn last(&self) -> Option<&[u8]> {
         if let Some(offset) = self.offsets.last() {
-            let res = self.data[*offset..].to_vec();
-            return res;
+            self.data.get(*offset..)
+        } else {
+            None
         }
-        vec![]
     }
 
     /// Removes the first `n` buffers.

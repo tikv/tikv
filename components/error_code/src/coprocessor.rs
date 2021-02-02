@@ -12,6 +12,7 @@ define_error_codes!(
     COLUMN_OFFSET => ("ColumnOffset", "", ""),
     UNKNOWN_SIGNATURE => ("UnknownSignature", "", ""),
     EVAL => ("Eval", "", ""),
+    CORRUPTED_DATA => ("CorruptedData", "", ""),
 
     STORAGE_ERROR => ("StorageError", "", ""),
     INVALID_CHARACTER_STRING => ("InvalidCharacterString", "", "")

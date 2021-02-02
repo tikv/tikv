@@ -4757,6 +4757,8 @@ dependencies = [
  "collections",
  "fail",
  "failure",
+ "hex 0.4.2",
+ "itertools 0.8.2",
  "kvproto",
  "log_wrappers",
  "match_template",
