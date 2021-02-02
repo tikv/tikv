@@ -1416,7 +1416,7 @@ impl<S: Snapshot> RawStore<S> {
                 inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
             }
             RawStore::TTL(inner) => {
-                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, false)
             }
         }
     }
@@ -1435,7 +1435,7 @@ impl<S: Snapshot> RawStore<S> {
                 inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
             }
             RawStore::TTL(inner) => {
-                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, false)
             }
         }
     }
@@ -1450,7 +1450,7 @@ impl<S: Snapshot> RawStoreInner<S> {
         RawStoreInner { snapshot }
     }
 
-    fn raw_get_key_value(
+    pub fn raw_get_key_value(
         &self,
         cf: CfName,
         key: &Key,
@@ -1474,7 +1474,7 @@ impl<S: Snapshot> RawStoreInner<S> {
     ///
     /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
-    fn forward_raw_scan(
+    pub fn forward_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,
@@ -1515,7 +1515,7 @@ impl<S: Snapshot> RawStoreInner<S> {
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    fn reverse_raw_scan(
+    pub fn reverse_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,

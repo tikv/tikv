@@ -22,7 +22,7 @@ impl<S: Snapshot> TTLSnapshot<S> {
 
         if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
             let expire_ts = get_expire_ts(v)?;
-            if expire_ts < self.current_ts {
+            if expire_ts != 0 && expire_ts < self.current_ts {
                 return Ok(None);
             }
         }
