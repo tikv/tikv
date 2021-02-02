@@ -116,7 +116,7 @@ impl BufferVec {
         if let Some(offset) = self.offsets.pop() {
             let res = self.data.get(offset..).map(Vec::from);
             self.data.truncate(offset);
-            return res;
+            res
         } else {
             None
         }

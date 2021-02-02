@@ -303,6 +303,93 @@ struct ValueInfo<'a> {
     tail_len: usize,
 }
 
+impl<'a> ValueInfo<'a> {
+    fn from_index_value(index_value: &'a [u8]) -> Result<Self> {
+        let tail_len = index_value[0] as usize;
+        if tail_len > index_value.len() {
+            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
+        }
+
+        let (remaining, tail) = index_value[1..].split_at(index_value.len() - 1 - tail_len);
+        let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
+        let (partition_id_bytes, remaining) = Self::split_partition_id(remaining)?;
+        let (restore_values, restored_v5) = Self::split_restore_data(remaining)?;
+
+        Ok(Self {
+            tail,
+            common_handle_bytes,
+            partition_id_bytes,
+            restore_values,
+            restored_v5,
+            tail_len,
+        })
+    }
+
+    #[inline]
+    fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
+        if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
+        {
+            let handle_len = (&value[1..]).read_u16().map_err(|_| {
+                other_err!(
+                    "Fail to read common handle's length from value: {}",
+                    log_wrappers::Value::value(value)
+                )
+            })? as usize;
+            let handle_end_offset = 3 + handle_len;
+            if handle_end_offset > value.len() {
+                return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
+            }
+            Ok(value[3..].split_at(handle_len))
+        } else {
+            Ok(value.split_at(0))
+        }
+    }
+
+    #[inline]
+    fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
+        if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
+        {
+            if value.len() < 9 {
+                return Err(other_err!(
+                    "Remaining len {} is too short to decode partition ID",
+                    value.len()
+                ));
+            }
+            Ok(value[1..].split_at(8))
+        } else {
+            Ok(value.split_at(0))
+        }
+    }
+
+    #[inline]
+    fn split_restore_data(value: &[u8]) -> Result<(&[u8], bool)> {
+        if value.is_empty() {
+            return Ok((value, false));
+        }
+
+        if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
+        {
+            Ok((&value[1..], true))
+        } else if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+        {
+            Ok((value, false))
+        } else {
+            Err(other_err!(
+                "Unexpected corrupted data {:?}",
+                hex::decode(value)
+            ))
+        }
+    }
+}
+
 impl IndexScanExecutorImpl {
     #[inline]
     fn decode_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
@@ -412,28 +499,6 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    #[inline]
-    fn split_common_handle_from_index_value(value: &[u8]) -> Result<(&[u8], &[u8])> {
-        if value
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
-        {
-            let handle_len = (&value[1..]).read_u16().map_err(|_| {
-                other_err!(
-                    "Fail to read common handle's length from value: {}",
-                    log_wrappers::Value::value(value)
-                )
-            })? as usize;
-            let handle_end_offset = 3 + handle_len;
-            if handle_end_offset > value.len() {
-                return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
-            }
-            Ok(value[3..].split_at(handle_len))
-        } else {
-            Ok(value.split_at(0))
-        }
-    }
-
     // restore_original_data restores the index values whose format is introduced in TiDB 5.0.
     // Unlike the format in TiDB 4.0, the new format is optimized for storage space:
     // 1. If the index is a composed index, only the non-binary string column's value need to write to value, not all.
@@ -449,7 +514,7 @@ impl IndexScanExecutorImpl {
         restored_values: &[u8],
         column_iter: impl Iterator<Item = (&'a FieldType, &'a i64, &'a mut LazyBatchColumn)>,
     ) -> Result<()> {
-
+        let row = RowSlice::from_bytes(restored_values)?;
         for (field_type, column_id, column) in column_iter {
             if !field_type.need_restored_data() {
                 continue;
@@ -463,19 +528,20 @@ impl IndexScanExecutorImpl {
             let mut last_value = column.raw().last().unwrap();
             let decoded_value = last_value.read_datum()?;
             if !last_value.is_empty() {
-                return Err(other_err!("Unexpected extra bytes {:?}", hex::encode(last_value)));
+                return Err(other_err!(
+                    "Unexpected extra bytes {:?}",
+                    hex::encode(last_value)
+                ));
             }
             if decoded_value == Datum::Null {
                 continue;
             }
+            column.mut_raw().pop();
 
-            let row = RowSlice::from_bytes(restored_values)?;
             let original_data = if is_bin_collation {
                 // _bin collation, we need to combine data from key and value to form the original data.
 
-                // unwrap: checked by `top_data.read_datum()? == Datum::Null`
-                let decoded_value = column.mut_raw().pop().unwrap();
-                let decoded_value = decoded_value.as_slice().read_datum()?;
+                // Unwrap as checked by `top_data.read_datum()? == Datum::Null`
                 let truncate_str = decoded_value.as_string()?.unwrap();
 
                 let space_num_data = row
@@ -493,7 +559,6 @@ impl IndexScanExecutorImpl {
                 let original_data = row
                     .get_non_null(*column_id)?
                     .ok_or_else(|| other_err!("Unexpected missing column {}", column_id))?;
-                column.mut_raw().pop();
                 original_data.to_vec()
             };
 
@@ -502,58 +567,6 @@ impl IndexScanExecutorImpl {
         }
 
         Ok(())
-    }
-
-    #[inline]
-    fn split_value_data(value: &[u8]) -> Result<ValueInfo> {
-        let tail_len = value[0] as usize;
-        if tail_len > value.len() {
-            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
-        }
-
-        let mut restored_v5 = false;
-        let (remaining, tail) = value[1..].split_at(value.len() - 1 - tail_len);
-        let (common_handle_bytes, remaining) =
-            Self::split_common_handle_from_index_value(remaining)?;
-        let (partition_id_bytes, remaining) = if remaining
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
-        {
-            if remaining.len() < 9 {
-                return Err(other_err!(
-                    "Remaining len {} is too short to decode partition ID",
-                    remaining.len()
-                ));
-            }
-            remaining[1..].split_at(8)
-        } else {
-            remaining.split_at(0)
-        };
-        let restore_values = if !remaining.is_empty()
-            && remaining
-                .get(0)
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
-        {
-            restored_v5 = true;
-            &remaining[1..]
-        } else if !remaining.is_empty()
-            && remaining
-                .get(0)
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
-        {
-            &remaining
-        } else {
-            "".as_bytes()
-        };
-
-        Ok(ValueInfo {
-            tail,
-            common_handle_bytes,
-            partition_id_bytes,
-            restore_values,
-            restored_v5,
-            tail_len,
-        })
     }
 
     // Process new layout index values in an extensible way,
@@ -572,7 +585,7 @@ impl IndexScanExecutorImpl {
             restore_values,
             restored_v5,
             tail_len,
-        } = Self::split_value_data(value)?;
+        } = ValueInfo::from_index_value(value)?;
 
         // Sanity check.
         if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
@@ -647,14 +660,16 @@ impl IndexScanExecutorImpl {
                 }
                 // Restored the original data in common handle if necessary.
                 let skip = self.columns_id_without_handle.len();
-                self.restore_original_data(
-                    restore_values,
-                    izip!(
-                        &self.schema[skip..],
-                        &self.columns_id_for_common_handle,
-                        &mut columns[skip..],
-                    ),
-                )?;
+                if !restore_values.is_empty() {
+                    self.restore_original_data(
+                        restore_values,
+                        izip!(
+                            &self.schema[skip..],
+                            &self.columns_id_for_common_handle,
+                            &mut columns[skip..],
+                        ),
+                    )?;
+                }
             }
         }
 
