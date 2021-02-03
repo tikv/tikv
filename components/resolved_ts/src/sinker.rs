@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use engine_traits::Snapshot;
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;

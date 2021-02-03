@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::io::Error as IoError;
 
 use engine_traits::Error as EngineTraitsError;
