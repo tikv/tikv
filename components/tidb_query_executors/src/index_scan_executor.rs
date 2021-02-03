@@ -470,7 +470,7 @@ impl IndexScanExecutorImpl {
                 let truncate_str = decoded_value.as_string()?.unwrap();
 
                 let space_num_data = row
-                    .get_non_null(*column_id)?
+                    .get(*column_id)?
                     .ok_or_else(|| other_err!("Unexpected missing column {}", column_id))?;
                 let space_num = decode_v2_u64(space_num_data)?;
 
@@ -482,7 +482,7 @@ impl IndexScanExecutorImpl {
                     .collect::<Vec<_>>()
             } else {
                 let original_data = row
-                    .get_non_null(*column_id)?
+                    .get(*column_id)?
                     .ok_or_else(|| other_err!("Unexpected missing column {}", column_id))?;
                 original_data.to_vec()
             };

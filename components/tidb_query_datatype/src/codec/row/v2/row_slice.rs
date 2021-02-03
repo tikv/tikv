@@ -152,8 +152,8 @@ impl RowSlice<'_> {
     }
 
     #[inline]
-    pub fn get_non_null(&self, id: i64) -> Result<Option<&[u8]>> {
-        if let Some((start, end)) = self.search_in_non_null_ids(id)? {
+    pub fn get(&self, column_id: i64) -> Result<Option<&[u8]>> {
+        if let Some((start, end)) = self.search_in_non_null_ids(column_id)? {
             Ok(Some(self.values().get(start..end).ok_or_else(|| {
                 Error::CorruptedData(log_wrappers::Value(self.origin()).to_string())
             })?))
