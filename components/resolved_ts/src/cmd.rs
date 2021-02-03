@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
@@ -214,19 +215,19 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
                 let key = Key::from_encoded(put.take_key());
                 let value = put.take_value();
                 match put.cf.as_str() {
-                    "write" => {
+                    CF_WRITE => {
                         let ts = key.decode_ts().unwrap();
                         let key = key.truncate_ts().unwrap();
                         let mut row = changes.entry(key).or_default();
                         assert!(row.write.is_none());
                         row.write = Some(KeyOp::Put(Some(ts), value));
                     }
-                    "lock" => {
+                    CF_LOCK => {
                         let mut row = changes.entry(key).or_default();
                         assert!(row.lock.is_none());
                         row.lock = Some(KeyOp::Put(None, value));
                     }
-                    "" | "default" => {
+                    "" | CF_DEFAULT => {
                         let ts = key.decode_ts().unwrap();
                         let key = key.truncate_ts().unwrap();
                         let mut row = changes.entry(key).or_default();
@@ -241,12 +242,12 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
             CmdType::Delete => {
                 let mut delete = req.take_delete();
                 match delete.cf.as_str() {
-                    "lock" => {
+                    CF_LOCK => {
                         let key = Key::from_encoded(delete.take_key());
                         let mut row = changes.entry(key).or_default();
                         row.lock = Some(KeyOp::Delete);
                     }
-                    "" | "default" | "write" => {}
+                    "" | CF_WRITE | CF_DEFAULT => {}
                     other => {
                         panic!("invalid cf {}", other);
                     }
