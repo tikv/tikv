@@ -288,7 +288,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     &bypass_locks,
                     &concurrency_manager,
                 )
-                .await?;
+                .await
+                .map_err(|e| {
+                    KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
+                    e
+                })?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -387,6 +391,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 snap_ctx
                             }
                             Err(e) => {
+                                KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
                                 req_snaps.push(Err(e));
                                 continue;
                             }
@@ -498,7 +503,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let snap_ctx =
                     prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)
-                        .await?;
+                        .await
+                        .map_err(|e| {
+                            KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
+                            e
+                        })?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {

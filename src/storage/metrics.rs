@@ -200,6 +200,9 @@ make_auto_flush_static_metric! {
     pub struct KvCommandCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
+    pub struct KvBlockedByMemLockCounterVec: LocalIntCounter {
+        "type" => CommandKind,
+    }
 
     pub struct SchedStageCounterVec: LocalIntCounter {
         "type" => CommandKind,
@@ -260,6 +263,16 @@ lazy_static! {
     .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
         auto_flush_from!(KV_COMMAND_COUNTER_VEC, KvCommandCounterVec);
+    pub static ref KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_blocked_by_mem_lock_total",
+        "Total number of commands blocked by memory locks.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC: KvBlockedByMemLockCounterVec = auto_flush_from!(
+        KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC,
+        KvBlockedByMemLockCounterVec
+    );
     pub static ref SCHED_STAGE_COUNTER: IntCounterVec = {
         register_int_counter_vec!(
             "tikv_scheduler_stage_total",
