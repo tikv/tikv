@@ -170,6 +170,16 @@ impl TxnEntry {
             _ => unreachable!(),
         }
     }
+    /// This method will generate this kv pair's key
+    pub fn to_key(&self) -> Result<Key> {
+        match self {
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A batch of transaction entries.
@@ -650,6 +660,7 @@ mod tests {
                             txn_size: 0,
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
+                            need_old_value: false,
                         },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         &None,

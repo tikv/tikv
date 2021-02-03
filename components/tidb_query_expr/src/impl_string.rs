@@ -47,13 +47,13 @@ pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     if let Some(&c) = trimmed.next() {
         if c == b'-' {
             negative = true;
-        } else if c >= b'0' && c <= b'9' {
+        } else if (b'0'..=b'9').contains(&c) {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(writer.write(Some(b"0".to_vec())));
         }
 
-        for c in trimmed.take_while(|&&c| c >= b'0' && c <= b'9') {
+        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -679,9 +679,9 @@ pub fn substring_index(
 
 #[rpn_fn]
 #[inline]
-pub fn strcmp(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
+pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(Some(match left.cmp(right) {
+    Ok(Some(match C::sort_compare(left, right)? {
         Less => -1,
         Equal => 0,
         Greater => 1,
@@ -3124,26 +3124,74 @@ mod tests {
     #[test]
     fn test_strcmp() {
         let test_cases = vec![
-            (Some(b"123".to_vec()), Some(b"123".to_vec()), Some(0)),
-            (Some(b"123".to_vec()), Some(b"1".to_vec()), Some(1)),
-            (Some(b"1".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"45".to_vec()), Some(-1)),
+            (
+                Some(b"123".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"1".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"1".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"45".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
             (
                 Some("你好".as_bytes().to_vec()),
                 Some(b"hello".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(1),
             ),
-            (Some(b"".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"".to_vec()), Some(1)),
-            (Some(b"".to_vec()), Some(b"".to_vec()), Some(0)),
-            (None, Some(b"123".to_vec()), None),
-            (Some(b"123".to_vec()), None, None),
-            (Some(b"".to_vec()), None, None),
-            (None, Some(b"".to_vec()), None),
+            (
+                Some(b"".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"ABC".to_vec()),
+                Some(b"abc".to_vec()),
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (None, Some(b"123".to_vec()), Collation::Utf8Mb4Bin, None),
+            (Some(b"123".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (Some(b"".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, Some(b"".to_vec()), Collation::Utf8Mb4Bin, None),
         ];
 
-        for (left, right, expect_output) in test_cases {
+        for (left, right, collation, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(left)
                 .push_param(right)
                 .evaluate(ScalarFuncSig::Strcmp)
@@ -3340,7 +3388,7 @@ mod tests {
         }
 
         // test invalid direction value
-        let args = (Some(b"bar".to_vec()), Some(b"b".to_vec()), Some(0 as i64));
+        let args = (Some(b"bar".to_vec()), Some(b"b".to_vec()), Some(0_i64));
         let got: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
             .push_param(args.0)
             .push_param(args.1)

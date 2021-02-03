@@ -186,7 +186,13 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// Return:
+    ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
+    /// Post Condition:
+    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
+        // Get the cursor for write record
+        //
         // When it switches to another key in prefix seek mode, creates a new cursor for it
         // because the current position of the cursor is seldom around `key`.
         if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
@@ -195,15 +201,18 @@ impl<S: Snapshot> MvccReader<S> {
         }
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
-        let ok = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
-        if !ok {
+        // find a `ts` encoded key which is less than the `ts` encoded version of the `key`
+        let found = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
+        if !found {
             return Ok(None);
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
+        // check whether the found written_key's "real key" part equals the `key` we want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
+        // parse out the write record
         let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
         Ok(Some((commit_ts, write)))
     }
@@ -389,6 +398,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
+        end: Option<&Key>,
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
@@ -407,6 +417,12 @@ impl<S: Snapshot> MvccReader<S> {
         let mut locks = Vec::with_capacity(limit);
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            if let Some(end) = end {
+                if key >= *end {
+                    return Ok((locks, false));
+                }
+            }
+
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
                 locks.push((key, lock));
@@ -596,6 +612,7 @@ mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
+                need_old_value: false,
             }
         }
 
@@ -1556,36 +1573,80 @@ mod tests {
         .collect();
 
         // Creates a reader and scan locks,
-        let check_scan_lock =
-            |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
-                let snap =
-                    RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-                let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-                let res = reader
-                    .scan_locks(start_key.as_ref(), |l| l.ts <= 10.into(), limit)
-                    .unwrap();
-                assert_eq!(res.0, expect_res);
-                assert_eq!(res.1, expect_is_remain);
-            };
+        let check_scan_lock = |start_key: Option<Key>,
+                               end_key: Option<Key>,
+                               limit,
+                               expect_res: &[_],
+                               expect_is_remain| {
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+            let res = reader
+                .scan_locks(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |l| l.ts <= 10.into(),
+                    limit,
+                )
+                .unwrap();
+            assert_eq!(res.0, expect_res);
+            assert_eq!(res.1, expect_is_remain);
+        };
 
-        check_scan_lock(None, 6, &visible_locks, false);
-        check_scan_lock(None, 5, &visible_locks, true);
-        check_scan_lock(None, 4, &visible_locks[0..4], true);
-        check_scan_lock(Some(Key::from_raw(b"k2")), 3, &visible_locks[1..4], true);
+        check_scan_lock(None, None, 6, &visible_locks, false);
+        check_scan_lock(None, None, 5, &visible_locks, true);
+        check_scan_lock(None, None, 4, &visible_locks[0..4], true);
+        check_scan_lock(
+            Some(Key::from_raw(b"k2")),
+            None,
+            3,
+            &visible_locks[1..4],
+            true,
+        );
         check_scan_lock(
             Some(Key::from_raw(b"k3\x00")),
+            None,
             1,
             &visible_locks[3..4],
             true,
         );
         check_scan_lock(
             Some(Key::from_raw(b"k3\x00")),
+            None,
             10,
             &visible_locks[3..],
             false,
         );
         // limit = 0 means unlimited.
-        check_scan_lock(None, 0, &visible_locks, false);
+        check_scan_lock(None, None, 0, &visible_locks, false);
+        // Test scanning with limited end_key
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3")),
+            0,
+            &visible_locks[..2],
+            false,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            0,
+            &visible_locks[..3],
+            false,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            3,
+            &visible_locks[..3],
+            true,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            2,
+            &visible_locks[..2],
+            true,
+        );
     }
 
     #[test]

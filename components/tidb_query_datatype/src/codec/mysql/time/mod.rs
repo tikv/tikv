@@ -498,7 +498,7 @@ mod parser {
     fn adjust_year(year: u32) -> u32 {
         if year <= 69 {
             2000 + year
-        } else if year >= 70 && year <= 99 {
+        } else if (70..=99).contains(&year) {
             1900 + year
         } else {
             year
@@ -972,7 +972,7 @@ impl TimeArgs {
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
-        if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
+        if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&ts) {
             return handle_invalid_date(ctx, self);
         }
 
@@ -1018,7 +1018,7 @@ impl Time {
         let hms = (input % 1_000_000) as u32;
 
         let year = ymd / 10_000;
-        let md = ymd % 10_000 as u32;
+        let md = ymd % 10_000_u32;
         let month = md / 100;
         let day = md % 100;
 

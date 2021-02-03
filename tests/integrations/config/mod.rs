@@ -9,10 +9,11 @@ use slog::Level;
 use batch_system::Config as BatchSystemConfig;
 use collections::HashSet;
 use encryption::{EncryptionConfig, FileConfig, MasterKeyConfig};
-use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel, PerfLevel};
+use engine_rocks::config::{BlobRunMode, CompressionType, LogLevel};
 use engine_rocks::raw::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use engine_traits::config::PerfLevel;
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raftstore::coprocessor::{Config as CopConfig, ConsistencyCheckMethod};
@@ -159,7 +160,7 @@ fn test_serde_custom_tikv_config() {
         raft_entry_cache_life_time: ReadableDuration::secs(12),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
         split_region_check_tick_interval: ReadableDuration::secs(12),
-        region_split_check_diff: ReadableSize::mb(6),
+        region_split_check_diff: ReadableSize::mb(20),
         region_compact_check_interval: ReadableDuration::secs(12),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         region_compact_check_step: 1_234,
@@ -636,7 +637,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
-        reserve_space: ReadableSize::gb(2),
+        reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
         block_cache: BlockCacheConfig {
             shared: true,
@@ -682,6 +683,7 @@ fn test_serde_custom_tikv_config() {
     value.backup = BackupConfig {
         num_threads: 456,
         batch_size: 7,
+        sst_max_size: ReadableSize::mb(789),
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -736,7 +738,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
             last = Some(a);
         }
         second.map_or(0, |(i, _)| i)
-    };
+    }
     let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
     let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
     if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {

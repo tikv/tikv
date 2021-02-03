@@ -180,8 +180,10 @@ impl TestSuite {
     }
 
     pub fn new_changedata_request(&mut self, region_id: u64) -> ChangeDataRequest {
-        let mut req = ChangeDataRequest::default();
-        req.region_id = region_id;
+        let mut req = ChangeDataRequest {
+            region_id,
+            ..Default::default()
+        };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
         // Assume batch resolved ts will be release in v4.0.7
         // For easy of testing (nightly CI), we lower the gate to v4.0.6

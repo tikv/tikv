@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-
+use crate::storage::txn::actions::get_old_value::get_old_value;
 use crate::storage::{
     mvcc::{
         metrics::{
@@ -14,7 +14,9 @@ use crate::storage::{
 };
 use fail::fail_point;
 use std::cmp;
-use txn_types::{is_short_value, Key, Mutation, MutationType, TimeStamp, Value, Write, WriteType};
+use txn_types::{
+    is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
+};
 
 /// Prewrite a single mutation by creating and storing a lock and value.
 pub fn prewrite<S: Snapshot>(
@@ -23,7 +25,7 @@ pub fn prewrite<S: Snapshot>(
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
-) -> Result<TimeStamp> {
+) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
     fail_point!("prewrite", |err| Err(
@@ -41,7 +43,7 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if let LockStatus::Locked(ts) = lock_status {
-        return Ok(ts);
+        return Ok((ts, OldValue::Unspecified));
     }
 
     // Note that the `prev_write` may have invalid GC fence.
@@ -52,16 +54,20 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if mutation.should_not_write {
-        return Ok(TimeStamp::zero());
+        return Ok((TimeStamp::zero(), OldValue::Unspecified));
     }
 
-    txn.check_extra_op(&mutation.key, mutation.mutation_type, prev_write)?;
+    let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
+        get_old_value(txn, &mutation.key, prev_write)?
+    } else {
+        OldValue::Unspecified
+    };
 
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 
     fail_point!("after_prewrite_one_key");
 
-    Ok(final_min_commit_ts)
+    Ok((final_min_commit_ts, old_value))
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +79,7 @@ pub struct TransactionProperties<'a> {
     pub txn_size: u64,
     pub lock_ttl: u64,
     pub min_commit_ts: TimeStamp,
+    pub need_old_value: bool,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -452,8 +459,6 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
-    use kvproto::kvrpcpb::ExtraOp;
-    #[cfg(test)]
     use txn_types::OldValue;
 
     fn optimistic_txn_props(primary: &[u8], start_ts: TimeStamp) -> TransactionProperties<'_> {
@@ -465,6 +470,7 @@ pub mod tests {
             txn_size: 0,
             lock_ttl: 0,
             min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
         }
     }
 
@@ -488,6 +494,7 @@ pub mod tests {
             txn_size,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         }
     }
 
@@ -586,7 +593,7 @@ pub mod tests {
 
         // min_commit_ts must be > max_ts
         let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
@@ -599,7 +606,7 @@ pub mod tests {
 
         // min_commit_ts must be > start_ts
         let mut txn = MvccTxn::new(snapshot, 44.into(), false, cm);
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
             Mutation::Put((Key::from_raw(b"k3"), b"v1".to_vec())),
@@ -613,7 +620,7 @@ pub mod tests {
         // min_commit_ts must be > for_update_ts
         let mut props = optimistic_async_props(b"k5", 44.into(), 50.into(), 2, false);
         props.kind = TransactionKind::Pessimistic(45.into());
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &props,
             Mutation::Put((Key::from_raw(b"k5"), b"v1".to_vec())),
@@ -627,7 +634,7 @@ pub mod tests {
         // min_commit_ts must be >= txn min_commit_ts
         let mut props = optimistic_async_props(b"k7", 44.into(), 50.into(), 2, false);
         props.min_commit_ts = 46.into();
-        let min_ts = prewrite(
+        let (min_ts, _) = prewrite(
             &mut txn,
             &props,
             Mutation::Put((Key::from_raw(b"k7"), b"v1".to_vec())),
@@ -702,6 +709,7 @@ pub mod tests {
                 txn_size: 0,
                 lock_ttl: 0,
                 min_commit_ts: TimeStamp::default(),
+                need_old_value: false,
             },
             Mutation::CheckNotExists(Key::from_raw(key)),
             &None,
@@ -729,6 +737,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
@@ -771,6 +780,7 @@ pub mod tests {
             txn_size: 2,
             lock_ttl: 2000,
             min_commit_ts: 10.into(),
+            need_old_value: false,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         prewrite(
@@ -872,6 +882,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
+            need_old_value: false,
         };
 
         let cases = vec![
@@ -916,7 +927,6 @@ pub mod tests {
 
         // 2. Check GC fence when reading the old value.
         let mut txn = MvccTxn::new(snapshot, 50.into(), false, cm);
-        txn.extra_op = ExtraOp::ReadOldValue;
         let txn_props = TransactionProperties {
             start_ts: 50.into(),
             kind: TransactionKind::Optimistic(false),
@@ -925,6 +935,7 @@ pub mod tests {
             txn_size: 6,
             lock_ttl: 2000,
             min_commit_ts: 51.into(),
+            need_old_value: true,
         };
 
         let cases: Vec<_> = vec![
@@ -938,16 +949,18 @@ pub mod tests {
         ]
         .into_iter()
         .map(|(k, v)| {
-            let old_value = v.map(|(value, ts)| OldValue {
-                short_value: Some(value.to_vec()),
-                start_ts: ts.into(),
-            });
+            let old_value = v
+                .map(|(value, ts)| OldValue::Value {
+                    short_value: Some(value.to_vec()),
+                    start_ts: ts.into(),
+                })
+                .unwrap_or(OldValue::None);
             (Key::from_raw(k), old_value)
         })
         .collect();
 
-        for (key, _) in &cases {
-            prewrite(
+        for (key, expected_value) in &cases {
+            let (_, old_value) = prewrite(
                 &mut txn,
                 &txn_props,
                 Mutation::Put((key.clone(), b"value".to_vec())),
@@ -955,13 +968,7 @@ pub mod tests {
                 false,
             )
             .unwrap();
+            assert_eq!(&old_value, expected_value);
         }
-        let mut old_values = txn.take_extra().old_values;
-        for (key, expected_value) in cases {
-            let (old_value, mutation) = old_values.remove(&key.append_ts(50.into())).unwrap();
-            assert_eq!(old_value, expected_value);
-            assert_eq!(mutation, MutationType::Put);
-        }
-        assert!(old_values.is_empty());
     }
 }

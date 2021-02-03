@@ -18,7 +18,7 @@ use raftstore::Error as RaftStoreError;
 use tikv::storage::{Cursor, ScanMode, Snapshot as EngineSnapshot, Statistics};
 use tikv_util::time::Instant;
 use tikv_util::worker::Scheduler;
-use txn_types::{Key, MutationType, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::endpoint::{Deregister, OldValueCache, Task};
 use crate::metrics::*;
@@ -134,13 +134,16 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
-                            assert!(old_value.is_none());
+                            assert!(!old_value.exists());
                             return None;
                         }
                         MutationType::Put | MutationType::Delete => {
-                            if let Some(old_value) = old_value {
-                                let start_ts = old_value.start_ts;
-                                return old_value.short_value.or_else(|| {
+                            if let OldValue::Value {
+                                start_ts,
+                                short_value,
+                            } = old_value
+                            {
+                                return short_value.or_else(|| {
                                     let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
                                     let start = Instant::now();
                                     let mut opts = ReadOptions::new();
