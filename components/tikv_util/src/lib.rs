@@ -5,6 +5,7 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(str_split_once)]
+#![feature(duration_saturating_ops)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -39,6 +40,7 @@ pub mod config;
 pub mod future;
 #[macro_use]
 pub mod macros;
+pub mod backoff;
 pub mod callback;
 pub mod deadline;
 pub mod keybuilder;

@@ -83,9 +83,10 @@ use std::{
     borrow::Cow,
     iter,
     sync::{atomic, Arc},
+    time::Duration,
 };
-use tikv_util::time::Instant;
-use tikv_util::time::ThreadReadId;
+use tikv_util::backoff::BackoffBuilder;
+use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -286,7 +287,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     start_ts,
                     &bypass_locks,
                     &concurrency_manager,
-                )?;
+                )
+                .await?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -377,7 +379,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             start_ts,
                             &bypass_locks,
                             &concurrency_manager,
-                        ) {
+                        )
+                        .await
+                        {
                             Ok(mut snap_ctx) => {
                                 snap_ctx.read_id = read_id.clone();
                                 snap_ctx
@@ -493,7 +497,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
                 let snap_ctx =
-                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
+                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)
+                        .await?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -1567,7 +1572,13 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-fn prepare_snap_ctx<'a>(
+const CHECK_MEM_LOCK_BACKOFF: BackoffBuilder = BackoffBuilder::new(
+    Duration::from_micros(50),
+    Duration::from_millis(5),
+    Duration::from_millis(50),
+);
+
+async fn prepare_snap_ctx<'a>(
     pb_ctx: &'a Context,
     keys: impl IntoIterator<Item = &'a Key> + Clone,
     start_ts: TimeStamp,
@@ -1579,13 +1590,26 @@ fn prepare_snap_ctx<'a>(
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
-        for key in keys.clone() {
-            concurrency_manager
-                .read_key_check(&key, |lock| {
-                    Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
-                })
-                .map_err(mvcc::Error::from)?;
-        }
+        let mut keys = keys.clone().into_iter().peekable();
+        CHECK_MEM_LOCK_BACKOFF
+            .create_async_backoff()
+            .retry(|| -> Result<()> {
+                while let Some(key) = keys.peek() {
+                    concurrency_manager
+                        .read_key_check(&key, |lock| {
+                            Lock::check_ts_conflict(
+                                Cow::Borrowed(lock),
+                                &key,
+                                start_ts,
+                                bypass_locks,
+                            )
+                        })
+                        .map_err(mvcc::Error::from)?;
+                    keys.next();
+                }
+                Ok(())
+            })
+            .await?;
     }
 
     let mut snap_ctx = SnapContext {
