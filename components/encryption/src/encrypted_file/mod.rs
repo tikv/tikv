@@ -16,7 +16,7 @@ use crate::Result;
 mod header;
 pub use header::*;
 
-pub const TMP_FILE_SUFFIX: &str = ".tmp";
+pub const TMP_FILE_SUFFIX: &str = "tmp";
 
 /// An file encrypted by master key.
 pub struct EncryptedFile<'a> {
