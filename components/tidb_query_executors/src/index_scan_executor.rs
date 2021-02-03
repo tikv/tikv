@@ -294,105 +294,30 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     }
 }
 
-struct ValueInfo<'a> {
-    tail: &'a [u8],
-    common_handle_bytes: &'a [u8],
-    partition_id_bytes: &'a [u8],
-    restore_values: &'a [u8],
-    restored_v5: bool,
-    tail_len: usize,
+#[derive(PartialEq, Debug, Copy, Clone)]
+enum DecodeHandleOp<'a> {
+    Nop,
+    IntFromKey(&'a [u8]),
+    IntFromValue(&'a [u8]),
+    CommonHandle(&'a [u8]),
 }
 
-impl<'a> ValueInfo<'a> {
-    fn from_index_value(index_value: &'a [u8]) -> Result<Self> {
-        let tail_len = index_value[0] as usize;
-        if tail_len > index_value.len() {
-            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
-        }
+#[derive(PartialEq, Debug, Copy, Clone)]
+enum RestoreData<'a> {
+    NotExists,
+    V4(&'a [u8]),
+    V5(&'a [u8]),
+}
 
-        let (remaining, tail) = index_value[1..].split_at(index_value.len() - 1 - tail_len);
-        let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
-        let (partition_id_bytes, remaining) = Self::split_partition_id(remaining)?;
-        let (restore_values, restored_v5) = Self::split_restore_data(remaining)?;
-
-        Ok(Self {
-            tail,
-            common_handle_bytes,
-            partition_id_bytes,
-            restore_values,
-            restored_v5,
-            tail_len,
-        })
-    }
-
-    #[inline]
-    fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
-        if value
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
-        {
-            let handle_len = (&value[1..]).read_u16().map_err(|_| {
-                other_err!(
-                    "Fail to read common handle's length from value: {}",
-                    log_wrappers::Value::value(value)
-                )
-            })? as usize;
-            let handle_end_offset = 3 + handle_len;
-            if handle_end_offset > value.len() {
-                return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
-            }
-            Ok(value[3..].split_at(handle_len))
-        } else {
-            Ok(value.split_at(0))
-        }
-    }
-
-    #[inline]
-    fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
-        if value
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
-        {
-            if value.len() < 9 {
-                return Err(other_err!(
-                    "Remaining len {} is too short to decode partition ID",
-                    value.len()
-                ));
-            }
-            Ok(value[1..].split_at(8))
-        } else {
-            Ok(value.split_at(0))
-        }
-    }
-
-    #[inline]
-    fn split_restore_data(value: &[u8]) -> Result<(&[u8], bool)> {
-        if value.is_empty() {
-            return Ok((value, false));
-        }
-
-        if value
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
-        {
-            Ok((&value[1..], true))
-        } else if value
-            .get(0)
-            .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
-        {
-            Ok((value, false))
-        } else {
-            Err(other_err!(
-                "Unexpected corrupted data {:?}",
-                hex::decode(value)
-            ))
-        }
-    }
+#[derive(PartialEq, Debug, Copy, Clone)]
+enum DecodePartitionIdOp<'a> {
+    Nop,
+    PID(&'a [u8]),
 }
 
 impl IndexScanExecutorImpl {
     #[inline]
-    fn decode_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
+    fn decode_int_handle_from_value(&self, mut value: &[u8]) -> Result<i64> {
         // NOTE: it is not `number::decode_i64`.
         value
             .read_u64()
@@ -401,7 +326,7 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn decode_handle_from_key(&self, key: &[u8]) -> Result<i64> {
+    fn decode_int_handle_from_key(&self, key: &[u8]) -> Result<i64> {
         let flag = key[0];
         let mut val = &key[1..];
 
@@ -475,14 +400,14 @@ impl IndexScanExecutorImpl {
             // ensured to be interested. For unique index, it is placed in the value.
             DecodeIntHandle if key_payload.is_empty() => {
                 // This is a unique index, and we should look up PK int handle in the value.
-                let handle_val = self.decode_handle_from_value(value)?;
+                let handle_val = self.decode_int_handle_from_value(value)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
             }
             DecodeIntHandle => {
                 // This is a normal index, and we should look up PK handle in the key.
-                let handle_val = self.decode_handle_from_key(key_payload)?;
+                let handle_val = self.decode_int_handle_from_key(key_payload)?;
                 columns[self.columns_id_without_handle.len()]
                     .mut_decoded()
                     .push_int(Some(handle_val));
@@ -529,8 +454,8 @@ impl IndexScanExecutorImpl {
             let decoded_value = last_value.read_datum()?;
             if !last_value.is_empty() {
                 return Err(other_err!(
-                    "Unexpected extra bytes {:?}",
-                    hex::encode(last_value)
+                    "Unexpected extra bytes: {}",
+                    log_wrappers::Value(last_value)
                 ));
             }
             if decoded_value == Datum::Null {
@@ -573,114 +498,270 @@ impl IndexScanExecutorImpl {
     // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     fn process_kv_general(
         &mut self,
-        mut key_payload: &[u8],
+        key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        // Split the value. The following logic is the same as SplitIndexValue() in the TiDB repo.
-        let ValueInfo {
-            tail,
-            common_handle_bytes,
-            partition_id_bytes,
-            restore_values,
-            restored_v5,
-            tail_len,
-        } = ValueInfo::from_index_value(value)?;
+        let (decode_handle, decode_pid, restore_data) =
+            self.build_operations(key_payload, value)?;
 
-        // Sanity check.
-        if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle {
+        self.decode_index_columns(key_payload, columns, restore_data)?;
+        self.decode_handle_columns(decode_handle, columns, restore_data)?;
+        self.decode_pid_columns(columns, decode_pid)?;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn build_operations<'a, 'b>(
+        &'b self,
+        mut key_payload: &'a [u8],
+        index_value: &'a [u8],
+    ) -> Result<(DecodeHandleOp<'a>, DecodePartitionIdOp<'a>, RestoreData<'a>)> {
+        let tail_len = index_value[0] as usize;
+        if tail_len > index_value.len() {
+            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
+        }
+
+        let (remaining, tail) = index_value[1..].split_at(index_value.len() - 1 - tail_len);
+
+        let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
+        let (decode_handle_op, remaining) = {
+            if !common_handle_bytes.is_empty() && self.decode_handle_strategy != DecodeCommonHandle
+            {
+                return Err(other_err!(
+                    "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
+                ));
+            }
+
+            let dispatcher = match self.decode_handle_strategy {
+                NoDecode => DecodeHandleOp::Nop,
+                DecodeIntHandle if tail_len < 8 => {
+                    // This is a non-unique index, we should extract the int handle from the key.
+                    datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                    DecodeHandleOp::IntFromKey(key_payload)
+                }
+                DecodeIntHandle => {
+                    // This is a unique index, we should extract the int handle from the value.
+                    DecodeHandleOp::IntFromValue(tail)
+                }
+                DecodeCommonHandle if common_handle_bytes.is_empty() => {
+                    // This is a non-unique index, we should extract the common handle from the key.
+                    datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
+                    DecodeHandleOp::CommonHandle(key_payload)
+                }
+                DecodeCommonHandle => {
+                    // This is a unique index, we should extract the common handle from the value.
+                    DecodeHandleOp::CommonHandle(common_handle_bytes)
+                }
+            };
+
+            (dispatcher, remaining)
+        };
+
+        let (partition_id_bytes, remaining) = Self::split_partition_id(remaining)?;
+        let decode_pid_op = {
+            if self.pid_column_cnt > 0 && partition_id_bytes.is_empty() {
+                return Err(other_err!(
+                    "Expect to decode partition id but payload is empty"
+                ));
+            } else if partition_id_bytes.is_empty() {
+                DecodePartitionIdOp::Nop
+            } else {
+                DecodePartitionIdOp::PID(partition_id_bytes)
+            }
+        };
+
+        let (restore_data, is_v5, remaining) = Self::split_restore_data(remaining)?;
+        let restore_data = {
+            if restore_data.is_empty() {
+                RestoreData::NotExists
+            } else if is_v5 {
+                RestoreData::V5(restore_data)
+            } else {
+                RestoreData::V4(restore_data)
+            }
+        };
+
+        if !remaining.is_empty() {
             return Err(other_err!(
-                "Expect to decode index values with common handles in `DecodeCommonHandle` mode."
+                "Unexpected corrupted extra bytes: {}",
+                log_wrappers::Value(remaining)
             ));
         }
 
-        // If there are some restore data, we need to process them to get the original data.
-        if !restore_values.is_empty() {
-            if restored_v5 {
+        Ok((decode_handle_op, decode_pid_op, restore_data))
+    }
+
+    #[inline]
+    fn decode_index_columns(
+        &mut self,
+        mut key_payload: &[u8],
+        columns: &mut LazyBatchColumnVec,
+        restore_data: RestoreData,
+    ) -> Result<()> {
+        match restore_data {
+            RestoreData::NotExists => {
+                Self::extract_columns_from_datum_format(
+                    &mut key_payload,
+                    &mut columns[..self.columns_id_without_handle.len()],
+                )?;
+            }
+
+            // If there are some restore data, we need to process them to get the original data.
+            RestoreData::V4(rst) => {
+                // 4.0 version format, use the restore data directly. The restore data contain all the indexed values.
+                self.extract_columns_from_row_format(rst, columns)?;
+            }
+            RestoreData::V5(rst) => {
                 // Extract the data from key, then use the restore data to get the original data.
                 Self::extract_columns_from_datum_format(
-                    &mut <&[u8]>::clone(&key_payload),
+                    &mut key_payload,
                     &mut columns[..self.columns_id_without_handle.len()],
                 )?;
                 let limit = self.columns_id_without_handle.len();
                 self.restore_original_data(
-                    restore_values,
+                    rst,
                     izip!(
                         &self.schema[..limit],
                         &self.columns_id_without_handle,
                         &mut columns[..limit],
                     ),
                 )?;
-            } else {
-                // 4.0 version format, use the restore data directly. The restore data contain all the indexed values.
-                self.extract_columns_from_row_format(restore_values, columns)?;
             }
-        } else {
-            // No restored data, we should extract the index columns from the key.
-            Self::extract_columns_from_datum_format(
-                &mut <&[u8]>::clone(&key_payload),
-                &mut columns[..self.columns_id_without_handle.len()],
-            )?;
-        }
-
-        match self.decode_handle_strategy {
-            NoDecode => {}
-            // This is a non-unique index value, we should extract the int handle from the key.
-            DecodeIntHandle if tail_len < 8 => {
-                datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
-                let handle = self.decode_handle_from_key(key_payload)?;
-                columns[self.columns_id_without_handle.len()]
-                    .mut_decoded()
-                    .push_int(Some(handle));
-            }
-            // This is a unique index value, we should extract the int handle from the value.
-            DecodeIntHandle => {
-                let handle = self.decode_handle_from_value(tail)?;
-                columns[self.columns_id_without_handle.len()]
-                    .mut_decoded()
-                    .push_int(Some(handle));
-            }
-
-            DecodeCommonHandle => {
-                if common_handle_bytes.is_empty() {
-                    // This is a non-unique index value, we should extract the int handle from the key.
-                    datum::skip_n(&mut key_payload, self.columns_id_without_handle.len())?;
-                    Self::extract_columns_from_datum_format(
-                        &mut key_payload,
-                        &mut columns[self.columns_id_without_handle.len()..],
-                    )?;
-                } else {
-                    // This is a unique index value, we should extract the int handle from the value.
-                    let mut handle = common_handle_bytes;
-                    let end_index = columns.columns_len() - self.pid_column_cnt;
-                    Self::extract_columns_from_datum_format(
-                        &mut handle,
-                        &mut columns[self.columns_id_without_handle.len()..end_index],
-                    )?;
-                }
-                // Restored the original data in common handle if necessary.
-                let skip = self.columns_id_without_handle.len();
-                if !restore_values.is_empty() {
-                    self.restore_original_data(
-                        restore_values,
-                        izip!(
-                            &self.schema[skip..],
-                            &self.columns_id_for_common_handle,
-                            &mut columns[skip..],
-                        ),
-                    )?;
-                }
-            }
-        }
-
-        if self.pid_column_cnt > 0 {
-            // If need partition id, append partition id to the last column.
-            let pid = NumberCodec::decode_i64(partition_id_bytes);
-            let idx = columns.columns_len() - 1;
-            columns[idx].mut_decoded().push_int(Some(pid));
         }
 
         Ok(())
+    }
+
+    #[inline]
+    fn decode_handle_columns(
+        &mut self,
+        decode_handle: DecodeHandleOp,
+        columns: &mut LazyBatchColumnVec,
+        restore_data: RestoreData,
+    ) -> Result<()> {
+        match decode_handle {
+            DecodeHandleOp::Nop => {}
+            DecodeHandleOp::IntFromKey(handle) => {
+                let handle = self.decode_int_handle_from_key(handle)?;
+                columns[self.columns_id_without_handle.len()]
+                    .mut_decoded()
+                    .push_int(Some(handle));
+            }
+            DecodeHandleOp::IntFromValue(handle) => {
+                let handle = self.decode_int_handle_from_value(handle)?;
+                columns[self.columns_id_without_handle.len()]
+                    .mut_decoded()
+                    .push_int(Some(handle));
+            }
+            DecodeHandleOp::CommonHandle(mut handle) => {
+                let end_index = columns.columns_len() - self.pid_column_cnt;
+                Self::extract_columns_from_datum_format(
+                    &mut handle,
+                    &mut columns[self.columns_id_without_handle.len()..end_index],
+                )?;
+            }
+        }
+
+        let restore_data_bytes = match restore_data {
+            RestoreData::NotExists => return Ok(()),
+            RestoreData::V4(value) => value,
+            RestoreData::V5(value) => value,
+        };
+
+        if let DecodeHandleOp::CommonHandle(_) = decode_handle {
+            let skip = self.columns_id_without_handle.len();
+            self.restore_original_data(
+                restore_data_bytes,
+                izip!(
+                    &self.schema[skip..],
+                    &self.columns_id_for_common_handle,
+                    &mut columns[skip..],
+                ),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn decode_pid_columns(
+        &mut self,
+        columns: &mut LazyBatchColumnVec,
+        decode_pid: DecodePartitionIdOp,
+    ) -> Result<()> {
+        match decode_pid {
+            DecodePartitionIdOp::Nop => {}
+            DecodePartitionIdOp::PID(pid) => {
+                // If need partition id, append partition id to the last column.
+                let pid = NumberCodec::decode_i64(pid);
+                let idx = columns.columns_len() - 1;
+                columns[idx].mut_decoded().push_int(Some(pid))
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
+        if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
+        {
+            let handle_len = (&value[1..]).read_u16().map_err(|_| {
+                other_err!(
+                    "Fail to read common handle's length from value: {}",
+                    log_wrappers::Value::value(value)
+                )
+            })? as usize;
+            let handle_end_offset = 3 + handle_len;
+            if handle_end_offset > value.len() {
+                return Err(other_err!("`handle_len` is corrupted: {}", handle_len));
+            }
+            Ok(value[3..].split_at(handle_len))
+        } else {
+            Ok(value.split_at(0))
+        }
+    }
+
+    #[inline]
+    fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
+        if value
+            .get(0)
+            .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
+        {
+            if value.len() < 9 {
+                return Err(other_err!(
+                    "Remaining len {} is too short to decode partition ID",
+                    value.len()
+                ));
+            }
+            Ok(value[1..].split_at(8))
+        } else {
+            Ok(value.split_at(0))
+        }
+    }
+
+    #[inline]
+    fn split_restore_data(value: &[u8]) -> Result<(&[u8], bool, &[u8])> {
+        Ok(
+            if value
+                .get(0)
+                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
+            {
+                (&value[1..], true, &value[value.len()..])
+            } else if value
+                .get(0)
+                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
+            {
+                (value, false, &value[value.len()..])
+            } else if value.is_empty() {
+                (value, false, value)
+            } else {
+                (&value[..0], false, value)
+            },
+        )
     }
 }
 
