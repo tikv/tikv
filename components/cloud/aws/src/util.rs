@@ -21,6 +21,8 @@ pub fn new_http_client() -> io::Result<HttpClient> {
     // than 100MB. See https://github.com/rusoto/rusoto/pull/1227
     // for more information.
     http_config.read_buf_size(READ_BUF_SIZE);
+    // It is important to explicitly create the client and not use a global
+    // See https://github.com/tikv/tikv/issues/7236.
     HttpClient::new_with_config(http_config).map_err(|e| {
         Error::new(
             ErrorKind::Other,

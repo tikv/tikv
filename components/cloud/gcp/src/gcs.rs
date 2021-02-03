@@ -35,10 +35,7 @@ pub struct Config {
 
 impl Config {
     pub fn missing_credentials() -> io::Error {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "missing credentials",
-        )
+        io::Error::new(io::ErrorKind::InvalidInput, "missing credentials")
     }
 
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
@@ -48,13 +45,20 @@ impl Config {
         let predefined_acl = parse_predefined_acl(attrs.get("predefined_acl").unwrap_or(def))
             .or_invalid_input("invalid predefined_acl")?;
         let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
-                .or_invalid_input("invalid storage_class")?;
+            .or_invalid_input("invalid storage_class")?;
 
-        let credentials_blob = attrs.get("credentials_blob").ok_or_else(Self::missing_credentials)?;
+        let credentials_blob = attrs
+            .get("credentials_blob")
+            .ok_or_else(Self::missing_credentials)?;
         let svc_info = ServiceAccountInfo::deserialize(credentials_blob)
             .or_invalid_input("invalid credentials_blob")?;
 
-        Ok(Config { bucket, predefined_acl, svc_info, storage_class })
+        Ok(Config {
+            bucket,
+            predefined_acl,
+            svc_info,
+            storage_class,
+        })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
@@ -72,11 +76,17 @@ impl Config {
         let predefined_acl = parse_predefined_acl(&input.predefined_acl)
             .or_invalid_input("invalid predefined_acl")?;
         let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
-                .or_invalid_input("invalid storage_class")?;
-        let credentials_blob = StringNonEmpty::required_field(input.credentials_blob, "credentials_blob")?;
+            .or_invalid_input("invalid storage_class")?;
+        let credentials_blob =
+            StringNonEmpty::required_field(input.credentials_blob, "credentials_blob")?;
         let svc_info = ServiceAccountInfo::deserialize(credentials_blob.to_string())
             .or_invalid_input("invalid credentials_blob")?;
-        Ok(Config { bucket, predefined_acl, svc_info, storage_class })
+        Ok(Config {
+            bucket,
+            predefined_acl,
+            svc_info,
+            storage_class,
+        })
     }
 }
 
@@ -206,8 +216,8 @@ impl GCSStorage {
 
     /// Create a new GCS storage for the given config.
     pub fn new(config: Config) -> io::Result<GCSStorage> {
-        let svc_access =
-            ServiceAccountAccess::new(config.svc_info.clone()).or_invalid_input("invalid credentials_blob")?;
+        let svc_access = ServiceAccountAccess::new(config.svc_info.clone())
+            .or_invalid_input("invalid credentials_blob")?;
         let client = Client::builder().build(HttpsConnector::new());
         Ok(GCSStorage {
             config,

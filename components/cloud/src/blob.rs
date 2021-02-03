@@ -1,5 +1,5 @@
+pub use kvproto::backup::CloudDynamic;
 use std::io;
-pub use kvproto::backup::{CloudDynamic};
 
 #[derive(Clone, Debug)]
 pub struct StringNonEmpty(String);

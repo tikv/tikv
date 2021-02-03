@@ -172,6 +172,7 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 name = "aws"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "bytes 0.5.3",
  "cloud",
  "futures 0.3.7",
@@ -187,7 +188,7 @@ dependencies = [
  "rusoto_kms",
  "rusoto_mock",
  "rusoto_s3",
- "rusoto_util",
+ "rusoto_sts",
  "slog",
  "slog-global",
  "tikv_util",
@@ -3797,16 +3798,6 @@ dependencies = [
  "serde_urlencoded",
  "tempfile",
  "xml-rs",
-]
-
-[[package]]
-name = "rusoto_util"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_sts",
 ]
 
 [[package]]

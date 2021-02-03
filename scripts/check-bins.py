@@ -13,7 +13,6 @@ import sys, json, os, time, re
 WHITE_LIST = {
     "configuration", "configuration_derive", "match_template", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
-    "rusoto_util",
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]

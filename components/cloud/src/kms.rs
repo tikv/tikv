@@ -126,7 +126,9 @@ pub mod fake {
 
     impl FakeKms {
         pub fn new(plaintext_key: Vec<u8>) -> Self {
-            Self { plaintext_key: PlainKey::new(plaintext_key).unwrap() }
+            Self {
+                plaintext_key: PlainKey::new(plaintext_key).unwrap(),
+            }
         }
     }
 

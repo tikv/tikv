@@ -2,7 +2,6 @@
 use std::io;
 use std::marker::PhantomData;
 
-use rusoto_core::request::HttpClient;
 use rusoto_core::{
     request::DispatchSignedRequest,
     {ByteStream, RusotoError},
@@ -57,7 +56,10 @@ impl Config {
             let secret_access_key = attrs.get("secret_access_key").unwrap_or(def).clone();
             Some(AccessKeyPair {
                 access_key: StringNonEmpty::required_field(access_key.clone(), "access_key")?,
-                secret_access_key: StringNonEmpty::required_field(secret_access_key, "secret_access_key")?,
+                secret_access_key: StringNonEmpty::required_field(
+                    secret_access_key,
+                    "secret_access_key",
+                )?,
             })
         } else {
             None
@@ -89,11 +91,13 @@ impl Config {
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
-            Some(ak) =>
-                Some(AccessKeyPair {
-                    access_key: ak,
-                    secret_access_key: StringNonEmpty::required_field(input.secret_access_key, "secret_access_key")?,
-                }),
+            Some(ak) => Some(AccessKeyPair {
+                access_key: ak,
+                secret_access_key: StringNonEmpty::required_field(
+                    input.secret_access_key,
+                    "secret_access_key",
+                )?,
+            }),
         };
         Ok(Config {
             bucket: config_bucket,
@@ -128,11 +132,7 @@ impl S3Storage {
 
     /// Create a new S3 storage for the given config.
     pub fn new(config: Config) -> io::Result<S3Storage> {
-        // Need to explicitly create a dispatcher
-        // See https://github.com/tikv/tikv/issues/7236.
-        let dispatcher = HttpClient::new()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
-        Self::with_request_dispatcher(config, dispatcher)
+        Self::with_request_dispatcher(config, util::new_http_client()?)
     }
 
     fn new_creds_dispatcher<Creds, Dispatcher>(
@@ -146,7 +146,7 @@ impl S3Storage {
     {
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
-        let region = rusoto_util::get_region(&bucket_region, &bucket_endpoint)?;
+        let region = util::get_region(&bucket_region, &bucket_endpoint)?;
         let client = S3Client::new_with(dispatcher, credentials_provider, region);
         Ok(S3Storage {
             config,
@@ -168,7 +168,7 @@ impl S3Storage {
             );
             Self::new_creds_dispatcher(config, dispatcher, cred_provider)
         } else {
-            let cred_provider = rusoto_util::CredentialsProvider::new()?;
+            let cred_provider = util::CredentialsProvider::new()?;
             Self::new_creds_dispatcher(config, dispatcher, cred_provider)
         }
     }
@@ -210,9 +210,9 @@ impl<'client> S3Uploader<'client> {
             key,
             bucket: config.bucket.bucket.to_string(),
             acl: config.acl.as_ref().cloned(),
-            server_side_encryption: config.sse.as_ref().map(|s| s.clone() ),
-            sse_kms_key_id: config.sse_kms_key_id.as_ref().map(|s| s.clone() ),
-            storage_class: config.storage_class.as_ref().map(|s| s.clone() ),
+            server_side_encryption: config.sse.as_ref().map(|s| s.clone()),
+            sse_kms_key_id: config.sse_kms_key_id.as_ref().map(|s| s.clone()),
+            storage_class: config.storage_class.as_ref().map(|s| s.clone()),
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -265,10 +265,10 @@ impl<'client> S3Uploader<'client> {
             .create_multipart_upload(CreateMultipartUploadRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
-                acl: self.acl.as_ref().map(|s| s.to_string() ),
-                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string( )),
-                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string() ),
-                storage_class: self.storage_class.as_ref().map(|s| s.to_string() ),
+                acl: self.acl.as_ref().map(|s| s.to_string()),
+                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string()),
+                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
+                storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                 ..Default::default()
             })
             .await?;
@@ -341,10 +341,10 @@ impl<'client> S3Uploader<'client> {
             .put_object(PutObjectRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
-                acl: self.acl.as_ref().map(|s| s.to_string() ),
-                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string() ),
-                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string() ),
-                storage_class: self.storage_class.as_ref().map(|s| s.to_string() ),
+                acl: self.acl.as_ref().map(|s| s.to_string()),
+                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string()),
+                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
+                storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                 content_length: Some(data.len() as i64),
                 body: Some(data.to_vec().into()),
                 ..Default::default()

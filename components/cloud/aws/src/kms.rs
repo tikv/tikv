@@ -13,6 +13,7 @@ use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tikv_util::box_err;
 use tokio::runtime::Runtime;
 
+use crate::util;
 use cloud::error::{Error, Result};
 use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
@@ -49,7 +50,7 @@ impl AwsKms {
         Creds: ProvideAwsCredentials + Send + Sync + 'static,
         Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
-        let region = rusoto_util::get_region(
+        let region = util::get_region(
             config.location.region.as_ref(),
             config.location.endpoint.as_ref(),
         )?;
@@ -66,7 +67,7 @@ impl AwsKms {
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-        let credentials_provider = rusoto_util::CredentialsProvider::new()?;
+        let credentials_provider = util::CredentialsProvider::new()?;
         Self::new_creds_dispatcher(config, dispatcher, credentials_provider)
     }
 
