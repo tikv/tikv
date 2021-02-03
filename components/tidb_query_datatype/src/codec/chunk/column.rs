@@ -19,6 +19,9 @@ use crate::codec::mysql::decimal::{
 use crate::codec::mysql::duration::{
     Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
 };
+use crate::codec::mysql::enums::{
+    Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef,
+};
 use crate::codec::mysql::json::{
     Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef,
 };
@@ -116,7 +119,11 @@ impl Column {
                     col.append_json_datum(&raw_datums[row_index])?
                 }
             }
-            EvalType::Enum => unimplemented!(),
+            EvalType::Enum => {
+                for &row_index in logical_rows {
+                    col.append_enum_datum(&raw_datums[row_index], field_type)?
+                }
+            }
             EvalType::Set => unimplemented!(),
         }
 
@@ -239,7 +246,16 @@ impl Column {
                     }
                 }
             }
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(vec) => {
+                for &row_index in logical_rows {
+                    match vec.get_option_ref(row_index) {
+                        None => {
+                            col.append_null();
+                        }
+                        Some(val) => col.append_enum(val)?,
+                    }
+                }
+            }
             VectorValue::Set(_) => unimplemented!(),
         }
         Ok(col)
@@ -271,7 +287,8 @@ impl Column {
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
-            FieldTypeTp::Enum | FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
+            FieldTypeTp::Bit | FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -824,6 +841,58 @@ impl Column {
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
         data.read_json()
+    }
+
+    // Append an Enum datum to the column
+    #[inline]
+    pub fn append_enum(&mut self, e: EnumRef) -> Result<()> {
+        self.data.write_enum(e)?;
+        self.finished_append_var();
+        Ok(())
+    }
+
+    pub fn append_enum_datum(&mut self, src_datum: &[u8], field_type: &FieldType) -> Result<()> {
+        if src_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = src_datum[0];
+        let raw_datum = &src_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::COMPACT_BYTES_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_compact_bytes(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            datum::VAR_UINT_FLAG => {
+                self.data
+                    .write_enum_to_chunk_by_datum_payload_var_uint(raw_datum, field_type)?;
+                self.finished_append_var();
+            }
+            _ => {
+                return Err(Error::InvalidDataType(format!(
+                    "Unsupported datum flag {} for Enum vector",
+                    flag
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the enum datum of the row in the column.
+    #[inline]
+    pub fn get_enum(&self, idx: usize) -> Result<Enum> {
+        let start = idx * self.fixed_len;
+        let end = start + self.fixed_len;
+        let mut data = &self.data[start..end];
+        data.read_enum_from_chunk()
     }
 
     /// Return the total rows in the column.

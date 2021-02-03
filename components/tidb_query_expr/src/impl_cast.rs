@@ -67,6 +67,7 @@ fn get_cast_fn_rpn_meta(
                 cast_json_as_any_fn_meta::<Int>()
             }
         }
+        (EvalType::Enum, EvalType::Int) => cast_enum_as_any_fn_meta::<Int>(),
 
         //  any as real
         (EvalType::Int, EvalType::Real) => {
@@ -106,6 +107,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Real) => cast_any_as_any_fn_meta::<DateTime, Real>(),
         (EvalType::Duration, EvalType::Real) => cast_any_as_any_fn_meta::<Duration, Real>(),
         (EvalType::Json, EvalType::Real) => cast_json_as_any_fn_meta::<Real>(),
+        (EvalType::Enum, EvalType::Real) => cast_enum_as_any_fn_meta::<Real>(),
 
         // any as string
         (EvalType::Int, EvalType::Bytes) => {
@@ -129,6 +131,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Bytes) => cast_any_as_string_fn_meta::<DateTime>(),
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
+        (EvalType::Enum, EvalType::Bytes) => cast_enum_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -386,16 +389,6 @@ fn cast_binary_string_as_int(ctx: &mut EvalContext, val: Option<BytesRef>) -> Re
             Ok(Some(r))
         }
     }
-}
-
-/// # TODO
-///
-/// This function is added to prove `rpn_fn` supports `enum`/`set` correctly. We will add enum/set
-/// related copr functions into `get_cast_fn_rpn_meta` after Enum/Set decode implemented.
-#[rpn_fn]
-#[inline]
-fn cast_enum_as_int(val: EnumRef) -> Result<Option<Int>> {
-    Ok(Some(val.value() as Int))
 }
 
 #[rpn_fn]
@@ -1352,6 +1345,37 @@ fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opt
     }
 }
 
+#[rpn_fn(nullable, capture = [ctx])]
+#[inline]
+fn cast_enum_as_any<To: Evaluable + EvaluableRet + ConvertFrom<Enum>>(
+    ctx: &mut EvalContext,
+    val: Option<EnumRef>,
+) -> Result<Option<To>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = To::convert_from(ctx, val.to_owned())?;
+            Ok(Some(val))
+        }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_enum_as_bytes(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.convert(ctx)?;
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Result;
@@ -1680,24 +1704,75 @@ mod tests {
 
     #[test]
     fn test_enum_as_int() {
-        // TODO: we need to test None case here.
-
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我太强啦");
+        test_none_with_ctx(cast_enum_as_any::<Int>);
 
         let cs = vec![
             // (input, expect)
-            (EnumRef::new(&buf, 0), 0),
-            (EnumRef::new(&buf, 1), 1),
+            (EnumRef::new("enum".as_bytes(), 0), 0),
+            (EnumRef::new("int".as_bytes(), 1), 1),
+            (EnumRef::new("real".as_bytes(), 2), 2),
+            (EnumRef::new("string".as_bytes(), 3), 3),
         ];
 
         for (input, expect) in cs {
-            let r = cast_enum_as_int(input);
+            let mut ctx = EvalContext::default();
+            let r = cast_enum_as_any::<Int>(&mut ctx, Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
+    }
+
+    #[test]
+    fn test_enum_as_real() {
+        test_none_with_ctx(cast_enum_as_any::<Real>);
+
+        let cs = vec![
+            // (input, expect)
+            (EnumRef::new("enum".as_bytes(), 0), Real::from(0.)),
+            (EnumRef::new("int".as_bytes(), 1), Real::from(1.)),
+            (EnumRef::new("real".as_bytes(), 2), Real::from(2.)),
+            (EnumRef::new("string".as_bytes(), 3), Real::from(3.)),
+        ];
+
+        for (input, expect) in cs {
+            let mut ctx = EvalContext::default();
+            let r = cast_enum_as_any::<Real>(&mut ctx, Some(input));
+            let r = r.map(|x| x.map(|x| x));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_enum_as_bytes() {
+        test_none_with_ctx_and_extra(cast_enum_as_bytes);
+
+        let cs = vec![
+            // (input, expect)
+            (
+                EnumRef::new("enum".as_bytes(), 0),
+                Bytes::from(""),
+                String::from(""),
+            ),
+            (
+                EnumRef::new("int".as_bytes(), 1),
+                Bytes::from("int"),
+                String::from("int"),
+            ),
+            (
+                EnumRef::new("real".as_bytes(), 2),
+                Bytes::from("real"),
+                String::from("real"),
+            ),
+            (
+                EnumRef::new("string".as_bytes(), 3),
+                Bytes::from("string"),
+                String::from("string"),
+            ),
+        ];
+
+        test_as_string_helper(cs, cast_enum_as_bytes, "cast_enum_as_bytes");
     }
 
     #[test]

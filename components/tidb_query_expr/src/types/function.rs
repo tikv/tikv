@@ -269,7 +269,10 @@ pub fn validate_expr_return_type(expr: &Expr, et: EvalType) -> Result<()> {
     if et == received_et {
         Ok(())
     } else {
-        Err(other_err!("Expect `{}`, received `{}`", et, received_et))
+        match (et, received_et) {
+            (EvalType::Int, EvalType::Enum) | (EvalType::Bytes, EvalType::Enum) => Ok(()),
+            _ => Err(other_err!("Expect `{}`, received `{}`", et, received_et)),
+        }
     }
 }
 

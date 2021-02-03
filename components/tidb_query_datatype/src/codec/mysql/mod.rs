@@ -33,7 +33,7 @@ pub mod time;
 
 pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode};
 pub use self::duration::{Duration, DurationDecoder, DurationEncoder};
-pub use self::enums::{Enum, EnumRef};
+pub use self::enums::{Enum, EnumDecoder, EnumEncoder, EnumRef};
 pub use self::json::{
     parse_json_path_expr, Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonType,
     ModifyType, PathExpression,

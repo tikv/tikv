@@ -191,12 +191,7 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
 
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我太强啦");
-        let buf = Arc::new(buf);
-
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), 1))).unwrap();
 
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();

@@ -2,32 +2,56 @@
 
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
-use tikv_util::buffer_vec::BufferVec;
+use tipb::FieldType;
 
+use crate::codec::convert::{ConvertTo, ToInt};
 use crate::codec::Result;
+use crate::expr::EvalContext;
+use crate::FieldTypeTp;
+use codec::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct Enum {
-    data: Arc<BufferVec>,
+    name: Vec<u8>,
 
     // MySQL Enum is 1-based index, value == 0 means this enum is ''
-    value: usize,
+    value: u64,
 }
 
 impl Enum {
-    pub fn new(data: Arc<BufferVec>, value: usize) -> Self {
-        Self { data, value }
+    pub fn new(name: Vec<u8>, value: u64) -> Self {
+        if value == 0 {
+            Self {
+                name: vec![],
+                value,
+            }
+        } else {
+            Self { name, value }
+        }
     }
-    pub fn value(&self) -> usize {
+    pub fn value(&self) -> u64 {
         self.value
+    }
+    pub fn value_ref(&self) -> &u64 {
+        &self.value
+    }
+    pub fn name(&self) -> &[u8] {
+        self.name.as_slice()
     }
     pub fn as_ref(&self) -> EnumRef<'_> {
         EnumRef {
-            data: &self.data,
+            name: &self.name,
             value: self.value,
         }
+    }
+    fn get_value_name(value: u64, elems: &[String]) -> &[u8] {
+        let name = if value == 0 {
+            ""
+        } else {
+            &elems[value as usize - 1]
+        };
+        name.as_bytes()
     }
 }
 
@@ -64,37 +88,62 @@ impl crate::codec::data_type::AsMySQLBool for Enum {
     }
 }
 
+impl ToInt for Enum {
+    fn to_int(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<i64> {
+        Ok(self.value as i64)
+    }
+
+    fn to_uint(&self, _ctx: &mut EvalContext, _tp: FieldTypeTp) -> Result<u64> {
+        Ok(self.value)
+    }
+}
+
+impl ConvertTo<f64> for Enum {
+    fn convert(&self, _ctx: &mut EvalContext) -> Result<f64> {
+        Ok(self.value as f64)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRef<'a> {
-    data: &'a BufferVec,
-    value: usize,
+    name: &'a [u8],
+    value: u64,
 }
 
 impl<'a> EnumRef<'a> {
-    pub fn new(data: &'a BufferVec, value: usize) -> Self {
-        Self { data, value }
+    pub fn new(name: &'a [u8], value: u64) -> Self {
+        if value == 0 {
+            Self {
+                name: "".as_bytes(),
+                value,
+            }
+        } else {
+            Self { name, value }
+        }
     }
     pub fn to_owned(self) -> Enum {
         Enum {
-            data: Arc::new(self.data.clone()),
+            name: self.name.to_owned(),
             value: self.value,
         }
     }
     pub fn is_empty(&self) -> bool {
         self.value == 0
     }
-    pub fn value(&self) -> usize {
+    pub fn value(&self) -> u64 {
         self.value
     }
+    pub fn value_ref(&self) -> &u64 {
+        &self.value
+    }
+    pub fn name(&self) -> &'a [u8] {
+        self.name
+    }
     pub fn as_str(&self) -> Result<&str> {
-        if self.value == 0 {
-            return Ok("");
-        }
-
-        let buf = &self.data[self.value - 1];
-
-        // TODO: take string collation into consideration here.
-        Ok(std::str::from_utf8(buf)?)
+        Ok(std::str::from_utf8(self.name)?)
+    }
+    pub fn len(&self) -> usize {
+        8 + self.name.len()
     }
 }
 
@@ -104,10 +153,7 @@ impl<'a> Display for EnumRef<'a> {
             return Ok(());
         }
 
-        let buf = &self.data[self.value - 1];
-
-        // TODO: Check the requirements and intentions of to_string usage.
-        write!(f, "{}", String::from_utf8_lossy(buf))
+        write!(f, "{}", String::from_utf8_lossy(self.name))
     }
 }
 
@@ -131,22 +177,114 @@ impl<'a> PartialOrd for EnumRef<'a> {
     }
 }
 
+impl<'a> ToString for EnumRef<'a> {
+    fn to_string(&self) -> String {
+        String::from_utf8_lossy(self.name).to_string()
+    }
+}
+
+pub trait EnumEncoder: NumberEncoder {
+    #[inline]
+    fn write_enum(&mut self, data: EnumRef) -> Result<()> {
+        self.write_u64_le(data.value as u64)?;
+        self.write_bytes(data.name)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_enum_to_chunk(&mut self, value: u64, name: &[u8]) -> Result<()> {
+        self.write_u64_le(value)?;
+        self.write_bytes(name)?;
+        Ok(())
+    }
+}
+
+impl<T: BufferWriter> EnumEncoder for T {}
+
+pub trait EnumDatumPayloadChunkEncoder: NumberEncoder + EnumEncoder {
+    #[inline]
+    fn write_enum_to_chunk_by_datum_payload_compact_bytes(
+        &mut self,
+        mut src_payload: &[u8],
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let vn = src_payload.read_var_i64()? as usize;
+        let mut data = src_payload.read_bytes(vn)?;
+        let value = data.read_var_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        self.write_enum_to_chunk(value, name)
+    }
+
+    #[inline]
+    fn write_enum_to_chunk_by_datum_payload_uint(
+        &mut self,
+        mut src_payload: &[u8],
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let value = src_payload.read_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        self.write_enum_to_chunk(value, name)
+    }
+
+    #[inline]
+    fn write_enum_to_chunk_by_datum_payload_var_uint(
+        &mut self,
+        mut src_payload: &[u8],
+        field_type: &FieldType,
+    ) -> Result<()> {
+        let value = src_payload.read_var_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        self.write_enum_to_chunk(value, name)
+    }
+}
+
+impl<T: BufferWriter> EnumDatumPayloadChunkEncoder for T {}
+
+pub trait EnumDecoder: NumberDecoder {
+    #[inline]
+    fn read_enum_compact_bytes(&mut self, field_type: &FieldType) -> Result<Enum> {
+        let vn = self.read_var_i64()? as usize;
+        let mut data = self.read_bytes(vn)?;
+        let value = data.read_var_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        Ok(Enum::new(name.to_vec(), value))
+    }
+
+    #[inline]
+    fn read_enum_uint(&mut self, field_type: &FieldType) -> Result<Enum> {
+        let value = self.read_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        Ok(Enum::new(name.to_vec(), value))
+    }
+
+    #[inline]
+    fn read_enum_var_uint(&mut self, field_type: &FieldType) -> Result<Enum> {
+        let value = self.read_var_u64()?;
+        let name = Enum::get_value_name(value, field_type.get_elems());
+        Ok(Enum::new(name.to_vec(), value))
+    }
+
+    #[inline]
+    fn read_enum_from_chunk(&mut self) -> Result<Enum> {
+        let value = self.read_u64()?;
+        let name = String::from_utf8_lossy(self.bytes()).to_string();
+        Ok(Enum::new(name.into_bytes(), value))
+    }
+}
+
+impl<T: BufferReader> EnumDecoder for T {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_to_string() {
-        let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
+        let cases = vec![("c", 1, "c"), ("b", 2, "b"), ("a", 3, "a")];
 
-        for (data, value, expect) in cases {
-            let mut buf = BufferVec::new();
-            for v in data {
-                buf.push(v)
-            }
-
+        for (name, value, expect) in cases {
             let e = Enum {
-                data: Arc::new(buf),
+                name: name.as_bytes().to_vec(),
                 value,
             };
 
@@ -156,15 +294,13 @@ mod tests {
 
     #[test]
     fn test_as_str() {
-        let cases = vec![(vec!["a", "b", "c"], 1, "a"), (vec!["a", "b", "c"], 3, "c")];
+        let cases = vec![("c", 1, "c"), ("b", 2, "b"), ("a", 3, "a")];
 
-        for (data, value, expect) in cases {
-            let mut buf = BufferVec::new();
-            for v in data {
-                buf.push(v)
-            }
-
-            let e = EnumRef { data: &buf, value };
+        for (name, value, expect) in cases {
+            let e = EnumRef {
+                name: name.as_bytes(),
+                value,
+            };
 
             assert_eq!(e.as_str().expect("get str correctly"), expect)
         }
@@ -172,20 +308,15 @@ mod tests {
 
     #[test]
     fn test_is_empty() {
-        let mut buf = BufferVec::new();
-        for v in &["a", "b", "c"] {
-            buf.push(v)
-        }
-
         let s = Enum {
-            data: Arc::new(buf),
+            name: "abc".to_owned().into_bytes(),
             value: 1,
         };
 
         assert!(!s.as_ref().is_empty());
 
         let s = Enum {
-            data: s.data,
+            name: vec![],
             value: 0,
         };
 

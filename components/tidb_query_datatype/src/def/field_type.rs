@@ -154,6 +154,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 

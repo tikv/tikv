@@ -3,41 +3,50 @@
 use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Enum, EnumRef};
+use crate::codec::data_type::{ChunkedVecBytes, ChunkedVecSized, Int};
 use crate::impl_chunked_vec_common;
-use std::sync::Arc;
-use tikv_util::buffer_vec::BufferVec;
 
-/// `ChunkedVecEnum` stores enum in a compact way.
+/// `ChunkedVecEnum` is a vector storing `Option<Enum>`.
 ///
 /// Inside `ChunkedVecEnum`:
-/// - `data` stores the real enum data.
-/// - `bitmap` indicates if an element at given index is null.
-/// - `value` is an 1-based index enum data offset, 0 means this enum is ''
+/// - `values` stores 1-based index enum data offsets, 0 means this enum is ''
+/// - `names` stores the names of enum data
 ///
 /// # Notes
 ///
-/// Make sure operating `bitmap` and `value` together to prevent different
-/// stored representation issue discussed at
-/// https://github.com/tikv/tikv/pull/8948#discussion_r516463693
+/// `values` and `names` both maintain a duplicated bitmap.
+/// We are not able to store the data in a more compact form
+/// because we have to borrow the reference of `ChunkedVecSize<Int>`
+/// and `ChunkedVecBytes`. The borrowed reference should have the same
+/// lifetime with `ChunkedVecEnum` which cannot be achieved if we don't
+/// store the owned data in struct fields.
 ///
-/// TODO: add way to set enum column data
+/// TODO: Change to a compact format when TiDB has its Enum/Set EvalType
 #[derive(Debug, Clone)]
 pub struct ChunkedVecEnum {
-    data: Arc<BufferVec>,
-    bitmap: BitVec,
     // MySQL Enum is 1-based index, value == 0 means this enum is ''
-    value: Vec<usize>,
+    values: ChunkedVecSized<Int>,
+    names: ChunkedVecBytes,
 }
 
 impl ChunkedVecEnum {
     #[inline]
     pub fn get(&self, idx: usize) -> Option<EnumRef> {
         assert!(idx < self.len());
-        if self.bitmap.get(idx) {
-            Some(EnumRef::new(&self.data, self.value[idx]))
-        } else {
-            None
-        }
+        self.values.get_option_ref(idx).map(|value| {
+            let name = self.names.get(idx).unwrap();
+            EnumRef::new(name, *value as u64)
+        })
+    }
+
+    #[inline]
+    pub fn as_vec_int(&self) -> &ChunkedVecSized<Int> {
+        &self.values
+    }
+
+    #[inline]
+    pub fn as_vec_bytes(&self) -> &ChunkedVecBytes {
+        &self.names
     }
 }
 
@@ -46,52 +55,50 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
 
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            data: Arc::new(BufferVec::new()),
-            bitmap: BitVec::with_capacity(capacity),
-            value: Vec::with_capacity(capacity),
+            values: ChunkedVecSized::<Int>::with_capacity(capacity),
+            names: ChunkedVecBytes::with_capacity(capacity),
         }
     }
 
     #[inline]
     fn push_data(&mut self, value: Enum) {
-        self.bitmap.push(true);
-        self.value.push(value.value());
+        self.values.push_data(value.value() as i64);
+        self.names.push_data(value.name().to_vec());
     }
 
     #[inline]
     fn push_null(&mut self) {
-        self.bitmap.push(false);
-        self.value.push(0);
+        self.values.push_null();
+        self.names.push_null();
     }
 
     fn len(&self) -> usize {
-        self.value.len()
+        self.values.len()
     }
 
     fn truncate(&mut self, len: usize) {
         if len < self.len() {
-            self.bitmap.truncate(len);
-            self.value.truncate(len);
+            self.values.truncate(len);
+            self.names.truncate(len);
         }
     }
 
     fn capacity(&self) -> usize {
-        self.bitmap.capacity().max(self.value.capacity())
+        self.values.capacity().max(self.names.capacity())
     }
 
     fn append(&mut self, other: &mut Self) {
-        self.value.append(&mut other.value);
-        self.bitmap.append(&mut other.bitmap);
+        self.values.append(&mut other.values);
+        self.names.append(&mut other.names);
     }
 
     fn to_vec(&self) -> Vec<Option<Enum>> {
         let mut x = Vec::with_capacity(self.len());
         for i in 0..self.len() {
-            x.push(if self.bitmap.get(i) {
-                Some(Enum::new(self.data.clone(), self.value[i]))
-            } else {
-                None
-            });
+            x.push(self.values.get_option_ref(i).map(|value| {
+                let name = self.names.get(i).unwrap().to_vec();
+                Enum::new(name, *value as u64)
+            }))
         }
         x
     }
@@ -99,20 +106,15 @@ impl ChunkedVec<Enum> for ChunkedVecEnum {
 
 impl PartialEq for ChunkedVecEnum {
     fn eq(&self, other: &Self) -> bool {
-        if self.data.len() != other.data.len() {
-            return false;
-        }
-        for idx in 0..self.data.len() {
-            if self.data[idx] != other.data[idx] {
-                return false;
-            }
-        }
-
-        if !self.bitmap.eq(&other.bitmap) {
+        if self.values.len() != other.values.len() {
             return false;
         }
 
-        if !self.value.eq(&other.value) {
+        if !self.values.eq(&other.values) {
+            return false;
+        }
+
+        if !self.names.eq(&other.names) {
             return false;
         }
 
@@ -127,7 +129,7 @@ impl<'a> ChunkRef<'a, EnumRef<'a>> for &'a ChunkedVecEnum {
     }
 
     fn get_bit_vec(self) -> &'a BitVec {
-        &self.bitmap
+        &self.values.get_bit_vec()
     }
 
     #[inline]
@@ -153,32 +155,23 @@ mod tests {
     use super::*;
 
     fn setup() -> ChunkedVecEnum {
-        let mut x: ChunkedVecEnum = ChunkedVecEnum::with_capacity(0);
-
-        // FIXME: we need a set_data here, but for now, we set directly
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我强爆啊");
-        buf.push("我成功了");
-        x.data = Arc::new(buf);
-
-        x
+        ChunkedVecEnum::with_capacity(0)
     }
 
     #[test]
     fn test_basics() {
         let mut x = setup();
         x.push(None);
-        x.push(Some(Enum::new(x.data.clone(), 2)));
+        x.push(Some(Enum::new("我强爆啊".as_bytes().to_vec(), 2)));
         x.push(None);
-        x.push(Some(Enum::new(x.data.clone(), 1)));
-        x.push(Some(Enum::new(x.data.clone(), 3)));
+        x.push(Some(Enum::new("我好强啊".as_bytes().to_vec(), 1)));
+        x.push(Some(Enum::new("我成功了".as_bytes().to_vec(), 3)));
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new(&x.data, 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new(&x.data, 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
         assert_eq!(x.len(), 5);
         assert!(!x.is_empty());
     }
@@ -187,10 +180,10 @@ mod tests {
     fn test_truncate() {
         let mut x = setup();
         x.push(None);
-        x.push(Some(Enum::new(x.data.clone(), 2)));
+        x.push(Some(Enum::new("我强爆啊".as_bytes().to_vec(), 2)));
         x.push(None);
-        x.push(Some(Enum::new(x.data.clone(), 1)));
-        x.push(Some(Enum::new(x.data.clone(), 3)));
+        x.push(Some(Enum::new("我好强啊".as_bytes().to_vec(), 1)));
+        x.push(Some(Enum::new("我成功了".as_bytes().to_vec(), 3)));
 
         x.truncate(100);
         assert_eq!(x.len(), 5);
@@ -198,7 +191,7 @@ mod tests {
         x.truncate(3);
         assert_eq!(x.len(), 3);
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
         assert_eq!(x.get(2), None);
 
         x.truncate(1);
@@ -213,21 +206,21 @@ mod tests {
     fn test_append() {
         let mut x = setup();
         x.push(None);
-        x.push(Some(Enum::new(x.data.clone(), 2)));
+        x.push(Some(Enum::new("我强爆啊".as_bytes().to_vec(), 2)));
 
         let mut y = setup();
         y.push(None);
-        y.push(Some(Enum::new(x.data.clone(), 1)));
-        y.push(Some(Enum::new(x.data.clone(), 3)));
+        y.push(Some(Enum::new("我好强啊".as_bytes().to_vec(), 1)));
+        y.push(Some(Enum::new("我成功了".as_bytes().to_vec(), 3)));
 
         x.append(&mut y);
         assert_eq!(x.len(), 5);
         assert!(y.is_empty());
 
         assert_eq!(x.get(0), None);
-        assert_eq!(x.get(1), Some(EnumRef::new(&x.data, 2)));
+        assert_eq!(x.get(1), Some(EnumRef::new("我强爆啊".as_bytes(), 2)));
         assert_eq!(x.get(2), None);
-        assert_eq!(x.get(3), Some(EnumRef::new(&x.data, 1)));
-        assert_eq!(x.get(4), Some(EnumRef::new(&x.data, 3)));
+        assert_eq!(x.get(3), Some(EnumRef::new("我好强啊".as_bytes(), 1)));
+        assert_eq!(x.get(4), Some(EnumRef::new("我成功了".as_bytes(), 3)));
     }
 }
