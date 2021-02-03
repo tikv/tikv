@@ -702,15 +702,15 @@ pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
-pub fn find_in_set(s: BytesRef, str_list: BytesRef) -> Result<Option<Int>> {
+pub fn find_in_set<C: Collator>(s: BytesRef, str_list: BytesRef) -> Result<Option<Int>> {
     if str_list.is_empty() {
         return Ok(Some(0));
     }
 
-    let s = String::from_utf8_lossy(s);
+    use std::cmp::Ordering::*;
     let result = String::from_utf8_lossy(str_list)
         .split(',')
-        .position(|str_in_set| str_in_set == s)
+        .position(|str_in_set| C::sort_compare(str_in_set.as_bytes(), s).unwrap() == Equal)
         .map(|p| p as i64 + 1)
         .or(Some(0));
 
@@ -3253,18 +3253,25 @@ mod tests {
     #[test]
     fn test_find_in_set() {
         let cases = vec![
-            ("foo", "foo,bar", 1),
-            ("foo", "foobar,bar", 0),
-            (" foo ", "foo, foo ", 2),
-            ("", "foo,bar,", 3),
-            ("", "", 0),
-            ("a,b", "a,b,c", 0),
+            ("foo", "foo,bar", Collation::Utf8Mb4Bin, 1),
+            ("foo", "foobar,bar", Collation::Utf8Mb4Bin, 0),
+            (" foo ", "foo, foo ", Collation::Utf8Mb4Bin, 2),
+            ("", "foo,bar,", Collation::Utf8Mb4Bin, 3),
+            ("", "", Collation::Utf8Mb4Bin, 0),
+            ("a,b", "a,b,c", Collation::Utf8Mb4Bin, 0),
+            ("a,b", "A,B,C", Collation::Utf8Mb4GeneralCi, 0),
         ];
 
-        for (s, str_list, exp) in cases {
+        for (s, str_list, collation, exp) in cases {
             let s = Some(s.as_bytes().to_vec());
             let str_list = Some(str_list.as_bytes().to_vec());
             let got = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(s)
                 .push_param(str_list)
                 .evaluate::<Int>(ScalarFuncSig::FindInSet)
@@ -3273,12 +3280,18 @@ mod tests {
         }
 
         let null_cases = vec![
-            (Some(b"foo".to_vec()), None, None),
-            (None, Some(b"bar".to_vec()), None),
-            (None, None, None),
+            (Some(b"foo".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, Some(b"bar".to_vec()), Collation::Utf8Mb4Bin, None),
+            (None, None, Collation::Utf8Mb4Bin, None),
         ];
-        for (s, str_list, exp) in null_cases {
+        for (s, str_list, collation, exp) in null_cases {
             let got = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(s)
                 .push_param(str_list)
                 .evaluate::<Int>(ScalarFuncSig::FindInSet)
