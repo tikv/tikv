@@ -672,12 +672,13 @@ impl IndexScanExecutorImpl {
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
             let skip = self.columns_id_without_handle.len();
+            let end_index = columns.columns_len() - self.pid_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
-                    &self.schema[skip..],
+                    &self.schema[skip..end_index],
                     &self.columns_id_for_common_handle,
-                    &mut columns[skip..],
+                    &mut columns[skip..end_index],
                 ),
             )?;
         }
