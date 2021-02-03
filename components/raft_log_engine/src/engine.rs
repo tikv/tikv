@@ -120,12 +120,7 @@ impl RaftEngine for RaftLogEngine {
         Ok(ret)
     }
 
-    fn clean(
-        &self,
-        raft_group_id: u64,
-        _: &RaftLocalState,
-        batch: &mut RaftLogBatch,
-    ) -> Result<()> {
+    fn clean(&self, raft_group_id: u64, _last_index: u64, batch: &mut RaftLogBatch) -> Result<()> {
         batch.0.clean_region(raft_group_id);
         Ok(())
     }

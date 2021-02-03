@@ -8,6 +8,7 @@ use tikv_util::config::ReadableDuration;
 pub struct Config {
     pub max_batch_size: usize,
     pub pool_size: usize,
+    pub io_pool_size: usize,
     pub reschedule_duration: ReadableDuration,
 }
 
@@ -16,6 +17,7 @@ impl Default for Config {
         Config {
             max_batch_size: 256,
             pool_size: 2,
+            io_pool_size: 1,
             reschedule_duration: ReadableDuration::secs(5),
         }
     }

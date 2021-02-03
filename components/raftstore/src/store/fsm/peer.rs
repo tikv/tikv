@@ -112,8 +112,11 @@ where
     /// `skip_gc_raft_log_ticks`.
     skip_gc_raft_log_ticks: usize,
 
-    // Batch raft command which has the same header into an entry
+    /// Batch raft command which has the same header into an entry
     batch_req_builder: BatchRaftCmdRequestBuilder<EK>,
+    /// Destroy is delayed because of some unpersisted readies in Peer.
+    /// Should call `destroy_peer` again after persisting all readies.
+    delayed_destroy: Option<bool>,
 }
 
 pub struct BatchRaftCmdRequestBuilder<E>
@@ -200,6 +203,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                delayed_destroy: None,
             }),
         ))
     }
@@ -242,6 +246,7 @@ where
                 batch_req_builder: BatchRaftCmdRequestBuilder::new(
                     cfg.raft_entry_max_size.0 as f64,
                 ),
+                delayed_destroy: None,
             }),
         ))
     }
@@ -473,7 +478,15 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
-            self.fsm.has_ready |= self.fsm.peer.check_new_persisted();
+            if self.fsm.peer.check_new_persisted() {
+                self.fsm.has_ready = true;
+                if let Some(mbt) = self.fsm.delayed_destroy {
+                    if !self.fsm.peer.has_unpersisted_ready() {
+                        self.destroy_peer(mbt);
+                    }
+                }
+            }
+
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -909,20 +922,17 @@ where
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
-            self.ctx.ready_res.push(r);
+            self.ctx.ready_count += 1;
+            self.ctx.raft_metrics.ready.has_ready_region += 1;
+
+            self.post_raft_ready_append(r.0, r.1);
         }
     }
 
-    pub fn post_raft_ready_append(
-        &mut self,
-        ready: Ready,
-        invoke_ctx: InvokeContext,
-    ) {
+    pub fn post_raft_ready_append(&mut self, ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         let res = self.fsm.peer.post_raft_ready_append(self.ctx, invoke_ctx);
-        self.fsm
-            .peer
-            .handle_raft_ready_advance(self.ctx, ready);
+        self.fsm.peer.handle_raft_ready_advance(self.ctx, ready);
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             if is_merging {
@@ -1788,6 +1798,12 @@ where
 
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
+
+        if self.fsm.peer.has_unpersisted_ready() {
+            assert_eq!(self.fsm.delayed_destroy, None);
+            self.fsm.delayed_destroy = Some(merged_by_target);
+            return;
+        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 

@@ -130,12 +130,7 @@ impl RaftEngine for RocksEngine {
         Ok(data_size)
     }
 
-    fn clean(
-        &self,
-        raft_group_id: u64,
-        state: &RaftLocalState,
-        batch: &mut Self::LogBatch,
-    ) -> Result<()> {
+    fn clean(&self, raft_group_id: u64, last_index: u64, batch: &mut Self::LogBatch) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
         let seek_key = keys::raft_log_key(raft_group_id, 0);
         let prefix = keys::raft_log_prefix(raft_group_id);
@@ -148,7 +143,7 @@ impl RaftEngine for RocksEngine {
                 Ok(index) => index,
                 Err(_) => return Ok(()),
             };
-            for index in first_index..=state.last_index {
+            for index in first_index..=last_index {
                 let key = keys::raft_log_key(raft_group_id, index);
                 batch.delete(&key)?;
             }

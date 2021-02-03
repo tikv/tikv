@@ -37,12 +37,7 @@ pub trait RaftEngine: Clone + Sync + Send + 'static {
         shrink_to: usize,
     ) -> Result<usize>;
 
-    fn clean(
-        &self,
-        raft_group_id: u64,
-        state: &RaftLocalState,
-        batch: &mut Self::LogBatch,
-    ) -> Result<()>;
+    fn clean(&self, raft_group_id: u64, last_index: u64, batch: &mut Self::LogBatch) -> Result<()>;
 
     /// Append some log entries and return written bytes.
     ///

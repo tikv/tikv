@@ -30,6 +30,7 @@ use raft::{
     StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
+use rand::Rng;
 use smallvec::SmallVec;
 use time::Timespec;
 use uuid::Uuid;
@@ -483,6 +484,8 @@ where
     snapshot_ready_status: (u64, bool),
     /// Outside code use it to notify the latest persisted number to this peer.
     persisted_notifier: Arc<AtomicU64>,
+    /// Async writer id
+    async_writer_id: Option<usize>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -578,6 +581,7 @@ where
             unpersisted_numbers: VecDeque::default(),
             snapshot_ready_status: (0, false),
             persisted_notifier: Arc::new(AtomicU64::new(0)),
+            async_writer_id: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -720,6 +724,7 @@ where
             );
             return None;
         }
+
         {
             let meta = ctx.store_meta.lock().unwrap();
             if meta.atomic_snap_regions.contains_key(&self.region_id) {
@@ -1494,9 +1499,8 @@ where
     ///
     /// The snapshot process order would be:
     /// 1.  Get the snapshot from the ready
-    /// 2.  If this ready is persisted in this loop, jump to step 4(`handle_raft_ready_advance`)
-    /// 3.  Wait for the notify of persisting this ready through `check_new_persisted`
-    /// 4.  Schedule the snapshot task to region worker through `schedule_applying_snapshot`
+    /// 2.  Wait for the notify of persisting this ready through `check_new_persisted`
+    /// 3.  Schedule the snapshot task to region worker through `schedule_applying_snapshot`
     /// 4.  Wait for applying snapshot to complete(`check_snap_status`)
     /// Then it's valid to handle the next ready.
     fn check_snap_status<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
@@ -1532,9 +1536,6 @@ where
                 if self.snapshot_ready_status.0 != 0 {
                     // This snapshot must be scheduled
                     assert!(self.snapshot_ready_status.1);
-
-                    self.raft_group
-                        .on_persist_ready(self.snapshot_ready_status.0);
 
                     self.snapshot_ready_status = (0, false);
 
@@ -1686,18 +1687,26 @@ where
         }
 
         let notifier = self.persisted_notifier.clone();
-        let invoke_ctx =
-            match self
-                .mut_store()
-                .handle_raft_ready(ctx, &mut ready, destroy_regions, notifier)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    // We may have written something to writebatch and it can't be reverted, so has
-                    // to panic here.
-                    panic!("{} failed to handle raft ready: {:?}", self.tag, e)
-                }
-            };
+        let async_writer_id = if let Some(id) = self.async_writer_id {
+            id
+        } else {
+            assert!(ctx.async_writers.len() > 0);
+            rand::thread_rng().gen_range(0, ctx.async_writers.len())
+        };
+        let invoke_ctx = match self.mut_store().handle_raft_ready(
+            ctx,
+            &mut ready,
+            destroy_regions,
+            notifier,
+            async_writer_id,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                // We may have written something to writebatch and it can't be reverted, so has
+                // to panic here.
+                panic!("{} failed to handle raft ready: {:?}", self.tag, e)
+            }
+        };
 
         Some((ready, invoke_ctx))
     }
@@ -1837,11 +1846,6 @@ where
         ready: Ready,
     ) {
         let is_synced = if ready.must_sync() {
-            ctx.sync_ctx.mark_ready_unsynced(
-                ready.number(),
-                self.region_id,
-                self.persisted_notifier.clone(),
-            );
             self.unpersisted_numbers
                 .push_back((ready.number(), ready.number()));
             false
@@ -1857,27 +1861,18 @@ where
             true
         };
 
-        if is_synced {
+        if !is_synced {
+            if !ready.snapshot().is_empty() {
+                // Snapshot will be scheduled after persisting this ready
+                self.snapshot_ready_status = (ready.number(), false);
+            }
+
+            self.raft_group.advance_append_async(ready);
+        } else {
             self.unpersisted_numbers.clear();
             self.persisted_notifier
                 .store(ready.number(), Ordering::Release);
-        }
 
-        if !ready.snapshot().is_empty() {
-            assert!(ready.must_sync());
-
-            if is_synced {
-                self.mut_store().schedule_applying_snapshot();
-            }
-            // If `is_synced` is false, the snapshot will be scheduled after
-            // persisting this ready.
-            self.snapshot_ready_status = (ready.number(), is_synced);
-            // Although `is_synced` may be true, `advance_append_async` must be called
-            // because the snapshot has not applied yet.
-            self.raft_group.advance_append_async(ready);
-        } else if !is_synced {
-            self.raft_group.advance_append_async(ready);
-        } else {
             let mut light_rd = self.raft_group.advance_append(ready);
 
             self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
@@ -1945,21 +1940,22 @@ where
             );
         }
 
-        if self.snapshot_ready_status.0 != 0 {
-            if self.unpersisted_numbers.is_empty() {
-                // Since the snapshot must belong to the last ready, if `unpersisted_numbers`
-                // is empty, it means this persisted number is the last one.
-                assert_eq!(self.snapshot_ready_status.0, number);
-                assert_eq!(self.snapshot_ready_status.1, false);
+        self.raft_group.on_persist_ready(persisted_number);
 
-                self.snapshot_ready_status.1 = true;
-                self.mut_store().schedule_applying_snapshot();
-            }
-            false
-        } else {
-            self.raft_group.on_persist_ready(persisted_number);
-            true
+        if self.snapshot_ready_status.0 != 0 && self.unpersisted_numbers.is_empty() {
+            // Since the snapshot must belong to the last ready, if `unpersisted_numbers`
+            // is empty, it means this persisted number is the last one.
+            assert_eq!(self.snapshot_ready_status.0, number);
+            assert_eq!(self.snapshot_ready_status.1, false);
+
+            self.snapshot_ready_status.1 = true;
+            self.mut_store().schedule_applying_snapshot();
         }
+        true
+    }
+
+    pub fn has_unpersisted_ready(&self) -> bool {
+        !self.unpersisted_numbers.is_empty()
     }
 
     fn response_read<T>(

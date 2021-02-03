@@ -199,7 +199,13 @@ fn test_serde_custom_tikv_config() {
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
         perf_level: PerfLevel::EnableTime,
-        delay_sync_us: 1500,
+        store_io_max_wait_us: 300,
+        store_io_queue_size: 64,
+        store_io_queue_init_bytes: 256 * 1024,
+        store_io_queue_bytes_step: 1.414213562373095,
+        store_io_queue_adaptive_gain: 1,
+        store_io_queue_sample_quantile: 0.99,
+        apply_io_size: 0,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

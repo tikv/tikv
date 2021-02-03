@@ -30,17 +30,18 @@ pub struct Config {
     #[config(skip)]
     pub store_io_max_wait_us: u64,
     #[config(skip)]
-    pub store_io_queue_size: u64,
+    pub store_io_queue_size: usize,
     #[config(skip)]
-    pub store_io_queue_init_bytes: u64,
+    pub store_io_queue_init_bytes: usize,
     #[config(skip)]
     pub store_io_queue_bytes_step: f64,
     #[config(skip)]
     pub store_io_queue_sample_quantile: f64,
     #[config(skip)]
-    pub store_io_queue_adaptive_gain: u64,
+    pub store_io_queue_adaptive_gain: usize,
     #[config(skip)]
     pub apply_io_size: u64,
+
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -206,7 +207,7 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            store_io_max_wait_us: 300,
+            store_io_max_wait_us: 500,
             store_io_queue_size: 64,
             store_io_queue_init_bytes: 256 * 1024,
             store_io_queue_bytes_step: 1.414213562373095,

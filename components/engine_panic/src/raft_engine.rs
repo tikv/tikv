@@ -50,12 +50,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn clean(
-        &self,
-        raft_group_id: u64,
-        state: &RaftLocalState,
-        batch: &mut Self::LogBatch,
-    ) -> Result<()> {
+    fn clean(&self, raft_group_id: u64, last_index: u64, batch: &mut Self::LogBatch) -> Result<()> {
         panic!()
     }
 
