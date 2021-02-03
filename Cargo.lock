@@ -3515,10 +3515,27 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "engine_traits",
+ "fail",
+ "futures 0.3.7",
+ "grpcio",
+ "hex 0.4.2",
+ "kvproto",
  "log_wrappers",
+ "pd_client",
+ "prost",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "security",
  "slog",
  "slog-global",
+ "thiserror",
+ "tikv",
  "tikv_util",
+ "tokio",
  "txn_types",
 ]
 

@@ -679,9 +679,9 @@ pub fn substring_index(
 
 #[rpn_fn]
 #[inline]
-pub fn strcmp(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
+pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(Some(match left.cmp(right) {
+    Ok(Some(match C::sort_compare(left, right)? {
         Less => -1,
         Equal => 0,
         Greater => 1,
@@ -3124,26 +3124,74 @@ mod tests {
     #[test]
     fn test_strcmp() {
         let test_cases = vec![
-            (Some(b"123".to_vec()), Some(b"123".to_vec()), Some(0)),
-            (Some(b"123".to_vec()), Some(b"1".to_vec()), Some(1)),
-            (Some(b"1".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"45".to_vec()), Some(-1)),
+            (
+                Some(b"123".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"1".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"1".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"45".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
             (
                 Some("你好".as_bytes().to_vec()),
                 Some(b"hello".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(1),
             ),
-            (Some(b"".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"".to_vec()), Some(1)),
-            (Some(b"".to_vec()), Some(b"".to_vec()), Some(0)),
-            (None, Some(b"123".to_vec()), None),
-            (Some(b"123".to_vec()), None, None),
-            (Some(b"".to_vec()), None, None),
-            (None, Some(b"".to_vec()), None),
+            (
+                Some(b"".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"ABC".to_vec()),
+                Some(b"abc".to_vec()),
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (None, Some(b"123".to_vec()), Collation::Utf8Mb4Bin, None),
+            (Some(b"123".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (Some(b"".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, Some(b"".to_vec()), Collation::Utf8Mb4Bin, None),
         ];
 
-        for (left, right, expect_output) in test_cases {
+        for (left, right, collation, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(left)
                 .push_param(right)
                 .evaluate(ScalarFuncSig::Strcmp)
