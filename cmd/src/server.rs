@@ -10,13 +10,13 @@
 
 use std::{
     cmp,
-    time::Duration,
     convert::TryFrom,
     env, fmt,
     fs::{self, File},
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -26,8 +26,8 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, MetricsFlusher,
-    RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, KvEngine,
+    MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -41,7 +41,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor, RegionInfoProvider,
     },
     router::ServerRaftStoreRouter,
     store::{
@@ -63,18 +63,18 @@ use tikv::{
         config::Config as ServerConfig,
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
-        ttl_checker::TTLChecker,
         lock_manager::LockManager,
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
+        ttl_checker::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
-        Engine,
         config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
         mvcc::MvccConsistencyCheckObserver,
+        Engine,
     },
 };
 use tikv_util::config::{ReadableSize, VersionTrack};
@@ -484,16 +484,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(
-        &mut self,
-    ) -> Arc<ServerConfig> {
+    fn init_servers(&mut self) -> Arc<ServerConfig> {
         let gc_worker = self.init_gc_worker();
-        let ttl_checker = TTLChecker::new(
+        let ttl_checker = Box::new(TTLChecker::new(
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.region_info_accessor.clone(),
             Duration::from_secs(3600),
-        );
-    
+        ));
+        self.to_stop.push(ttl_checker);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
 
         // Create cdc.
@@ -1162,5 +1161,11 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+impl<E: KvEngine, R: RegionInfoProvider> Stop for TTLChecker<E, R> {
+    fn stop(mut self: Box<Self>) {
+        (*self).stop()
     }
 }

@@ -1,47 +1,79 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::mpsc;
-use std::time::Duration;
-use std::thread::{self, JoinHandle};
 
-use raftstore::coprocessor::{RegionInfoProvider};
+use std::io;
+use std::sync::mpsc::{self, Sender};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
 use engine_rocks::TTLProperties;
-use engine_traits::{Range, KvEngine, TableProperties, TablePropertiesCollection, CF_DEFAULT};
+use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection, CF_DEFAULT};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 
+pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
+    runner: Option<Runner<E, R>>,
 
-pub struct TTLChecker<E: KvEngine , R: RegionInfoProvider> {
+    sender: Option<Sender<bool>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
+    pub fn new(engine: E, region_info_provider: R, poll_interval: Duration) -> Self {
+        TTLChecker::<E, R> {
+            runner: Some(Runner {
+                engine,
+                region_info_provider,
+                poll_interval,
+            }),
+            sender: None,
+            handle: None,
+        }
+    }
+
+    pub fn start(&mut self) -> Result<(), io::Error> {
+        let (tx, rx) = mpsc::channel();
+        self.sender = Some(tx);
+        let runner = self.runner.take().unwrap();
+        let h = thread::Builder::new()
+            .name("ttl-checker".to_owned())
+            .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                let mut interval = runner.poll_interval;
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                    interval = runner.run();
+                }
+                tikv_alloc::remove_thread_memory_accessor();
+            })?;
+        self.handle = Some(h);
+        Ok(())
+    }
+
+    pub fn stop(&mut self) {
+        let h = self.handle.take();
+        if h.is_none() {
+            return;
+        }
+        drop(self.sender.take().unwrap());
+        if let Err(e) = h.unwrap().join() {
+            error!("join ttl checker failed"; "err" => ?e);
+            return;
+        }
+    }
+}
+
+struct Runner<E: KvEngine, R: RegionInfoProvider> {
     engine: E,
     region_info_provider: R,
     poll_interval: Duration,
 }
 
-impl<E: KvEngine , R: RegionInfoProvider> TTLChecker<E, R> {
-    pub fn new(engine: E, region_info_provider: R, poll_interval: Duration) -> Self {
-        TTLChecker::<E, R> {
-            engine,
-            region_info_provider,
-            poll_interval,
-        }
-    }
-
-    pub fn start(self) -> JoinHandle<()> {
-        thread::Builder::new()
-            .name(thd_name!("ttl-checker"))
-            .spawn(move || {
-                tikv_alloc::add_thread_memory_accessor();
-                self.run();
-                tikv_alloc::remove_thread_memory_accessor();
-            }).unwrap()
-    }
-
-    pub fn run(&self) {
-        thread::sleep(self.poll_interval);
-
-        let mut round_start_time = Instant::now();
+impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
+    fn run(&self) -> Duration {
+        let round_start_time = Instant::now();
         let mut key = vec![];
         loop {
             let (tx, rx) = mpsc::channel();
-            let res = self.region_info_provider.seek_region(
+            if let Err(e) = self.region_info_provider.seek_region(
                 &key,
                 Box::new(move |iter| {
                     for info in iter {
@@ -50,28 +82,31 @@ impl<E: KvEngine , R: RegionInfoProvider> TTLChecker<E, R> {
                     }
                     let _ = tx.send(None);
                 }),
-            ).unwrap();
+            ) {
+                error!(?e; "ttl checker: failed to get next region information");
+            }
 
             match rx.recv() {
                 Ok(None) => {
                     // checks a round
                     let round_time = Instant::now() - round_start_time;
                     if self.poll_interval > round_time {
-                        let wait = self.poll_interval - round_time;
-                        thread::sleep(wait);
+                        return self.poll_interval - round_time;
                     }
-                    round_start_time = Instant::now();
-                },
+                    return Duration::new(0, 0);
+                }
                 Ok(Some(mut region)) => {
-                    self.check_ttl_for_region(region.get_start_key(), region.get_end_key());
+                    self.check_ttl_for_range(region.get_start_key(), region.get_end_key());
                     key = region.take_end_key();
-                },
-                Err(_) => {}
+                }
+                Err(e) => {
+                    error!(?e; "ttl checker: failed to get next region information");
+                }
             }
         }
     }
 
-    pub fn check_ttl_for_region(&self, start_key: &[u8], end_key: &[u8]) {
+    pub fn check_ttl_for_range(&self, start_key: &[u8], end_key: &[u8]) {
         let current_ts = UnixSecs::now().into_inner();
         let range = Range::new(start_key, end_key);
         let collection = match self
@@ -117,7 +152,7 @@ impl<E: KvEngine , R: RegionInfoProvider> TTLChecker<E, R> {
                 "files" => ?files,
                 "err" => %e,
             );
-        } 
+        }
         // compact_range_timer.observe_duration();
         info!(
             "compact files finished";
