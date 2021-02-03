@@ -593,8 +593,15 @@ dependencies = [
 name = "cloud"
 version = "0.0.1"
 dependencies = [
- "encryption",
+ "error_code",
  "external_storage",
+ "failure",
+ "kvproto",
+ "openssl",
+ "protobuf",
+ "rusoto_core",
+ "tikv_util",
+ "tokio",
 ]
 
 [[package]]
@@ -1153,6 +1160,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.5.3",
+ "cloud",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -1171,7 +1179,6 @@ dependencies = [
  "prometheus",
  "protobuf",
  "rand",
- "rusoto_core",
  "serde",
  "serde_derive",
  "slog",
@@ -1188,6 +1195,7 @@ name = "encryption_export"
 version = "0.0.1"
 dependencies = [
  "aws",
+ "cloud",
  "encryption",
  "gcp",
  "kvproto",

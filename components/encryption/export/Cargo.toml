@@ -9,17 +9,24 @@ default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
 protobuf-codec = [
   "kvproto/protobuf-codec",
   "encryption/protobuf-codec",
+  "gcp/protobuf-codec",
+  "aws/protobuf-codec",
+  "cloud/protobuf-codec",
 ]
 prost-codec = [
   "kvproto/prost-codec",
   "encryption/prost-codec",
+  "gcp/prost-codec",
+  "aws/prost-codec",
+  "cloud/prost-codec",
 ]
 cloud-aws = ["aws"]
 cloud-gcp = ["gcp"]
 
 [dependencies]
-aws = { path = "../../cloud/aws", optional = true }
-gcp = { path = "../../cloud/gcp", optional = true }
+aws = { path = "../../cloud/aws", optional = true, default-features = false }
+cloud = { path = "../../cloud/", default-features = false }
+gcp = { path = "../../cloud/gcp", optional = true, default-features = false }
 encryption = { path = "../", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 openssl = "0.10"

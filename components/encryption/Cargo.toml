@@ -7,12 +7,14 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "cloud/protobuf-codec",
   "engine_traits/protobuf-codec",
   "error_code/protobuf-codec",
   "kvproto/protobuf-codec",
   "tikv_util/protobuf-codec",
 ]
 prost-codec = [
+  "cloud/prost-codec",
   "engine_traits/prost-codec",
   "error_code/prost-codec",
   "kvproto/prost-codec",
@@ -26,6 +28,7 @@ bytes = "0.5"
 crossbeam = "0.7"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
+cloud = { path = "../cloud", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
@@ -40,7 +43,6 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 openssl = "0.10"
 protobuf = "2.8"
 rand = "0.7"
-rusoto_core = "0.45.0"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

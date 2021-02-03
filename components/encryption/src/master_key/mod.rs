@@ -27,7 +27,7 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
-pub use self::kms::{DataKeyPair, EncryptedKey, KeyId, KmsBackend, KmsProvider};
+pub use self::kms::KmsBackend;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}

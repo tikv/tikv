@@ -13,9 +13,8 @@ use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
 use tikv_util::box_err;
 use tokio::runtime::Runtime;
 
-use cloud::encryption::{
-    DataKeyPair, EncryptedKey, Error, KeyId, KmsConfig, KmsProvider, PlainKey, Result,
-};
+use cloud::error::{Error, Result};
+use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
@@ -42,7 +41,7 @@ impl std::fmt::Debug for AwsKms {
 
 impl AwsKms {
     fn new_creds_dispatcher<Creds, Dispatcher>(
-        config: KmsConfig,
+        config: Config,
         dispatcher: Dispatcher,
         credentials_provider: Creds,
     ) -> Result<AwsKms>
@@ -50,17 +49,20 @@ impl AwsKms {
         Creds: ProvideAwsCredentials + Send + Sync + 'static,
         Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
-        let region = rusoto_util::get_region(config.region.as_ref(), config.endpoint.as_ref())?;
+        let region = rusoto_util::get_region(
+            config.location.region.as_ref(),
+            config.location.endpoint.as_ref(),
+        )?;
         let client = KmsClient::new_with(dispatcher, credentials_provider, region);
         Ok(AwsKms {
             client,
-            current_key_id: KeyId::new(config.key_id)?,
-            region: config.region,
-            endpoint: config.endpoint,
+            current_key_id: config.key_id,
+            region: config.location.region,
+            endpoint: config.location.endpoint,
         })
     }
 
-    fn new_with_dispatcher<D>(config: KmsConfig, dispatcher: D) -> Result<AwsKms>
+    fn new_with_dispatcher<D>(config: Config, dispatcher: D) -> Result<AwsKms>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
@@ -68,7 +70,7 @@ impl AwsKms {
         Self::new_creds_dispatcher(config, dispatcher, credentials_provider)
     }
 
-    pub fn new(config: KmsConfig) -> Result<AwsKms> {
+    pub fn new(config: Config) -> Result<AwsKms> {
         // We must create our own dispatcher
         // See https://github.com/tikv/tikv/issues/7236
         let dispatcher = HttpClient::new()?;
@@ -128,7 +130,7 @@ impl KmsProvider for AwsKms {
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
         Ok(DataKeyPair {
             encrypted: EncryptedKey::new(ciphertext_key)?,
-            plaintext: PlainKey::new(plaintext_key)?,
+            plaintext: plaintext_key,
         })
     }
 }
@@ -184,7 +186,7 @@ mod tests {
     use rusoto_credential::StaticProvider;
     use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     // use rusoto_mock::MockRequestDispatcher;
-    use cloud::encryption::KmsConfig;
+    use cloud::kms::Location;
     use rusoto_mock::MockRequestDispatcher;
     use tokio::runtime::{Builder, Runtime};
 
@@ -202,11 +204,13 @@ mod tests {
     fn test_aws_kms() {
         let magic_contents = b"5678" as &[u8];
         let key_contents = vec![1u8; 32];
-        let config = KmsConfig {
-            key_id: "test_key_id".to_string(),
-            region: "ap-southeast-2".to_string(),
-            endpoint: String::new(),
-            provider: String::new(),
+        let config = Config {
+            key_id: KeyId::new("test_key_id".to_string()).unwrap(),
+            vendor: String::new(),
+            location: Location {
+                region: "ap-southeast-2".to_string(),
+                endpoint: String::new(),
+            },
         };
         let mut runtime = runtime();
 
@@ -243,11 +247,13 @@ mod tests {
 
     #[test]
     fn test_kms_wrong_key_id() {
-        let config = KmsConfig {
-            key_id: "test_key_id".to_string(),
-            region: "ap-southeast-2".to_string(),
-            endpoint: String::new(),
-            provider: String::new(),
+        let config = Config {
+            key_id: KeyId::new("test_key_id".to_string()).unwrap(),
+            vendor: String::new(),
+            location: Location {
+                region: "ap-southeast-2".to_string(),
+                endpoint: String::new(),
+            },
         };
 
         // IncorrectKeyException

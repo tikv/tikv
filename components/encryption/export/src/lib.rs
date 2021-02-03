@@ -3,9 +3,10 @@ extern crate slog_global;
 
 use std::path::Path;
 
-#[cfg(feature = "cloud-aws")]
+#[cfg(feature = "aws")]
 pub use aws::AwsKms;
-#[cfg(feature = "cloud-aws")]
+pub use cloud::kms::Config as CloudConfig;
+#[cfg(feature = "aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
     encryption_method_from_db_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs,
@@ -43,10 +44,11 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
         MasterKeyConfig::File { config } => {
             Box::new(FileBackend::new(Path::new(&config.path))?) as _
         }
-        MasterKeyConfig::Kms { config } => match config.provider.as_str() {
-            #[cfg(feature = "cloud-aws")]
+        MasterKeyConfig::Kms { config } => match config.vendor.as_str() {
+            #[cfg(feature = "aws")]
             "aws" | "" => {
-                let kms_provider = AwsKms::new(config.clone())?;
+                let conf = CloudConfig::from_proto(config.clone().into_proto())?;
+                let kms_provider = AwsKms::new(conf)?;
                 Box::new(KmsBackend::new(Box::new(kms_provider))?) as _
             }
             provider => return Err(Error::Other(box_err!("provider not found {}", provider))),

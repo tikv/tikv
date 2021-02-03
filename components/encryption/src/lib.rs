@@ -31,7 +31,4 @@ pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
 pub use self::io::{create_aes_ctr_crypter, DecrypterReader, EncrypterReader, EncrypterWriter};
 pub use self::manager::{DataKeyManager, DataKeyManagerArgs};
-pub use self::master_key::{
-    Backend, DataKeyPair, EncryptedKey, FileBackend, KeyId, KmsBackend, KmsProvider,
-    PlaintextBackend,
-};
+pub use self::master_key::{Backend, FileBackend, KmsBackend, PlaintextBackend};

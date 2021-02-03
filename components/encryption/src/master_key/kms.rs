@@ -8,28 +8,12 @@ use tokio::runtime::{Builder, Runtime};
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::crypter::{Iv, PlainKey};
 use crate::{Error, Result};
+use cloud::{EncryptedKey, KmsProvider};
 
-#[derive(PartialEq, Debug)]
-pub struct KeyId(String);
-
-// KeyID is a newtype to mark a String as an ID of a key
-// This ID exists in a foreign system such as AWS
-// The key id must be non-empty
-impl KeyId {
-    pub fn new(id: String) -> Result<KeyId> {
-        if id.is_empty() {
-            Err(box_err!("KMS key id can not be empty"))
-        } else {
-            Ok(KeyId(id))
-        }
-    }
-}
-
-impl std::ops::Deref for KeyId {
-    type Target = String;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+#[derive(Debug)]
+pub struct DataKeyPair {
+    pub encrypted: EncryptedKey,
+    pub plaintext: PlainKey,
 }
 
 #[derive(Debug)]
@@ -51,39 +35,6 @@ impl State {
     fn cached(&self, ciphertext_key: &EncryptedKey) -> bool {
         *ciphertext_key == self.cached_ciphertext_key
     }
-}
-
-// EncryptedKey is a newtype used to mark data as an encrypted key
-// It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug)]
-pub struct EncryptedKey(Vec<u8>);
-
-impl EncryptedKey {
-    pub fn new(key: Vec<u8>) -> Result<EncryptedKey> {
-        if key.is_empty() {
-            error!("Encrypted content is empty");
-        }
-        Ok(EncryptedKey(key))
-    }
-}
-
-impl std::ops::Deref for EncryptedKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Debug)]
-pub struct DataKeyPair {
-    pub encrypted: EncryptedKey,
-    pub plaintext: PlainKey,
-}
-
-pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
-    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<DataKeyPair>;
-    fn decrypt_data_key(&self, runtime: &mut Runtime, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &[u8];
 }
 
 #[derive(Debug)]
@@ -118,7 +69,10 @@ impl KmsBackend {
         if opt_state.is_none() {
             let mut runtime = self.runtime.lock().unwrap();
             let data_key = self.kms_provider.generate_data_key(&mut runtime)?;
-            *opt_state = Some(State::new_from_datakey(data_key)?);
+            *opt_state = Some(State::new_from_datakey(DataKeyPair {
+                plaintext: PlainKey::new(data_key.plaintext)?,
+                encrypted: data_key.encrypted,
+            })?);
         }
         let state = opt_state.as_ref().unwrap();
 
@@ -207,43 +161,9 @@ impl Backend for KmsBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cloud::kms::fake::FakeKms;
     use hex::FromHex;
     use matches::assert_matches;
-
-    const FAKE_VENDOR_NAME: &[u8] = b"FAKE";
-    const FAKE_DATA_KEY_ENCRYPTED: &[u8] = b"encrypted                       ";
-
-    #[derive(Debug)]
-    struct FakeKms {
-        plaintext_key: PlainKey,
-    }
-
-    impl FakeKms {
-        pub fn new(plaintext_key: PlainKey) -> Self {
-            Self { plaintext_key }
-        }
-    }
-
-    impl KmsProvider for FakeKms {
-        fn generate_data_key(&self, _runtime: &mut Runtime) -> Result<DataKeyPair> {
-            Ok(DataKeyPair {
-                encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
-                plaintext: PlainKey::new(self.plaintext_key.clone()).unwrap(),
-            })
-        }
-
-        fn decrypt_data_key(
-            &self,
-            _runtime: &mut Runtime,
-            _ciphertext: &EncryptedKey,
-        ) -> Result<Vec<u8>> {
-            Ok(vec![1u8, 32])
-        }
-
-        fn name(&self) -> &[u8] {
-            FAKE_VENDOR_NAME
-        }
-    }
 
     #[test]
     fn test_state() {
@@ -273,14 +193,13 @@ mod tests {
             .unwrap();
         let ct = Vec::from_hex("84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980")
             .unwrap();
-        let key = PlainKey::new(
+        let plainkey =
             Vec::from_hex("c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139")
-                .unwrap(),
-        )
-        .unwrap();
+                .unwrap();
+
         let iv = Vec::from_hex("cafabd9672ca6c79a2fbdc22").unwrap();
 
-        let backend = KmsBackend::new(Box::new(FakeKms::new(key))).unwrap();
+        let backend = KmsBackend::new(Box::new(FakeKms::new(plainkey))).unwrap();
         let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
