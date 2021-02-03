@@ -6,10 +6,13 @@
 #[macro_use]
 extern crate failure;
 
+#[macro_use]
+extern crate slog_global;
+
 pub mod external_storage {
     pub use external_storage::{
-        block_on_external_io, empty_to_none, error_stream, none_to_empty, retry,
-        AsyncReadAsSyncStreamOfBytes, BucketConf, ExternalStorage, RetryError,
+        block_on_external_io, error_stream, retry,
+        AsyncReadAsSyncStreamOfBytes, ExternalStorage, RetryError,
     };
 }
 
@@ -19,4 +22,7 @@ pub use error::{Error, ErrorTrait, Result};
 pub mod kms;
 #[cfg(test)]
 pub use kms::fake;
-pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider};
+pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
+
+pub mod blob;
+pub use blob::{none_to_empty, StringNonEmpty, BucketConf};

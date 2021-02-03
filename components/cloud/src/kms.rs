@@ -73,10 +73,37 @@ impl std::ops::Deref for EncryptedKey {
     }
 }
 
+// PlainKey is a newtype used to mark a vector a plaintext key.
+// It requires the vec to be a valid AesGcmCrypter key.
+pub struct PlainKey(Vec<u8>);
+
+impl PlainKey {
+    pub fn new(key: Vec<u8>) -> Result<Self> {
+        // TODO: crypter.rs in encryption performs additional validation
+        Ok(Self(key))
+    }
+}
+
+impl std::ops::Deref for PlainKey {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// Don't expose the key in a debug print
+impl std::fmt::Debug for PlainKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PlainKey")
+            .field(&"REDACTED".to_string())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub struct DataKeyPair {
     pub encrypted: EncryptedKey,
-    pub plaintext: Vec<u8>,
+    pub plaintext: PlainKey,
 }
 
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
@@ -94,12 +121,12 @@ pub mod fake {
 
     #[derive(Debug)]
     pub struct FakeKms {
-        plaintext_key: Vec<u8>,
+        plaintext_key: PlainKey,
     }
 
     impl FakeKms {
         pub fn new(plaintext_key: Vec<u8>) -> Self {
-            Self { plaintext_key }
+            Self { plaintext_key: PlainKey::new(plaintext_key).unwrap() }
         }
     }
 
@@ -107,7 +134,7 @@ pub mod fake {
         fn generate_data_key(&self, _runtime: &mut Runtime) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
-                plaintext: self.plaintext_key.clone(),
+                plaintext: PlainKey::new(self.plaintext_key.clone()).unwrap(),
             })
         }
 

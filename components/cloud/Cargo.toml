@@ -7,10 +7,10 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-    "external_storage/protobuf-codec",
+    "kvproto/protobuf-codec",
 ]
 prost-codec = [
-    "external_storage/prost-codec",
+    "kvproto/prost-codec",
 ]
 
 [dependencies]
@@ -23,3 +23,7 @@ protobuf = "2.8"
 tokio = { version = "0.2.13", features = ["time"] }
 tikv_util = { path = "../tikv_util", default-features = false }
 rusoto_core = "0.45.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+# better to not use slog-global, but pass in the logger
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+url = "2.0"

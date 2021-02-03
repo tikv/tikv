@@ -14,7 +14,7 @@ use tikv_util::box_err;
 use tokio::runtime::Runtime;
 
 use cloud::error::{Error, Result};
-use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider};
+use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
@@ -130,7 +130,7 @@ impl KmsProvider for AwsKms {
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
         Ok(DataKeyPair {
             encrypted: EncryptedKey::new(ciphertext_key)?,
-            plaintext: plaintext_key,
+            plaintext: PlainKey::new(plaintext_key)?,
         })
     }
 }

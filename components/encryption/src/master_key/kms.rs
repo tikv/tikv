@@ -70,7 +70,7 @@ impl KmsBackend {
             let mut runtime = self.runtime.lock().unwrap();
             let data_key = self.kms_provider.generate_data_key(&mut runtime)?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
-                plaintext: PlainKey::new(data_key.plaintext)?,
+                plaintext: PlainKey::new(data_key.plaintext.clone())?,
                 encrypted: data_key.encrypted,
             })?);
         }

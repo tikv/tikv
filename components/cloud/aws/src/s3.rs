@@ -1,31 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
-use rusoto_core::request::HttpClient;
-use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use std::io;
 use std::marker::PhantomData;
 
+use rusoto_core::request::HttpClient;
+use rusoto_core::{
+    request::DispatchSignedRequest,
+    {ByteStream, RusotoError},
+};
+use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
+use rusoto_s3::*;
+
+use tikv_util::stream::{block_on_external_io, error_stream, retry};
+use cloud::blob::{none_to_empty, BucketConf, StringNonEmpty};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-
-use rusoto_core::{
-    request::DispatchSignedRequest,
-    {ByteStream, RusotoError},
-};
-use rusoto_s3::*;
-
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
-use external_storage::{
-    empty_to_none, none_to_empty, BucketConf, ExternalStorage,
 pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 
 #[derive(Clone)]
 pub struct AccessKeyPair {
-    pub access_key: String,
-    pub secret_access_key: String,
+    pub access_key: StringNonEmpty,
+    pub secret_access_key: StringNonEmpty,
 }
 
 impl std::fmt::Debug for AccessKeyPair {
@@ -37,53 +34,43 @@ impl std::fmt::Debug for AccessKeyPair {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    pub bucket: BucketConf,
-    pub sse: Option<String>,
-    pub acl: Option<String>,
-    pub access_key_pair: Option<AccessKeyPair>,
-    pub force_path_style: bool,
-    pub sse_kms_key_id: Option<String>,
+    bucket: BucketConf,
+    sse: Option<StringNonEmpty>,
+    acl: Option<StringNonEmpty>,
+    access_key_pair: Option<AccessKeyPair>,
+    force_path_style: bool,
+    sse_kms_key_id: Option<StringNonEmpty>,
+    storage_class: Option<StringNonEmpty>,
 }
 
 impl Config {
-    pub fn validate(&self) -> io::Result<()> {
-        self.bucket.validate()
-    }
-
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = cloud_dynamic.bucket.clone().into_option().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Required field bucket is missing")
-        })?;
+        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
         let attrs = &cloud_dynamic.attrs;
         let def = &String::new();
         let force_path_style_str = attrs.get("force_path_style").unwrap_or(def).clone();
         let force_path_style = force_path_style_str == "true" || force_path_style_str == "True";
-        let config_bucket = BucketConf {
-            bucket: bucket.bucket,
-            endpoint: empty_to_none(bucket.endpoint),
-            prefix: empty_to_none(bucket.prefix),
-            storage_class: empty_to_none(bucket.storage_class),
-            region: None,
-        };
         let access_key_opt = attrs.get("access_key");
         let access_key_pair = if let Some(access_key) = access_key_opt {
             let secret_access_key = attrs.get("secret_access_key").unwrap_or(def).clone();
             Some(AccessKeyPair {
-                access_key: access_key.clone(),
-                secret_access_key,
+                access_key: StringNonEmpty::required_field(access_key.clone(), "access_key")?,
+                secret_access_key: StringNonEmpty::required_field(secret_access_key, "secret_access_key")?,
             })
         } else {
             None
         };
+        let storage_class = bucket.storage_class.clone();
         Ok(Config {
-            bucket: config_bucket,
-            sse: empty_to_none(attrs.get("sse").unwrap_or(def).clone()),
-            acl: empty_to_none(attrs.get("acl").unwrap_or(def).clone()),
+            bucket: bucket,
+            sse: StringNonEmpty::opt(attrs.get("sse").unwrap_or(def).clone()),
+            acl: StringNonEmpty::opt(attrs.get("acl").unwrap_or(def).clone()),
             access_key_pair,
             force_path_style,
-            sse_kms_key_id: empty_to_none(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
+            sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
+            storage_class,
         })
     }
 
@@ -92,28 +79,30 @@ impl Config {
             .bucket_info
             .into_option()
             .unwrap_or_else(InputBucket::default);
+        let storage_class = StringNonEmpty::opt2(bucket.storage_class, input.storage_class);
         let config_bucket = BucketConf {
-            bucket: bucket.bucket,
-            endpoint: empty_to_none(bucket.endpoint),
-            prefix: empty_to_none(bucket.prefix),
-            storage_class: empty_to_none(bucket.storage_class),
+            bucket: StringNonEmpty::required_field2(bucket.bucket, input.bucket, "bucket")?,
+            endpoint: StringNonEmpty::opt2(bucket.endpoint, input.endpoint),
+            prefix: StringNonEmpty::opt2(bucket.prefix, input.prefix),
+            storage_class: storage_class.clone(),
             region: None,
         };
-        let access_key_pair = if !input.access_key.is_empty() {
-            Some(AccessKeyPair {
-                access_key: input.access_key,
-                secret_access_key: input.secret_access_key,
-            })
-        } else {
-            None
+        let access_key_pair = match StringNonEmpty::opt(input.access_key) {
+            None => None,
+            Some(ak) =>
+                Some(AccessKeyPair {
+                    access_key: ak,
+                    secret_access_key: StringNonEmpty::required_field(input.secret_access_key, "secret_access_key")?,
+                }),
         };
         Ok(Config {
             bucket: config_bucket,
-            sse: empty_to_none(input.sse),
-            acl: empty_to_none(input.acl),
+            sse: StringNonEmpty::opt(input.sse),
+            acl: StringNonEmpty::opt(input.acl),
             access_key_pair,
             force_path_style: input.force_path_style,
-            sse_kms_key_id: empty_to_none(input.sse_kms_key_id),
+            sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
+            storage_class: storage_class,
         })
     }
 }
@@ -139,7 +128,6 @@ impl S3Storage {
 
     /// Create a new S3 storage for the given config.
     pub fn new(config: Config) -> io::Result<S3Storage> {
-        config.validate()?;
         // Need to explicitly create a dispatcher
         // See https://github.com/tikv/tikv/issues/7236.
         let dispatcher = HttpClient::new()
@@ -156,7 +144,6 @@ impl S3Storage {
         Creds: ProvideAwsCredentials + Send + Sync + 'static,
         Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
-        config.validate()?;
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
         let region = rusoto_util::get_region(&bucket_region, &bucket_endpoint)?;
@@ -172,13 +159,12 @@ impl S3Storage {
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-        config.validate()?;
         // TODO: this should not be supported.
         // It implies static AWS credentials.
         if let Some(access_key_pair) = &config.access_key_pair {
             let cred_provider = StaticProvider::new_minimal(
-                access_key_pair.access_key.to_owned(),
-                access_key_pair.secret_access_key.to_owned(),
+                (*access_key_pair.access_key).to_owned(),
+                (*access_key_pair.secret_access_key).to_owned(),
             );
             Self::new_creds_dispatcher(config, dispatcher, cred_provider)
         } else {
@@ -189,7 +175,7 @@ impl S3Storage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", prefix, key);
+            return format!("{}/{}", *prefix, key);
         }
         key.to_owned()
     }
@@ -203,10 +189,10 @@ struct S3Uploader<'client> {
 
     bucket: String,
     key: String,
-    acl: Option<String>,
-    server_side_encryption: Option<String>,
-    ssekms_key_id: Option<String>,
-    storage_class: Option<String>,
+    acl: Option<StringNonEmpty>,
+    server_side_encryption: Option<StringNonEmpty>,
+    sse_kms_key_id: Option<StringNonEmpty>,
+    storage_class: Option<StringNonEmpty>,
 
     upload_id: String,
     parts: Vec<CompletedPart>,
@@ -222,11 +208,11 @@ impl<'client> S3Uploader<'client> {
         Self {
             client,
             key,
-            bucket: config.bucket.bucket.clone(),
+            bucket: config.bucket.bucket.to_string(),
             acl: config.acl.as_ref().cloned(),
-            server_side_encryption: config.sse.as_ref().cloned(),
-            ssekms_key_id: config.sse_kms_key_id.as_ref().cloned(),
-            storage_class: config.bucket.storage_class.as_ref().cloned(),
+            server_side_encryption: config.sse.as_ref().map(|s| s.clone() ),
+            sse_kms_key_id: config.sse_kms_key_id.as_ref().map(|s| s.clone() ),
+            storage_class: config.storage_class.as_ref().map(|s| s.clone() ),
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -279,10 +265,10 @@ impl<'client> S3Uploader<'client> {
             .create_multipart_upload(CreateMultipartUploadRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
+                acl: self.acl.as_ref().map(|s| s.to_string() ),
+                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string( )),
+                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string() ),
+                storage_class: self.storage_class.as_ref().map(|s| s.to_string() ),
                 ..Default::default()
             })
             .await?;
@@ -355,10 +341,10 @@ impl<'client> S3Uploader<'client> {
             .put_object(PutObjectRequest {
                 bucket: self.bucket.clone(),
                 key: self.key.clone(),
-                acl: self.acl.clone(),
-                server_side_encryption: self.server_side_encryption.clone(),
-                ssekms_key_id: self.ssekms_key_id.clone(),
-                storage_class: self.storage_class.clone(),
+                acl: self.acl.as_ref().map(|s| s.to_string() ),
+                server_side_encryption: self.server_side_encryption.as_ref().map(|s| s.to_string() ),
+                ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string() ),
+                storage_class: self.storage_class.as_ref().map(|s| s.to_string() ),
                 content_length: Some(data.len() as i64),
                 body: Some(data.to_vec().into()),
                 ..Default::default()
@@ -404,7 +390,7 @@ impl ExternalStorage for S3Storage {
         debug!("read file from s3 storage"; "key" => %key);
         let req = GetObjectRequest {
             key,
-            bucket: bucket.clone(),
+            bucket: (*bucket).clone(),
             ..Default::default()
         };
         Box::new(
@@ -415,7 +401,7 @@ impl ExternalStorage for S3Storage {
                     Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
                         ByteStream::new(error_stream(io::Error::new(
                             io::ErrorKind::NotFound,
-                            format!("no key {} at bucket {}", key, bucket),
+                            format!("no key {} at bucket {}", key, *bucket),
                         )))
                     }
                     Err(e) => ByteStream::new(error_stream(io::Error::new(

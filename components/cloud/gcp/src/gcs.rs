@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
-use external_storage::{ empty_to_none, BucketConf, ExternalStorage; };
+use cloud::blob::{none_to_empty, BucketConf, StringNonEmpty};
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -25,56 +25,58 @@ const HARDCODED_ENDPOINTS: &[&str] = &[
     "https://www.googleapis.com/storage/v1",
 ];
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    pub bucket: BucketConf,
-    pub predefined_acl: Option<String>,
-    pub credentials_blob: String,
+    bucket: BucketConf,
+    predefined_acl: Option<PredefinedAcl>,
+    storage_class: Option<StorageClass>,
+    svc_info: ServiceAccountInfo,
 }
 
 impl Config {
-    pub fn validate(&self) -> io::Result<()> {
-        self.bucket.validate()
+    pub fn missing_credentials() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "missing credentials",
+        )
     }
 
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = cloud_dynamic.bucket.clone().into_option().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Required field bucket is missing")
-        })?;
+        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
         let attrs = &cloud_dynamic.attrs;
         let def = &String::new();
-        let config_bucket = BucketConf {
-            bucket: bucket.bucket,
-            endpoint: empty_to_none(bucket.endpoint),
-            prefix: empty_to_none(bucket.prefix),
-            storage_class: empty_to_none(bucket.storage_class),
-            region: None,
-        };
-        config_bucket.validate()?;
-        Ok(Config {
-            bucket: config_bucket,
-            predefined_acl: empty_to_none(attrs.get("predefined_acl").unwrap_or(def).clone()),
-            credentials_blob: attrs.get("credentials_blob").unwrap_or(def).clone(),
-        })
+        let predefined_acl = parse_predefined_acl(attrs.get("predefined_acl").unwrap_or(def))
+            .or_invalid_input("invalid predefined_acl")?;
+        let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
+                .or_invalid_input("invalid storage_class")?;
+
+        let credentials_blob = attrs.get("credentials_blob").ok_or_else(Self::missing_credentials)?;
+        let svc_info = ServiceAccountInfo::deserialize(credentials_blob)
+            .or_invalid_input("invalid credentials_blob")?;
+
+        Ok(Config { bucket, predefined_acl, svc_info, storage_class })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
-        let bucket = input
+        let b = input
             .bucket_info
             .into_option()
             .unwrap_or_else(InputBucket::default);
-        let config_bucket = BucketConf {
-            bucket: bucket.bucket,
-            endpoint: empty_to_none(bucket.endpoint),
-            prefix: empty_to_none(bucket.prefix),
-            storage_class: empty_to_none(bucket.storage_class),
+        let bucket = BucketConf {
+            bucket: StringNonEmpty::required_field2(b.bucket, input.bucket, "bucket")?,
+            endpoint: StringNonEmpty::opt2(b.endpoint, input.endpoint),
+            prefix: StringNonEmpty::opt2(b.prefix, input.prefix),
+            storage_class: StringNonEmpty::opt2(b.storage_class, input.storage_class),
             region: None,
         };
-        Ok(Config {
-            bucket: config_bucket,
-            predefined_acl: empty_to_none(input.predefined_acl),
-            credentials_blob: input.credentials_blob,
-        })
+        let predefined_acl = parse_predefined_acl(&input.predefined_acl)
+            .or_invalid_input("invalid predefined_acl")?;
+        let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
+                .or_invalid_input("invalid storage_class")?;
+        let credentials_blob = StringNonEmpty::required_field(input.credentials_blob, "credentials_blob")?;
+        let svc_info = ServiceAccountInfo::deserialize(credentials_blob.to_string())
+            .or_invalid_input("invalid credentials_blob")?;
+        Ok(Config { bucket, predefined_acl, svc_info, storage_class })
     }
 }
 
@@ -204,17 +206,8 @@ impl GCSStorage {
 
     /// Create a new GCS storage for the given config.
     pub fn new(config: Config) -> io::Result<GCSStorage> {
-        config.bucket.validate()?;
-        if config.credentials_blob.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing credentials",
-            ));
-        }
-        let svc_info = ServiceAccountInfo::deserialize(&config.credentials_blob)
-            .or_invalid_input("invalid credentials_blob")?;
         let svc_access =
-            ServiceAccountAccess::new(svc_info).or_invalid_input("invalid credentials_blob")?;
+            ServiceAccountAccess::new(config.svc_info.clone()).or_invalid_input("invalid credentials_blob")?;
         let client = Client::builder().build(HttpsConnector::new());
         Ok(GCSStorage {
             config,
@@ -344,28 +337,12 @@ impl ExternalStorage for GCSStorage {
 
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.bucket.clone())
+        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
             .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
-
-        let storage_class = parse_storage_class(
-            self.config
-                .bucket
-                .storage_class
-                .as_ref()
-                .unwrap_or(&String::new()),
-        )
-        .or_invalid_input("invalid storage_class")?;
-        let predefined_acl = parse_predefined_acl(
-            self.config
-                .predefined_acl
-                .as_ref()
-                .unwrap_or(&String::new()),
-        )
-        .or_invalid_input("invalid predefined_acl")?;
 
         let metadata = Metadata {
             name: Some(key),
-            storage_class,
+            storage_class: self.config.storage_class,
             ..Default::default()
         };
 
@@ -382,7 +359,7 @@ impl ExternalStorage for GCSStorage {
                     content_length,
                     &metadata,
                     Some(InsertObjectOptional {
-                        predefined_acl,
+                        predefined_acl: self.config.predefined_acl,
                         ..Default::default()
                     }),
                 )?
@@ -396,7 +373,7 @@ impl ExternalStorage for GCSStorage {
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let bucket = self.config.bucket.bucket.clone();
+        let bucket = self.config.bucket.bucket.to_string();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);
         let oid = match ObjectId::new(bucket, name) {

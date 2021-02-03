@@ -600,8 +600,11 @@ dependencies = [
  "openssl",
  "protobuf",
  "rusoto_core",
+ "slog",
+ "slog-global",
  "tikv_util",
  "tokio",
+ "url",
 ]
 
 [[package]]
