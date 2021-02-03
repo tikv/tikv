@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 use tikv::storage::kv::RocksSnapshot;
-use tikv::storage::txn::{FixtureStore, SnapshotStore, Store};
+use tikv::storage::txn::{FixtureStore, Store, TxnStore};
 
 /// `MemStore` is a store provider that operates directly over a BTreeMap.
 pub type MemStore = FixtureStore;
 
 /// `RocksStore` is a store provider that operates over a disk-based RocksDB storage.
-pub type RocksStore = SnapshotStore<Arc<RocksSnapshot>>;
+pub type RocksStore = TxnStore<Arc<RocksSnapshot>>;
 
 pub trait StoreDescriber {
     /// Describes a store for Criterion to output.

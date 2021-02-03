@@ -33,8 +33,8 @@ use txn_types::{Key, TimeStamp};
 pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::scheduler::Scheduler;
 pub use self::store::{
-    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
-    TxnEntryScanner, TxnEntryStore,
+    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, Store, TxnEntry, TxnEntryScanner,
+    TxnEntryStore, TxnStore,
 };
 
 /// Process result of a command.

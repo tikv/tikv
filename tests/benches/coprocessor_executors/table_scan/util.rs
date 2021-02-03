@@ -14,18 +14,18 @@ use tidb_query_executors::interface::*;
 use tidb_query_executors::BatchTableScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
+use tikv::storage::{RocksEngine, Statistics, Store};
 
 use crate::util::executor_descriptor::table_scan;
 use crate::util::scan_bencher;
 
 pub type TableScanParam = ();
 
-pub struct BatchTableScanExecutorBuilder<T: TxnStore + 'static> {
+pub struct BatchTableScanExecutorBuilder<T: Store + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScanExecutorBuilder<T> {
+impl<T: Store + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScanExecutorBuilder<T> {
     type T = T;
     type E = Box<dyn BatchExecutor<StorageStats = Statistics>>;
     type P = TableScanParam;
@@ -56,11 +56,11 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
     }
 }
 
-pub struct TableScanExecutorDAGBuilder<T: TxnStore + 'static> {
+pub struct TableScanExecutorDAGBuilder<T: Store + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
+impl<T: Store + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
     for TableScanExecutorDAGBuilder<T>
 {
     type T = T;

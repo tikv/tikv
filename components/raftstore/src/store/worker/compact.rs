@@ -5,7 +5,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_traits::{CF_WRITE, KvEngine};
+use engine_traits::{KvEngine, CF_WRITE};
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;

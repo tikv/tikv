@@ -40,7 +40,7 @@ pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
 pub mod mvcc;
-pub mod ttl;
+pub mod raw;
 pub mod txn;
 
 mod read_pool;
@@ -54,9 +54,9 @@ pub use self::{
         PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
         TestEngineBuilder,
     },
+    raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
-    ttl::TTLSnapshot,
-    txn::{ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{ProcessResult, Scanner, Store, TxnStore},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
@@ -73,7 +73,6 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
@@ -295,7 +294,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -502,7 +501,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -641,7 +640,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -801,7 +800,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let r = store.raw_get_key_value(cf, &Key::from_encoded(key), &mut stats);
+                    let r = store
+                        .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
+                        .map_err(Error::from);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -873,11 +874,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let mut stats = Statistics::default();
                             let store = RawStore::new(snapshot, enable_ttl);
                             let cf = Self::rawkv_cf(&cf)?;
-                            results.push(store.raw_get_key_value(
-                                cf,
-                                &Key::from_encoded(key),
-                                &mut stats,
-                            ));
+                            results.push(
+                                store
+                                    .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
+                                    .map_err(Error::from),
+                            );
                             tls_collect_read_flow(ctx.get_region_id(), &stats);
                         }
                         Err(e) => {
@@ -945,7 +946,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
                         .map(|k| {
-                            let v = store.raw_get_key_value(cf, &k, &mut stats);
+                            let v = store
+                                .raw_get_key_value(cf, &k, &mut stats)
+                                .map_err(Error::from);
                             (k, v)
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
@@ -1187,28 +1190,31 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                     let mut statistics = Statistics::default();
                     let result = if reverse_scan {
-                        store
-                            .reverse_raw_scan(
-                                cf,
-                                &start_key,
-                                end_key.as_ref(),
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .map_err(Error::from)
+                        store.reverse_raw_scan(
+                            cf,
+                            &start_key,
+                            end_key.as_ref(),
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
                     } else {
-                        store
-                            .forward_raw_scan(
-                                cf,
-                                &start_key,
-                                end_key.as_ref(),
-                                limit,
-                                &mut statistics,
-                                key_only,
-                            )
-                            .map_err(Error::from)
-                    };
+                        store.forward_raw_scan(
+                            cf,
+                            &start_key,
+                            end_key.as_ref(),
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
+                    }
+                    .map_err(Error::from)
+                    .map(|results| {
+                        results
+                            .into_iter()
+                            .map(|x| x.map_err(Error::from))
+                            .collect()
+                    });
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -1321,7 +1327,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         } else {
                             Some(Key::from_encoded(end_key))
                         };
-                        let pairs = if reverse_scan {
+                        let pairs: Vec<Result<KvPair>> = if reverse_scan {
                             store.reverse_raw_scan(
                                 &cf,
                                 &start_key,
@@ -1329,7 +1335,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
+                            )
                         } else {
                             store.forward_raw_scan(
                                 &cf,
@@ -1338,8 +1344,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
-                        };
+                            )
+                        }
+                        .map(|results| {
+                            results
+                                .into_iter()
+                                .map(|x| x.map_err(Error::from))
+                                .collect()
+                        })
+                        .map_err(Error::from)?;
                         result.extend(pairs.into_iter());
                     }
                     let mut key_ranges = vec![];
@@ -1373,182 +1386,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
-    }
-}
-
-enum RawStore<S: Snapshot> {
-    Vanilla(RawStoreInner<S>),
-    TTL(RawStoreInner<TTLSnapshot<S>>),
-}
-
-impl<S: Snapshot> RawStore<S> {
-    pub fn new(snapshot: S, enable_ttl: bool) -> Self {
-        if enable_ttl {
-            RawStore::Vanilla(RawStoreInner::new(snapshot))
-        } else {
-            RawStore::TTL(RawStoreInner::new(snapshot.into()))
-        }
-    }
-
-    pub fn raw_get_key_value(
-        &self,
-        cf: CfName,
-        key: &Key,
-        stats: &mut Statistics,
-    ) -> Result<Option<Vec<u8>>> {
-        match self {
-            RawStore::Vanilla(inner) => inner.raw_get_key_value(cf, key, stats),
-            RawStore::TTL(inner) => inner.raw_get_key_value(cf, key, stats),
-        }
-    }
-
-    pub fn forward_raw_scan(
-        &self,
-        cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        match self {
-            RawStore::Vanilla(inner) => {
-                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
-            }
-            RawStore::TTL(inner) => {
-                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, false)
-            }
-        }
-    }
-
-    pub fn reverse_raw_scan(
-        &self,
-        cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        match self {
-            RawStore::Vanilla(inner) => {
-                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
-            }
-            RawStore::TTL(inner) => {
-                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, false)
-            }
-        }
-    }
-}
-
-struct RawStoreInner<S: Snapshot> {
-    snapshot: S,
-}
-
-impl<S: Snapshot> RawStoreInner<S> {
-    pub fn new(snapshot: S) -> Self {
-        RawStoreInner { snapshot }
-    }
-
-    pub fn raw_get_key_value(
-        &self,
-        cf: CfName,
-        key: &Key,
-        stats: &mut Statistics,
-    ) -> Result<Option<Vec<u8>>> {
-        // no scan_count for this kind of op.
-        let key_len = key.as_encoded().len();
-        self.snapshot
-            .get_cf(cf, key)
-            .map(|value| {
-                stats.data.flow_stats.read_keys = 1;
-                stats.data.flow_stats.read_bytes =
-                    key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
-                value
-            })
-            .map_err(Error::from)
-    }
-
-    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
-    /// `None`, it means unbounded.
-    ///
-    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
-    /// keys will be returned.
-    pub fn forward_raw_scan(
-        &self,
-        cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Forward)?;
-        let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.seek(&start_key, statistics)? {
-            return Ok(vec![]);
-        }
-        let mut pairs = vec![];
-        while cursor.valid()? && pairs.len() < limit {
-            pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
-                if key_only {
-                    vec![]
-                } else {
-                    cursor.value(statistics).to_owned()
-                },
-            )));
-            cursor.next(statistics);
-        }
-        Ok(pairs)
-    }
-
-    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
-    /// `start_key` is `None`, it means it's unbounded.
-    ///
-    /// If `key_only` is true, the value
-    /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    pub fn reverse_raw_scan(
-        &self,
-        cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
-        limit: usize,
-        statistics: &mut Statistics,
-        key_only: bool,
-    ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Backward)?;
-        let statistics = statistics.mut_cf_statistics(cf);
-        if !cursor.reverse_seek(&start_key, statistics)? {
-            return Ok(vec![]);
-        }
-        let mut pairs = vec![];
-        while cursor.valid()? && pairs.len() < limit {
-            pairs.push(Ok((
-                cursor.key(statistics).to_owned(),
-                if key_only {
-                    vec![]
-                } else {
-                    cursor.value(statistics).to_owned()
-                },
-            )));
-            cursor.prev(statistics);
-        }
-        Ok(pairs)
     }
 }
 

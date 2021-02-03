@@ -10,13 +10,13 @@ use tipb::ColumnInfo;
 use test_coprocessor::*;
 use tidb_query_executors::interface::*;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Store as TxnStore};
+use tikv::storage::{RocksEngine, Store};
 
 use crate::util::bencher::Bencher;
 use crate::util::store::StoreDescriber;
 
 pub trait ScanExecutorBuilder: 'static {
-    type T: TxnStore + 'static;
+    type T: Store + 'static;
     type E;
     type P: Copy + 'static;
     fn build(
@@ -28,7 +28,7 @@ pub trait ScanExecutorBuilder: 'static {
 }
 
 pub trait ScanExecutorDAGHandlerBuilder: 'static {
-    type T: TxnStore + 'static;
+    type T: Store + 'static;
     type P: Copy + 'static;
     fn build(
         batch: bool,
