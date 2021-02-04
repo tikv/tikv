@@ -2083,7 +2083,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
 dependencies = [
  "cc",
  "cmake",
@@ -2092,7 +2092,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2112,7 +2112,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3515,10 +3515,27 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "engine_traits",
+ "fail",
+ "futures 0.3.7",
+ "grpcio",
+ "hex 0.4.2",
+ "kvproto",
  "log_wrappers",
+ "pd_client",
+ "prost",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "security",
  "slog",
  "slog-global",
+ "thiserror",
+ "tikv",
  "tikv_util",
+ "tokio",
  "txn_types",
 ]
 
@@ -3558,7 +3575,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#a3fe394e6012f03c12b33b5e8baee5f2c5c02667"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4796,6 +4813,7 @@ dependencies = [
  "profiler",
  "protobuf",
  "rand",
+ "regex",
  "safemem",
  "static_assertions",
  "tidb_query_codegen",
