@@ -32,6 +32,7 @@ use tikv_util::worker::Scheduler;
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use rand::Rng;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1408,6 +1409,7 @@ pub fn clear_meta(
             first_index = keys::raft_log_index(key).unwrap();
             Ok(false)
         })?;
+    std::thread::sleep(std::time::Duration::from_secs(12));
     for id in first_index..=last_index {
         box_try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
     }
