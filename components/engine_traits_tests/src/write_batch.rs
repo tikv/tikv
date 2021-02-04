@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{default_engine, assert_engine_error};
+use super::{assert_engine_error, default_engine};
 use engine_test::kv::KvTestEngine;
-use engine_traits::{Mutable, Peekable, WriteBatchExt, SyncMutable, WriteBatch};
 use engine_traits::CF_DEFAULT;
+use engine_traits::{Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt};
 use std::panic::{self, AssertUnwindSafe};
 
 #[test]
@@ -106,7 +106,7 @@ fn write_batch_delete_range_cf_basic() {
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
@@ -128,7 +128,7 @@ fn write_batch_delete_range_cf_inexact() {
     db.engine.put(b"d", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
     db.engine.put(b"g", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"f").unwrap();
@@ -169,7 +169,7 @@ fn write_batch_delete_range_cf_none() {
 
     db.engine.put(b"a", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
@@ -191,7 +191,7 @@ fn write_batch_delete_range_cf_twice() {
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
@@ -214,7 +214,7 @@ fn write_batch_delete_range_cf_twice_1() {
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
@@ -237,7 +237,7 @@ fn write_batch_delete_range_cf_twice_2() {
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
     db.engine.put(b"e", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"e").unwrap();
@@ -260,7 +260,7 @@ fn write_batch_delete_range_cf_empty_range() {
     db.engine.put(b"a", b"").unwrap();
     db.engine.put(b"b", b"").unwrap();
     db.engine.put(b"c", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"b", b"b").unwrap();
@@ -278,13 +278,14 @@ fn write_batch_delete_range_cf_backward_range() {
     db.engine.put(b"a", b"").unwrap();
     db.engine.put(b"b", b"").unwrap();
     db.engine.put(b"c", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     wb.delete_range_cf(CF_DEFAULT, b"c", b"a").unwrap();
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         wb.write().unwrap();
-    })).is_err());
+    }))
+    .is_err());
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -299,7 +300,7 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
     db.engine.put(b"b", b"").unwrap();
     db.engine.put(b"c", b"").unwrap();
     db.engine.put(b"d", b"").unwrap();
-    
+
     let mut wb = db.engine.write_batch();
 
     // Everything in the write batch before the panic
@@ -312,7 +313,8 @@ fn write_batch_delete_range_cf_backward_range_partial_commit() {
 
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         wb.write().unwrap();
-    })).is_err());
+    }))
+    .is_err());
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());

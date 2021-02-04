@@ -1,14 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{default_engine};
-use engine_traits::{Iterable, Iterator, KvEngine};
+use super::default_engine;
 use engine_traits::SeekKey;
+use engine_traits::{Iterable, Iterator, KvEngine};
 use std::panic::{self, AssertUnwindSafe};
 
 fn iter_empty<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     let mut iter = i(e);
 
@@ -16,16 +17,20 @@ where E: KvEngine,
 
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = iter.prev();
-    })).is_err());
+    }))
+    .is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         let _ = iter.next();
-    })).is_err());
+    }))
+    .is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.key();
-    })).is_err());
+    }))
+    .is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.value();
-    })).is_err());
+    }))
+    .is_err());
 
     assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
     assert_eq!(iter.seek(SeekKey::End).unwrap(), false);
@@ -48,9 +53,10 @@ fn iter_empty_snapshot() {
 }
 
 fn iter_forward<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -84,10 +90,12 @@ where E: KvEngine,
 
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.key();
-    })).is_err());
+    }))
+    .is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.value();
-    })).is_err());
+    }))
+    .is_err());
 }
 
 #[test]
@@ -103,9 +111,10 @@ fn iter_forward_snapshot() {
 }
 
 fn iter_reverse<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -139,10 +148,12 @@ where E: KvEngine,
 
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.key();
-    })).is_err());
+    }))
+    .is_err());
     assert!(panic::catch_unwind(AssertUnwindSafe(|| {
         iter.value();
-    })).is_err());
+    }))
+    .is_err());
 }
 
 #[test]
@@ -158,9 +169,10 @@ fn iter_reverse_snapshot() {
 }
 
 fn seek_to_key_then_forward<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -198,9 +210,10 @@ fn seek_to_key_then_forward_snapshot() {
 }
 
 fn seek_to_key_then_reverse<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -238,9 +251,10 @@ fn seek_to_key_then_reverse_snapshot() {
 }
 
 fn iter_forward_then_reverse<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -298,9 +312,10 @@ fn iter_forward_then_reverse_snapshot() {
 }
 
 fn iter_reverse_then_forward<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -359,9 +374,10 @@ fn iter_reverse_then_forward_snapshot() {
 
 // When seek finds an exact key then seek_for_prev behaves just like seek
 fn seek_for_prev<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"a").unwrap();
     e.put(b"b", b"b").unwrap();
@@ -404,9 +420,10 @@ fn seek_for_prev_snapshot() {
 // it still might succeed, but its behavior differs
 // based on whether `seek` or `seek_for_prev` is called.
 fn seek_key_miss<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"c", b"c").unwrap();
 
@@ -435,9 +452,10 @@ fn seek_key_miss_snapshot() {
 }
 
 fn seek_key_prev_miss<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"c", b"c").unwrap();
 

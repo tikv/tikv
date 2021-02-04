@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::engine_cfs;
-use std::panic::{self, AssertUnwindSafe};
-use engine_traits::{Peekable, SyncMutable, Result};
-use engine_traits::{CF_WRITE, ALL_CFS, CF_DEFAULT};
-use engine_traits::{WriteBatchExt, WriteBatch, Mutable};
 use engine_test::kv::KvTestEngine;
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
+use engine_traits::{Peekable, Result, SyncMutable};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
+use std::panic::{self, AssertUnwindSafe};
 
 #[derive(Eq, PartialEq)]
 enum WriteScenario {
@@ -112,7 +112,7 @@ impl WriteScenarioEngine {
                 match (&r1, &r2) {
                     (Ok(Some(ref r1)), Ok(Some(ref r2))) => assert_eq!(r1[..], r2[..]),
                     (Ok(None), Ok(None)) => { /* pass */ }
-                    _ => { }
+                    _ => {}
                 }
                 r1
             }

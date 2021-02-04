@@ -4,7 +4,7 @@
 
 use super::engine_cfs;
 use engine_traits::{Peekable, SyncMutable};
-use engine_traits::{CF_WRITE, ALL_CFS, CF_DEFAULT};
+use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
 
 // Store using put; load using get_cf(CF_DEFAULT)
 #[test]

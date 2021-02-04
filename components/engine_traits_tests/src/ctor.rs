@@ -4,9 +4,9 @@
 
 use super::tempdir;
 
-use engine_traits::ALL_CFS;
+use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
 use engine_test::kv::KvTestEngine;
-use engine_test::ctor::{EngineConstructorExt, DBOptions, CFOptions, ColumnFamilyOptions};
+use engine_traits::ALL_CFS;
 
 #[test]
 fn new_engine_basic() {
@@ -20,8 +20,9 @@ fn new_engine_opt_basic() {
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
     let db_opts = DBOptions::new();
-    let cf_opts = ALL_CFS.iter().map(|cf| {
-        CFOptions::new(cf, ColumnFamilyOptions::new())
-    }).collect();
+    let cf_opts = ALL_CFS
+        .iter()
+        .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+        .collect();
     let _db = KvTestEngine::new_engine_opt(path, db_opts, cf_opts).unwrap();
 }

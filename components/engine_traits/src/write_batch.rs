@@ -119,7 +119,6 @@ pub trait Mutable: Send {
 /// Calling `rollback_to_save_point` reverts all commands issued since the last
 /// save point, and pops the save point from the stack.
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
-
     /// Create a write batch with a given command capacity
     fn with_capacity(e: &E, cap: usize) -> Self;
 

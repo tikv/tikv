@@ -58,28 +58,30 @@ struct TempDirEnginePair {
 
 /// Create an engine with only CF_DEFAULT
 fn default_engine() -> TempDirEnginePair {
-    use engine_traits::CF_DEFAULT;
-    use engine_test::kv::KvTestEngine;
     use engine_test::ctor::EngineConstructorExt;
+    use engine_test::kv::KvTestEngine;
+    use engine_traits::CF_DEFAULT;
 
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
     let engine = KvTestEngine::new_engine(path, None, &[CF_DEFAULT], None).unwrap();
     TempDirEnginePair {
-        engine, tempdir: dir,
+        engine,
+        tempdir: dir,
     }
 }
 
 /// Create an engine with the specified column families
 fn engine_cfs(cfs: &[&str]) -> TempDirEnginePair {
-    use engine_test::kv::KvTestEngine;
     use engine_test::ctor::EngineConstructorExt;
+    use engine_test::kv::KvTestEngine;
 
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
     let engine = KvTestEngine::new_engine(path, None, cfs, None).unwrap();
     TempDirEnginePair {
-        engine, tempdir: dir,
+        engine,
+        tempdir: dir,
     }
 }
 
@@ -92,7 +94,7 @@ fn tempdir() -> tempfile::TempDir {
 
 fn assert_engine_error<T>(r: engine_traits::Result<T>) {
     match r {
-        Err(engine_traits::Error::Engine(_)) => { },
+        Err(engine_traits::Error::Engine(_)) => {}
         _ => panic!("expected Error::Engine"),
     }
 }

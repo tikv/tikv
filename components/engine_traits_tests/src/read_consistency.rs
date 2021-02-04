@@ -2,9 +2,9 @@
 
 //! Testing iterator and snapshot behavior in the presence of intermixed writes
 
-use super::{default_engine};
-use engine_traits::{KvEngine, SyncMutable, Peekable};
+use super::default_engine;
 use engine_traits::{Iterable, Iterator};
+use engine_traits::{KvEngine, Peekable, SyncMutable};
 
 #[test]
 fn snapshot_with_writes() {
@@ -31,9 +31,10 @@ fn snapshot_with_writes() {
 // single point in time. It seems the engine iterator is essentially just a
 // snapshot iterator.
 fn iterator_with_writes<E, I, IF>(e: &E, i: IF)
-where E: KvEngine,
-      I: Iterator,
-      IF: Fn(&E) -> I,
+where
+    E: KvEngine,
+    I: Iterator,
+    IF: Fn(&E) -> I,
 {
     e.put(b"a", b"").unwrap();
     e.put(b"c", b"").unwrap();
