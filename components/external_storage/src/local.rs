@@ -14,7 +14,8 @@ use futures_util::{
 };
 use rand::Rng;
 
-use super::{util::error_stream, ExternalStorage};
+use super::ExternalStorage;
+use tikv_util::stream::error_stream;
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
