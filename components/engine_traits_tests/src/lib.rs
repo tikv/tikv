@@ -144,3 +144,39 @@ mod cf_names {
         }
     }
 }
+
+mod engine_iter {
+    use super::{default_engine};
+    use engine_traits::{Iterable, Iterator};
+    use engine_traits::SeekKey;
+    use std::panic::{self, AssertUnwindSafe};
+
+    #[test]
+    fn iter_empty() {
+        let db = default_engine();
+        let mut iter = db.engine.iterator().unwrap();
+
+        assert_eq!(iter.valid().unwrap(), false);
+
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = iter.prev();
+        })).is_err());
+        assert!(panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = iter.next();
+        })).is_err());
+        assert!(panic::catch_unwind(|| {
+            iter.key();
+        }).is_err());
+        assert!(panic::catch_unwind(|| {
+            iter.value();
+        }).is_err());
+
+        assert_eq!(iter.seek(SeekKey::Start).unwrap(), false);
+        assert_eq!(iter.seek(SeekKey::End).unwrap(), false);
+        assert_eq!(iter.seek(SeekKey::Key(b"foo")).unwrap(), false);
+        assert_eq!(iter.seek_for_prev(SeekKey::Start).unwrap(), false);
+        assert_eq!(iter.seek_for_prev(SeekKey::End).unwrap(), false);
+        assert_eq!(iter.seek_for_prev(SeekKey::Key(b"foo")).unwrap(), false);
+    }
+}
+
