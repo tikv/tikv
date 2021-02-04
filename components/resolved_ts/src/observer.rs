@@ -50,6 +50,7 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
             let mut region = Region::default();
             region.mut_peers().push(Peer::default());
             // Create a snapshot here for preventing the old value was GC-ed.
+            // TODO: only need it after enabling old value, may add a flag to indicate whether to get it.
             let snapshot =
                 RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
             if let Err(e) = self.scheduler.schedule(Task::ChangeLog {
