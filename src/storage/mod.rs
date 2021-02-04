@@ -290,6 +290,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 )
                 .await
                 .map_err(|e| {
+                    info!("blocked by mem lock"; "err" => ?e);
                     KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
                     e
                 })?;
@@ -391,6 +392,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 snap_ctx
                             }
                             Err(e) => {
+                                info!("blocked by mem lock"; "err" => ?e);
                                 KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
                                 req_snaps.push(Err(e));
                                 continue;
@@ -505,6 +507,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)
                         .await
                         .map_err(|e| {
+                            info!("blocked by mem lock"; "err" => ?e);
                             KV_BLOCKED_BY_MEM_LOCK_COUNTER_VEC_STATIC.get(CMD).inc();
                             e
                         })?;

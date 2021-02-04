@@ -200,6 +200,7 @@ make_auto_flush_static_metric! {
     pub struct KvCommandCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
+
     pub struct KvBlockedByMemLockCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
