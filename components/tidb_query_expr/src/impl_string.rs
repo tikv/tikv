@@ -4,6 +4,7 @@ use std::{iter, str};
 use tidb_query_codegen::rpn_fn;
 
 use crate::impl_math::i64_to_usize;
+use bstr::ByteSlice;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
@@ -708,8 +709,8 @@ pub fn find_in_set<C: Collator>(s: BytesRef, str_list: BytesRef) -> Result<Optio
     }
 
     use std::cmp::Ordering::*;
-    let result = String::from_utf8_lossy(str_list)
-        .split(',')
+    let result = str_list
+        .split_str(",")
         .position(|str_in_set| C::sort_compare(str_in_set.as_bytes(), s).unwrap() == Equal)
         .map(|p| p as i64 + 1)
         .or(Some(0));
