@@ -160,11 +160,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                                 Some(region_id)
                             };
                             if tx.send(resp).is_err() {
-                                error!("cdc send tso response failed"; "region_id" => region_id);
+                                error!("resolved-ts send tso response failed"; "region_id" => region_id);
                             }
                         }))),
                     ) {
-                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                        warn!("resolved-ts send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
                         return None;
                     }
                     rx.await.unwrap_or(None)
@@ -319,7 +319,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             .filter_map(|resp| match resp {
                 Ok(resp) => Some(resp),
                 Err(e) => {
-                    debug!("cdc check leader error"; "err" =>?e);
+                    debug!("resolved-ts check leader error"; "err" =>?e);
                     None
                 }
             })
@@ -338,7 +338,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 if region_has_quorum(&region_map[&region_id], &stores) {
                     Some(region_id)
                 } else {
-                    debug!("cdc cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
+                    debug!("resolved-ts cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
                     None
                 }
             })

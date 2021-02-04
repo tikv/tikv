@@ -68,7 +68,7 @@ impl<E: KvEngine> RoleObserver for ChangeDataObserver<E> {
             role,
             region: ctx.region().clone(),
         }) {
-            info!(""; "err" => ?e);
+            info!("failed to schedule region role changed event"; "err" => ?e);
         }
     }
 }
