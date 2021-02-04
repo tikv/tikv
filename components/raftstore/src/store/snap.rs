@@ -3,7 +3,6 @@
 use std::cmp::{Ordering as CmpOrdering, Reverse};
 use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
-use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
@@ -30,6 +29,7 @@ use collections::{HashMap, HashMapEntry as Entry};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use file_system::{
     calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
+    File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
 use openssl::symm::{Cipher, Crypter, Mode};
@@ -362,7 +362,7 @@ impl Snap {
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
         if !dir_path.exists() {
-            fs::create_dir_all(dir_path.as_path())?;
+            file_system::create_dir_all(dir_path.as_path())?;
         }
         let snap_prefix = if is_sending {
             SNAP_GEN_PREFIX
@@ -545,7 +545,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let buf = fs::read(&self.meta_file.path)?;
+        let buf = file_system::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::default();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
@@ -666,7 +666,7 @@ impl Snap {
             f.write_all(&v[..])?;
             f.flush()?;
             f.sync_all()?;
-            fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+            file_system::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
             self.hold_tmp_files = false;
             Ok(())
         } else {
@@ -890,7 +890,7 @@ impl GenericSnapshot for Snap {
     }
 
     fn meta(&self) -> io::Result<Metadata> {
-        fs::metadata(&self.meta_file.path)
+        file_system::metadata(&self.meta_file.path)
     }
 
     fn total_size(&self) -> io::Result<u64> {
@@ -943,7 +943,7 @@ impl GenericSnapshot for Snap {
                 ));
             }
 
-            fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+            file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
             self.mgr.snap_size.fetch_add(cf_file.size, Ordering::SeqCst);
         }
         sync_dir(&self.dir_path)?;
@@ -955,7 +955,7 @@ impl GenericSnapshot for Snap {
             meta_file.write_all(&v[..])?;
             meta_file.sync_all()?;
         }
-        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        file_system::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
@@ -1136,7 +1136,7 @@ impl SnapManager {
         let _lock = self.core.registry.wl();
         let path = Path::new(&self.core.base);
         if !path.exists() {
-            fs::create_dir_all(path)?;
+            file_system::create_dir_all(path)?;
             return Ok(());
         }
         if !path.is_dir() {
@@ -1145,12 +1145,12 @@ impl SnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        for f in fs::read_dir(path)? {
+        for f in file_system::read_dir(path)? {
             let p = f?;
             if p.file_type()?.is_file() {
                 if let Some(s) = p.file_name().to_str() {
                     if s.ends_with(TMP_FILE_SUFFIX) {
-                        fs::remove_file(p.path())?;
+                        file_system::remove_file(p.path())?;
                     } else if s.ends_with(SST_FILE_SUFFIX) {
                         let len = p.metadata()?.len();
                         self.core.snap_size.fetch_add(len, Ordering::SeqCst);
@@ -1165,7 +1165,7 @@ impl SnapManager {
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
         let registry = self.core.registry.rl();
-        let read_dir = fs::read_dir(Path::new(&self.core.base))?;
+        let read_dir = file_system::read_dir(Path::new(&self.core.base))?;
         // Remove the duplicate snap keys.
         let mut v: Vec<_> = read_dir
             .filter_map(|p| {
@@ -1462,7 +1462,7 @@ impl SnapManagerCore {
     }
 
     fn rename_tmp_cf_file_for_send(&self, cf_file: &mut CfFile) -> RaftStoreResult<()> {
-        fs::rename(&cf_file.tmp_path, &cf_file.path)?;
+        file_system::rename(&cf_file.tmp_path, &cf_file.path)?;
         let mgr = self.encryption_key_manager.as_ref();
         if let Some(mgr) = &mgr {
             let src = cf_file.tmp_path.to_str().unwrap();
@@ -1528,7 +1528,7 @@ impl SnapManagerBuilder {
 pub mod tests {
     use std::cmp;
     use std::f64::INFINITY;
-    use std::fs::{self, File, OpenOptions};
+    use file_system::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1949,7 +1949,7 @@ pub mod tests {
     // Make all the snapshot in the specified dir corrupted to have incorrect size.
     fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
@@ -1970,7 +1970,7 @@ pub mod tests {
     fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
         let dir_path = dir.into();
         let mut res = Vec::new();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
@@ -2015,7 +2015,7 @@ pub mod tests {
     fn corrupt_snapshot_meta_file<T: Into<PathBuf>>(dir: T) -> usize {
         let mut total = 0;
         let dir_path = dir.into();
-        let read_dir = fs::read_dir(dir_path).unwrap();
+        let read_dir = file_system::read_dir(dir_path).unwrap();
         for p in read_dir {
             if p.is_ok() {
                 let e = p.as_ref().unwrap();
