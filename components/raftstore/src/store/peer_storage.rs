@@ -194,23 +194,10 @@ impl EntryCache {
                 );
             }
         }
-        let mut start_idx = 0;
-        if let Some(len) = (self.cache.len() + entries.len()).checked_sub(MAX_CACHE_CAPACITY) {
-            if len < self.cache.len() {
-                let mut drained_cache_entries_size = 0;
-                self.cache.drain(..len).for_each(|e| {
-                    drained_cache_entries_size += (e.data.capacity() + e.context.capacity()) as i64
-                });
-                self.mem_size_change -= drained_cache_entries_size;
-            } else {
-                start_idx = len - self.cache.len();
-                self.update_mem_size_change_before_clear();
-                self.cache.clear();
-            }
-        }
+
         let old_capacity = self.cache.capacity();
         let mut entries_mem_size = 0;
-        for e in &entries[start_idx..] {
+        for e in entries {
             self.cache.push_back(e.to_owned());
             entries_mem_size += (e.data.capacity() + e.context.capacity()) as i64;
         }

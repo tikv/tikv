@@ -683,10 +683,10 @@ where
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
+        let is_applying_snap = self.fsm.peer.is_applying_snapshot_strictly();
         let s = self.fsm.peer.get_store();
         let compacted_idx = s.truncated_index();
         let compacted_term = s.truncated_term();
-        let is_applying_snap = s.is_applying_snapshot();
         for (key, is_sending) in snaps {
             if is_sending {
                 let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
@@ -1779,13 +1779,27 @@ where
             false
         } else {
             // Destroy the peer fsm directly
-            self.destroy_peer(false);
-            true
+            self.destroy_peer(false)
         }
     }
 
-    fn destroy_peer(&mut self, merged_by_target: bool) {
+    fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
         fail_point!("destroy_peer");
+        // Mark itself as pending_remove
+        self.fsm.peer.pending_remove = true;
+
+        if self.fsm.peer.has_unpersisted_ready() {
+            assert_eq!(self.fsm.delayed_destroy, None);
+            self.fsm.delayed_destroy = Some(merged_by_target);
+            info!(
+                "delays destroy";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "merged_by_target" => merged_by_target,
+            );
+            return false;
+        }
+
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -1795,15 +1809,6 @@ where
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
         assert!(!self.fsm.peer.is_applying_snapshot());
-
-        // Mark itself as pending_remove
-        self.fsm.peer.pending_remove = true;
-
-        if self.fsm.peer.has_unpersisted_ready() {
-            assert_eq!(self.fsm.delayed_destroy, None);
-            self.fsm.delayed_destroy = Some(merged_by_target);
-            return;
-        }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
@@ -1918,6 +1923,8 @@ where
             }
         }
         meta.leaders.remove(&region_id);
+
+        true
     }
 
     // Update some region infos

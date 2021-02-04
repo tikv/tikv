@@ -426,7 +426,7 @@ where
             self.kv_engine
                 .write_opt(&task.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to save append state result: {:?}", self.tag, e);
+                    panic!("{} failed to save kv wb: {:?}", self.tag, e);
                 });
             if task.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                 task.kv_wb = self.kv_engine.write_batch_with_cap(4 * 1024);
@@ -441,7 +441,7 @@ where
             self.raft_engine
                 .consume_and_shrink(&mut task.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft append result: {:?}", self.tag, e);
+                    panic!("{} failed to save raft wb: {:?}", self.tag, e);
                 });
 
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);

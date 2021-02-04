@@ -1949,7 +1949,10 @@ where
             assert_eq!(self.snapshot_ready_status.1, false);
 
             self.snapshot_ready_status.1 = true;
-            self.mut_store().schedule_applying_snapshot();
+            if !self.pending_remove {
+                // If pending_remove is true, snapshot should not be scheduled.
+                self.mut_store().schedule_applying_snapshot();
+            }
         }
         true
     }
