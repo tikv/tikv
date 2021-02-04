@@ -2198,7 +2198,10 @@ mod tests {
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None)),
+                CFOptions::new(
+                    CF_DEFAULT,
+                    cfg_rocksdb.defaultcf.build_opt(&cache, None, false),
+                ),
                 CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
@@ -3042,6 +3045,7 @@ mod tests {
                     "".to_string(),
                     kv.0.to_vec(),
                     kv.1.to_vec(),
+                    0,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -3143,6 +3147,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
+                0,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -3180,6 +3185,7 @@ mod tests {
                     "".to_string(),
                     key.clone(),
                     value.clone(),
+                    0,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -3218,6 +3224,7 @@ mod tests {
                     "".to_string(),
                     key.clone(),
                     value.clone(),
+                    0,
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
@@ -3263,6 +3270,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
+                0,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3363,6 +3371,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
+                0,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();
@@ -3576,15 +3585,23 @@ mod tests {
                     SnapContext::default(),
                 )
                 .await?;
-                <Storage<RocksEngine, DummyLockManager>>::forward_raw_scan(
-                    &snapshot,
-                    &"".to_string(),
-                    &Key::from_encoded(b"c1".to_vec()),
-                    Some(Key::from_encoded(b"d3".to_vec())),
-                    20,
-                    &mut Statistics::default(),
-                    false,
-                )
+                let store = RawStore::new(snapshot, false);
+                store
+                    .forward_raw_scan(
+                        "",
+                        &Key::from_encoded(b"c1".to_vec()),
+                        Some(&Key::from_encoded(b"d3".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                    )
+                    .map_err(Error::from)
+                    .map(|results| {
+                        results
+                            .into_iter()
+                            .map(|x| x.map_err(Error::from))
+                            .collect()
+                    })
             })
             .unwrap(),
         );
@@ -3596,15 +3613,23 @@ mod tests {
                     SnapContext::default(),
                 )
                 .await?;
-                <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
-                    &snapshot,
-                    &"".to_string(),
-                    &Key::from_encoded(b"d3".to_vec()),
-                    Some(Key::from_encoded(b"c1".to_vec())),
-                    20,
-                    &mut Statistics::default(),
-                    false,
-                )
+                let store = RawStore::new(snapshot, false);
+                store
+                    .reverse_raw_scan(
+                        "",
+                        &Key::from_encoded(b"d3".to_vec()),
+                        Some(&Key::from_encoded(b"c1".to_vec())),
+                        20,
+                        &mut Statistics::default(),
+                        false,
+                    )
+                    .map_err(Error::from)
+                    .map(|results| {
+                        results
+                            .into_iter()
+                            .map(|x| x.map_err(Error::from))
+                            .collect()
+                    })
             })
             .unwrap(),
         );
@@ -3744,6 +3769,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
+                0,
                 expect_ok_callback(tx, 0),
             )
             .unwrap();

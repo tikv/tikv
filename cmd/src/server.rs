@@ -16,7 +16,6 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex},
-    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -489,7 +488,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let ttl_checker = Box::new(TTLChecker::new(
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.region_info_accessor.clone(),
-            Duration::from_secs(3600),
+            self.config.storage.ttl_check_poll_interval.into(),
         ));
         self.to_stop.push(ttl_checker);
 
@@ -945,7 +944,7 @@ impl TiKVServer<RocksEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
-            self.config.enable_ttl,
+            self.config.storage.enable_ttl,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
@@ -1011,7 +1010,7 @@ impl TiKVServer<RaftLogEngine> {
         let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
             &block_cache,
             Some(&self.region_info_accessor),
-            self.config.enable_ttl,
+            self.config.storage.enable_ttl,
         );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(

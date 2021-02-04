@@ -141,10 +141,6 @@ pub struct Config {
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
-    /// Interval to check TTL and the actual check time won't strictly consistent with the interval,
-    /// instead, with some random variation in +-20% range.
-    pub ttl_check_tick_interval: ReadableDuration,
-
     #[config(hidden)]
     pub use_delete_range: bool,
 
@@ -246,7 +242,6 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
-            ttl_check_tick_interval: ReadableDuration::hours(24),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),

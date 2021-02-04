@@ -9,7 +9,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
 use libc::c_int;
 use std::error::Error;
-use tikv_util::config::{self, OptionReadableSize, ReadableSize};
+use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
@@ -55,6 +55,8 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[config(skip)]
     pub enable_ttl: bool,
+    /// Interval to check TTL for all SSTs,
+    pub ttl_check_poll_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -71,6 +73,7 @@ impl Default for Config {
             enable_async_apply_prewrite: false,
             block_cache: BlockCacheConfig::default(),
             enable_ttl: false,
+            ttl_check_poll_interval: ReadableDuration::hours(24),
         }
     }
 }

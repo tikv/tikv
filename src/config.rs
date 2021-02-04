@@ -2296,9 +2296,6 @@ pub struct TiKvConfig {
     pub enable_io_snoop: bool,
 
     #[config(skip)]
-    pub enable_ttl: bool,
-
-    #[config(skip)]
     pub readpool: ReadPoolConfig,
 
     #[config(skip)]
@@ -2364,7 +2361,6 @@ impl Default for TiKvConfig {
             log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             enable_io_snoop: true,
-            enable_ttl: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -2472,7 +2468,7 @@ impl TiKvConfig {
             }
         }
 
-        if self.enable_ttl {
+        if self.storage.enable_ttl {
             // if default cf is non-empty, write cf and lock cf should be empty
             // not to make mixture of txnkv and rawkv
 
@@ -3345,8 +3341,11 @@ mod tests {
             new_engine_opt(
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
-                cfg.rocksdb
-                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache(), None),
+                cfg.rocksdb.build_cf_opts(
+                    &cfg.storage.block_cache.build_shared_cache(),
+                    None,
+                    cfg.storage.enable_ttl,
+                ),
             )
             .unwrap(),
         ));

@@ -1163,11 +1163,10 @@ mod tests {
     #[test]
     fn test_out_of_sync_max_ts() {
         use crate::storage::{
-            kv::Result, CfName, ConcurrencyManager, Cursor, DummyLockManager, IterOptions,
-            ScanMode, Value,
+            kv::Result, CfName, ConcurrencyManager, Cursor, DummyLockManager, ScanMode, Value,
         };
         use engine_rocks::RocksEngineIterator;
-        use engine_traits::ReadOptions;
+        use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;

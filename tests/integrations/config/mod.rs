@@ -647,6 +647,8 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         },
+        enable_ttl: false,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
