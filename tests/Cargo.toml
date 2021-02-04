@@ -45,8 +45,10 @@ path = "benches/channel/mod.rs"
 test = true
 
 [features]
-default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb"]
+default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
+cloud-aws = [ "external_storage_export/cloud-aws" ]
+cloud-gcp = [ "external_storage_export/cloud-gcp" ]
 testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [

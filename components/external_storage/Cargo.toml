@@ -6,11 +6,18 @@ publish = false
 
 [features]
 default = ["protobuf-codec"]
-protobuf-codec = ["kvproto/protobuf-codec"]
-prost-codec = ["kvproto/prost-codec"]
+protobuf-codec = [
+    "kvproto/protobuf-codec",
+    "cloud/protobuf-codec",
+]
+prost-codec = [
+    "kvproto/prost-codec",
+    "cloud/prost-codec",
+]
 
 [dependencies]
 bytes = "0.5.3"
+cloud = { path = "../cloud", default_features = false }
 futures = "0.3"
 futures-executor = "0.3"
 futures-io = "0.3"

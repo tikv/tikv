@@ -595,8 +595,8 @@ name = "cloud"
 version = "0.0.1"
 dependencies = [
  "error_code",
- "external_storage",
  "failure",
+ "futures-io",
  "kvproto",
  "openssl",
  "protobuf",
@@ -1331,6 +1331,7 @@ name = "external_storage"
 version = "0.0.1"
 dependencies = [
  "bytes 0.5.3",
+ "cloud",
  "futures 0.3.7",
  "futures-executor",
  "futures-io",

@@ -7,27 +7,27 @@ use std::io;
 use std::path::Path;
 use std::time::Instant;
 
-#[cfg(feature = "cloud-aws")]
+#[cfg(feature = "aws")]
 pub use aws::S3Storage;
-#[cfg(feature = "cloud-gcp")]
+#[cfg(feature = "aws")]
+use kvproto::backup::S3;
+
+#[cfg(feature = "gcp")]
 pub use gcp::GCSStorage;
+#[cfg(feature = "gcp")]
+use kvproto::backup::Gcs;
 
 #[cfg(feature = "prost-codec")]
 pub use kvproto::backup::storage_backend::Backend;
-#[cfg(feature = "cloud-gcp")]
-use kvproto::backup::Gcs;
 #[cfg(feature = "protobuf-codec")]
 pub use kvproto::backup::StorageBackend_oneof_backend as Backend;
-#[cfg(feature = "cloud-aws")]
-use kvproto::backup::S3;
-use kvproto::backup::{Noop, StorageBackend};
 #[cfg(feature = "libloading")]
 use libloading;
 
 pub use external_storage::{
-    block_on_external_io, record_storage_create, ExternalStorage, LocalStorage, NoopStorage,
-    READ_BUF_SIZE,
+    record_storage_create, BlobStore, ExternalStorage, LocalStorage, NoopStorage,
 };
+use kvproto::backup::{Noop, StorageBackend};
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn ExternalStorage>> {
@@ -39,24 +39,30 @@ pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn Ex
                 Box::new(LocalStorage::new(p)?) as Box<dyn ExternalStorage>
             }
             Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
-            #[cfg(feature = "cloud-aws")]
+            #[cfg(feature = "aws")]
             Backend::S3(config) => {
-                Box::new(S3Storage::from_input(config.clone())?) as Box<dyn ExternalStorage>
+                let store = Box::new(S3Storage::from_input(config.clone())?);
+                Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
             }
-            #[cfg(feature = "cloud-gcp")]
+            #[cfg(feature = "gcp")]
             Backend::Gcs(config) => {
-                Box::new(GCSStorage::from_input(config.clone())?) as Box<dyn ExternalStorage>
+                let store = Box::new(GCSStorage::from_input(config.clone())?);
+                Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
             }
-            #[cfg(feature = "libloading")]
-            Backend::CloudDynamic(dyn_backend) => load_external_storage(dyn_backend)?,
-            #[cfg(not(feature = "libloading"))]
             Backend::CloudDynamic(dyn_backend) => match dyn_backend.name.as_str() {
-                #[cfg(feature = "cloud-aws")]
-                "aws" | "s3" => Box::new(S3Storage::from_cloud_dynamic(&dyn_backend)?)
-                    as Box<dyn ExternalStorage>,
-                #[cfg(feature = "cloud-gcp")]
-                "gcp" | "gcs" => Box::new(GCSStorage::from_cloud_dynamic(&dyn_backend)?)
-                    as Box<dyn ExternalStorage>,
+                #[cfg(feature = "aws")]
+                "aws" | "s3" => {
+                    let store = Box::new(S3Storage::from_cloud_dynamic(&dyn_backend)?);
+                    Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+                }
+                #[cfg(feature = "gcp")]
+                "gcp" | "gcs" => {
+                    let store = Box::new(GCSStorage::from_cloud_dynamic(&dyn_backend)?);
+                    Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+                }
+                #[cfg(feature = "libloading")]
+                _ => load_external_storage(dyn_backend)?,
+                #[cfg(not(feature = "libloading"))]
                 _ => {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
@@ -64,7 +70,7 @@ pub fn create_storage(storage_backend: &StorageBackend) -> io::Result<Box<dyn Ex
                     ))
                 }
             },
-            #[cfg(not(any(feature = "cloud-gcp", feature = "cloud-aws")))]
+            #[cfg(not(any(feature = "gcp", feature = "aws")))]
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -98,7 +104,7 @@ fn load_external_storage(backend: CloudDynamic) -> io::Result<Box<dyn ExternalSt
     Ok(new_storage(backend)?)
 }
 
-#[cfg(feature = "cloud-aws")]
+#[cfg(feature = "aws")]
 // Creates a S3 `StorageBackend`
 pub fn make_s3_backend(config: S3) -> StorageBackend {
     #[cfg(feature = "prost-codec")]
@@ -148,7 +154,7 @@ pub fn make_noop_backend() -> StorageBackend {
     }
 }
 
-#[cfg(feature = "cloud-gcp")]
+#[cfg(feature = "gcp")]
 pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
     #[cfg(feature = "prost-codec")]
     {

@@ -1,5 +1,49 @@
+use futures_io::AsyncRead;
 pub use kvproto::backup::CloudDynamic;
 use std::io;
+use std::marker::Unpin;
+
+/// An abstraction for blob storage.
+/// Currently the same as ExternalStorage
+pub trait BlobStorage: 'static {
+    fn name(&self) -> &'static str;
+
+    fn url(&self) -> url::Url;
+
+    /// Write all contents of the read to the given path.
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()>;
+
+    /// Read all contents of the given path.
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+}
+
+impl BlobStorage for Box<dyn BlobStorage> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn url(&self) -> url::Url {
+        (**self).url()
+    }
+
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        (**self).write(name, reader, content_length)
+    }
+
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).read(name)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct StringNonEmpty(String);
@@ -13,7 +57,7 @@ impl StringNonEmpty {
     }
 
     pub fn opt2(s1: String, s2: String) -> Option<Self> {
-        Self::opt(s1).or(Self::opt(s2))
+        Self::opt(s1).or_else(|| Self::opt(s2))
     }
 
     pub fn required_field(s: String, field: &str) -> io::Result<Self> {
@@ -67,6 +111,16 @@ pub struct BucketConf {
 }
 
 impl BucketConf {
+    pub fn default(bucket: StringNonEmpty) -> Self {
+        BucketConf {
+            bucket,
+            endpoint: None,
+            region: None,
+            prefix: None,
+            storage_class: None,
+        }
+    }
+
     pub fn url(&self, host: &str) -> url::Url {
         let mut u = url::Url::parse(host).expect("bucket url");
         if let Err(e) = u.set_host(Some(&self.bucket)) {
@@ -107,23 +161,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bucket_validate() {
-        assert!(BucketConf::default().validate().is_err());
-        let bucket = BucketConf {
-            bucket: "bucket".to_owned(),
-            ..BucketConf::default()
-        };
-        assert!(bucket.validate().is_ok());
-    }
-
-    #[test]
     fn test_url_of_bucket() {
-        let bucket = BucketConf {
-            bucket: "bucket".to_owned(),
-            prefix: Some("/backup 01/prefix/".to_owned()),
-            endpoint: Some("http://endpoint.com".to_owned()),
-            ..BucketConf::default()
-        };
+        let bucket_name = StringNonEmpty::required("bucket".to_owned()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.prefix = StringNonEmpty::opt("/backup 01/prefix/".to_owned());
+        bucket.endpoint = StringNonEmpty::opt("http://endpoint.com".to_owned());
         assert_eq!(
             bucket.url("s3://").to_string(),
             "s3://bucket/backup%2001/prefix/"

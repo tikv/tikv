@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
-use cloud::blob::{none_to_empty, BucketConf, StringNonEmpty};
+use cloud::blob::{none_to_empty, BlobStorage, BucketConf, StringNonEmpty};
 use futures_util::{
     future::TryFutureExt,
     io::{AsyncRead, AsyncReadExt, Cursor},
@@ -34,6 +34,16 @@ pub struct Config {
 }
 
 impl Config {
+    #[cfg(test)]
+    pub fn default(bucket: BucketConf) -> Self {
+        Self {
+            bucket,
+            predefined_acl: None,
+            storage_class: None,
+            svc_info: ServiceAccountInfo::deserialize("{}").unwrap(),
+        }
+    }
+
     pub fn missing_credentials() -> io::Error {
         io::Error::new(io::ErrorKind::InvalidInput, "missing credentials")
     }
@@ -328,7 +338,7 @@ fn url_for(config: &Config) -> url::Url {
 
 const STORAGE_NAME: &str = "gcs";
 
-impl ExternalStorage for GCSStorage {
+impl BlobStorage for GCSStorage {
     fn name(&self) -> &'static str {
         &STORAGE_NAME
     }
@@ -447,16 +457,12 @@ mod tests {
 
     #[test]
     fn test_url_of_backend() {
-        let gcs = Config {
-            bucket: BucketConf {
-                bucket: "bucket".to_owned(),
-                prefix: Some("/backup 02/prefix/".to_owned()),
-                endpoint: Some("http://endpoint.com".to_owned()),
-                // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
-                ..BucketConf::default()
-            },
-            ..Config::default()
-        };
+        let bucket_name = StringNonEmpty::required("bucket".to_owned()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.prefix = StringNonEmpty::opt("/backup 02/prefix/".to_owned());
+        bucket.endpoint = StringNonEmpty::opt("http://endpoint.com".to_owned());
+        let gcs = Config::default(bucket);
+        // only 'bucket' and 'prefix' should be visible in url_of_backend()
         assert_eq!(
             url_for(&gcs).to_string(),
             "gcs://bucket/backup%2002/prefix/"

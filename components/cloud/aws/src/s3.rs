@@ -9,14 +9,14 @@ use rusoto_core::{
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::*;
 
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
-use cloud::blob::{none_to_empty, BucketConf, StringNonEmpty};
+use cloud::blob::{none_to_empty, BlobStorage, BucketConf, StringNonEmpty};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
 pub use kvproto::backup::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use tikv_util::stream::{block_on_external_io, error_stream, retry};
 
 #[derive(Clone)]
 pub struct AccessKeyPair {
@@ -45,6 +45,19 @@ pub struct Config {
 }
 
 impl Config {
+    #[cfg(test)]
+    pub fn default(bucket: BucketConf) -> Self {
+        Self {
+            bucket,
+            sse: None,
+            acl: None,
+            access_key_pair: None,
+            force_path_style: false,
+            sse_kms_key_id: None,
+            storage_class: None,
+        }
+    }
+
     pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
         let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
         let attrs = &cloud_dynamic.attrs;
@@ -66,13 +79,13 @@ impl Config {
         };
         let storage_class = bucket.storage_class.clone();
         Ok(Config {
-            bucket: bucket,
+            bucket,
+            storage_class,
             sse: StringNonEmpty::opt(attrs.get("sse").unwrap_or(def).clone()),
             acl: StringNonEmpty::opt(attrs.get("acl").unwrap_or(def).clone()),
             access_key_pair,
             force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
-            storage_class,
         })
     }
 
@@ -100,13 +113,13 @@ impl Config {
             }),
         };
         Ok(Config {
+            storage_class,
             bucket: config_bucket,
             sse: StringNonEmpty::opt(input.sse),
             acl: StringNonEmpty::opt(input.acl),
             access_key_pair,
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
-            storage_class: storage_class,
         })
     }
 }
@@ -210,9 +223,9 @@ impl<'client> S3Uploader<'client> {
             key,
             bucket: config.bucket.bucket.to_string(),
             acl: config.acl.as_ref().cloned(),
-            server_side_encryption: config.sse.as_ref().map(|s| s.clone()),
-            sse_kms_key_id: config.sse_kms_key_id.as_ref().map(|s| s.clone()),
-            storage_class: config.storage_class.as_ref().map(|s| s.clone()),
+            server_side_encryption: config.sse.as_ref().cloned(),
+            sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
+            storage_class: config.storage_class.as_ref().cloned(),
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -360,7 +373,7 @@ fn url_for(config: &Config) -> url::Url {
 
 const STORAGE_NAME: &str = "s3";
 
-impl ExternalStorage for S3Storage {
+impl BlobStorage for S3Storage {
     fn name(&self) -> &'static str {
         &STORAGE_NAME
     }
@@ -424,36 +437,28 @@ mod tests {
 
     #[test]
     fn test_s3_config() {
-        let mut config = Config {
-            bucket: BucketConf {
-                bucket: "mybucket".to_string(),
-                region: Some("ap-southeast-2".to_string()),
-                prefix: Some("myprefix".to_string()),
-                ..BucketConf::default()
-            },
-            access_key_pair: Some(AccessKeyPair {
-                access_key: "abc".to_string(),
-                secret_access_key: "xyz".to_string(),
-            }),
-            ..Default::default()
-        };
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
+        bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
+        let mut config = Config::default(bucket);
+        config.access_key_pair = Some(AccessKeyPair {
+            access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
+            secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
+        });
         assert!(S3Storage::new(config.clone()).is_ok());
-        config.bucket.bucket = "".to_owned();
+        config.bucket.region = None;
         assert!(S3Storage::new(config).is_err());
     }
 
     #[test]
     fn test_s3_storage() {
         let magic_contents = "5678";
-        let config = Config {
-            bucket: BucketConf {
-                region: empty_to_none("ap-southeast-2".to_string()),
-                bucket: "mybucket".to_string(),
-                prefix: empty_to_none("myprefix".to_string()),
-                ..BucketConf::default()
-            },
-            ..Config::default()
-        };
+        let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
+        bucket.prefix = StringNonEmpty::opt("myprefix".to_string());
+        let config = Config::default(bucket);
         let dispatcher = MockRequestDispatcher::with_status(200).with_request_checker(
             move |req: &SignedRequest| {
                 assert_eq!(req.region.name(), "ap-southeast-2");
@@ -522,16 +527,11 @@ mod tests {
 
     #[test]
     fn test_url_of_backend() {
-        let s3 = Config {
-            bucket: BucketConf {
-                bucket: "bucket".to_owned(),
-                prefix: empty_to_none("/backup 01/prefix/".to_owned()),
-                endpoint: empty_to_none("http://endpoint.com".to_owned()),
-                ..BucketConf::default()
-            },
-            // ^ only 'bucket' and 'prefix' should be visible in url_of_backend()
-            ..Config::default()
-        };
+        let bucket_name = StringNonEmpty::required("bucket".to_owned()).unwrap();
+        let mut bucket = BucketConf::default(bucket_name);
+        bucket.prefix = StringNonEmpty::opt("/backup 01/prefix/".to_owned());
+        bucket.endpoint = StringNonEmpty::opt("http://endpoint.com".to_owned());
+        let s3 = Config::default(bucket);
         assert_eq!(url_for(&s3).to_string(), "s3://bucket/backup%2001/prefix/");
     }
 }

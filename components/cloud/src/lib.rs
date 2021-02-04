@@ -9,13 +9,6 @@ extern crate failure;
 #[macro_use]
 extern crate slog_global;
 
-pub mod external_storage {
-    pub use external_storage::{
-        block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, ExternalStorage,
-        RetryError,
-    };
-}
-
 pub mod error;
 pub use error::{Error, ErrorTrait, Result};
 

@@ -4,7 +4,9 @@ use std::{
     path::Path,
 };
 
-use external_storage_export::{ExternalStorage, GCSStorage, LocalStorage, NoopStorage, S3Storage};
+use external_storage_export::{
+    BlobStore, ExternalStorage, GCSStorage, LocalStorage, NoopStorage, S3Storage,
+};
 use futures::executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
@@ -105,7 +107,8 @@ fn create_s3_storage(opt: &Opt) -> Result<Box<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    Ok(Box::new(S3Storage::from_input(config)?) as Box<dyn ExternalStorage>)
+    let store = Box::new(S3Storage::from_input(config)?);
+    Ok(Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>)
 }
 
 fn create_gcs_storage(opt: &Opt) -> Result<Box<dyn ExternalStorage>> {
@@ -125,7 +128,8 @@ fn create_gcs_storage(opt: &Opt) -> Result<Box<dyn ExternalStorage>> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    Ok(Box::new(GCSStorage::from_input(config)?) as Box<dyn ExternalStorage>)
+    let store = Box::new(GCSStorage::from_input(config)?);
+    Ok(Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>)
 }
 
 fn process() -> Result<()> {

@@ -13,6 +13,7 @@ use std::marker::Unpin;
 use std::sync::Arc;
 use std::time::Instant;
 
+use cloud::blob::BlobStorage;
 use futures_io::AsyncRead;
 
 mod local;
@@ -80,6 +81,44 @@ pub trait ExternalStorage: 'static {
     ) -> io::Result<()>;
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+}
+
+pub struct BlobStore(Box<dyn BlobStorage>);
+
+impl BlobStore {
+    pub fn new(inner: Box<dyn BlobStorage>) -> Self {
+        BlobStore(inner)
+    }
+}
+
+impl std::ops::Deref for BlobStore {
+    type Target = Box<dyn BlobStorage>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ExternalStorage for BlobStore {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn url(&self) -> url::Url {
+        (**self).url()
+    }
+
+    fn write(
+        &self,
+        name: &str,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        (**self).write(name, reader, content_length)
+    }
+
+    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).read(name)
+    }
 }
 
 impl ExternalStorage for Arc<dyn ExternalStorage> {

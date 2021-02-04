@@ -5,12 +5,17 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
 protobuf-codec = [
   "backup/protobuf-codec",
+  "external_storage_export/protobuf-codec",
 ]
 prost-codec = [
   "backup/prost-codec",
+  "external_storage_export/prost-codec",
 ]
+cloud-aws = ["external_storage_export/cloud-aws"]
+cloud-gcp = ["external_storage_export/cloud-gcp"]
 
 [dependencies]
 backup = { path = "../backup" }
