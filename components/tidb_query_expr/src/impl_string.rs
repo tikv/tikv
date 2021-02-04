@@ -3265,6 +3265,7 @@ mod tests {
             ("", "foo,bar,", Collation::Utf8Mb4Bin, 3),
             ("", "", Collation::Utf8Mb4Bin, 0),
             ("a,b", "a,b,c", Collation::Utf8Mb4Bin, 0),
+            ("测试", "中文,测试,英文", Collation::Utf8Mb4Bin, 2),
             ("foo", "A,FOO,BAR", Collation::Utf8Mb4GeneralCi, 2),
             ("b", "A,B,C", Collation::Utf8Mb4GeneralCi, 2),
         ];
