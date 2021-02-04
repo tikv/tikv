@@ -1526,9 +1526,9 @@ impl SnapManagerBuilder {
 
 #[cfg(test)]
 pub mod tests {
+    use file_system::{self, File, OpenOptions};
     use std::cmp;
     use std::f64::INFINITY;
-    use file_system::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

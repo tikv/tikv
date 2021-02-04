@@ -9,7 +9,6 @@ extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-mod condvar;
 mod file;
 mod iosnoop;
 mod metrics;
@@ -20,8 +19,8 @@ pub use file::{File, OpenOptions};
 pub use iosnoop::{get_io_type, init_io_snooper, set_io_type};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesCalibrator, IORateLimiter,
-    IORateLimiterStatistics, WithIORateLimit,
+    get_io_rate_limiter, set_io_rate_limiter, IORateLimiter, IORateLimiterStatistics,
+    WithIORateLimit,
 };
 
 pub use std::fs::{

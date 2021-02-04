@@ -1,25 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{condvar::Condvar, IOMeasure, IOOp, IOPriority, IOType};
+use super::{IOMeasure, IOOp, IOPriority, IOType};
 
 use crossbeam_utils::CachePadded;
-use parking_lot::{Mutex, MutexGuard};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use parking_lot::{Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc::{self, Sender},
+    Arc,
+};
+use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use tikv_util::time::Instant;
-
-/// Used to calibrate actual IO throughput.
-/// A naive implementation would be deducing disk IO based on empirical ratio
-/// with respect to hardware environment.
-pub trait BytesCalibrator: Send + std::fmt::Debug {
-    /// Calibrate estimation of throughput of current epoch. This methods can
-    /// be called several times before a reset.
-    /// Returned value must be no larger than `before_calibration`.
-    fn calibrate(&mut self, before_calibration: usize) -> usize;
-
-    fn reset(&mut self);
-}
 
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
@@ -77,17 +69,11 @@ impl IORateLimiterStatistics {
     }
 }
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(10);
+const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(200);
 
 #[inline]
 fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usize {
     (ios_per_sec as f64 * refill_period.as_secs_f64()) as usize
-}
-
-#[derive(Debug)]
-struct RawIORateLimiterProtected {
-    last_refill_time: Instant,
-    calibrator: Option<Box<dyn BytesCalibrator>>,
 }
 
 /// Limit total IO flow below provided threshold by throttling low-priority IOs.
@@ -95,151 +81,183 @@ struct RawIORateLimiterProtected {
 #[derive(Debug)]
 struct RawIORateLimiter {
     refill_period: Duration,
-    priority_ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
-    priority_ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
-    condv: Condvar,
-    protected: Mutex<RawIORateLimiterProtected>,
+    ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    pending_ios: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    protected: RwLock<RawIORateLimiterProtected>,
 }
 
-macro_rules! condv_wait_impl {
-    ($condv:expr, $lock:expr, $guard:expr, $timeout:expr, true) => {
-        $condv.wait_timeout($guard, $timeout)
+#[derive(Debug)]
+struct RawIORateLimiterProtected {
+    last_refill_time: Instant,
+}
+
+impl RawIORateLimiterProtected {
+    pub fn new() -> Self {
+        RawIORateLimiterProtected {
+            last_refill_time: Instant::now_coarse(),
+        }
+    }
+}
+
+macro_rules! sleep_impl {
+    ($duration:expr, "sync") => {
+        std::thread::sleep($duration)
     };
-    ($condv:expr, $lock:expr, $guard:expr, $timeout:expr, false) => {
-        $condv.async_wait_timeout(&$lock, $guard, $timeout).await
+    ($duration:expr, "async") => {
+        tokio::time::delay_for($duration).await
+    };
+    ($duration:expr, "non-blocking") => {
+        return 0
     };
 }
 
 macro_rules! request_impl {
-    ($self:expr, $priority:expr, $amount:expr, $sync:tt) => {{
+    ($self:expr, $priority:expr, $amount:expr, $mode:tt) => {{
         let priority_idx = $priority as usize;
         loop {
-            let cached_ios_per_refill =
-                $self.priority_ios_per_sec[priority_idx].load(Ordering::Relaxed);
+            let cached_ios_per_refill = $self.ios_per_sec[priority_idx].load(Ordering::Relaxed);
             if cached_ios_per_refill == 0 {
                 return $amount;
             }
             let amount = std::cmp::min($amount, cached_ios_per_refill);
-            let tmp = $self.priority_ios_through[priority_idx].fetch_add(amount, Ordering::AcqRel);
-            if amount + tmp <= cached_ios_per_refill {
+            let ios_through =
+                $self.ios_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
+            if ios_through <= cached_ios_per_refill {
                 return amount;
             }
-            let mut locked = $self.protected.lock();
-            // TODO: calibration
-            let now = Instant::now_coarse();
-            assert!(now >= locked.last_refill_time);
-            let since_last_refill = now.duration_since(locked.last_refill_time);
-            if since_last_refill < $self.refill_period {
-                let cached_last_refill_time = locked.last_refill_time;
-                // use a slightly larger timeout so that they can react to notification
-                // and preserve enqueue order
-                let (mut locked, timed_out) = condv_wait_impl!(
-                    $self.condv,
-                    &$self.protected,
-                    locked,
-                    $self.refill_period.mul_f32(1.1) - since_last_refill,
-                    $sync
-                );
-                if timed_out && locked.last_refill_time == cached_last_refill_time {
-                    $self.refill(&mut locked, Instant::now_coarse());
+            if let Some(locked) = $self.protected.try_read() {
+                let now = Instant::now_coarse();
+                if locked.last_refill_time + Duration::from_millis(1) >= now {
+                    continue;
+                }
+                let pending =
+                    $self.pending_ios[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
+                let since_last_refill = now.duration_since(locked.last_refill_time);
+                drop(locked);
+                if $self.refill_period > since_last_refill {
+                    sleep_impl!($self.refill_period - since_last_refill, $mode);
+                }
+                if pending <= cached_ios_per_refill {
+                    return amount;
                 }
             } else {
-                $self.refill(&mut locked, now);
+                // spin a while for the concurrent refill to complete
+                std::thread::yield_now();
+                while $self.protected.try_read().is_none() {
+                    std::thread::yield_now();
+                }
             }
         }
     }};
 }
 
 impl RawIORateLimiter {
-    pub fn new(refill_period: Duration, ios_per_sec: usize) -> Self {
+    fn new(refill_period: Duration, _ios_per_sec: usize) -> Self {
         assert!(IOPriority::High as usize == IOPriority::VARIANT_COUNT - 1);
-        let priority_ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT] =
-            Default::default();
-        let ios_per_sec = calculate_ios_per_refill(ios_per_sec, refill_period);
+        let ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT] = Default::default();
+        let _ios_per_sec = calculate_ios_per_refill(_ios_per_sec, refill_period);
         for i in 0..IOPriority::VARIANT_COUNT {
-            priority_ios_per_sec[i].store(ios_per_sec, Ordering::Relaxed);
+            ios_per_sec[i].store(_ios_per_sec, Ordering::Relaxed);
         }
         RawIORateLimiter {
             refill_period,
-            priority_ios_through: Default::default(),
-            priority_ios_per_sec,
-            condv: Condvar::new(),
-            protected: Mutex::new(RawIORateLimiterProtected {
-                last_refill_time: Instant::now_coarse(),
-                calibrator: None,
-            }),
+            ios_through: Default::default(),
+            ios_per_sec,
+            pending_ios: Default::default(),
+            protected: RwLock::new(RawIORateLimiterProtected::new()),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn set_calibrator(&mut self, calibrator: Box<dyn BytesCalibrator>) {
-        self.protected.get_mut().calibrator = Some(calibrator);
     }
 
     /// Dynamically changes the total IO flow threshold, effective after at most `refill_period`.
     #[allow(dead_code)]
-    pub fn set_ios_per_sec(&self, ios_per_sec: usize) {
-        // we hold this lock so a concurrent refill can't negate our attempt.
-        let _locked = self.protected.lock();
-        let before = self.priority_ios_per_sec[IOPriority::High as usize].load(Ordering::Relaxed);
+    fn set_ios_per_sec(&self, ios_per_sec: usize) {
         let now = calculate_ios_per_refill(ios_per_sec, self.refill_period);
-        self.priority_ios_per_sec[IOPriority::High as usize].store(now, Ordering::Relaxed);
+        let before = self.ios_per_sec[IOPriority::High as usize].swap(now, Ordering::Relaxed);
         if before == 0 || now == 0 {
-            // corner case for disabling/enabling rate limit.
+            // toggle on/off rate limit.
+            // we hold this lock so a concurrent refill can't negate our effort.
+            let _locked = self.protected.write();
             for i in 0..IOPriority::VARIANT_COUNT - 1 {
-                self.priority_ios_per_sec[i].store(now, Ordering::Relaxed);
+                self.ios_per_sec[i].store(now, Ordering::Relaxed);
             }
         }
     }
 
-    pub fn request(&self, priority: IOPriority, amount: usize) -> usize {
-        request_impl!(self, priority, amount, true /*sync*/)
+    fn request(&self, priority: IOPriority, amount: usize) -> usize {
+        request_impl!(self, priority, amount, "sync")
     }
 
-    pub async fn async_request(&self, priority: IOPriority, amount: usize) -> usize {
-        request_impl!(self, priority, amount, false /*sync*/)
+    async fn async_request(&self, priority: IOPriority, amount: usize) -> usize {
+        request_impl!(self, priority, amount, "async")
     }
 
-    #[inline]
-    fn refill(&self, locked: &mut MutexGuard<RawIORateLimiterProtected>, now: Instant) {
-        let mut cached_priority_ios_through = [0; IOPriority::VARIANT_COUNT];
-        for i in 0..IOPriority::VARIANT_COUNT {
-            cached_priority_ios_through[i] = std::cmp::min(
-                self.priority_ios_through[i].load(Ordering::Relaxed),
-                self.priority_ios_per_sec[i].load(Ordering::Relaxed),
+    fn refill(&self) {
+        let mut locked = self.protected.write();
+
+        let mut limit = self.ios_per_sec[IOPriority::High as usize].load(Ordering::Relaxed);
+        if limit == 0 {
+            return;
+        }
+        let now = Instant::now_coarse();
+        let mut ios_through = self.ios_through[IOPriority::High as usize].swap(
+            self.pending_ios[IOPriority::High as usize].swap(0, Ordering::Relaxed),
+            Ordering::Release,
+        );
+        for p in &[IOPriority::Medium, IOPriority::Low] {
+            let pi = *p as usize;
+            limit = if limit > ios_through {
+                limit - ios_through
+            } else {
+                1 // a small positive value
+            };
+            self.ios_per_sec[pi].store(limit, Ordering::Relaxed);
+            ios_through = self.ios_through[pi].swap(
+                self.pending_ios[pi].swap(0, Ordering::Relaxed),
+                Ordering::Release,
             );
         }
-        // start from high priority
-        let mut limit =
-            self.priority_ios_per_sec[IOPriority::High as usize].load(Ordering::Relaxed);
-        self.priority_ios_through[IOPriority::High as usize].store(0, Ordering::Release);
-        let mut higher_priority_ios_through =
-            cached_priority_ios_through[IOPriority::High as usize];
-        for i in (0..IOPriority::VARIANT_COUNT - 1).rev() {
-            limit = if limit > higher_priority_ios_through {
-                limit - higher_priority_ios_through
-            } else if limit == 0 {
-                0 // 0 means disabled
-            } else {
-                10 // a small positive value
-            };
-            self.priority_ios_per_sec[i].store(limit, Ordering::Relaxed);
-            higher_priority_ios_through += cached_priority_ios_through[i];
-            // finally reset the consumption
-            self.priority_ios_through[i].store(0, Ordering::Release);
-        }
 
-        if let Some(calibrator) = &mut locked.calibrator {
-            calibrator.reset();
-        }
         locked.last_refill_time = now;
-        self.condv.notify_all(locked);
     }
 
     #[cfg(test)]
-    pub fn is_drained(&self, priority: IOPriority) -> bool {
-        self.priority_ios_through[priority as usize].load(Ordering::Acquire)
-            >= self.priority_ios_per_sec[priority as usize].load(Ordering::Acquire)
+    fn is_drained(&self, priority: IOPriority) -> bool {
+        self.ios_through[priority as usize].load(Ordering::Acquire)
+            >= self.ios_per_sec[priority as usize].load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+struct Refiller {
+    sender: Option<Mutex<Sender<()>>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Refiller {
+    pub fn new() -> Self {
+        Refiller {
+            sender: None,
+            handle: None,
+        }
+    }
+
+    pub fn must_start(&mut self, limiter: Arc<RawIORateLimiter>) {
+        let (tx, rx) = mpsc::channel();
+        let h = ThreadBuilder::new()
+            .name("refiller".to_owned())
+            .spawn(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                while let Err(mpsc::RecvTimeoutError::Timeout) =
+                    rx.recv_timeout(DEFAULT_REFILL_PERIOD)
+                {
+                    limiter.refill();
+                }
+                tikv_alloc::remove_thread_memory_accessor();
+            })
+            .unwrap();
+        self.handle = Some(h);
+        self.sender = Some(Mutex::new(tx));
     }
 }
 
@@ -247,20 +265,25 @@ impl RawIORateLimiter {
 #[derive(Debug)]
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::VARIANT_COUNT],
-    bytes: Option<RawIORateLimiter>,
+    bytes: Option<Arc<RawIORateLimiter>>,
     ios: Option<RawIORateLimiter>,
     enable_statistics: CachePadded<AtomicBool>,
     stats: Arc<IORateLimiterStatistics>,
+    refiller: Refiller,
 }
 
 impl IORateLimiter {
     pub fn new() -> IORateLimiter {
+        let limiter = Arc::new(RawIORateLimiter::new(DEFAULT_REFILL_PERIOD, 0));
+        let mut refiller = Refiller::new();
+        refiller.must_start(limiter.clone());
         IORateLimiter {
             priority_map: [IOPriority::High; IOType::VARIANT_COUNT],
-            bytes: Some(RawIORateLimiter::new(DEFAULT_REFILL_PERIOD, 0)),
+            bytes: Some(limiter),
             ios: None,
             enable_statistics: CachePadded::new(AtomicBool::new(true)),
             stats: Arc::new(IORateLimiterStatistics::new()),
+            refiller,
         }
     }
 
