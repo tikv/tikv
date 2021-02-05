@@ -1234,7 +1234,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let (_guard, stats) = WithIORateLimit::new(0);
+        let (_guard, stats) = WithIORateLimit::new();
         let (tmp, endpoint) = new_endpoint();
         let engine = endpoint.engine.clone();
 

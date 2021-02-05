@@ -220,12 +220,6 @@ impl RawIORateLimiter {
 
         locked.last_refill_time = now;
     }
-
-    #[cfg(test)]
-    fn is_drained(&self, priority: IOPriority) -> bool {
-        self.ios_through[priority as usize].load(Ordering::Acquire)
-            >= self.ios_per_sec[priority as usize].load(Ordering::Acquire)
-    }
 }
 
 #[derive(Debug)]
@@ -363,6 +357,7 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
+// Do NOT use this method in multi-threaded test environment.
 pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
     *IO_RATE_LIMITER.lock() = limiter;
 }
@@ -375,15 +370,15 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     }
 }
 
+// Set a global rate limit that can be used to trace IOs.
 pub struct WithIORateLimit {
     previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
 impl WithIORateLimit {
-    pub fn new(bytes_per_sec: usize) -> (Self, Arc<IORateLimiterStatistics>) {
+    pub fn new() -> (Self, Arc<IORateLimiterStatistics>) {
         let previous_io_rate_limiter = get_io_rate_limiter();
         let limiter = Arc::new(IORateLimiter::new());
-        limiter.set_io_rate_limit(IOMeasure::Bytes, bytes_per_sec);
         limiter.enable_statistics(true);
         let stats = limiter.statistics();
         set_io_rate_limiter(Some(limiter));
@@ -412,75 +407,6 @@ mod tests {
         assert!(left <= right * 1.1);
     }
 
-    fn approximate_eq_2(left: f64, right: f64, margin: f64) {
-        assert!(left >= right * (1.0 - margin));
-        assert!(left <= right * (1.0 + margin));
-    }
-
-    #[test]
-    fn test_basic_rate_limit() {
-        let refills_in_one_sec = 10;
-        let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
-        let limiter = RawIORateLimiter::new(refill_period, 2 * refills_in_one_sec);
-
-        assert_eq!(limiter.request(IOPriority::High, 1), 1);
-        assert_eq!(limiter.request(IOPriority::High, 10), 2);
-        limiter.set_ios_per_sec(10 * refills_in_one_sec);
-        assert_eq!(limiter.request(IOPriority::High, 10), 10);
-        limiter.set_ios_per_sec(100 * refills_in_one_sec);
-
-        let limiter = Arc::new(limiter);
-        let mut threads = vec![];
-        assert_eq!(limiter.request(IOPriority::High, 1000), 100);
-        let begin = Instant::now();
-        for _ in 0..50 {
-            let limiter = limiter.clone();
-            let t = std::thread::spawn(move || {
-                assert_eq!(limiter.request(IOPriority::High, 1), 1);
-            });
-            threads.push(t);
-        }
-        for t in threads {
-            t.join().unwrap();
-        }
-        let end = Instant::now();
-        assert!(end.duration_since(begin) >= refill_period);
-        assert!(end.duration_since(begin) < refill_period * 2);
-    }
-
-    #[test]
-    fn test_dynamic_relax_limit() {
-        let refills_in_one_sec = 10;
-        let refill_period = Duration::from_millis(1000 / refills_in_one_sec as u64);
-        let limiter = Arc::new(RawIORateLimiter::new(refill_period, 2 * refills_in_one_sec));
-
-        let (limiter1, limiter2) = (limiter.clone(), limiter.clone());
-
-        fn inner(limiter: Arc<RawIORateLimiter>) {
-            assert!(limiter.is_drained(IOPriority::High));
-            assert_eq!(limiter.request(IOPriority::High, 100), 100);
-        }
-        assert_eq!(limiter.request(IOPriority::High, 100), 2);
-        // only one thread do the refill after timeout
-        let t1 = std::thread::spawn(move || {
-            inner(limiter1);
-        });
-        let t2 = std::thread::spawn(move || {
-            inner(limiter2);
-        });
-        let begin = Instant::now();
-        // make sure limiters start waiting
-        std::thread::sleep(Duration::from_millis(10));
-        limiter.set_ios_per_sec(10000 * refills_in_one_sec);
-        t1.join().unwrap();
-        t2.join().unwrap();
-        let end = Instant::now();
-        approximate_eq(
-            end.duration_since(begin).as_secs_f64(),
-            refill_period.as_secs_f64() * 1.1,
-        );
-    }
-
     struct BackgroundContext {
         threads: Vec<std::thread::JoinHandle<()>>,
         stop: Option<Arc<AtomicBool>>,
@@ -501,7 +427,7 @@ mod tests {
     struct Request(IOType, IOOp, usize);
 
     fn start_background_jobs(
-        limiter: Arc<IORateLimiter>,
+        limiter: &Arc<IORateLimiter>,
         job_count: usize,
         request: Request,
         interval: Option<Duration>,
@@ -528,13 +454,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_rate_limited_heavy_flow() {
-        let bytes_per_sec = 10000;
-        let limiter = Arc::new(IORateLimiter::new());
-        limiter.enable_statistics(true);
-        limiter.set_io_rate_limit(IOMeasure::Bytes, bytes_per_sec);
+    fn verify_rate_limit(limiter: &Arc<IORateLimiter>, bytes_per_sec: usize) {
         let stats = limiter.statistics();
+        stats.reset();
+        limiter.set_io_rate_limit(IOMeasure::Bytes, bytes_per_sec);
         let duration = {
             let begin = Instant::now();
             {
@@ -556,6 +479,17 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limited_heavy_flow() {
+        let low_bytes_per_sec = 2000;
+        let high_bytes_per_sec = 10000;
+        let limiter = Arc::new(IORateLimiter::new());
+        limiter.enable_statistics(true);
+        verify_rate_limit(&limiter, low_bytes_per_sec);
+        verify_rate_limit(&limiter, high_bytes_per_sec);
+        verify_rate_limit(&limiter, low_bytes_per_sec);
+    }
+
+    #[test]
     fn test_rate_limited_light_flow() {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
@@ -568,7 +502,7 @@ mod tests {
             {
                 // each thread request at most 1000 bytes per second
                 let _context = start_background_jobs(
-                    limiter,
+                    &limiter,
                     actual_kbytes_per_sec, /*job_count*/
                     Request(IOType::Compaction, IOOp::Write, 1),
                     Some(Duration::from_millis(1)),
@@ -601,7 +535,7 @@ mod tests {
             let begin = Instant::now();
             {
                 let _write = start_background_jobs(
-                    limiter.clone(),
+                    &limiter,
                     2, /*job_count*/
                     Request(
                         IOType::ForegroundWrite,
@@ -611,7 +545,7 @@ mod tests {
                     Some(Duration::from_millis(1)),
                 );
                 let _compaction = start_background_jobs(
-                    limiter.clone(),
+                    &limiter,
                     2, /*job_count*/
                     Request(
                         IOType::Compaction,
@@ -621,7 +555,7 @@ mod tests {
                     Some(Duration::from_millis(1)),
                 );
                 let _import = start_background_jobs(
-                    limiter,
+                    &limiter,
                     2, /*job_count*/
                     Request(
                         IOType::Import,
@@ -641,10 +575,9 @@ mod tests {
             (write_work * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
         );
         let compaction_bytes = stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes);
-        approximate_eq_2(
+        approximate_eq(
             compaction_bytes as f64,
             ((100 - write_work) * bytes_per_sec / 100) as f64 * duration.as_secs_f64(),
-            0.2,
         );
         let import_bytes = stats.fetch(IOType::Import, IOOp::Write, IOMeasure::Bytes);
         let total_bytes = write_bytes + import_bytes + compaction_bytes;

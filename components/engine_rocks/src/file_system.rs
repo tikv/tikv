@@ -46,7 +46,7 @@ mod tests {
     use tempfile::Builder;
 
     fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>, WithIORateLimit) {
-        let (guard, stats) = WithIORateLimit::new(0);
+        let (guard, stats) = WithIORateLimit::new();
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
         let env = get_env(None).unwrap();

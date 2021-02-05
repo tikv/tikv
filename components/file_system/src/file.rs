@@ -25,12 +25,30 @@ impl File {
         })
     }
 
+    #[cfg(test)]
+    pub fn open_with_limiter<P: AsRef<Path>>(
+        path: P,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> io::Result<File> {
+        let inner = fs::File::open(path)?;
+        Ok(File { inner, limiter })
+    }
+
     pub fn create<P: AsRef<Path>>(path: P) -> io::Result<File> {
         let inner = fs::File::create(path)?;
         Ok(File {
             inner,
             limiter: get_io_rate_limiter(),
         })
+    }
+
+    #[cfg(test)]
+    pub fn create_with_limiter<P: AsRef<Path>>(
+        path: P,
+        limiter: Option<Arc<IORateLimiter>>,
+    ) -> io::Result<File> {
+        let inner = fs::File::create(path)?;
+        Ok(File { inner, limiter })
     }
 
     pub fn from_raw_file(file: fs::File) -> io::Result<File> {
@@ -210,25 +228,30 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        let (_guard, stats) = WithIORateLimit::new(100);
+        // make sure read at most one bytes at a time
+        let limiter = Arc::new(IORateLimiter::new());
+        limiter.set_io_rate_limit(IOMeasure::Bytes, 5 /* 1s / refill_period */);
+        limiter.enable_statistics(true);
+        let stats = limiter.statistics();
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("magic words");
         {
-            let _guard = WithIOType::new(IOType::Export);
-            let mut f = File::create(&tmp_file).unwrap();
+            let _guard = WithIOType::new(IOType::ForegroundWrite);
+            let mut f = File::create_with_limiter(&tmp_file, Some(limiter.clone())).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
-                stats.fetch(IOType::Export, IOOp::Write, IOMeasure::Bytes),
+                stats.fetch(IOType::ForegroundWrite, IOOp::Write, IOMeasure::Bytes),
                 content.len()
             );
         }
         {
+            // only export read IOs are limited
             let _guard = WithIOType::new(IOType::Export);
             let mut buffer = String::new();
-            let mut f = File::open(&tmp_file).unwrap();
+            let mut f = File::open_with_limiter(&tmp_file, Some(limiter)).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
             // read_to_string only exit when file.read() returns zero, which means
