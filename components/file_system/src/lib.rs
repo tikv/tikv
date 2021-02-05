@@ -119,6 +119,15 @@ impl IOPriority {
             IOPriority::High => "high",
         }
     }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "low" => Some(IOPriority::Low),
+            "medium" => Some(IOPriority::Medium),
+            "high" => Some(IOPriority::High),
+            _ => None,
+        }
+    }
 }
 
 pub mod io_priority_serde {
@@ -133,12 +142,7 @@ pub mod io_priority_serde {
     where
         S: Serializer,
     {
-        let name = match *t {
-            IOPriority::Low => "low",
-            IOPriority::Medium => "medium",
-            IOPriority::High => "high",
-        };
-        serializer.serialize_str(name)
+        serializer.serialize_str(t.as_str())
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<IOPriority, D::Error>
@@ -157,10 +161,8 @@ pub mod io_priority_serde {
             where
                 E: Error,
             {
-                let str = match &*value.trim().to_lowercase() {
-                    "low" => IOPriority::Low,
-                    "medium" => IOPriority::Medium,
-                    "high" => IOPriority::High,
+                let p = match IOPriority::from_str(&*value.trim().to_lowercase()) {
+                    Some(p) => p,
                     _ => {
                         return Err(E::invalid_value(
                             Unexpected::Other(&"invalid compression type".to_string()),
@@ -168,7 +170,7 @@ pub mod io_priority_serde {
                         ));
                     }
                 };
-                Ok(str)
+                Ok(p)
             }
         }
 
