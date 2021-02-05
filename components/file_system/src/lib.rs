@@ -111,6 +111,16 @@ pub enum IOPriority {
     High = 2,
 }
 
+impl IOPriority {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            IOPriority::Low => "low",
+            IOPriority::Medium => "medium",
+            IOPriority::High => "high",
+        }
+    }
+}
+
 pub mod io_priority_serde {
     use std::fmt;
 

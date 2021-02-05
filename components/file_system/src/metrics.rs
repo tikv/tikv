@@ -49,4 +49,13 @@ lazy_static! {
             &["type", "op"],
             exponential_buckets(1.0, 2.0, 22).unwrap() // max 4s
         ).unwrap();
+
+    pub static ref RATE_LIMITER_REQUEST_WAIT_DURATION: HistogramVec = register_histogram_vec!(
+            "tikv_rate_limiter_request_wait_duration",
+            "Bucketed histogram of IO rate limiter request wait duration",
+            &["type"],
+            // 1ms ~ 1024ms
+            exponential_buckets(0.001, 2.0, 11).unwrap()
+        )
+        .unwrap();
 }

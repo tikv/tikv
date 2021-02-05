@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::metrics::RATE_LIMITER_REQUEST_WAIT_DURATION;
 use super::{IOOp, IOPriority, IOType};
 
 use crossbeam_utils::CachePadded;
@@ -117,7 +118,11 @@ macro_rules! request_impl {
                 let since_last_refill = now.duration_since(locked.last_refill_time);
                 drop(locked);
                 if since_last_refill < DEFAULT_REFILL_PERIOD {
-                    sleep_impl!(DEFAULT_REFILL_PERIOD - since_last_refill, $mode);
+                    let wait = DEFAULT_REFILL_PERIOD - since_last_refill;
+                    RATE_LIMITER_REQUEST_WAIT_DURATION
+                        .with_label_values(&[$priority.as_str()])
+                        .observe(wait.as_secs_f64());
+                    sleep_impl!(wait, $mode);
                 }
                 // our request is already recorded in `pending_ios`.
                 if pending <= cached_ios_per_refill {
