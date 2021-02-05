@@ -49,37 +49,4 @@ lazy_static! {
             &["type", "op"],
             exponential_buckets(1.0, 2.0, 22).unwrap() // max 4s
         ).unwrap();
-
-    pub static ref BLOCKED_COUNTER_1: IntCounter = register_int_counter!(
-            "tikv_io_blocked_count_1",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
-
-    pub static ref BLOCKED_COUNTER_2: IntCounter = register_int_counter!(
-            "tikv_io_blocked_count_2",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
-
-    pub static ref BLOCKED_COUNTER_3: IntCounter = register_int_counter!(
-            "tikv_io_blocked_count_3",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
-    pub static ref BLOCKED_COUNTER_4: IntCounter = register_int_counter!(
-            "tikv_io_blocked_count_4",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
-    pub static ref BLOCKED_COUNTER_5: IntGauge = register_int_gauge!(
-            "tikv_io_blocked_count_5",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
-    pub static ref BLOCKED_COUNTER_6: IntGauge = register_int_gauge!(
-            "tikv_io_blocked_count_6",
-            "Number of threads blocked by IO rate limiter"
-        )
-        .unwrap();
 }
