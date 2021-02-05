@@ -34,6 +34,7 @@ pub trait Mutable: Send {
     fn delete(&mut self, key: &[u8]) -> Result<()>;
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()>;
 
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()>;
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()>;
 
     fn put_msg<M: protobuf::Message>(&mut self, key: &[u8], m: &M) -> Result<()> {

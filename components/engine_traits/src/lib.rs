@@ -261,7 +261,6 @@ extern crate tikv_alloc;
 #[cfg(test)]
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate slog_global;
 
 // These modules contain traits that need to be implemented by engines, either
@@ -337,8 +336,6 @@ pub use raft_engine::{raft_engine_impl_reexports, CacheStats, RaftEngine, RaftLo
 
 // These modules need further scrutiny
 
-pub mod metrics_flusher;
-pub use crate::metrics_flusher::*;
 pub mod compaction_job;
 pub mod util;
 pub use compaction_job::*;

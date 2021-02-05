@@ -4,6 +4,8 @@ use std::{iter, str};
 use tidb_query_codegen::rpn_fn;
 
 use crate::impl_math::i64_to_usize;
+use bstr::ByteSlice;
+use std::cmp::Ordering;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
@@ -47,13 +49,13 @@ pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     if let Some(&c) = trimmed.next() {
         if c == b'-' {
             negative = true;
-        } else if c >= b'0' && c <= b'9' {
+        } else if (b'0'..=b'9').contains(&c) {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(writer.write(Some(b"0".to_vec())));
         }
 
-        for c in trimmed.take_while(|&&c| c >= b'0' && c <= b'9') {
+        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -158,10 +160,14 @@ pub fn bit_length(arg: BytesRef) -> Result<Option<i64>> {
 
 #[rpn_fn(nullable)]
 #[inline]
-pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
+pub fn ord<C: Collator>(arg: Option<BytesRef>) -> Result<Option<i64>> {
     let mut result = 0;
     if let Some(content) = arg {
-        let size = bstr::decode_utf8(content).1;
+        let size = if let Some((_, size)) = C::Charset::decode_one(content) {
+            size
+        } else {
+            0
+        };
         let bytes = &content[..size];
         let mut factor = 1;
 
@@ -679,9 +685,9 @@ pub fn substring_index(
 
 #[rpn_fn]
 #[inline]
-pub fn strcmp(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
+pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(Some(match left.cmp(right) {
+    Ok(Some(match C::sort_compare(left, right)? {
         Less => -1,
         Equal => 0,
         Greater => 1,
@@ -702,15 +708,19 @@ pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
-pub fn find_in_set(s: BytesRef, str_list: BytesRef) -> Result<Option<Int>> {
+pub fn find_in_set<C: Collator>(s: BytesRef, str_list: BytesRef) -> Result<Option<Int>> {
     if str_list.is_empty() {
         return Ok(Some(0));
     }
 
-    let s = String::from_utf8_lossy(s);
-    let result = String::from_utf8_lossy(str_list)
-        .split(',')
-        .position(|str_in_set| str_in_set == s)
+    let result = str_list
+        .split_str(",")
+        .position(|str_in_set| {
+            C::sort_compare(str_in_set.as_bytes(), s)
+                .ok()
+                .filter(|o| *o == Ordering::Equal)
+                .is_some()
+        })
         .map(|p| p as i64 + 1)
         .or(Some(0));
 
@@ -1694,20 +1704,30 @@ mod tests {
     #[test]
     fn test_ord() {
         let cases = vec![
-            (Some("2"), Some(50i64)),
-            (Some("23"), Some(50i64)),
-            (Some("2.3"), Some(50i64)),
-            (Some(""), Some(0i64)),
-            (Some("你好"), Some(14990752i64)),
-            (Some("にほん"), Some(14909867i64)),
-            (Some("한국"), Some(15570332i64)),
-            (Some("👍"), Some(4036989325i64)),
-            (Some("א"), Some(55184i64)),
-            (None, Some(0)),
+            (Some("2"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some("23"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some("2.3"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some(""), Collation::Utf8Mb4Bin, Some(0i64)),
+            (Some("你好"), Collation::Utf8Mb4Bin, Some(14990752i64)),
+            (Some("にほん"), Collation::Utf8Mb4Bin, Some(14909867i64)),
+            (Some("한국"), Collation::Utf8Mb4Bin, Some(15570332i64)),
+            (Some("👍"), Collation::Utf8Mb4Bin, Some(4036989325i64)),
+            (Some("א"), Collation::Utf8Mb4Bin, Some(55184i64)),
+            (Some("2.3"), Collation::Utf8Mb4GeneralCi, Some(50i64)),
+            (None, Collation::Utf8Mb4Bin, Some(0)),
+            (Some("a"), Collation::Latin1Bin, Some(97i64)),
+            (Some("ab"), Collation::Latin1Bin, Some(97i64)),
+            (Some("你好"), Collation::Latin1Bin, Some(228i64)),
         ];
 
-        for (arg, expect_output) in cases {
+        for (arg, collation, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::Ord)
                 .unwrap();
@@ -3124,26 +3144,74 @@ mod tests {
     #[test]
     fn test_strcmp() {
         let test_cases = vec![
-            (Some(b"123".to_vec()), Some(b"123".to_vec()), Some(0)),
-            (Some(b"123".to_vec()), Some(b"1".to_vec()), Some(1)),
-            (Some(b"1".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"45".to_vec()), Some(-1)),
+            (
+                Some(b"123".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"1".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"1".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"45".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
             (
                 Some("你好".as_bytes().to_vec()),
                 Some(b"hello".to_vec()),
+                Collation::Utf8Mb4Bin,
                 Some(1),
             ),
-            (Some(b"".to_vec()), Some(b"123".to_vec()), Some(-1)),
-            (Some(b"123".to_vec()), Some(b"".to_vec()), Some(1)),
-            (Some(b"".to_vec()), Some(b"".to_vec()), Some(0)),
-            (None, Some(b"123".to_vec()), None),
-            (Some(b"123".to_vec()), None, None),
-            (Some(b"".to_vec()), None, None),
-            (None, Some(b"".to_vec()), None),
+            (
+                Some(b"".to_vec()),
+                Some(b"123".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(-1),
+            ),
+            (
+                Some(b"123".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(1),
+            ),
+            (
+                Some(b"".to_vec()),
+                Some(b"".to_vec()),
+                Collation::Utf8Mb4Bin,
+                Some(0),
+            ),
+            (
+                Some(b"ABC".to_vec()),
+                Some(b"abc".to_vec()),
+                Collation::Utf8Mb4GeneralCi,
+                Some(0),
+            ),
+            (None, Some(b"123".to_vec()), Collation::Utf8Mb4Bin, None),
+            (Some(b"123".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (Some(b"".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, Some(b"".to_vec()), Collation::Utf8Mb4Bin, None),
         ];
 
-        for (left, right, expect_output) in test_cases {
+        for (left, right, collation, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(left)
                 .push_param(right)
                 .evaluate(ScalarFuncSig::Strcmp)
@@ -3205,18 +3273,27 @@ mod tests {
     #[test]
     fn test_find_in_set() {
         let cases = vec![
-            ("foo", "foo,bar", 1),
-            ("foo", "foobar,bar", 0),
-            (" foo ", "foo, foo ", 2),
-            ("", "foo,bar,", 3),
-            ("", "", 0),
-            ("a,b", "a,b,c", 0),
+            ("foo", "foo,bar", Collation::Utf8Mb4Bin, 1),
+            ("foo", "foobar,bar", Collation::Utf8Mb4Bin, 0),
+            (" foo ", "foo, foo ", Collation::Utf8Mb4Bin, 2),
+            ("", "foo,bar,", Collation::Utf8Mb4Bin, 3),
+            ("", "", Collation::Utf8Mb4Bin, 0),
+            ("a,b", "a,b,c", Collation::Utf8Mb4Bin, 0),
+            ("测试", "中文,测试,英文", Collation::Utf8Mb4Bin, 2),
+            ("foo", "A,FOO,BAR", Collation::Utf8Mb4GeneralCi, 2),
+            ("b", "A,B,C", Collation::Utf8Mb4GeneralCi, 2),
         ];
 
-        for (s, str_list, exp) in cases {
+        for (s, str_list, collation, exp) in cases {
             let s = Some(s.as_bytes().to_vec());
             let str_list = Some(str_list.as_bytes().to_vec());
             let got = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(s)
                 .push_param(str_list)
                 .evaluate::<Int>(ScalarFuncSig::FindInSet)
@@ -3225,12 +3302,18 @@ mod tests {
         }
 
         let null_cases = vec![
-            (Some(b"foo".to_vec()), None, None),
-            (None, Some(b"bar".to_vec()), None),
-            (None, None, None),
+            (Some(b"foo".to_vec()), None, Collation::Utf8Mb4Bin, None),
+            (None, Some(b"bar".to_vec()), Collation::Utf8Mb4Bin, None),
+            (None, None, Collation::Utf8Mb4Bin, None),
         ];
-        for (s, str_list, exp) in null_cases {
+        for (s, str_list, collation, exp) in null_cases {
             let got = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(s)
                 .push_param(str_list)
                 .evaluate::<Int>(ScalarFuncSig::FindInSet)
@@ -3340,7 +3423,7 @@ mod tests {
         }
 
         // test invalid direction value
-        let args = (Some(b"bar".to_vec()), Some(b"b".to_vec()), Some(0 as i64));
+        let args = (Some(b"bar".to_vec()), Some(b"b".to_vec()), Some(0_i64));
         let got: Result<Option<Bytes>> = RpnFnScalarEvaluator::new()
             .push_param(args.0)
             .push_param(args.1)

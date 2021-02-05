@@ -738,7 +738,7 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
             last = Some(a);
         }
         second.map_or(0, |(i, _)| i)
-    };
+    }
     let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
     let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
     if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {

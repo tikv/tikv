@@ -84,19 +84,22 @@ fn test_pd_client_deadlock() {
             func();
             tx.send(()).unwrap();
         });
+        // Only allow to reconnect once for a func.
+        client.handle_reconnect(move || {
+            fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+        });
         // Remove the fail point to let the PD client thread go on.
         fail::remove(leader_client_reconnect_fp);
 
-        let mut timeout = Duration::from_millis(500);
-        if name == "region_heartbeat" {
-            // region_heartbeat may need to retry a few times due to reconnection so increases its timeout.
-            timeout = Duration::from_secs(30);
-        }
+        let timeout = Duration::from_millis(500);
         if rx.recv_timeout(timeout).is_err() {
             panic!("PdClient::{}() hangs", name);
         }
         handle.join().unwrap();
     }
+
+    drop(client);
+    fail::remove(leader_client_reconnect_fp);
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other

@@ -15,6 +15,7 @@ use grpcio::{
 use kvproto::cdcpb::{
     ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
 };
+use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
@@ -187,9 +188,10 @@ impl Conn {
                     error!("different version on the same connection";
                         "previous version" => ?version, "version" => ?ver,
                         "downstream" => ?self.peer, "conn_id" => ?self.id);
-                    let mut compat = Compatibility::default();
-                    compat.required_version = version.to_string();
-                    Some(compat)
+                    Some(Compatibility {
+                        required_version: version.to_string(),
+                        ..Default::default()
+                    })
                 }
             }
             None => {
@@ -301,6 +303,7 @@ impl ChangeData for Service {
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
+            let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
             let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -310,7 +313,13 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(peer.clone(), region_epoch, req_id, conn_id);
+            let downstream = Downstream::new(
+                peer.clone(),
+                region_epoch,
+                req_id,
+                conn_id,
+                enable_old_value,
+            );
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
@@ -414,18 +423,26 @@ mod tests {
             }
         };
 
-        let mut event_small = Event::default();
         let row_small = EventRow::default();
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = vec![row_small].into();
-        event_small.event = Some(Event_oneof_event::Entries(event_entries));
+        let event_entries = EventEntries {
+            entries: vec![row_small].into(),
+            ..Default::default()
+        };
+        let event_small = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
 
-        let mut event_big = Event::default();
         let mut row_big = EventRow::default();
-        row_big.set_key(vec![0 as u8; CDC_MAX_RESP_SIZE as usize]);
-        let mut event_entries = EventEntries::default();
-        event_entries.entries = vec![row_big].into();
-        event_big.event = Some(Event_oneof_event::Entries(event_entries));
+        row_big.set_key(vec![0_u8; CDC_MAX_RESP_SIZE as usize]);
+        let event_entries = EventEntries {
+            entries: vec![row_big].into(),
+            ..Default::default()
+        };
+        let event_big = Event {
+            event: Some(Event_oneof_event::Entries(event_entries)),
+            ..Default::default()
+        };
 
         let mut resolved_ts = ResolvedTs::default();
         resolved_ts.set_ts(1);

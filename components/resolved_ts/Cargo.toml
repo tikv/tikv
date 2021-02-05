@@ -7,18 +7,54 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
+  "grpcio/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "pd_client/protobuf-codec",
+  "raft/protobuf-codec",
+  "raftstore/protobuf-codec",
+  "tikv/protobuf-codec",
   "txn_types/protobuf-codec",
-  "tikv_util/protobuf-codec",
 ]
 prost-codec = [
+  "grpcio/prost-codec",
+  "kvproto/prost-codec",
+  "pd_client/prost-codec",
+  "raft/prost-codec",
+  "raftstore/prost-codec",
+  "tikv/prost-codec",
   "txn_types/prost-codec",
-  "tikv_util/prost-codec",
 ]
+tcmalloc = ["tikv/tcmalloc"]
+jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+portable = ["tikv/portable"]
+sse = ["tikv/sse"]
+mem-profiling = ["tikv/mem-profiling"]
+failpoints = ["tikv/failpoints"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
-tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
-txn_types = { path = "../txn_types", default-features = false }
+crossbeam = "0.7"
+concurrency_manager = { path = "../concurrency_manager" }
+engine_traits = { path = "../engine_traits" }
+fail = "0.4"
+futures = "0.3"
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+hex = "0.4"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+log_wrappers = { path = "../log_wrappers" }
+pd_client = { path = "../pd_client" }
+prost = "0.6"
+protobuf = "2.8"
+raft = { version = "0.6.0-alpha", default-features = false }
+raftstore = { path = "../raftstore" }
+thiserror = "1.0"
+tikv = { path = "../../", default-features = false }
+tikv_util = { path = "../tikv_util" }
+tokio = { version = "0.2", features = ["rt-threaded"]}
+txn_types = { path = "../txn_types" }
+security = { path = "../security" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-log_wrappers = { path = "../log_wrappers" }

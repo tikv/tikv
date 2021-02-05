@@ -278,7 +278,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 }
             });
             let mut sink = sink.sink_map_err(PdError::from);
-            sink.send_all(&mut stream).await.unwrap();
+            let _ = sink.send_all(&mut stream).await;
             let _ = sink.close().await;
         });
     }
