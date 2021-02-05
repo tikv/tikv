@@ -101,7 +101,7 @@ mod tests {
             (Long, Some(EvalType::Int)),
             (Float, Some(EvalType::Real)),
             (Double, Some(EvalType::Real)),
-            (Null, None),
+            (Null, Some(EvalType::Bytes)),
             (Timestamp, Some(EvalType::DateTime)),
             (LongLong, Some(EvalType::Int)),
             (Int24, Some(EvalType::Int)),
