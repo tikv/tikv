@@ -7,7 +7,7 @@ use crate::iosnoop::{fetch_io_bytes, flush_io_latency_metrics};
 use crate::metrics::IO_BYTES_VEC;
 use crate::IOBytes;
 use crate::IORateLimiterStatistics;
-use crate::{IOMeasure, IOOp, IOType};
+use crate::{IOOp, IOType};
 
 pub enum BytesFetcher {
     /// Fetch IO statistics from IO rate limiter, which records passed-through IOs in atomic counters.
@@ -20,8 +20,8 @@ impl BytesFetcher {
     fn fetch(&self, io_type: IOType) -> IOBytes {
         match *self {
             BytesFetcher::FromRateLimiter(ref stats) => IOBytes {
-                read: stats.fetch(io_type, IOOp::Read, IOMeasure::Bytes) as u64,
-                write: stats.fetch(io_type, IOOp::Write, IOMeasure::Bytes) as u64,
+                read: stats.fetch(io_type, IOOp::Read) as u64,
+                write: stats.fetch(io_type, IOOp::Write) as u64,
             },
             BytesFetcher::FromIOSnooper() => fetch_io_bytes(io_type),
         }

@@ -104,11 +104,6 @@ impl std::ops::Sub for IOBytes {
     }
 }
 
-pub enum IOMeasure {
-    Bytes,
-    Iops,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Copy, VariantCount)]
 pub enum IOPriority {
     Low = 0,

@@ -947,7 +947,7 @@ pub mod tests {
 
     use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
-    use file_system::{IOMeasure, IOOp, WithIORateLimit};
+    use file_system::{IOOp, WithIORateLimit};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -1310,11 +1310,8 @@ pub mod tests {
             );
             let (none, _rx) = block_on(rx.into_future());
             assert!(none.is_none(), "{:?}", none);
-            assert_eq!(
-                stats.fetch(IOType::Export, IOOp::Write, IOMeasure::Bytes),
-                0
-            );
-            assert_ne!(stats.fetch(IOType::Export, IOOp::Read, IOMeasure::Bytes), 0);
+            assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
+            assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
         }
     }
 

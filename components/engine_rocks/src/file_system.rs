@@ -38,7 +38,7 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{IOMeasure, IOOp, IORateLimiterStatistics, IOType, WithIORateLimit};
+    use file_system::{IOOp, IORateLimiterStatistics, IOType, WithIORateLimit};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
@@ -74,14 +74,14 @@ mod tests {
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) < value_size * 3);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
         stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
         db.flush(true /*sync*/).unwrap();
-        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write, IOMeasure::Bytes) < value_size * 3);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
+        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 3);
         stats.reset();
         db.c()
             .compact_range(
@@ -91,9 +91,9 @@ mod tests {
                 1,     /*max_subcompactions*/
             )
             .unwrap();
-        assert!(stats.fetch(IOType::Compaction, IOOp::Read, IOMeasure::Bytes) > value_size * 4);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Read, IOMeasure::Bytes) < value_size * 5);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) > value_size * 3);
-        assert!(stats.fetch(IOType::Compaction, IOOp::Write, IOMeasure::Bytes) < value_size * 4);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Read) > value_size * 4);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Read) < value_size * 5);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Write) > value_size * 3);
+        assert!(stats.fetch(IOType::Compaction, IOOp::Write) < value_size * 4);
     }
 }

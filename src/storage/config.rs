@@ -7,7 +7,7 @@ use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Res
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOMeasure, IOPriority, IORateLimiter, IOType};
+use file_system::{get_io_rate_limiter, IOPriority, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableSize};
@@ -142,7 +142,7 @@ impl ConfigManager for StorageConfigManger {
             let limiter = limiter.unwrap();
             if let Some(limit) = io_rate_limit.remove("total") {
                 if let OptionReadableSize(Some(limit)) = limit.into() {
-                    limiter.set_io_rate_limit(IOMeasure::Bytes, limit.as_b() as usize);
+                    limiter.set_io_rate_limit(limit.as_b() as usize);
                 }
             }
         }
@@ -287,7 +287,7 @@ impl IORateLimitConfig {
     pub fn build(&self) -> IORateLimiter {
         let mut limiter = IORateLimiter::new();
         if let Some(limit) = self.total.0 {
-            limiter.set_io_rate_limit(IOMeasure::Bytes, limit.as_b() as usize);
+            limiter.set_io_rate_limit(limit.as_b() as usize);
         }
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);

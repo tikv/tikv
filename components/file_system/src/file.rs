@@ -230,7 +230,7 @@ mod tests {
     fn test_instrumented_file() {
         // make sure read at most one bytes at a time
         let limiter = Arc::new(IORateLimiter::new());
-        limiter.set_io_rate_limit(IOMeasure::Bytes, 5 /* 1s / refill_period */);
+        limiter.set_io_rate_limit(5 /* 1s / refill_period */);
         limiter.enable_statistics(true);
         let stats = limiter.statistics();
 
@@ -243,7 +243,7 @@ mod tests {
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
-                stats.fetch(IOType::ForegroundWrite, IOOp::Write, IOMeasure::Bytes),
+                stats.fetch(IOType::ForegroundWrite, IOOp::Write),
                 content.len()
             );
         }
@@ -256,10 +256,7 @@ mod tests {
             assert_eq!(buffer, content);
             // read_to_string only exit when file.read() returns zero, which means
             // it requires two EOF reads to finish the call.
-            assert_eq!(
-                stats.fetch(IOType::Export, IOOp::Read, IOMeasure::Bytes),
-                content.len() + 2
-            );
+            assert_eq!(stats.fetch(IOType::Export, IOOp::Read), content.len() + 2);
         }
     }
 }
