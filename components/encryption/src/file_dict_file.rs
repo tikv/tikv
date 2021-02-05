@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
+use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
@@ -10,7 +11,6 @@ use crate::master_key::{Backend, PlaintextBackend};
 use crate::metrics::*;
 use crate::Result;
 
-use std::fs::{rename, File, OpenOptions};
 use std::io::BufRead;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -138,7 +138,7 @@ impl FileDictionaryFile {
             rename(&tmp_path, &origin_path)?;
             let base_dir = File::open(&self.base)?;
             base_dir.sync_all()?;
-            let file = std::fs::OpenOptions::new().append(true).open(origin_path)?;
+            let file = OpenOptions::new().append(true).open(origin_path)?;
             self.append_file.replace(file);
         } else {
             let file = EncryptedFile::new(&self.base, &self.name);
