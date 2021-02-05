@@ -35,6 +35,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tame-gcs = { version = "0.8.0", features = ["async-multipart"] }
 tame-oauth = "0.4.2"
+gcp_auth = { git = "https://github.com/tennix/gcp_auth.git", default-features = true, branch = "custom-cred" }
 tikv_alloc = { path = "../tikv_alloc" }
 tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
