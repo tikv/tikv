@@ -7,6 +7,7 @@ use engine_traits::{Peekable, Result, SyncMutable};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
 use std::panic::{self, AssertUnwindSafe};
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Eq, PartialEq)]
 enum WriteScenario {
     NoCf,
