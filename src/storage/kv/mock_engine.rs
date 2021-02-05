@@ -13,7 +13,15 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct MockEngine {
     base: RocksEngine,
-    expected_modifies: Arc<ExpectedWriteList>,
+    expected_modifies: Option<Arc<ExpectedWriteList>>,
+    last_modifies: Arc<Mutex<Vec<Vec<Modify>>>>,
+}
+
+impl MockEngine {
+    pub fn take_last_modifies(&self) -> Vec<Vec<Modify>> {
+        let mut last_modifies = self.last_modifies.lock().unwrap();
+        std::mem::take(&mut last_modifies)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -83,6 +91,50 @@ impl Drop for ExpectedWriteList {
     }
 }
 
+fn check_expected_write(
+    expected_writes: &mut LinkedList<ExpectedWrite>,
+    modifies: &[Modify],
+    has_proposed_cb: bool,
+    has_committed_cb: bool,
+) {
+    for modify in modifies {
+        if let Some(expected_write) = expected_writes.pop_front() {
+            // check whether the modify is expected
+            if let Some(expected_modify) = expected_write.modify {
+                assert_eq!(
+                    modify, &expected_modify,
+                    "modify writing to Engine not match with expected"
+                )
+            }
+            // check whether use right callback
+            match expected_write.use_proposed_cb {
+                Some(true) => assert!(
+                    has_proposed_cb,
+                    "this write is supposed to return during the propose stage"
+                ),
+                Some(false) => assert!(
+                    !has_proposed_cb,
+                    "this write is not supposed to return during the propose stage"
+                ),
+                None => {}
+            }
+            match expected_write.use_committed_cb {
+                Some(true) => assert!(
+                    has_committed_cb,
+                    "this write is supposed to return during the commit stage"
+                ),
+                Some(false) => assert!(
+                    !has_committed_cb,
+                    "this write is not supposed to return during the commit stage"
+                ),
+                None => {}
+            }
+        } else {
+            panic!("unexpected modify {:?} wrote to the Engine", modify)
+        }
+    }
+}
+
 impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
@@ -115,44 +167,17 @@ impl Engine for MockEngine {
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Result<()> {
-        let mut expected_writes = self.expected_modifies.0.lock().unwrap();
-        for modify in batch.modifies.iter() {
-            if let Some(expected_write) = expected_writes.pop_front() {
-                // check whether the modify is expected
-                if let Some(expected_modify) = expected_write.modify {
-                    assert_eq!(
-                        modify, &expected_modify,
-                        "modify writing to Engine not match with expected"
-                    )
-                }
-                // check whether use right callback
-                match expected_write.use_proposed_cb {
-                    Some(true) => assert!(
-                        proposed_cb.is_some(),
-                        "this write is supposed to return during the propose stage"
-                    ),
-                    Some(false) => assert!(
-                        proposed_cb.is_none(),
-                        "this write is not supposed to return during the propose stage"
-                    ),
-                    None => {}
-                }
-                match expected_write.use_committed_cb {
-                    Some(true) => assert!(
-                        committed_cb.is_some(),
-                        "this write is supposed to return during the commit stage"
-                    ),
-                    Some(false) => assert!(
-                        committed_cb.is_none(),
-                        "this write is not supposed to return during the commit stage"
-                    ),
-                    None => {}
-                }
-            } else {
-                panic!("unexpected modify {:?} wrote to the Engine", modify)
-            }
+        if let Some(expected_modifies) = self.expected_modifies.as_ref() {
+            let mut expected_writes = expected_modifies.0.lock().unwrap();
+            check_expected_write(
+                &mut expected_writes,
+                &batch.modifies,
+                proposed_cb.is_some(),
+                committed_cb.is_some(),
+            );
         }
-        drop(expected_writes);
+        let mut last_modifies = self.last_modifies.lock().unwrap();
+        last_modifies.push(batch.modifies.clone());
         self.base
             .async_write_ext(ctx, batch, write_cb, proposed_cb, committed_cb)
     }
@@ -160,26 +185,36 @@ impl Engine for MockEngine {
 
 pub struct MockEngineBuilder {
     base: RocksEngine,
-    expected_modifies: LinkedList<ExpectedWrite>,
+    expected_modifies: Option<LinkedList<ExpectedWrite>>,
 }
 
 impl MockEngineBuilder {
     pub fn from_rocks_engine(rocks_engine: RocksEngine) -> Self {
         Self {
             base: rocks_engine,
-            expected_modifies: LinkedList::new(),
+            expected_modifies: None,
         }
     }
 
     pub fn add_expected_write(mut self, write: ExpectedWrite) -> Self {
-        self.expected_modifies.push_back(write);
+        match self.expected_modifies.as_mut() {
+            Some(expected_modifies) => expected_modifies.push_back(write),
+            None => {
+                let mut list = LinkedList::new();
+                list.push_back(write);
+                self.expected_modifies = Some(list);
+            }
+        }
         self
     }
 
     pub fn build(self) -> MockEngine {
         MockEngine {
             base: self.base,
-            expected_modifies: Arc::new(ExpectedWriteList(Mutex::new(self.expected_modifies))),
+            expected_modifies: self
+                .expected_modifies
+                .map(|m| Arc::new(ExpectedWriteList(Mutex::new(m)))),
+            last_modifies: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

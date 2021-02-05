@@ -114,6 +114,14 @@ fn map_strcmp_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     })
 }
 
+fn map_find_in_set_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => find_in_set_fn_meta::<TT>()
+        }
+    })
+}
+
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool, bool) -> RpnFnMeta,
@@ -600,7 +608,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::OctString => oct_string_fn_meta(),
-        ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
+        ScalarFuncSig::FindInSet => map_find_in_set_sig(ft)?,
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
         ScalarFuncSig::ToBase64 => to_base64_fn_meta(),
