@@ -71,7 +71,8 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::LongBlob
             | crate::FieldTypeTp::Blob
             | crate::FieldTypeTp::VarString
-            | crate::FieldTypeTp::String => EvalType::Bytes,
+            | crate::FieldTypeTp::String
+            | crate::FieldTypeTp::Null => EvalType::Bytes,
             _ => {
                 // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode and decode.
