@@ -1715,6 +1715,9 @@ mod tests {
             (Some("א"), Collation::Utf8Mb4Bin, Some(55184i64)),
             (Some("2.3"), Collation::Utf8Mb4GeneralCi, Some(50i64)),
             (None, Collation::Utf8Mb4Bin, Some(0)),
+            (Some("a"), Collation::Latin1Bin, Some(97i64)),
+            (Some("ab"), Collation::Latin1Bin, Some(97i64)),
+            (Some("你好"), Collation::Latin1Bin, Some(228i64)),
         ];
 
         for (arg, collation, expect_output) in cases {
