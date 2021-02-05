@@ -160,10 +160,14 @@ pub fn bit_length(arg: BytesRef) -> Result<Option<i64>> {
 
 #[rpn_fn(nullable)]
 #[inline]
-pub fn ord(arg: Option<BytesRef>) -> Result<Option<i64>> {
+pub fn ord<C: Collator>(arg: Option<BytesRef>) -> Result<Option<i64>> {
     let mut result = 0;
     if let Some(content) = arg {
-        let size = bstr::decode_utf8(content).1;
+        let size = if let Some((_, size)) = C::Charset::decode_one(content) {
+            size
+        } else {
+            0
+        };
         let bytes = &content[..size];
         let mut factor = 1;
 
@@ -1700,20 +1704,30 @@ mod tests {
     #[test]
     fn test_ord() {
         let cases = vec![
-            (Some("2"), Some(50i64)),
-            (Some("23"), Some(50i64)),
-            (Some("2.3"), Some(50i64)),
-            (Some(""), Some(0i64)),
-            (Some("你好"), Some(14990752i64)),
-            (Some("にほん"), Some(14909867i64)),
-            (Some("한국"), Some(15570332i64)),
-            (Some("👍"), Some(4036989325i64)),
-            (Some("א"), Some(55184i64)),
-            (None, Some(0)),
+            (Some("2"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some("23"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some("2.3"), Collation::Utf8Mb4Bin, Some(50i64)),
+            (Some(""), Collation::Utf8Mb4Bin, Some(0i64)),
+            (Some("你好"), Collation::Utf8Mb4Bin, Some(14990752i64)),
+            (Some("にほん"), Collation::Utf8Mb4Bin, Some(14909867i64)),
+            (Some("한국"), Collation::Utf8Mb4Bin, Some(15570332i64)),
+            (Some("👍"), Collation::Utf8Mb4Bin, Some(4036989325i64)),
+            (Some("א"), Collation::Utf8Mb4Bin, Some(55184i64)),
+            (Some("2.3"), Collation::Utf8Mb4GeneralCi, Some(50i64)),
+            (None, Collation::Utf8Mb4Bin, Some(0)),
+            (Some("a"), Collation::Latin1Bin, Some(97i64)),
+            (Some("ab"), Collation::Latin1Bin, Some(97i64)),
+            (Some("你好"), Collation::Latin1Bin, Some(228i64)),
         ];
 
-        for (arg, expect_output) in cases {
+        for (arg, collation, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::LongLong)
+                        .collation(collation)
+                        .build(),
+                )
                 .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::Ord)
                 .unwrap();
