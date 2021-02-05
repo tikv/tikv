@@ -12,6 +12,7 @@ make_static_metric! {
         compaction,
         replication,
         load_balance,
+        gc,
         import,
         export,
     }
