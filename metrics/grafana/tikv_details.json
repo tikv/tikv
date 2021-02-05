@@ -6749,7 +6749,7 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
+              "format": "µs",
               "label": null,
               "logBase": 1,
               "max": null,
