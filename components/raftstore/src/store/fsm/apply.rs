@@ -20,11 +20,11 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{
-    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, IterOptions, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
+use engine_traits::{Iterator as EngineIterator, PerfContext, SeekKey};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -42,6 +42,7 @@ use raft::eraftpb::{
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -1331,7 +1332,7 @@ where
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
                     assert!(ctx.kv_wb.is_empty());
-                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
+                    self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
                     assert!(ctx.kv_wb.is_empty());
@@ -1469,9 +1470,9 @@ where
         Ok(resp)
     }
 
-    fn handle_delete_range(
+    fn handle_delete_range<W: WriteBatch<EK>>(
         &mut self,
-        engine: &EK,
+        ctx: &mut ApplyContext<EK, W>,
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
@@ -1518,20 +1519,27 @@ where
                     e
                 )
             };
-            engine
+            ctx.engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
-            let strategy = if use_delete_range {
-                DeleteStrategy::DeleteByRange
+            if use_delete_range {
+                // Delete all remaining keys.
+                ctx.engine
+                    .delete_ranges_cf(cf, DeleteStrategy::DeleteByRange, &range)
+                    .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteByRange));
             } else {
-                DeleteStrategy::DeleteByKey
+                let start = KeyBuilder::from_slice(&start_key, 0, 0);
+                let end = KeyBuilder::from_slice(&end_key, 0, 0);
+                let iter_opt = IterOptions::new(Some(start), Some(end), false);
+                let mut it = ctx.engine.iterator_cf_opt(cf, iter_opt)?;
+                let mut it_valid = it.seek(SeekKey::Key(&start_key))?;
+                while it_valid {
+                    ctx.kv_wb.delete_cf(cf, it.key())?;
+                    it_valid = it.next()?;
+                }
             };
-            // Delete all remaining keys.
-            engine
-                .delete_ranges_cf(cf, strategy.clone(), &range)
-                .unwrap_or_else(move |e| fail_f(e, strategy));
-            engine
+            ctx.engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
                 .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteBlobs));
         }
