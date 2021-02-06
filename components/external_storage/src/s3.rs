@@ -17,11 +17,9 @@ use rusoto_core::{
 };
 use rusoto_s3::*;
 
-use super::{
-    util::{block_on_external_io, error_stream, retry, RetryError},
-    ExternalStorage,
-};
+use super::ExternalStorage;
 use kvproto::backup::S3 as Config;
+use tikv_util::stream::{block_on_external_io, error_stream, retry};
 
 /// S3 compatible storage
 #[derive(Clone)]
@@ -96,21 +94,6 @@ impl S3Storage {
             return format!("{}/{}", self.config.prefix, key);
         }
         key.to_owned()
-    }
-}
-
-impl<E> RetryError for RusotoError<E> {
-    fn placeholder() -> Self {
-        Self::Blocking
-    }
-
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::HttpDispatch(_) => true,
-            Self::Unknown(resp) if resp.status.is_server_error() => true,
-            // FIXME: Retry NOT_READY & THROTTLED (403).
-            _ => false,
-        }
     }
 }
 
