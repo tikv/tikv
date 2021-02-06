@@ -35,12 +35,12 @@ pub struct Config {
 
 impl Config {
     #[cfg(test)]
-    pub fn default(bucket: BucketConf) -> Self {
+    pub fn default(bucket: BucketConf, svc_info: ServiceAccountInfo) -> Self {
         Self {
             bucket,
             predefined_acl: None,
             storage_class: None,
-            svc_info: ServiceAccountInfo::deserialize("{}").unwrap(),
+            svc_info,
         }
     }
 
@@ -461,7 +461,10 @@ mod tests {
         let mut bucket = BucketConf::default(bucket_name);
         bucket.prefix = StringNonEmpty::opt("/backup 02/prefix/".to_owned());
         bucket.endpoint = StringNonEmpty::opt("http://endpoint.com".to_owned());
-        let gcs = Config::default(bucket);
+        let svc_info = ServiceAccountInfo::deserialize(
+            "{\"private_key\":\"KEY\",\"client_email\":\"service@example.com\",\"token_uri\":\"https://example.com\"}",
+        ).unwrap();
+        let gcs = Config::default(bucket, svc_info);
         // only 'bucket' and 'prefix' should be visible in url_of_backend()
         assert_eq!(
             url_for(&gcs).to_string(),

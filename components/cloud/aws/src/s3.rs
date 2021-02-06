@@ -9,6 +9,7 @@ use rusoto_core::{
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::*;
 
+use crate::util;
 use cloud::blob::{none_to_empty, BlobStorage, BucketConf, StringNonEmpty};
 use futures_util::{
     future::FutureExt,
@@ -447,7 +448,7 @@ mod tests {
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
         });
         assert!(S3Storage::new(config.clone()).is_ok());
-        config.bucket.region = None;
+        config.bucket.region = StringNonEmpty::opt("foo".to_string());
         assert!(S3Storage::new(config).is_err());
     }
 

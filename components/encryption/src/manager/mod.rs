@@ -1211,10 +1211,11 @@ mod tests {
         });
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
 
-        let result = new_key_manager(&tmp_dir, None, wrong_key, &*previous);
+        let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
         // When the master key is invalid, the key manager left a empty file dict and return errors.
         assert!(result.is_err());
-        let result = new_key_manager(&tmp_dir, None, right_key, &*previous);
+        let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
+        let result = new_key_manager(&tmp_dir, None, right_key, previous);
         assert!(result.is_ok());
     }
 }

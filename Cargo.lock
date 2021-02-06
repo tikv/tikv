@@ -1201,6 +1201,7 @@ dependencies = [
  "aws",
  "cloud",
  "encryption",
+ "file_system",
  "gcp",
  "kvproto",
  "openssl",
@@ -1683,6 +1684,7 @@ dependencies = [
  "slog-global",
  "tame-gcs",
  "tame-oauth",
+ "tikv_util",
  "tokio",
  "url",
 ]

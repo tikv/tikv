@@ -20,46 +20,10 @@ mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
-<<<<<<< HEAD
-mod s3;
-pub use s3::S3Storage;
-mod gcs;
-pub use gcs::GCSStorage;
-=======
-mod util;
-pub use util::{
-    block_on_external_io, error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError,
-};
->>>>>>> reorg for cloud interface
 mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
 
-<<<<<<< HEAD
-/// Create a new storage from the given storage backend description.
-pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
-    let start = Instant::now();
-    let (label, storage) = match &backend.backend {
-        Some(Backend::Local(local)) => {
-            let p = Path::new(&local.path);
-            ("local", LocalStorage::new(p).map(|s| Arc::new(s) as _))
-        }
-        Some(Backend::Noop(_)) => ("noop", Ok(Arc::new(NoopStorage::default()) as _)),
-        Some(Backend::S3(config)) => ("s3", S3Storage::new(config).map(|s| Arc::new(s) as _)),
-        Some(Backend::Gcs(config)) => ("gcs", GCSStorage::new(config).map(|s| Arc::new(s) as _)),
-        _ => {
-            let u = url_of_backend(backend);
-            error!("unknown storage"; "scheme" => u.scheme());
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("unknown storage {}", u),
-            ));
-        }
-    };
-=======
-pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
->>>>>>> reorg for cloud interface
     EXT_STORAGE_CREATE_HISTOGRAM
         .with_label_values(&[storage.name()])
         .observe(start.elapsed().as_secs_f64());

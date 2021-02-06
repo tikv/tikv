@@ -12,8 +12,8 @@ use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
-use file_system::{IOType, WithIOType};
 use external_storage_export::{create_storage, ExternalStorage};
+use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -945,6 +945,7 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::{fs, thread};
 
+    use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IOOp, WithIORateLimit};
     use futures::executor::block_on;

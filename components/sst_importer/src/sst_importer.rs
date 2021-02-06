@@ -28,7 +28,7 @@ use engine_traits::{
     EncryptionKeyManager, IngestExternalFileOptions, Iterator, KvEngine, SeekKey, SstReader,
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::{block_on_external_io, create_storage, READ_BUF_SIZE};
+use external_storage_export::create_storage;
 use file_system::{sync_dir, File, OpenOptions};
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
