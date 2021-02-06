@@ -726,7 +726,7 @@ mod tests {
     use crate::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
+    use tidb_query_datatype::codec::mysql::MAX_FSP;
     use tidb_query_datatype::FieldTypeTp;
 
     #[test]
@@ -928,8 +928,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (date, expect) in cases {
             let date = Some(DateTime::parse_datetime(&mut ctx, date, MAX_FSP, true).unwrap());
-            let expect =
-                expect.map(|expect| Time::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
+            let expect = expect
+                .map(|expect| DateTime::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(date)
@@ -1191,7 +1191,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let time = match arg {
-                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
+                Some(arg) => Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
                 None => None,
             };
             let output = RpnFnScalarEvaluator::new()
@@ -1215,7 +1215,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = Time::parse_datetime(&mut ctx, arg, 6, true).unwrap();
+            let time = DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToSeconds)
@@ -1336,8 +1336,8 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
-            let arg1 = Time::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
-            let arg2 = Time::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
+            let arg1 = DateTime::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
+            let arg2 = DateTime::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -1388,9 +1388,10 @@ mod tests {
             ),
         ];
         for (arg1, arg2, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
-                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+                arg1.map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
@@ -1432,9 +1433,10 @@ mod tests {
             ),
         ];
         for (arg0, arg1, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg0 =
-                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+                arg0.map(|arg0| DateTime::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
             let arg1 = arg1.map(|str| str.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
@@ -1493,9 +1495,10 @@ mod tests {
             ),
         ];
         for (arg1, arg2, exp, null_case) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
-                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+                arg1.map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             if null_case {
                 let output = RpnFnScalarEvaluator::new()
@@ -1546,9 +1549,10 @@ mod tests {
             ),
         ];
         for (arg0, arg1, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg0 =
-                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+                arg0.map(|arg0| DateTime::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
             let arg1 = arg1.map(|str| str.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
@@ -1582,9 +1586,9 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let datetime: Option<Time> =
-                exp.map(|exp: &str| Time::parse_date(&mut ctx, exp).unwrap());
-            let output: Option<Time> = RpnFnScalarEvaluator::new()
+            let datetime: Option<DateTime> =
+                exp.map(|exp: &str| DateTime::parse_date(&mut ctx, exp).unwrap());
+            let output: Option<DateTime> = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::FromDays)
                 .unwrap();
@@ -1610,7 +1614,7 @@ mod tests {
             (Some(100i64), Some(3615901i64)),
         ];
         for (arg1, arg2) in null_cases {
-            let exp: Option<Time> = None;
+            let exp: Option<DateTime> = None;
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -1636,7 +1640,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
-            let exp = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let exp = Some(DateTime::parse_date(&mut ctx, exp).unwrap());
             let arg2 = Some(arg2);
             let arg1 = Some(arg1);
             let output = RpnFnScalarEvaluator::new()
@@ -1716,7 +1720,7 @@ mod tests {
         ];
         for (time, err_code, expect) in cases {
             let mut ctx = EvalContext::default();
-            let time = time.map(|time: &str| Time::parse_date(&mut ctx, time).unwrap());
+            let time = time.map(|time: &str| DateTime::parse_date(&mut ctx, time).unwrap());
             let (output, ctx) = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .context(ctx)
@@ -1875,7 +1879,7 @@ mod tests {
 
         for (arg, err_code, exp) in cases {
             let mut ctx = EvalContext::default();
-            let arg = arg.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let arg = arg.map(|arg: &str| DateTime::parse_date(&mut ctx, arg).unwrap());
             let (output, ctx) = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .context(ctx)
@@ -1963,8 +1967,8 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = Some(Time::parse_date(&mut ctx, arg).unwrap());
-            let exp_val = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let time = Some(DateTime::parse_date(&mut ctx, arg).unwrap());
+            let exp_val = Some(DateTime::parse_date(&mut ctx, exp).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::LastDay)
@@ -1973,16 +1977,16 @@ mod tests {
         }
         let none_cases = vec!["2011-00-01 10:10:10"];
         for case in none_cases {
-            let time = Some(Time::parse_date(&mut ctx, case).unwrap());
+            let time = Some(DateTime::parse_date(&mut ctx, case).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
-                .evaluate::<Time>(ScalarFuncSig::LastDay)
+                .evaluate::<DateTime>(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, None);
         }
         let output = RpnFnScalarEvaluator::new()
-            .push_param(None::<Time>)
-            .evaluate::<Time>(ScalarFuncSig::LastDay)
+            .push_param(None::<DateTime>)
+            .evaluate::<DateTime>(ScalarFuncSig::LastDay)
             .unwrap();
         assert_eq!(output, None);
     }
