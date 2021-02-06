@@ -744,6 +744,13 @@ pub fn trim_1_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
+pub fn trim_2_args(arg: BytesRef, pat: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    let trimmed = trim(arg, pat, TrimDirection::Both);
+    Ok(writer.write_ref(Some(trimmed)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
 pub fn trim_3_args(
     arg: BytesRef,
     pat: BytesRef,
@@ -752,9 +759,8 @@ pub fn trim_3_args(
 ) -> Result<BytesGuard> {
     match TrimDirection::from_i64(*direction) {
         Some(d) => {
-            let arg = String::from_utf8_lossy(arg);
-            let pat = String::from_utf8_lossy(pat);
-            Ok(writer.write(Some(trim(&arg, &pat, d))))
+            let trimmed = trim(arg, pat, d);
+            Ok(writer.write_ref(Some(trimmed)))
         }
         _ => Err(box_err!("invalid direction value: {}", direction)),
     }
@@ -778,13 +784,34 @@ impl TrimDirection {
 }
 
 #[inline]
-fn trim(s: &str, pat: &str, direction: TrimDirection) -> Vec<u8> {
-    let r = match direction {
-        TrimDirection::Leading => s.trim_start_matches(pat),
-        TrimDirection::Trailing => s.trim_end_matches(pat),
-        _ => s.trim_start_matches(pat).trim_end_matches(pat),
+fn trim<'a, 'b>(string: &'a [u8], pattern: &'b [u8], direction: TrimDirection) -> &'a [u8] {
+    if pattern.is_empty() {
+        return string;
+    }
+    let pat_length = pattern.len();
+    let s_length = string.len();
+
+    let left_position = match direction {
+        TrimDirection::Trailing => 0,
+        _ => string
+            .chunks(pat_length)
+            .position(|chunk| chunk != pattern)
+            .map(|pos| pos * pat_length)
+            .unwrap_or(s_length - (s_length % pat_length)),
     };
-    r.to_string().into_bytes()
+
+    let right_position = match direction {
+        TrimDirection::Leading => s_length,
+        _ => string
+            .rchunks(pat_length)
+            .position(|chunk| chunk != pattern)
+            .map(|pos| s_length - pos * pat_length)
+            .unwrap_or(s_length % pat_length),
+    };
+
+    let right_position = right_position.max(left_position);
+
+    &string[left_position..right_position]
 }
 
 #[rpn_fn]
@@ -3363,6 +3390,62 @@ mod tests {
     }
 
     #[test]
+    fn test_trim_2_args() {
+        let test_cases = vec![
+            (None, None, None),
+            (Some("x"), None, None),
+            (None, Some("x"), None),
+            (Some("xxx"), Some("x"), Some("")),
+            (Some("xxxbarxxx"), Some("x"), Some("bar")),
+            (Some("xxxbarxxx"), Some("xx"), Some("xbarx")),
+            (Some("xyxybarxyxy"), Some("xy"), Some("bar")),
+            (Some("xyxybarxyxyx"), Some("xy"), Some("barxyxyx")),
+            (Some("xyxy"), Some("xy"), Some("")),
+            (Some("xyxyx"), Some("xy"), Some("x")),
+            (Some("   bar   "), Some(""), Some("   bar   ")),
+            (Some(""), Some("x"), Some("")),
+            (Some("张三和张三"), Some("张三"), Some("和")),
+            (Some("xxxbarxxxxx"), Some("x"), Some("bar")),
+        ];
+
+        for (arg, pat, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .push_param(pat.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::Trim2Args)
+                .unwrap();
+            assert_eq!(output, expect.map(|s| s.as_bytes().to_vec()));
+        }
+
+        let invalid_utf8_cases = vec![
+            (
+                Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()),
+                Some(b" ".to_vec()),
+                Some(b"\xF0 Hello \x90 World \x80".to_vec()),
+            ),
+            (
+                Some(b"xy\xF0 Hello \x90 World \x80 ".to_vec()),
+                Some(b"xy".to_vec()),
+                Some(b"\xF0 Hello \x90 World \x80 ".to_vec()),
+            ),
+            (
+                Some(b"\xF0 Hello \x90 World \x80 ".to_vec()),
+                Some(b"\xF0".to_vec()),
+                Some(b" Hello \x90 World \x80 ".to_vec()),
+            ),
+        ];
+
+        for (arg, pat, expected) in invalid_utf8_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .evaluate(ScalarFuncSig::Trim2Args)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
     fn test_trim_3_args() {
         let tests = vec![
             (
@@ -3430,6 +3513,30 @@ mod tests {
             .push_param(args.2)
             .evaluate(ScalarFuncSig::Trim3Args);
         assert!(got.is_err());
+
+        let invalid_utf8_cases = vec![
+            (
+                Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()),
+                Some(b" ".to_vec()),
+                Some(TrimDirection::Leading as i64),
+                Some(b"\xF0 Hello \x90 World \x80 ".to_vec()),
+            ),
+            (
+                Some(b"  \xF0 Hello \x90 World \x80 ".to_vec()),
+                Some(b" ".to_vec()),
+                Some(TrimDirection::Trailing as i64),
+                Some(b"  \xF0 Hello \x90 World \x80".to_vec()),
+            ),
+        ];
+        for (arg, pat, direction, expected) in invalid_utf8_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .push_param(pat)
+                .push_param(direction)
+                .evaluate(ScalarFuncSig::Trim3Args)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
     }
 
     #[test]
