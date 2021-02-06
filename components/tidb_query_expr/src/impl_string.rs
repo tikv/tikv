@@ -510,6 +510,13 @@ pub fn lower(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
+pub fn lower_binary(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+    // Noop for binary strings
+    Ok(writer.write_ref(Some(arg)))
+}
+
+#[rpn_fn(writer)]
+#[inline]
 pub fn hex_str_arg(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     Ok(writer.write(Some(log_wrappers::hex_encode_upper(arg).into_bytes())))
 }
@@ -2544,6 +2551,7 @@ mod tests {
 
     #[test]
     fn test_lower() {
+        // Test non-binary string case
         let cases = vec![
             (Some(b"HELLO".to_vec()), Some(b"hello".to_vec())),
             (Some(b"123".to_vec()), Some(b"123".to_vec())),
@@ -2569,6 +2577,42 @@ mod tests {
         for (arg, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::Lower)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+
+        // Test binary string case
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
+            (
+                Some("CAFÉ".as_bytes().to_vec()),
+                Some("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    arg.clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .collation(Collation::Binary)
+                        .build(),
+                )
                 .evaluate(ScalarFuncSig::Lower)
                 .unwrap();
             assert_eq!(output, exp);
