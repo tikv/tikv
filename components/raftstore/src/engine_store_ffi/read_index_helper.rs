@@ -9,12 +9,20 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as
 use tikv_util::future::paired_future_callback;
 use txn_types::Key;
 
-pub trait ReadIndex {
+pub trait ReadIndex: Sync + Send {
     fn batch_read_index(&self, req: Vec<ReadIndexRequest>) -> Vec<(ReadIndexResponse, u64)>;
 }
 
 pub struct ReadIndexClient<ER: RaftEngine> {
-    pub router: RaftRouter<RocksEngine, ER>,
+    pub router: std::sync::Mutex<RaftRouter<RocksEngine, ER>>,
+}
+
+impl<ER: RaftEngine> ReadIndexClient<ER> {
+    pub fn new(router: RaftRouter<RocksEngine, ER>) -> Self {
+        Self {
+            router: std::sync::Mutex::new(router),
+        }
+    }
 }
 
 impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
@@ -44,7 +52,12 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
 
             let (cb, f) = paired_future_callback();
 
-            if let Err(e) = self.router.send_command(cmd, Callback::Read(cb)) {
+            if let Err(e) = self
+                .router
+                .lock()
+                .unwrap()
+                .send_command(cmd, Callback::Read(cb))
+            {
                 // Retrun region error instead a gRPC error.
                 let mut resp = ReadIndexResponse::default();
                 let region_error = if let RaftStoreError::Transport(DiscardReason::Disconnected) = e

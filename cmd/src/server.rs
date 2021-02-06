@@ -129,9 +129,7 @@ pub unsafe fn run_tikv(config: TiKvConfig) {
             let mut proxy = RaftStoreProxy {
                 status: AtomicU8::new(RaftProxyStatus::Idle as u8),
                 key_manager: tikv.encryption_key_manager.clone(),
-                read_index_client: Box::new(ReadIndexClient {
-                    router: tikv.router.clone(),
-                }),
+                read_index_client: Box::new(ReadIndexClient::new(tikv.router.clone())),
             };
 
             let proxy_helper = RaftStoreProxyFFIHelper::new(&proxy);
