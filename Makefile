@@ -59,8 +59,8 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
-# Disable SSE on ARM
-ifeq ($(shell uname -p),aarch64)
+# Only enable SSE on x86_64
+ifneq ($(shell uname -p),x86_64)
 ROCKSDB_SYS_SSE=0
 endif
 

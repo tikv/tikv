@@ -41,7 +41,7 @@ concurrency_manager = { path = "../concurrency_manager" }
 engine_traits = { path = "../engine_traits" }
 fail = "0.4"
 futures = "0.3"
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8", git = "https://github.com/sticnarf/grpc-rs.git", branch = "apple-silicon", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 log_wrappers = { path = "../log_wrappers" }

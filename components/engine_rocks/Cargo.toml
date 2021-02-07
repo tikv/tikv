@@ -56,7 +56,8 @@ protobuf = "2"
 fail = "0.4"
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/sticnarf/rust-rocksdb.git"
+branch = "apple-silicon"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
