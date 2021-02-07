@@ -101,14 +101,8 @@ fn find_str(text: &str, pattern: &str) -> Option<usize> {
 #[rpn_fn]
 #[inline]
 pub fn locate_2_args_utf8<C: Collator>(substr: BytesRef, s: BytesRef) -> Result<Option<i64>> {
-    let substr = match str::from_utf8(substr) {
-        Ok(substr) => substr,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let s = match str::from_utf8(s) {
-        Ok(s) => s,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
+    let substr = str::from_utf8(substr)?;
+    let s = str::from_utf8(s)?;
     let offset = if C::IS_CASE_INSENSITIVE {
         find_str(&s.to_lowercase(), &substr.to_lowercase())
     } else {
@@ -127,14 +121,8 @@ pub fn locate_3_args_utf8<C: Collator>(
     if *pos < 1 {
         return Ok(Some(0));
     }
-    let substr = match str::from_utf8(substr) {
-        Ok(substr) => substr,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let s = match str::from_utf8(s) {
-        Ok(s) => s,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
+    let substr = str::from_utf8(substr)?;
+    let s = str::from_utf8(s)?;
     let start = match s
         .char_indices()
         .map(|(i, _)| i)
@@ -219,10 +207,8 @@ pub fn ascii(arg: BytesRef) -> Result<Option<i64>> {
 #[rpn_fn(writer)]
 #[inline]
 pub fn reverse_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    match str::from_utf8(arg) {
-        Ok(s) => Ok(writer.write(Some(s.chars().rev().collect::<String>().into_bytes()))),
-        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-    }
+    let arg = str::from_utf8(arg)?;
+    Ok(writer.write(Some(arg.chars().rev().collect::<String>().into_bytes())))
 }
 
 #[rpn_fn(writer)]
@@ -279,14 +265,8 @@ pub fn lpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = match str::from_utf8(&*arg) {
-        Ok(arg) => arg,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let pad = match str::from_utf8(&*pad) {
-        Ok(pad) => pad,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
+    let input = str::from_utf8(&*arg)?;
+    let pad = str::from_utf8(&*pad)?;
     let input_len = input.chars().count();
     match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
         None => Ok(writer.write(None)),
@@ -392,25 +372,22 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     if *rhs <= 0 {
         return Ok(writer.write_ref(Some(b"")));
     }
-    match str::from_utf8(&*lhs) {
-        Ok(s) => {
-            let rhs = *rhs as usize;
-            let len = s.chars().count();
-            let result = if len > rhs {
-                let idx = s
-                    .char_indices()
-                    .nth(rhs)
-                    .map(|(idx, _)| idx)
-                    .unwrap_or_else(|| s.len());
-                s[..idx].as_bytes()
-            } else {
-                s.as_bytes()
-            };
+    let s = str::from_utf8(&*lhs)?;
 
-            Ok(writer.write_ref(Some(result)))
-        }
-        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-    }
+    let rhs = *rhs as usize;
+    let len = s.chars().count();
+    let result = if len > rhs {
+        let idx = s
+            .char_indices()
+            .nth(rhs)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| s.len());
+        s[..idx].as_bytes()
+    } else {
+        s.as_bytes()
+    };
+
+    Ok(writer.write_ref(Some(result)))
 }
 
 #[rpn_fn(writer)]
@@ -461,34 +438,30 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
     if *rhs <= 0 {
         return Ok(writer.write_ref(Some(b"")));
     }
-    match str::from_utf8(&*lhs) {
-        Ok(s) => {
-            let rhs = *rhs as usize;
-            let len = s.chars().count();
-            let result = if len > rhs {
-                let idx = s
-                    .char_indices()
-                    .nth(len - rhs)
-                    .map(|(idx, _)| idx)
-                    .unwrap_or_else(|| s.len());
-                s[idx..].as_bytes()
-            } else {
-                s.as_bytes()
-            };
 
-            Ok(writer.write_ref(Some(result)))
-        }
-        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-    }
+    let s = str::from_utf8(&*lhs)?;
+
+    let rhs = *rhs as usize;
+    let len = s.chars().count();
+    let result = if len > rhs {
+        let idx = s
+            .char_indices()
+            .nth(len - rhs)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| s.len());
+        s[idx..].as_bytes()
+    } else {
+        s.as_bytes()
+    };
+
+    Ok(writer.write_ref(Some(result)))
 }
 
 #[rpn_fn(writer)]
 #[inline]
 pub fn upper_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
-    match str::from_utf8(arg) {
-        Ok(s) => Ok(writer.write_ref(Some(s.to_uppercase().as_bytes()))),
-        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-    }
+    let s = str::from_utf8(arg)?;
+    Ok(writer.write_ref(Some(s.to_uppercase().as_bytes())))
 }
 
 #[rpn_fn(writer)]
@@ -796,10 +769,8 @@ pub fn char_length(bs: BytesRef) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn char_length_utf8(bs: BytesRef) -> Result<Option<Int>> {
-    match str::from_utf8(bs) {
-        Ok(s) => Ok(Some(s.chars().count() as i64)),
-        Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-    }
+    let s = str::from_utf8(bs)?;
+    Ok(Some(s.chars().count() as i64))
 }
 
 #[rpn_fn(writer)]
