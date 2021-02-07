@@ -156,6 +156,9 @@ build:
 release:
 	./release.sh
 
+gen_proxy_ffi:
+	./gen-proxy-ffi.sh
+
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
 unportable_release:

@@ -1404,11 +1404,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "gen_ffi_interfaces"
+name = "gen-proxy-ffi"
 version = "0.1.0"
 dependencies = [
  "bindgen",
  "clap",
+ "md5",
  "walkdir",
 ]
 

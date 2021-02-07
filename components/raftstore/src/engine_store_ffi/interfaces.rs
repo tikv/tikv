@@ -49,7 +49,7 @@ pub mod root {
     use self::super::root;
     pub const _LIBCPP_VERSION: u32 = 8000;
     pub const _LIBCPP_ABI_VERSION: u32 = 1;
-    pub const _LIBCPP_STD_VER: u32 = 17;
+    pub const _LIBCPP_STD_VER: u32 = 11;
     pub const _LIBCPP_OBJECT_FORMAT_MACHO: u32 = 1;
     pub const _LIBCPP_HIDE_FROM_ABI_PER_TU: u32 = 1;
     pub const _LIBCPP_LOCALE__L_EXTENSIONS: u32 = 1;
@@ -442,12 +442,12 @@ pub mod root {
         #[repr(C)]
         #[derive(Debug)]
         pub struct RaftStoreProxyPtr {
-            pub _inner: root::DB::ConstRawVoidPtr,
+            pub inner: root::DB::ConstRawVoidPtr,
         }
         #[repr(C)]
         #[derive(Debug)]
         pub struct SSTReaderPtr {
-            pub _inner: root::DB::RawVoidPtr,
+            pub inner: root::DB::RawVoidPtr,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -634,8 +634,8 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
         pub const RAFT_STORE_PROXY_VERSION: u32 = 401006;
+        pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
     pub type __builtin_va_list = [root::__va_list_tag; 1usize];
     #[repr(C)]

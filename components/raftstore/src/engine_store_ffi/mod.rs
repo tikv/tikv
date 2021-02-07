@@ -65,17 +65,17 @@ impl RaftStoreProxy {
 
 impl RaftStoreProxyPtr {
     unsafe fn as_ref(&self) -> &RaftStoreProxy {
-        &*(self._inner as *const RaftStoreProxy)
+        &*(self.inner as *const RaftStoreProxy)
     }
     fn is_null(&self) -> bool {
-        self._inner == std::ptr::null()
+        self.inner == std::ptr::null()
     }
 }
 
 impl From<&RaftStoreProxy> for RaftStoreProxyPtr {
     fn from(ptr: &RaftStoreProxy) -> Self {
         Self {
-            _inner: ptr as *const _ as ConstRawVoidPtr,
+            inner: ptr as *const _ as ConstRawVoidPtr,
         }
     }
 }
@@ -289,17 +289,17 @@ pub extern "C" fn ffi_handle_link_file(
 
 impl SSTReaderPtr {
     unsafe fn as_mut_lock(&mut self) -> &mut LockCFFileReader {
-        &mut *(self._inner as *mut LockCFFileReader)
+        &mut *(self.inner as *mut LockCFFileReader)
     }
 
     unsafe fn as_mut(&mut self) -> &mut SSTFileReader {
-        &mut *(self._inner as *mut SSTFileReader)
+        &mut *(self.inner as *mut SSTFileReader)
     }
 }
 
 impl From<RawVoidPtr> for SSTReaderPtr {
     fn from(pre: RawVoidPtr) -> Self {
-        Self { _inner: pre }
+        Self { inner: pre }
     }
 }
 
@@ -354,10 +354,10 @@ unsafe extern "C" fn ffi_next(mut reader: SSTReaderPtr, type_: ColumnFamilyType)
 unsafe extern "C" fn ffi_gc(reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match type_ {
         ColumnFamilyType::Lock => {
-            Box::from_raw(reader._inner as *mut LockCFFileReader);
+            Box::from_raw(reader.inner as *mut LockCFFileReader);
         }
         _ => {
-            Box::from_raw(reader._inner as *mut SSTFileReader);
+            Box::from_raw(reader.inner as *mut SSTFileReader);
         }
     }
 }
@@ -536,10 +536,6 @@ impl Drop for RawCppPtr {
         }
     }
 }
-
-unsafe impl Send for RawCppPtr {}
-
-unsafe impl Send for EngineStoreServerHelper {}
 
 static mut ENGINE_STORE_SERVER_HELPER_PTR: u64 = 0;
 

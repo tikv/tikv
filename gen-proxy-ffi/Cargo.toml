@@ -1,10 +1,11 @@
 [package]
-name = "gen_ffi_interfaces"
+name = "gen-proxy-ffi"
 version = "0.1.0"
 authors = ["Tong Zhigao <tongzhigao@pingcap.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "gen-proxy-ffi"
 
 [dependencies.bindgen]
 version = ""
@@ -13,4 +14,5 @@ features = ["which-rustfmt"]
 
 [dependencies]
 walkdir = "2"
+md5 = ""
 clap = ""

@@ -248,7 +248,7 @@ members = [
   "components/collections",
 
   "raftstore-proxy",
-  "gen_ffi_interfaces"
+  "gen-proxy-ffi"
 ]
 default-members = ["raftstore-proxy"]
 
