@@ -501,7 +501,7 @@ pub fn upper(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn lower(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+pub fn lower_utf8(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     match str::from_utf8(arg) {
         Ok(s) => Ok(writer.write_ref(Some(s.to_lowercase().as_bytes()))),
         Err(err) => Err(box_err!("invalid input value: {:?}", err)),
@@ -510,7 +510,7 @@ pub fn lower(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
 
 #[rpn_fn(writer)]
 #[inline]
-pub fn lower_binary(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
+pub fn lower(arg: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     // Noop for binary strings
     Ok(writer.write_ref(Some(arg)))
 }

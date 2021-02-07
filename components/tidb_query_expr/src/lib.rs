@@ -274,9 +274,9 @@ fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
         ));
     }
     if children[0].get_field_type().is_binary_string_like() {
-        Ok(lower_binary_fn_meta())
-    } else {
         Ok(lower_fn_meta())
+    } else {
+        Ok(lower_utf8_fn_meta())
     }
 }
 
