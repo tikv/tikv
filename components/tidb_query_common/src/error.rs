@@ -67,7 +67,6 @@ impl From<std::string::FromUtf8Error> for EvaluateError {
     }
 }
 
-
 impl ErrorCodeExt for EvaluateError {
     fn error_code(&self) -> ErrorCode {
         match self {

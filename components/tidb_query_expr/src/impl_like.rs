@@ -77,7 +77,7 @@ pub fn regexp_utf8(
     target: BytesRef,
     pattern: BytesRef,
 ) -> Result<Option<i64>> {
-    let target =  String::from_utf8(target.to_vec())?;
+    let target = String::from_utf8(target.to_vec())?;
 
     match metadata {
         Some(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
@@ -103,7 +103,7 @@ pub fn regexp(
     match metadata {
         Some(regex) => Ok(Some(regex.is_match(target.as_ref()) as i64)),
         None => {
-            let pattern =  String::from_utf8(pattern.to_vec())?;
+            let pattern = String::from_utf8(pattern.to_vec())?;
             match BytesRegex::new(&pattern) {
                 Ok(bytes_regex) => Ok(Some(bytes_regex.is_match(target.as_ref()) as i64)),
                 Err(err) => Err(box_err!("invalid regex pattern: {:?}", err)),
