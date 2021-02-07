@@ -495,6 +495,27 @@ fn truncate_real(x: Real, d: i32) -> Real {
 
 #[inline]
 #[rpn_fn]
+pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = arg1;
+    let d = if *d >= 0 {
+        (*d).min(127) as i8
+    } else {
+        (*d).max(-128) as i8
+    };
+    let r: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
+    Ok(Some(r?))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_decimal_with_uint(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = (*arg1 as u64).min(127) as i8;
+    let r: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
+    Ok(Some(r?))
+}
+
+#[inline]
+#[rpn_fn]
 pub fn round_with_frac_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
     let number = arg0;
     let digits = arg1;
@@ -1708,6 +1729,67 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn test_truncate_decimal() {
+        let test_cases = vec![
+            ("-1.23", 0i64, false, "-1"),
+            ("-1.23", 1i64, false, "-1.2"),
+            ("-11.23", -1i64, false, "-10"),
+            ("1.58", 0i64, false, "1"),
+            ("1.58", 1i64, false, "1.5"),
+            ("23.298", -1i64, false, "20"),
+            ("23.298", -100i64, false, "0"),
+            ("23.298", 100i64, false, "23.298"),
+            ("23.298", 200i64, false, "23.298"),
+            ("23.298", -200i64, false, "0"),
+            (
+                "1.999999999999999999999999999999",
+                31i64,
+                false,
+                "1.999999999999999999999999999999",
+            ),
+            (
+                "99999999999999999999999999999999999999999999999999999999999999999",
+                -66i64,
+                false,
+                "0",
+            ),
+            (
+                "99999999999999999999999999999999999.999999999999999999999999999999",
+                31i64,
+                false,
+                "99999999999999999999999999999999999.999999999999999999999999999999",
+            ),
+            (
+                "99999999999999999999999999999999999.999999999999999999999999999999",
+                -36i64,
+                false,
+                "0",
+            ),
+            // case unsigned
+            ("23.298", u64::MAX as i64, true, "23.298"),
+        ];
+
+        for (lhs, rhs, rhs_is_unsigned, expected) in test_cases {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let expect = Decimal::from_str(expected).unwrap();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Decimal::from_str(lhs).unwrap()))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Decimal>(ScalarFuncSig::TruncateDecimal)
+                .unwrap();
+            assert_eq!(output, Some(expect));
         }
     }
 

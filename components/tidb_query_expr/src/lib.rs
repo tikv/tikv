@@ -245,6 +245,14 @@ fn truncate_real_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn truncate_decimal_mapper(rhs_is_unsigned: bool) -> RpnFnMeta {
+    if rhs_is_unsigned {
+        truncate_decimal_with_uint_fn_meta()
+    } else {
+        truncate_decimal_with_int_fn_meta()
+    }
+}
+
 pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     if children.len() != 1 {
         return Err(other_err!(
@@ -513,6 +521,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundDec => round_dec_fn_meta(),
         ScalarFuncSig::TruncateInt => map_rhs_int_sig(value, children, truncate_int_mapper)?,
         ScalarFuncSig::TruncateReal => map_rhs_int_sig(value, children, truncate_real_mapper)?,
+        ScalarFuncSig::TruncateDecimal => map_rhs_int_sig(value, children, truncate_decimal_mapper)?,
         ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
         ScalarFuncSig::RoundWithFracDec => round_with_frac_dec_fn_meta(),
         ScalarFuncSig::RoundWithFracReal => round_with_frac_real_fn_meta(),
