@@ -401,7 +401,7 @@ pub fn sub_datetime_and_string(
             return ctx
                 .handle_invalid_time_error(Error::overflow(
                     "DATETIME",
-                    format!("({} + {})", datetime, duration_str),
+                    format!("({} - {})", datetime, duration_str),
                 ))
                 .map(|_| Ok(None))?;
         }
