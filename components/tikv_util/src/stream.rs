@@ -3,8 +3,9 @@
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
+use http::status::StatusCode;
 use rand::{thread_rng, Rng};
-use rusoto_core::RusotoError;
+use rusoto_core::{request::HttpDispatchError, RusotoError};
 use std::{
     future::Future,
     io, iter,
@@ -83,10 +84,6 @@ pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
 
 /// Trait for errors which can be retried inside [`retry()`].
 pub trait RetryError {
-    /// Returns a placeholder to indicate an uninitialized error. This function exists only to
-    /// satisfy safety, there is no meaning attached to the returned value.
-    fn placeholder() -> Self;
-
     /// Returns whether this error can be retried.
     fn is_retryable(&self) -> bool;
 }
@@ -107,35 +104,39 @@ where
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
     const MAX_RETRY_TIMES: usize = 4;
     let mut retry_wait_dur = Duration::from_secs(1);
-    let mut result = Err(E::placeholder());
 
-    for _ in 0..MAX_RETRY_TIMES {
-        result = action().await;
-        if let Err(e) = &result {
+    let mut final_result = action().await;
+    for _ in 1..MAX_RETRY_TIMES {
+        if let Err(e) = &final_result {
             if e.is_retryable() {
                 delay_for(retry_wait_dur + Duration::from_millis(thread_rng().gen_range(0, 1000)))
                     .await;
                 retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
+                final_result = action().await;
                 continue;
             }
         }
         break;
     }
+    final_result
+}
 
-    result
+pub fn http_retriable(status: StatusCode) -> bool {
+    status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT
 }
 
 impl<E> RetryError for RusotoError<E> {
-    fn placeholder() -> Self {
-        Self::Blocking
-    }
-
     fn is_retryable(&self) -> bool {
         match self {
-            Self::HttpDispatch(_) => true,
-            Self::Unknown(resp) if resp.status.is_server_error() => true,
-            // FIXME: Retry NOT_READY & THROTTLED (403).
+            Self::HttpDispatch(e) => e.is_retryable(),
+            Self::Unknown(resp) if http_retriable(resp.status) => true,
             _ => false,
         }
+    }
+}
+
+impl RetryError for HttpDispatchError {
+    fn is_retryable(&self) -> bool {
+        true
     }
 }

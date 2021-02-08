@@ -7,7 +7,7 @@ publish = false
 default-run = "tikv-server"
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -16,11 +16,13 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 bcc-iosnoop = ["tikv/bcc-iosnoop"]
+cloud-aws = [ "encryption_export/cloud-aws" ]
+cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
   "backup/protobuf-codec",
   "cdc/protobuf-codec",
   "concurrency_manager/protobuf-codec",
-  "encryption/protobuf-codec",
+  "encryption_export/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_traits/protobuf-codec",
   "error_code/protobuf-codec",
@@ -40,7 +42,7 @@ prost-codec = [
   "backup/prost-codec",
   "cdc/prost-codec",
   "concurrency_manager/prost-codec",
-  "encryption/prost-codec",
+  "encryption_export/prost-codec",
   "engine_rocks/prost-codec",
   "engine_traits/prost-codec",
   "error_code/prost-codec",
@@ -80,7 +82,7 @@ crossbeam = "0.7"
 tempfile = "3.0"
 clap = "2.32"
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
-encryption = { path = "../components/encryption", default-features = false }
+encryption_export = { path = "../components/encryption/export", default-features = false }
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }

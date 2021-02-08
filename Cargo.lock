@@ -169,6 +169,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "aws"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "bytes 0.5.3",
+ "cloud",
+ "futures 0.3.7",
+ "futures-util",
+ "grpcio",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "matches",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kms",
+ "rusoto_mock",
+ "rusoto_s3",
+ "rusoto_sts",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -565,6 +593,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloud"
+version = "0.0.1"
+dependencies = [
+ "error_code",
+ "failure",
+ "futures-io",
+ "kvproto",
+ "openssl",
+ "protobuf",
+ "rusoto_core",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "cloudabi"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -602,7 +648,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
- "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -1120,6 +1166,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes 0.5.3",
+ "cloud",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -1138,22 +1185,33 @@ dependencies = [
  "prometheus",
  "protobuf",
  "rand 0.7.3",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_kms",
- "rusoto_mock",
- "rusoto_util",
- "rust-ini",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "encryption_export"
+version = "0.0.1"
+dependencies = [
+ "aws",
+ "cloud",
+ "encryption",
+ "file_system",
+ "kvproto",
+ "openssl",
+ "protobuf",
+ "rust-ini",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tikv_util",
 ]
 
 [[package]]
@@ -4756,7 +4814,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
- "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -4814,7 +4872,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "collections",
- "encryption",
+ "encryption_export",
  "fail",
  "grpcio",
  "kvproto",
@@ -5104,7 +5162,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "derive_more",
- "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -5260,6 +5318,7 @@ dependencies = [
  "futures 0.3.7",
  "futures-util",
  "grpcio",
+ "http",
  "kvproto",
  "lazy_static",
  "libc 0.2.80",

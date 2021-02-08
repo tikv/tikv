@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cloud::ErrorTrait as CloudErrorTrait;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
@@ -11,6 +12,8 @@ use std::{error, result};
 pub enum Error {
     #[fail(display = "Other error {}", _0)]
     Other(Box<dyn error::Error + Sync + Send>),
+    #[fail(display = "Cloud KMS error {}", _0)]
+    Cloud(Box<dyn CloudErrorTrait>),
     #[fail(display = "RocksDB error {}", _0)]
     Rocks(String),
     #[fail(display = "IO error {}", _0)]
@@ -67,6 +70,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
+            Error::Cloud(err) => err.error_code(),
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
@@ -76,5 +80,17 @@ impl ErrorCodeExt for Error {
             Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
             Error::Other(_) => error_code::UNKNOWN,
         }
+    }
+}
+
+impl std::convert::From<Box<dyn CloudErrorTrait>> for Error {
+    fn from(err: Box<dyn cloud::ErrorTrait>) -> Error {
+        Error::Cloud(err)
+    }
+}
+
+impl std::convert::From<cloud::Error> for Error {
+    fn from(err: cloud::Error) -> Error {
+        Error::Cloud(Box::new(err) as Box<dyn cloud::ErrorTrait>)
     }
 }

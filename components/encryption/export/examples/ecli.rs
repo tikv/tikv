@@ -5,7 +5,10 @@ extern crate tikv_util;
 
 use std::io::{Read, Write};
 
-use encryption::{AwsKms, Backend, Error, KmsBackend, KmsConfig, Result};
+pub use cloud::kms::Config as CloudConfig;
+#[cfg(feature = "cloud-aws")]
+use encryption_export::{AwsKms, KmsBackend, KmsConfig};
+use encryption_export::{Backend, Error, Result};
 use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
@@ -80,7 +83,9 @@ fn create_kms_backend(cmd: &KmsCommand, credential_file: Option<&String>) -> Res
         config.endpoint = endpoint.to_string();
     }
     config.key_id = cmd.key_id.to_owned();
-    KmsBackend::new(Box::new(AwsKms::new(config)?))
+
+    let conf = CloudConfig::from_proto(config.into_proto())?;
+    KmsBackend::new(Box::new(AwsKms::new(conf)?))
 }
 
 #[allow(irrefutable_let_patterns)]

@@ -20,7 +20,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
@@ -398,7 +398,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager = DataKeyManager::from_config(
+        self.encryption_key_manager = data_key_manager_from_config(
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
