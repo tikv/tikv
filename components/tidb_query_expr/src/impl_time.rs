@@ -317,24 +317,11 @@ pub fn add_datetime_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
-    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
-        Ok(arg) => arg,
-        Err(_) => return Ok(None),
-    };
-
-    let res = match arg0.checked_add(ctx, arg1) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DATETIME",
-                    format!("({} + {})", arg0, arg1),
-                ))
-                .map(|_| Ok(None))?;
-        }
-    };
-    Ok(Some(res))
+    let duration = parse_duration(ctx, arg1)?;
+    match duration {
+        Some(dur) => add_datetime_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
+    }
 }
 
 #[rpn_fn(capture=[ctx])]
@@ -389,24 +376,11 @@ pub fn sub_datetime_and_string(
     datetime: &DateTime,
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
-    let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
-        Ok(duration) => duration,
-        Err(_) => return Ok(None),
-    };
-
-    let res = match datetime.checked_sub(ctx, duration) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DATETIME",
-                    format!("({} - {})", datetime, duration),
-                ))
-                .map(|_| Ok(None))?;
-        }
-    };
-    Ok(Some(res))
+    let duration = parse_duration(ctx, duration_str)?;
+    match duration {
+        Some(dur) => sub_datetime_and_duration(ctx, datetime, &dur),
+        None => Ok(None),
+    }
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -680,24 +654,11 @@ pub fn add_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
-    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
-        Ok(arg) => arg,
-        Err(_) => return Ok(None),
-    };
-
-    let res = match arg1.checked_add(arg2) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DURATION",
-                    format!("({} + {})", arg1, arg2),
-                ))
-                .map(|_| Ok(None))?;
-        }
-    };
-    Ok(Some(res))
+    let duration = parse_duration(ctx, arg2)?;
+    match duration {
+        Some(dur) => add_duration_and_duration(ctx, arg1, &dur),
+        None => Ok(None),
+    }
 }
 
 /// Cast Duration into string representation and drop subsec if possible.
@@ -715,6 +676,12 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
         _ => datetime.maximize_fsp(),
     };
     datetime.to_string()
+}
+
+#[inline]
+fn parse_duration(ctx: &mut EvalContext, unparsed: BytesRef) -> Result<Option<Duration>> {
+    let str = std::str::from_utf8(&unparsed).map_err(Error::Encoding)?;
+    Ok(Duration::parse(ctx, str, MAX_FSP).ok())
 }
 
 #[cfg(test)]
