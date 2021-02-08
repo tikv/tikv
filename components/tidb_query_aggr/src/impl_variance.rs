@@ -17,7 +17,11 @@ use super::*;
 
 /// A trait for VARIANCE aggregation functions
 pub trait VarianceType: Clone + std::fmt::Debug + Send + Sync + 'static {
+    /// Checks whether the given expression type refers to the type of variance.
     fn check_expr_type(tt: ExprType) -> bool;
+
+    /// Computes the variance based on the last $M_2$ and the number of values that went into
+    /// computing $M_2$.
     fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T>;
 }
 
@@ -31,7 +35,10 @@ impl VarianceType for Sample {
     fn check_expr_type(tt: ExprType) -> bool {
         tt == ExprType::VarSamp
     }
+
     fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T> {
+        // With Welford's algorithm, the sample variance, or $s_n^2$ can be computed by dividing $M_2$
+        // by $count - 1$.
         m2.div(&T::from_usize(count - 1)?)
     }
 }
@@ -40,7 +47,10 @@ impl VarianceType for Population {
     fn check_expr_type(tt: ExprType) -> bool {
         tt == ExprType::Variance || tt == ExprType::VarPop
     }
+
     fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T> {
+        // With Welford's algorithm, the sample variance, or $s_n^2$ can be computed by dividing $M_2$
+        // by $count$.
         m2.div(&T::from_usize(count)?)
     }
 }
@@ -78,7 +88,7 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
-        // The rewrite should always succeed.
+        // Rewrite expression to insert CAST() if needed. The rewrite should always succeed.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -90,7 +100,14 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
             ));
         }
 
-        // VARIANCE outputs one column.
+        // VARIANCE outputs three columns (count, sum, variance).
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
+        out_schema.push(out_ft.clone());
         out_schema.push(out_ft);
         out_exp.push(exp);
 
@@ -141,8 +158,15 @@ where
     V: VarianceType,
     VectorValue: VectorValueExt<T>,
 {
+    /// Current number of valid values that are considered for variance.
     count: usize,
+    /// Current sum of values.
+    sum: T,
+    /// Current mean of values.
     mean: T,
+    /// $M_2$ is a term from Welford's algorithm and denotes the sum of squares of differences from
+    /// the current mean, or more precisely $\sum_{i=1}^n (x_i - \bar{x_n})^2$ where $\bar{x_n}$
+    /// denotes the mean of the first $n$ values.
     m2: T,
     _phantom: std::marker::PhantomData<V>,
 }
@@ -156,6 +180,7 @@ where
     pub fn new() -> Self {
         Self {
             count: 0,
+            sum: T::zero(),
             mean: T::zero(),
             m2: T::zero(),
             _phantom: std::marker::PhantomData,
@@ -176,6 +201,7 @@ where
                 let value = value.into_owned_value();
 
                 self.count += 1;
+                self.sum.add_assign(ctx, &value)?;
                 let delta = value.sub(&self.mean)?;
                 self.mean
                     .add_assign(ctx, &delta.div(&T::from_usize(self.count)?)?)?;
@@ -199,7 +225,11 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push(if self.count == 0 {
+        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        assert_eq!(target.len(), 3);
+        target[0].push_int(Some(self.count as Int));
+        target[1].push(Some(self.sum.clone()));
+        target[2].push(if self.count == 0 {
             None
         } else {
             Some(V::compute_variance(&self.m2, self.count)?)
@@ -279,7 +309,6 @@ mod tests {
         assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
     }*/
 
-    /// VARIANCE(Bytes) should produce (Real).
     #[test]
     fn test_integration() {
         let pop_var_parser = AggrFnDefinitionParserVariance::<Population>::new();
@@ -314,21 +343,30 @@ mod tests {
         let pop_var_aggr_fn = pop_var_parser
             .parse(pop_var_expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
-        assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(schema.len(), 3);
+        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(schema[2].as_accessor().tp(), FieldTypeTp::Double);
         assert_eq!(exp.len(), 1);
 
         let samp_var_aggr_fn = samp_var_parser
             .parse(samp_var_expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
-        assert_eq!(schema.len(), 2);
-        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(schema.len(), 6);
+        assert_eq!(schema[3].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[4].as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(schema[5].as_accessor().tp(), FieldTypeTp::Double);
         assert_eq!(exp.len(), 2);
 
         let mut pop_var_state = pop_var_aggr_fn.create_state();
         let mut samp_var_state = samp_var_aggr_fn.create_state();
 
-        let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];
+        // VARIANCE will return <Int, Decimal, Decimal>
+        let mut aggr_result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Real),
+            VectorValue::with_capacity(0, EvalType::Real),
+        ];
 
         // population variance
         {
@@ -369,8 +407,16 @@ mod tests {
                 .unwrap();
         }
 
+        // count
+        assert_eq!(aggr_result[0].to_int_vec(), &[Some(2), Some(2)]);
+        // sum
         assert_eq!(
-            aggr_result[0].to_real_vec(),
+            aggr_result[1].to_real_vec(),
+            &[Real::new(54.5).ok(), Real::new(54.5).ok()]
+        );
+        // variance (population, sample)
+        assert_eq!(
+            aggr_result[2].to_real_vec(),
             &[Real::new(217.5625).ok(), Real::new(435.125).ok()]
         );
     }
