@@ -390,18 +390,18 @@ pub fn sub_datetime_and_string(
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
     let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
-    let duration_str = match Duration::parse(ctx, duration_str, MAX_FSP) {
-        Ok(arg) => arg,
+    let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
+        Ok(duration) => duration,
         Err(_) => return Ok(None),
     };
 
-    let res = match datetime.checked_sub(ctx, duration_str) {
+    let res = match datetime.checked_sub(ctx, duration) {
         Some(res) => res,
         None => {
             return ctx
                 .handle_invalid_time_error(Error::overflow(
                     "DATETIME",
-                    format!("({} - {})", datetime, duration_str),
+                    format!("({} - {})", datetime, duration),
                 ))
                 .map(|_| Ok(None))?;
         }
