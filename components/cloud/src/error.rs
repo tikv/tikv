@@ -23,6 +23,8 @@ pub enum Error {
     Io(IoError),
     #[fail(display = "OpenSSL error {}", _0)]
     Ssl(SslError),
+    #[fail(display = "OpenSSL error {}", _0)]
+    Tls(TlsError),
     #[fail(display = "Protobuf error {}", _0)]
     Proto(ProtobufError),
     #[fail(display = "Wrong master key error {}", _0)]
@@ -78,13 +80,21 @@ impl_from! {
     ProtobufError => Proto,
 }
 
-impl std::convert::From<rusoto_core::request::TlsError> for Error {
-    fn from(err: rusoto_core::request::TlsError) -> Error {
-        Error::Other(box_err!(format!("{}", err)))
+impl std::convert::From<TlsError> for Error {
+    fn from(err: TlsError) -> Error {
+        Error::Tls(err)
     }
 }
 
-/*
+impl ErrorCodeExt for KeyError {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            KeyError::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
+            KeyError::EmptyContents(_) => error_code::UNKNOWN,
+        }
+    }
+}
+
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {

@@ -3,9 +3,10 @@
 // The cloud crate defines the interaction between
 // the cloud provider crates and other TiKV crates
 
+#![feature(min_specialization)]
+
 #[macro_use]
 extern crate failure;
-
 #[macro_use]
 extern crate slog_global;
 

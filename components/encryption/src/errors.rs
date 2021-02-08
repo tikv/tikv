@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud;
+use cloud::ErrorTrait as CloudErrorTrait;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
@@ -13,7 +13,7 @@ pub enum Error {
     #[fail(display = "Other error {}", _0)]
     Other(Box<dyn error::Error + Sync + Send>),
     #[fail(display = "Cloud KMS error {}", _0)]
-    Cloud(Box<dyn cloud::ErrorTrait>),
+    Cloud(Box<dyn CloudErrorTrait>),
     #[fail(display = "RocksDB error {}", _0)]
     Rocks(String),
     #[fail(display = "IO error {}", _0)]
@@ -83,7 +83,7 @@ impl ErrorCodeExt for Error {
     }
 }
 
-impl std::convert::From<Box<dyn cloud::ErrorTrait>> for Error {
+impl std::convert::From<Box<dyn CloudErrorTrait>> for Error {
     fn from(err: Box<dyn cloud::ErrorTrait>) -> Error {
         Error::Cloud(err)
     }
