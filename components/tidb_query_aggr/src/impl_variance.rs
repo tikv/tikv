@@ -20,9 +20,8 @@ pub trait VarianceType: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// Checks whether the given expression type refers to the type of variance.
     fn check_expr_type(tt: ExprType) -> bool;
 
-    /// Computes the variance based on the last $M_2$ and the number of values that went into
-    /// computing $M_2$.
-    fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T>;
+    /// Computes the final variance of values.
+    fn compute_final_variance<T: Summable>(variance: &T, count: usize) -> Result<T>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,10 +35,8 @@ impl VarianceType for Sample {
         tt == ExprType::VarSamp
     }
 
-    fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T> {
-        // With Welford's algorithm, the sample variance, or $s_n^2$ can be computed by dividing $M_2$
-        // by $count - 1$.
-        m2.div(&T::from_usize(count - 1)?)
+    fn compute_final_variance<T: Summable>(variance: &T, count: usize) -> Result<T> {
+        variance.div(&T::from_usize(count - 1)?)
     }
 }
 
@@ -48,10 +45,8 @@ impl VarianceType for Population {
         tt == ExprType::Variance || tt == ExprType::VarPop
     }
 
-    fn compute_variance<T: Summable>(m2: &T, count: usize) -> Result<T> {
-        // With Welford's algorithm, the sample variance, or $s_n^2$ can be computed by dividing $M_2$
-        // by $count$.
-        m2.div(&T::from_usize(count)?)
+    fn compute_final_variance<T: Summable>(variance: &T, count: usize) -> Result<T> {
+        variance.div(&T::from_usize(count)?)
     }
 }
 
@@ -158,16 +153,9 @@ where
     V: VarianceType,
     VectorValue: VectorValueExt<T>,
 {
-    /// Current number of valid values that are considered for variance.
     count: usize,
-    /// Current sum of values.
     sum: T,
-    /// Current mean of values.
-    mean: T,
-    /// $M_2$ is a term from Welford's algorithm and denotes the sum of squares of differences from
-    /// the current mean, or more precisely $\sum_{i=1}^n (x_i - \bar{x_n})^2$ where $\bar{x_n}$
-    /// denotes the mean of the first $n$ values.
-    m2: T,
+    variance: T,
     _phantom: std::marker::PhantomData<V>,
 }
 
@@ -181,15 +169,11 @@ where
         Self {
             count: 0,
             sum: T::zero(),
-            mean: T::zero(),
-            m2: T::zero(),
+            variance: T::zero(),
             _phantom: std::marker::PhantomData,
         }
     }
 
-    /// Use [Welford's online algorithm][1] to update population variance in a single pass.
-    ///
-    /// [1]: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
     #[inline]
     fn update_concrete<'a, TT>(&mut self, ctx: &mut EvalContext, value: Option<TT>) -> Result<()>
     where
@@ -202,11 +186,16 @@ where
 
                 self.count += 1;
                 self.sum.add_assign(ctx, &value)?;
-                let delta = value.sub(&self.mean)?;
-                self.mean
-                    .add_assign(ctx, &delta.div(&T::from_usize(self.count)?)?)?;
-                let delta2 = value.sub(&self.mean)?;
-                self.m2.add_assign(ctx, &delta.mul(&delta2)?)?;
+                if self.count > 1 {
+                    // t := (count * input) - sum
+                    let t = value.mul(&T::from_usize(self.count)?)?.sub(&self.sum)?;
+                    // variance += (t * t) / (count * (count - 1))
+                    self.variance.add_assign(
+                        ctx,
+                        &t.mul(&t)?
+                            .div(&T::from_usize(self.count * (self.count - 1))?)?,
+                    )?;
+                }
                 Ok(())
             }
         }
@@ -232,7 +221,7 @@ where
         target[2].push(if self.count == 0 {
             None
         } else {
-            Some(V::compute_variance(&self.m2, self.count)?)
+            Some(V::compute_final_variance(&self.variance, self.count)?)
         });
         Ok(())
     }
