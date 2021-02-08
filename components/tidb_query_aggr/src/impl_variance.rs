@@ -110,8 +110,8 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnVariance::<Decimal, V>::new()),
             EvalType::Real => Box::new(AggrFnVariance::<Real, V>::new()),
-            //EvalType::Enum => Box::new(AggrFnVarianceForEnum::new()),
-            //EvalType::Set => Box::new(AggrFnVarianceForSet::new()),
+            EvalType::Enum => Box::new(AggrFnVarianceForEnum::<V>::new()),
+            EvalType::Set => Box::new(AggrFnVarianceForSet::<V>::new()),
             // If we meet unexpected types after rewriting, it is an implementation fault.
             _ => unreachable!(),
         })
@@ -217,12 +217,233 @@ where
         // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
         assert_eq!(target.len(), 3);
         target[0].push_int(Some(self.count as Int));
-        target[1].push(Some(self.sum.clone()));
-        target[2].push(if self.count == 0 {
-            None
+        if self.count > 0 {
+            target[1].push(Some(self.sum.clone()));
+            target[2].push(Some(V::compute_final_variance(&self.variance, self.count)?));
         } else {
-            Some(V::compute_final_variance(&self.variance, self.count)?)
-        });
+            target[1].push(None as Option<T>);
+            target[2].push(None as Option<T>);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateVarianceForEnum::<V>::new())]
+pub struct AggrFnVarianceForEnum<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    _phantom: std::marker::PhantomData<V>,
+}
+
+impl<V> AggrFnVarianceForEnum<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// The state of the VARIANCE aggregate function.
+#[derive(Debug)]
+pub struct AggrFnStateVarianceForEnum<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    count: usize,
+    sum: Decimal,
+    variance: Decimal,
+    _phantom: std::marker::PhantomData<V>,
+}
+
+impl<V> AggrFnStateVarianceForEnum<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            count: 0,
+            sum: Decimal::zero(),
+            variance: Decimal::zero(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// # Notes
+    ///
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
+    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    ///
+    /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                let value = Decimal::from(value.value());
+
+                self.count += 1;
+                self.sum.add_assign(ctx, &value)?;
+                if self.count > 1 {
+                    // t := (count * input) - sum
+                    let t = Summable::sub(
+                        &Summable::mul(&value, &Summable::from_usize(self.count)?)?,
+                        &self.sum,
+                    )?;
+                    // variance += (t * t) / (count * (count - 1))
+                    self.variance.add_assign(
+                        ctx,
+                        &Summable::div(
+                            &Summable::mul(&t, &t)?,
+                            &Summable::from_usize(self.count * (self.count - 1))?,
+                        )?,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<V> super::ConcreteAggrFunctionState for AggrFnStateVarianceForEnum<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    type ParameterType = EnumRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        assert_eq!(target.len(), 3);
+        target[0].push_int(Some(self.count as Int));
+        if self.count > 0 {
+            target[1].push(Some(self.sum.clone()));
+            target[2].push(Some(V::compute_final_variance(&self.variance, self.count)?));
+        } else {
+            target[1].push(None as Option<Decimal>);
+            target[2].push(None as Option<Decimal>);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateVarianceForSet::<V>::new())]
+pub struct AggrFnVarianceForSet<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    _phantom: std::marker::PhantomData<V>,
+}
+
+impl<V> AggrFnVarianceForSet<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// The state of the VARIANCE aggregate function.
+#[derive(Debug)]
+pub struct AggrFnStateVarianceForSet<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    count: usize,
+    sum: Decimal,
+    variance: Decimal,
+    _phantom: std::marker::PhantomData<V>,
+}
+
+impl<V> AggrFnStateVarianceForSet<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    pub fn new() -> Self {
+        Self {
+            count: 0,
+            sum: Decimal::zero(),
+            variance: Decimal::zero(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// # Notes
+    ///
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
+    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    ///
+    /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                let value = Decimal::from(value.value());
+
+                self.count += 1;
+                self.sum.add_assign(ctx, &value)?;
+                if self.count > 1 {
+                    // t := (count * input) - sum
+                    let t = Summable::sub(
+                        &Summable::mul(&value, &Summable::from_usize(self.count)?)?,
+                        &self.sum,
+                    )?;
+                    // variance += (t * t) / (count * (count - 1))
+                    self.variance.add_assign(
+                        ctx,
+                        &Summable::div(
+                            &Summable::mul(&t, &t)?,
+                            &Summable::from_usize(self.count * (self.count - 1))?,
+                        )?,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<V> super::ConcreteAggrFunctionState for AggrFnStateVarianceForSet<V>
+where
+    V: VarianceType,
+    VectorValue: VectorValueExt<Decimal>,
+{
+    type ParameterType = SetRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        assert_eq!(target.len(), 3);
+        target[0].push_int(Some(self.count as Int));
+        if self.count > 0 {
+            target[1].push(Some(self.sum.clone()));
+            target[2].push(Some(V::compute_final_variance(&self.variance, self.count)?));
+        } else {
+            target[1].push(None as Option<Decimal>);
+            target[2].push(None as Option<Decimal>);
+        }
         Ok(())
     }
 }
@@ -240,63 +461,89 @@ mod tests {
 
     use super::*;
 
-    /*#[test]
+    #[test]
     fn test_variance_enum() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnVarianceForEnum::new();
+        let function = AggrFnVarianceForEnum::<Population>::new();
         let mut state = function.create_state();
 
-        let mut result = [VectorValue::with_capacity(0, EvalType::Decimal)];
+        let mut result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+        ];
 
         let mut buf = BufferVec::new();
         buf.push("我好强啊");
         buf.push("我太强啦");
         let buf = Arc::new(buf);
 
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), &[None]);
-
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
-        result[0].clear();
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].to_decimal_vec(), &[None]);
+        assert_eq!(result[2].to_decimal_vec(), &[None]);
 
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
         update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
         result[0].clear();
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
+        result[1].clear();
+        result[2].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
+        assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
+
+        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        result[0].clear();
+        result[1].clear();
+        result[2].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
+        assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
     }
 
     #[test]
     fn test_variance_set() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnVarianceForSet::new();
+        let function = AggrFnVarianceForSet::<Population>::new();
         let mut state = function.create_state();
 
-        let mut result = [VectorValue::with_capacity(0, EvalType::Decimal)];
+        let mut result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+        ];
 
         let mut buf = BufferVec::new();
         buf.push("我好强啊");
         buf.push("我太强啦");
         let buf = Arc::new(buf);
 
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), &[None]);
-
-        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
-        result[0].clear();
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].to_decimal_vec(), &[None]);
+        assert_eq!(result[2].to_decimal_vec(), &[None]);
 
         update!(state, &mut ctx, Some(SetRef::new(&buf, 0b01))).unwrap();
         update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
-        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
         result[0].clear();
-        state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
-    }*/
+        result[1].clear();
+        result[2].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
+        assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
+
+        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        result[0].clear();
+        result[1].clear();
+        result[2].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Decimal::from_f64(3.0).ok()]);
+        assert_eq!(result[2].to_decimal_vec(), &[Decimal::from_f64(0.25).ok()]);
+    }
 
     #[test]
     fn test_integration() {
