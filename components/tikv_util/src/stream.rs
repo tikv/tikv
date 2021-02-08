@@ -83,10 +83,6 @@ pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
 
 /// Trait for errors which can be retried inside [`retry()`].
 pub trait RetryError {
-    /// Returns a placeholder to indicate an uninitialized error. This function exists only to
-    /// satisfy safety, there is no meaning attached to the returned value.
-    fn placeholder() -> Self;
-
     /// Returns whether this error can be retried.
     fn is_retryable(&self) -> bool;
 }
@@ -107,29 +103,24 @@ where
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
     const MAX_RETRY_TIMES: usize = 4;
     let mut retry_wait_dur = Duration::from_secs(1);
-    let mut result = Err(E::placeholder());
 
-    for _ in 0..MAX_RETRY_TIMES {
-        result = action().await;
-        if let Err(e) = &result {
+    let mut final_result = action().await;
+    for _ in 1..MAX_RETRY_TIMES {
+        if let Err(e) = &final_result {
             if e.is_retryable() {
                 delay_for(retry_wait_dur + Duration::from_millis(thread_rng().gen_range(0, 1000)))
                     .await;
                 retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
+                final_result = action().await;
                 continue;
             }
         }
         break;
     }
-
-    result
+    final_result
 }
 
 impl<E> RetryError for RusotoError<E> {
-    fn placeholder() -> Self {
-        Self::Blocking
-    }
-
     fn is_retryable(&self) -> bool {
         match self {
             Self::HttpDispatch(_) => true,

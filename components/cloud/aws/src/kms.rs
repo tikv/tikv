@@ -1,8 +1,5 @@
-use std::future::Future;
 use std::ops::Deref;
-use std::time::Duration;
 
-use futures::future::{self};
 use futures_util::TryFutureExt;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::HttpClient;
@@ -10,7 +7,7 @@ use rusoto_core::RusotoError;
 use rusoto_credential::ProvideAwsCredentials;
 use rusoto_kms::DecryptError;
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
-use tikv_util::box_err;
+use tikv_util::stream::retry;
 use tokio::runtime::Runtime;
 
 use crate::util;
@@ -98,7 +95,7 @@ impl KmsProvider for AwsKms {
             grant_tokens: None,
         };
         let client = &self.client;
-        let decrypt_response = retry(runtime, || {
+        let decrypt_response = runtime.block_on(retry(|| {
             client.decrypt(decrypt_request.clone()).map_err(|e| {
                 if let RusotoError::Service(DecryptError::IncorrectKey(e)) = e {
                     Error::WrongMasterKey(e.into())
@@ -108,7 +105,7 @@ impl KmsProvider for AwsKms {
                     Error::Other(e.into())
                 }
             })
-        })?;
+        }))?;
         Ok(decrypt_response.plaintext.unwrap().as_ref().to_vec())
     }
 
@@ -121,12 +118,11 @@ impl KmsProvider for AwsKms {
             number_of_bytes: None,
         };
         let client = &self.client;
-        let generate_response = retry(runtime, || {
+        let generate_response = runtime.block_on(retry(|| {
             client
                 .generate_data_key(generate_request.clone())
                 .map_err(|e| Error::Other(e.into()))
-        })
-        .unwrap();
+        }))?;
         let ciphertext_key = generate_response.ciphertext_blob.unwrap().as_ref().to_vec();
         let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
         Ok(DataKeyPair {
@@ -148,37 +144,6 @@ impl std::fmt::Debug for KmsClientDebug {
             .field("endpoint", &self.endpoint)
             .finish()
     }
-}
-
-pub fn retry<T, U, F>(runtime: &mut Runtime, mut func: F) -> Result<T>
-where
-    F: FnMut() -> U,
-    U: Future<Output = Result<T>> + std::marker::Unpin,
-{
-    let retry_limit = 6;
-    let timeout_duration = Duration::from_secs(10);
-    let mut last_err = None;
-    for _ in 0..retry_limit {
-        let fut = func();
-
-        match runtime.block_on(async move {
-            let timeout = tokio::time::delay_for(timeout_duration);
-            future::select(fut, timeout).await
-        }) {
-            future::Either::Left((Ok(resp), _)) => return Ok(resp),
-            future::Either::Left((Err(e), _)) => {
-                error!("kms request failed"; "error"=>?e);
-                if let Error::WrongMasterKey(e) = e {
-                    return Err(Error::WrongMasterKey(e));
-                }
-                last_err = Some(e);
-            }
-            future::Either::Right((_, _)) => {
-                error!("kms request timeout"; "timeout" => ?timeout_duration);
-            }
-        }
-    }
-    Err(Error::Other(box_err!("{:?}", last_err)))
 }
 
 #[cfg(test)]

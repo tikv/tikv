@@ -4,8 +4,9 @@ use std::{error, result};
 
 use openssl::error::ErrorStack as SslError;
 use protobuf::ProtobufError;
+use rusoto_core::request::TlsError;
 
-use tikv_util::box_err;
+use tikv_util::stream::RetryError;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 
@@ -92,8 +93,31 @@ impl ErrorCodeExt for Error {
             Error::Proto(_) => error_code::encryption::PROTO,
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
             Error::Other(_) => error_code::UNKNOWN,
+            Error::Tls(_) => error_code::encryption::CRYPTER,
             Error::KeyError(e) => e.error_code(),
         }
     }
 }
-*/
+
+impl RetryError for Error {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Error::Io(_) => true,
+            Error::Ssl(_) => true,
+            Error::Proto(_) => true,
+            Error::WrongMasterKey(_) => false,
+            Error::Other(_) => true,
+            Error::Tls(_) => true,
+            Error::KeyError(e) => e.is_retryable(),
+        }
+    }
+}
+
+impl RetryError for KeyError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            KeyError::WrongMasterKey(_) => false,
+            KeyError::EmptyContents(_) => false,
+        }
+    }
+}
