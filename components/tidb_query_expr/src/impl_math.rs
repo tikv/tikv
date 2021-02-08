@@ -9,51 +9,8 @@ use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
 
-const I64_TEN_POWS: [i64; 19] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
-];
-
-const U64_TEN_POWS: [u64; 20] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
-    10_000_000_000_000_000_000,
-];
-
+const MAX_I64_DIGIT_LENGTH: i64 = 19;
+const MAX_U64_DIGIT_LENGTH: i64 = 20;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 #[rpn_fn]
@@ -467,10 +424,10 @@ pub fn round_dec(arg: &Decimal) -> Result<Option<Decimal>> {
 pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
     Ok(Some(if *arg1 >= 0 {
         *arg0
-    } else if *arg1 <= -(I64_TEN_POWS.len() as i64) {
+    } else if *arg1 <= -MAX_I64_DIGIT_LENGTH {
         0
     } else {
-        let shift = I64_TEN_POWS[-*arg1 as usize];
+        let shift = 10i64.pow(-*arg1 as u32);
         *arg0 / shift * shift
     }))
 }
@@ -486,10 +443,10 @@ pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
     Ok(Some(if *arg1 >= 0 {
         *arg0
-    } else if *arg1 <= -(I64_TEN_POWS.len() as i64) {
+    } else if *arg1 <= -MAX_U64_DIGIT_LENGTH {
         0
     } else {
-        let shift = U64_TEN_POWS[-*arg1 as usize];
+        let shift = 10u64.pow(-*arg1 as u32);
         ((*arg0 as u64) / shift * shift) as Int
     }))
 }
