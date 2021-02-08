@@ -1,8 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Borrow;
-use std::ops::{Add, AddAssign, Deref, Div, Mul, Sub};
-
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
 use tidb_query_datatype::builder::FieldTypeBuilder;
@@ -214,7 +211,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        // Note: The result of `VARIANCE()` is returned as `(count, sum, variance)`.
         assert_eq!(target.len(), 3);
         target[0].push_int(Some(self.count as Int));
         if self.count > 0 {
@@ -279,8 +276,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number is used in the
+    /// calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
@@ -324,7 +322,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        // Note: The result of `VARIANCE()` is returned as `(count, sum, variance)`.
         assert_eq!(target.len(), 3);
         target[0].push_int(Some(self.count as Int));
         if self.count > 0 {
@@ -389,8 +387,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number is used in the
+    /// calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
@@ -434,7 +433,7 @@ where
 
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        // Note: The result of `AVG()` is returned as `(count, sum, variance)`.
+        // Note: The result of `VARIANCE()` is returned as `(count, sum, variance)`.
         assert_eq!(target.len(), 3);
         target[0].push_int(Some(self.count as Int));
         if self.count > 0 {
@@ -643,14 +642,14 @@ mod tests {
                 .unwrap();
         }
 
-        // count
+        // count:
         assert_eq!(aggr_result[0].to_int_vec(), &[Some(2), Some(2)]);
-        // sum
+        // sum:
         assert_eq!(
             aggr_result[1].to_real_vec(),
             &[Real::new(54.5).ok(), Real::new(54.5).ok()]
         );
-        // variance (population, sample)
+        // variance (population, sample):
         assert_eq!(
             aggr_result[2].to_real_vec(),
             &[Real::new(217.5625).ok(), Real::new(435.125).ok()]
