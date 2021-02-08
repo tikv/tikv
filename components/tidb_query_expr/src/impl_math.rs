@@ -496,7 +496,7 @@ pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<De
         *arg1.max(&-128) as i8
     };
 
-    let res: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
     Ok(Some(res?))
 }
 
@@ -505,7 +505,7 @@ pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<De
 pub fn truncate_decimal_with_uint(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
     let d = (*arg1 as u64).min(127) as i8;
 
-    let res: codec::Result<Decimal> = arg0.to_owned().round(d, RoundMode::Truncate).into();
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
     Ok(Some(res?))
 }
 
