@@ -55,6 +55,18 @@ impl From<Infallible> for EvaluateError {
     }
 }
 
+impl From<std::str::Utf8Error> for EvaluateError {
+    fn from(err: std::str::Utf8Error) -> Self {
+        EvaluateError::Other(format!("invalid input value: {:?}", err))
+    }
+}
+
+impl From<std::string::FromUtf8Error> for EvaluateError {
+    fn from(err: std::string::FromUtf8Error) -> Self {
+        EvaluateError::Other(format!("invalid input value: {:?}", err))
+    }
+}
+
 impl ErrorCodeExt for EvaluateError {
     fn error_code(&self) -> ErrorCode {
         match self {
