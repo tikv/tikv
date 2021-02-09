@@ -823,23 +823,30 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
 
-        //                // TODO: pass this test after refactoring the issue #3953 is fixed.
-        //                {
-        //                    let format: Option<Bytes> =  Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
-        //                    let time: Option<DateTime> = Some( DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
-        //
-        //                    let mut cfg = EvalConfig::new();
-        //                    cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
-        //                    let ctx = EvalContext::new(Arc::new(cfg));
-        //
-        //                    let output = RpnFnScalarEvaluator::new()
-        //                        .context(ctx)
-        //                        .push_param(time.clone())
-        //                        .push_param(format)
-        //                        .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
-        //                    assert!(output.is_err());
-        //                }
+        {
+            let format: Option<Bytes> = Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
+            let time: Option<DateTime> = Some(
+                DateTime::parse_datetime(
+                    &mut EvalContext::default(),
+                    "0000-00-00 00:00:00",
+                    6,
+                    true,
+                )
+                .unwrap(),
+            );
+
+            let mut cfg = EvalConfig::new();
+            cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+                .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+            let ctx = EvalContext::new(Arc::new(cfg));
+
+            let output = RpnFnScalarEvaluator::new()
+                .context(ctx)
+                .push_param(time)
+                .push_param(format)
+                .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
+            assert!(output.is_err());
+        }
 
         {
             let mut cfg = EvalConfig::new();
@@ -860,14 +867,13 @@ mod tests {
         let cases: Vec<(Option<&str>, Option<&str>)> = vec![
             (Some("2010-01-07 23:12:34.12345"), None),
             (None, None),
-            // TODO: pass this test after refactoring the issue #3953 is fixed.
-            //            (
-            //                "0000-00-00 00:00:00",
-            //                Some(
-            //                    "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
-            //                            %x %Y %y %%",
-            //                ),
-            //            ),
+            (
+                Some("0000-00-00 00:00:00"),
+                Some(
+                    "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                                       %x %Y %y %%",
+                ),
+            ),
         ];
 
         for (date, format) in cases {
