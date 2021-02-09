@@ -9,28 +9,8 @@ use tidb_query_datatype::codec::mysql::{RoundMode, DEFAULT_FSP};
 use tidb_query_datatype::codec::{self, Error};
 use tidb_query_datatype::expr::EvalContext;
 
-const I64_TEN_POWS: [i64; 19] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
-];
-
+const MAX_I64_DIGIT_LENGTH: i64 = 19;
+const MAX_U64_DIGIT_LENGTH: i64 = 20;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 #[rpn_fn]
@@ -442,15 +422,13 @@ pub fn round_dec(arg: &Decimal) -> Result<Option<Decimal>> {
 #[inline]
 #[rpn_fn]
 pub fn truncate_int_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
-    let x = arg0;
-    let d = arg1;
-    Ok(Some(if *d >= 0 {
-        *x
-    } else if *d <= -(I64_TEN_POWS.len() as i64) {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -MAX_I64_DIGIT_LENGTH {
         0
     } else {
-        let shift = I64_TEN_POWS[-*d as usize];
-        *x / shift * shift
+        let shift = 10i64.pow(-*arg1 as u32);
+        *arg0 / shift * shift
     }))
 }
 
@@ -462,23 +440,39 @@ pub fn truncate_int_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
 
 #[inline]
 #[rpn_fn]
-pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
-    let d = arg1;
-    let d = if *d >= 0 {
-        (*d).min(i64::from(i32::max_value())) as i32
+pub fn truncate_uint_with_int(arg0: &Int, arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(if *arg1 >= 0 {
+        *arg0
+    } else if *arg1 <= -MAX_U64_DIGIT_LENGTH {
+        0
     } else {
-        (*d).max(i64::from(i32::min_value())) as i32
+        let shift = 10u64.pow(-*arg1 as u32);
+        ((*arg0 as u64) / shift * shift) as Int
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_uint_with_uint(arg0: &Int, _arg1: &Int) -> Result<Option<Int>> {
+    Ok(Some(*arg0))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_real_with_int(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
+    let d = if *arg1 >= 0 {
+        (*arg1).min(i64::from(i32::max_value())) as i32
+    } else {
+        (*arg1).max(i64::from(i32::min_value())) as i32
     };
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn truncate_real_with_uint(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
-    let x = arg0;
     let d = (*arg1 as u64).min(i32::max_value() as u64) as i32;
-    Ok(Some(truncate_real(*x, d)))
+    Ok(Some(truncate_real(*arg0, d)))
 }
 
 fn truncate_real(x: Real, d: i32) -> Real {
@@ -491,6 +485,28 @@ fn truncate_real(x: Real, d: i32) -> Real {
     } else {
         Real::from(tmp.trunc() / shift)
     }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_decimal_with_int(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = if *arg1 >= 0 {
+        *arg1.min(&127) as i8
+    } else {
+        *arg1.max(&-128) as i8
+    };
+
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
+    Ok(Some(res?))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn truncate_decimal_with_uint(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
+    let d = (*arg1 as u64).min(127) as i8;
+
+    let res: codec::Result<Decimal> = arg0.round(d, RoundMode::Truncate).into();
+    Ok(Some(res?))
 }
 
 #[inline]
@@ -1671,6 +1687,44 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_uint() {
+        let tests = vec![
+            (
+                18446744073709551615_u64,
+                u64::max_value() as i64,
+                true,
+                18446744073709551615_u64,
+            ),
+            (
+                18446744073709551615_u64,
+                -2,
+                false,
+                18446744073709551600_u64,
+            ),
+            (18446744073709551615_u64, -20, false, 0),
+            (18446744073709551615_u64, 2, false, 18446744073709551615_u64),
+        ];
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs as Int))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Int>(ScalarFuncSig::TruncateUint)
+                .unwrap();
+
+            assert_eq!(output, Some(expected as Int));
+        }
+    }
+
+    #[test]
     #[allow(clippy::excessive_precision)]
     fn test_truncate_real() {
         let test_cases = vec![
@@ -1708,6 +1762,133 @@ mod tests {
                 .unwrap();
 
             assert_eq!(output, Some(Real::from(expected)));
+        }
+    }
+
+    #[test]
+    fn test_truncate_decimal() {
+        let tests = vec![
+            (
+                Decimal::from_str("-1.23").unwrap(),
+                0,
+                false,
+                Decimal::from_str("-1").unwrap(),
+            ),
+            (
+                Decimal::from_str("-1.23").unwrap(),
+                1,
+                false,
+                Decimal::from_str("-1.2").unwrap(),
+            ),
+            (
+                Decimal::from_str("-11.23").unwrap(),
+                -1,
+                false,
+                Decimal::from_str("-10").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.58").unwrap(),
+                0,
+                false,
+                Decimal::from_str("1").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.58").unwrap(),
+                1,
+                false,
+                Decimal::from_str("1.5").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -1,
+                false,
+                Decimal::from_str("20").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -100,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                100,
+                false,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                200,
+                false,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                -200,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str("23.298").unwrap(),
+                u64::max_value() as i64,
+                true,
+                Decimal::from_str("23.298").unwrap(),
+            ),
+            (
+                Decimal::from_str("1.999999999999999999999999999999").unwrap(),
+                31,
+                false,
+                Decimal::from_str("1.999999999999999999999999999999").unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999999999999999999999999999999999",
+                )
+                .unwrap(),
+                -66,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+                31,
+                false,
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+            ),
+            (
+                Decimal::from_str(
+                    "99999999999999999999999999999999999.999999999999999999999999999999",
+                )
+                .unwrap(),
+                -36,
+                false,
+                Decimal::from_str("0").unwrap(),
+            ),
+        ];
+
+        for (lhs, rhs, rhs_is_unsigned, expected) in tests {
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(lhs))
+                .push_param_with_field_type(Some(rhs), rhs_field_type)
+                .evaluate::<Decimal>(ScalarFuncSig::TruncateDecimal)
+                .unwrap();
+
+            assert_eq!(output, Some(expected));
         }
     }
 
