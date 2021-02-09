@@ -3,10 +3,10 @@
 #[macro_use]
 extern crate tikv_util;
 
-use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 
 use encryption::{AwsKms, Backend, Error, KmsBackend, KmsConfig, Result};
+use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;

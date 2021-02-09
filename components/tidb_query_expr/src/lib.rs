@@ -114,6 +114,22 @@ fn map_strcmp_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     })
 }
 
+fn map_find_in_set_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => find_in_set_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_ord_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => ord_fn_meta::<TT>()
+        }
+    })
+}
+
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool, bool) -> RpnFnMeta,
@@ -579,7 +595,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Locate2ArgsUtf8 => map_locate_2_args_utf8_sig(ft)?,
         ScalarFuncSig::Locate3ArgsUtf8 => map_locate_3_args_utf8_sig(ft)?,
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
-        ScalarFuncSig::Ord => ord_fn_meta(),
+        ScalarFuncSig::Ord => map_ord_sig(ft)?,
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
@@ -595,6 +611,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddStringAndDuration => add_string_and_duration_fn_meta(),
         ScalarFuncSig::SubStringAndDuration => sub_string_and_duration_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),
+        ScalarFuncSig::Trim2Args => trim_2_args_fn_meta(),
         ScalarFuncSig::Trim3Args => trim_3_args_fn_meta(),
         ScalarFuncSig::FromBase64 => from_base64_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
@@ -618,7 +635,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::OctString => oct_string_fn_meta(),
-        ScalarFuncSig::FindInSet => find_in_set_fn_meta(),
+        ScalarFuncSig::FindInSet => map_find_in_set_sig(ft)?,
         ScalarFuncSig::CharLength => char_length_fn_meta(),
         ScalarFuncSig::CharLengthUtf8 => char_length_utf8_fn_meta(),
         ScalarFuncSig::ToBase64 => to_base64_fn_meta(),

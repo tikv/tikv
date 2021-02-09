@@ -117,21 +117,29 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     }
 }
 
-pub struct WithIORateLimiter {
+pub struct WithIORateLimit {
     previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
 }
 
-impl WithIORateLimiter {
-    pub fn new(limiter: Option<Arc<IORateLimiter>>) -> Self {
+impl WithIORateLimit {
+    pub fn new(refill_bytes: usize) -> (Self, Arc<IORateLimiterStatistics>) {
         let previous_io_rate_limiter = get_io_rate_limiter();
-        set_io_rate_limiter(limiter);
-        WithIORateLimiter {
-            previous_io_rate_limiter,
-        }
+        let limiter = Arc::new(IORateLimiter::new(
+            refill_bytes,
+            true, /*enable_statistics*/
+        ));
+        let stats = limiter.statistics();
+        set_io_rate_limiter(Some(limiter));
+        (
+            WithIORateLimit {
+                previous_io_rate_limiter,
+            },
+            stats,
+        )
     }
 }
 
-impl Drop for WithIORateLimiter {
+impl Drop for WithIORateLimit {
     fn drop(&mut self) {
         set_io_rate_limiter(self.previous_io_rate_limiter.take());
     }
