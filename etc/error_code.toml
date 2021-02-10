@@ -238,6 +238,16 @@ error = '''
 KV:Raft:ConfChangeError
 '''
 
+["KV:Raftstore:ProposalInMergingMode"]
+error = '''
+KV:Raftstore:ProposalInMergingMode
+'''
+
+["KV:Raftstore:ReadIndexNotReady"]
+error = '''
+KV:Raftstore:ReadIndexNotReady
+'''
+
 ["KV:Raftstore:EntryTooLarge"]
 error = '''
 KV:Raftstore:EntryTooLarge
@@ -401,6 +411,11 @@ KV:SSTImporter:WrongKeyPrefix
 ["KV:SSTImporter:BadFormat"]
 error = '''
 KV:SSTImporter:BadFormat
+'''
+
+["KV:SSTImporter:FileConflict"]
+error = '''
+KV:SSTImporter:FileConflict
 '''
 
 ["KV:Storage:Timeout"]

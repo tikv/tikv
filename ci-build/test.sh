@@ -11,9 +11,14 @@ panic() {
 # Move to project root
 cd "$(dirname "$0")/.."
 
-if [[ -z "$SKIP_FORMAT_CHECK" ]]; then
+if [[ -z "$SKIP_CHECK_DIRTY_TESTS" ]]; then
     make format
-    git diff-index --quiet HEAD -- || (git --no-pager diff; panic "\e[35mplease 'make format' before creating a pr!!!\e[0m")
+    git --no-pager diff --exit-code HEAD || panic "\e[35mplease 'make format' before creating a pr!!!\e[0m"
+fi
+
+if [[ -z "$SKIP_CHECK_DIRTY_TESTS" ]]; then
+    make error-code
+    git --no-pager diff --exit-code HEAD || panic "\e[35mplease 'make format' before creating a pr!!!\e[0m"
 fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
@@ -35,7 +40,7 @@ else
 fi
 status=$?
 if [[ -z "$SKIP_CHECK_DIRTY_TESTS" ]]; then
-    git diff-index --quiet HEAD -- || echo "\e[35mplease run 'make test' before creating a pr!!!\e[0m"
+    git --no-pager diff --exit-code HEAD || panic "\e[35mplease run 'make test' before creating a pr!!!\e[0m"
 fi
 for case in `cat tests.out | python -c "import sys
 import re

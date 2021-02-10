@@ -315,12 +315,8 @@ ctl:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
-# Actually use make to track dependencies! This saves half a second.
-error_code_files := $(shell find components/error_code/ -type f )
-etc/error_code.toml: $(error_code_files)
+error-code:
 	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
-
-error-code: etc/error_code.toml
 
 # A special target for building TiKV docker image.
 docker:
