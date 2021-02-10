@@ -160,10 +160,10 @@ impl TitanCfConfig {
 
 #[derive(Clone, Copy, Debug)]
 struct BackgroundJobLimits {
-    pub max_background_jobs: u32,
-    pub max_background_flushes: u32,
-    pub max_sub_compactions: u32,
-    pub max_titan_background_gc: u32,
+    max_background_jobs: u32,
+    max_background_flushes: u32,
+    max_sub_compactions: u32,
+    max_titan_background_gc: u32,
 }
 
 fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimits {
@@ -176,10 +176,10 @@ fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimi
         2,
         cmp::min(defaults.max_background_jobs, (cpu_num - 1.0) as u32),
     );
-    // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
+    // Scale flush threads proportionally to max_background_jobs. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        cmp::max(defaults.max_background_flushes, (cpu_num as u32) / 4),
+        cmp::min(defaults.max_background_flushes, (cpu_num as u32) / 4),
         max_background_jobs - 1,
     );
     // Cap max_sub_compactions to allow at least two compactions.
