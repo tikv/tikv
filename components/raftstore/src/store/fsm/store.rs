@@ -79,8 +79,8 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
-use crate::store::fsm::async_io::AsyncWriter;
-use crate::store::fsm::async_io::AsyncWriters;
+use crate::store::fsm::async_io::{AsyncWriter, AsyncWriters};
+use crate::store::fsm::apply_async_io::{ApplyAsyncWriter, ApplyAsyncWriters};
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -809,7 +809,12 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 }
 
-pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
+pub struct RaftPollerBuilder<EK, ER, T, W> 
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch<EK>,
+{
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask<EK>>,
@@ -831,9 +836,15 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     async_writers: Vec<AsyncWriter<EK, ER>>,
+    pub apply_async_writers: Vec<ApplyAsyncWriter<EK, W>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
+impl<EK, ER, T, W> RaftPollerBuilder<EK, ER, T, W>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+    W: WriteBatch<EK>,
+{
     /// Initialize this store. It scans the db engine, loads all regions
     /// and their peers from it, and schedules snapshot worker if necessary.
     /// WARN: This store should not be used before initialized.
@@ -1004,11 +1015,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
     }
 }
 
-impl<EK, ER, T> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T>
+impl<EK, ER, T, W> HandlerBuilder<PeerFsm<EK, ER>, StoreFsm<EK>> for RaftPollerBuilder<EK, ER, T, W>
 where
     EK: KvEngine + 'static,
     ER: RaftEngine + 'static,
     T: Transport + 'static,
+    W: WriteBatch<EK> + 'static,
 {
     type Handler = RaftPoller<EK, ER, T>;
 
@@ -1077,16 +1089,27 @@ struct Workers<EK: KvEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 }
 
-pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
+pub struct RaftBatchSystem<EK, ER, W> 
+where
+    EK: KvEngine, 
+    ER: RaftEngine, 
+    W: WriteBatch<EK> + 'static,
+{
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK>>,
-    async_writer: AsyncWriters<EK, ER>,
+    async_writers: AsyncWriters<EK, ER>,
+    apply_async_writers: ApplyAsyncWriters<EK, W>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
+impl<EK, ER, W> RaftBatchSystem<EK, ER, W> 
+where
+    EK: KvEngine, 
+    ER: RaftEngine, 
+    W: WriteBatch<EK> + 'static,
+{
     pub fn router(&self) -> RaftRouter<EK, ER> {
         self.router.clone()
     }
@@ -1162,11 +1185,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
-        self.async_writer.spawn(
+        self.async_writers.spawn(
             meta.get_id(),
             &engines.kv,
             &engines.raft,
             &self.router,
+            &cfg.value(),
+        )?;
+
+        self.apply_async_writers.spawn(
+            meta.get_id(),
+            &engines.kv,
+            Box::new(self.router.clone()),
+            &coprocessor_host,
             &cfg.value(),
         )?;
 
@@ -1191,37 +1222,27 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            async_writers: self.async_writer.writers.clone(),
+            async_writers: self.async_writers.writers().clone(),
+            apply_async_writers: self.apply_async_writers.writers().clone(),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
-        if engine.support_write_batch_vec() {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatchVec>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                pd_client,
-            )?;
-        } else {
-            self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
-                workers,
-                region_peers,
-                builder,
-                auto_split_controller,
-                concurrency_manager,
-                pd_client,
-            )?;
-        }
+        self.start_system::<T, C>(
+            workers,
+            region_peers,
+            builder,
+            auto_split_controller,
+            concurrency_manager,
+            pd_client,
+        )?;
         Ok(())
     }
 
-    fn start_system<T: Transport + 'static, C: PdClient + 'static, W: WriteBatch<EK> + 'static>(
+    fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers<EK>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
-        builder: RaftPollerBuilder<EK, ER, T>,
+        builder: RaftPollerBuilder<EK, ER, T, W>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         pd_client: Arc<C>,
@@ -1305,7 +1326,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         handles.push(workers.pd_worker.stop());
         self.apply_system.shutdown();
         self.system.shutdown();
-        self.async_writer.shutdown();
+        self.async_writers.shutdown();
         for h in handles {
             if let Some(h) = h {
                 h.join().unwrap();
@@ -1317,9 +1338,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     }
 }
 
-pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
+pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine, W: WriteBatch<EK>>(
     cfg: &Config,
-) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER>) {
+) -> (RaftRouter<EK, ER>, RaftBatchSystem<EK, ER, W>) {
     let (store_tx, store_fsm) = StoreFsm::new(cfg);
     let (apply_router, apply_system) = create_apply_batch_system(&cfg);
     let (router, system) =
@@ -1331,7 +1352,8 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        async_writer: AsyncWriters::new(),
+        async_writers: AsyncWriters::new(),
+        apply_async_writers: ApplyAsyncWriters::new(),
     };
     (raft_router, system)
 }

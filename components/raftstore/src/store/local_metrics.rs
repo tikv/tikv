@@ -477,3 +477,34 @@ impl AsyncWriterStoreMetrics {
         self.task_limit_bytes.flush();
     }
 }
+
+#[derive(Clone)]
+pub struct AsyncWriterApplyMetrics {
+    pub queue_size: LocalHistogram,
+    pub adaptive_idx: LocalHistogram,
+    pub task_real_bytes: LocalHistogram,
+    pub task_suggest_bytes: LocalHistogram,
+    pub task_limit_bytes: LocalHistogram,
+}
+
+impl Default for AsyncWriterApplyMetrics {
+    fn default() -> Self {
+        Self {
+            queue_size: RAFT_ASYNC_WRITER_APPLY_QUEUE_SIZE.local(),
+            adaptive_idx: RAFT_ASYNC_WRITER_APPLY_ADAPTIVE_IDX.local(),
+            task_real_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_BYTES.local(),
+            task_suggest_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_SUGGEST_BYTES.local(),
+            task_limit_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_LIMIT_BYTES.local(),
+        }
+    }
+}
+
+impl AsyncWriterApplyMetrics {
+    pub fn flush(&mut self) {
+        self.queue_size.flush();
+        self.adaptive_idx.flush();
+        self.task_real_bytes.flush();
+        self.task_suggest_bytes.flush();
+        self.task_limit_bytes.flush();
+    }
+}

@@ -13,7 +13,7 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Peekable, RaftEngine};
+use engine_traits::{Engines, Peekable, RaftEngine, WriteBatch};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use kvproto::replication_modepb::ReplicationStatus;
@@ -57,11 +57,11 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
+pub struct Node<C: PdClient + 'static, ER: RaftEngine, W: WriteBatch<RocksEngine> + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
-    system: RaftBatchSystem<RocksEngine, ER>,
+    system: RaftBatchSystem<RocksEngine, ER, W>,
     has_started: bool,
 
     pd_client: Arc<C>,
@@ -69,20 +69,21 @@ pub struct Node<C: PdClient + 'static, ER: RaftEngine> {
     bg_worker: Option<Worker>,
 }
 
-impl<C, ER> Node<C, ER>
+impl<C, ER, W> Node<C, ER, W>
 where
-    C: PdClient,
+    C: PdClient + 'static,
     ER: RaftEngine,
+    W: WriteBatch<RocksEngine> + 'static,
 {
     /// Creates a new Node.
     pub fn new(
-        system: RaftBatchSystem<RocksEngine, ER>,
+        system: RaftBatchSystem<RocksEngine, ER, W>,
         cfg: &ServerConfig,
         store_cfg: Arc<VersionTrack<StoreConfig>>,
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Option<Worker>,
-    ) -> Node<C, ER> {
+    ) -> Node<C, ER, W> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {

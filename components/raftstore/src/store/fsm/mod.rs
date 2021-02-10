@@ -6,6 +6,7 @@
 
 pub mod apply;
 pub mod async_io;
+pub mod apply_async_io;
 mod metrics;
 mod peer;
 pub mod store;

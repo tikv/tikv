@@ -20,9 +20,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
-use engine_traits::{
-    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
-};
+use engine_traits::{CF_DEFAULT, CF_WRITE, Engines, MetricsFlusher, RaftEngine, WriteBatch, WriteBatchExt, compaction_job::CompactionJobInfo};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -100,8 +98,8 @@ pub fn run_tikv(config: TiKvConfig) {
     let _m = Monitor::default();
 
     macro_rules! run_impl {
-        ($ER: ty) => {{
-            let mut tikv = TiKVServer::<$ER>::init(config);
+        ($ER: ty, $W: ty) => {{
+            let mut tikv = TiKVServer::<$ER, $W>::init(config);
             tikv.check_conflict_addr();
             tikv.init_fs();
             tikv.init_yatp();
@@ -121,28 +119,36 @@ pub fn run_tikv(config: TiKvConfig) {
     }
 
     if !config.raft_engine.enable {
-        run_impl!(RocksEngine)
+        if config.rocksdb.enable_multi_batch_write {
+            run_impl!(RocksEngine, <RocksEngine as WriteBatchExt>::WriteBatchVec)
+        } else {
+            run_impl!(RocksEngine, <RocksEngine as WriteBatchExt>::WriteBatch)
+        }
     } else {
-        run_impl!(RaftLogEngine)
+        if config.rocksdb.enable_multi_batch_write {
+            run_impl!(RaftLogEngine, <RocksEngine as WriteBatchExt>::WriteBatchVec)
+        } else {
+            run_impl!(RaftLogEngine, <RocksEngine as WriteBatchExt>::WriteBatch)
+        }
     }
 }
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 /// A complete TiKV server.
-struct TiKVServer<ER: RaftEngine> {
+struct TiKVServer<ER: RaftEngine, W: WriteBatch<RocksEngine> + 'static> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter<RocksEngine, ER>,
-    system: Option<RaftBatchSystem<RocksEngine, ER>>,
+    system: Option<RaftBatchSystem<RocksEngine, ER, W>>,
     resolver: resolve::PdStoreAddrResolver,
     state: Arc<Mutex<GlobalReplicationState>>,
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<ER>>,
-    servers: Option<Servers<ER>>,
+    servers: Option<Servers<ER, W>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -158,16 +164,16 @@ struct TiKVEngines<ER: RaftEngine> {
     engine: RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
 }
 
-struct Servers<ER: RaftEngine> {
+struct Servers<ER: RaftEngine, W: WriteBatch<RocksEngine> + 'static> {
     lock_mgr: LockManager,
     server: Server<RaftRouter<RocksEngine, ER>, resolve::PdStoreAddrResolver>,
-    node: Node<RpcClient, ER>,
+    node: Node<RpcClient, ER, W>,
     importer: Arc<SSTImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
 }
 
-impl<ER: RaftEngine> TiKVServer<ER> {
-    fn init(mut config: TiKvConfig) -> TiKVServer<ER> {
+impl<ER: RaftEngine, W: WriteBatch<RocksEngine>> TiKVServer<ER, W> {
+    fn init(mut config: TiKvConfig) -> TiKVServer<ER, W> {
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
         // used during startup process.
@@ -884,7 +890,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 }
 
-impl TiKVServer<RocksEngine> {
+impl<W: WriteBatch<RocksEngine>> TiKVServer<RocksEngine, W> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
@@ -948,7 +954,7 @@ impl TiKVServer<RocksEngine> {
     }
 }
 
-impl TiKVServer<RaftLogEngine> {
+impl<W: WriteBatch<RocksEngine>> TiKVServer<RaftLogEngine, W> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
         let env = get_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();

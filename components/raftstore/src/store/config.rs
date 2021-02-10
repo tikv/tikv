@@ -27,21 +27,6 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[config(skip)]
-    pub store_io_max_wait_us: u64,
-    #[config(skip)]
-    pub store_io_queue_size: usize,
-    #[config(skip)]
-    pub store_io_queue_init_bytes: usize,
-    #[config(skip)]
-    pub store_io_queue_bytes_step: f64,
-    #[config(skip)]
-    pub store_io_queue_sample_quantile: f64,
-    #[config(skip)]
-    pub store_io_queue_adaptive_gain: usize,
-    #[config(skip)]
-    pub apply_io_size: u64,
-
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -207,13 +192,6 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
-            store_io_max_wait_us: 500,
-            store_io_queue_size: 64,
-            store_io_queue_init_bytes: 256 * 1024,
-            store_io_queue_bytes_step: 1.414213562373095,
-            store_io_queue_adaptive_gain: 1,
-            store_io_queue_sample_quantile: 0.99,
-            apply_io_size: 0,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -433,28 +411,6 @@ impl Config {
 
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_max_wait_us"])
-            .set((self.store_io_max_wait_us as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_queue_size"])
-            .set((self.store_io_queue_size as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_queue_init_bytes"])
-            .set((self.store_io_queue_init_bytes as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_queue_bytes_step"])
-            .set((self.store_io_queue_bytes_step as f64).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_queue_sample_quantile"])
-            .set((self.store_io_queue_sample_quantile as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_io_queue_adaptive_gain"])
-            .set((self.store_io_queue_adaptive_gain as i32).into());
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["apply_io_size"])
-            .set((self.apply_io_size as i32).into());
-
-        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
 
@@ -614,11 +570,54 @@ impl Config {
             .with_label_values(&["apply_pool_size"])
             .set(self.apply_batch_system.pool_size as f64);
         CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_pool_size"])
+            .set((self.apply_batch_system.io_pool_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_max_wait_us"])
+            .set((self.apply_batch_system.io_max_wait_us as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_queue_size"])
+            .set((self.apply_batch_system.io_queue_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_queue_init_bytes"])
+            .set((self.apply_batch_system.io_queue_init_bytes as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_queue_bytes_step"])
+            .set((self.apply_batch_system.io_queue_bytes_step as f64).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_queue_sample_quantile"])
+            .set((self.apply_batch_system.io_queue_sample_quantile as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_io_queue_adaptive_gain"])
+            .set((self.apply_batch_system.io_queue_adaptive_gain as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_max_batch_size"])
             .set(self.store_batch_system.max_batch_size as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_pool_size"])
             .set(self.store_batch_system.pool_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_pool_size"])
+            .set((self.store_batch_system.io_pool_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_max_wait_us"])
+            .set((self.store_batch_system.io_max_wait_us as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_size"])
+            .set((self.store_batch_system.io_queue_size as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_init_bytes"])
+            .set((self.store_batch_system.io_queue_init_bytes as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_bytes_step"])
+            .set((self.store_batch_system.io_queue_bytes_step as f64).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_sample_quantile"])
+            .set((self.store_batch_system.io_queue_sample_quantile as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["store_io_queue_adaptive_gain"])
+            .set((self.store_batch_system.io_queue_adaptive_gain as i32).into());
+
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);

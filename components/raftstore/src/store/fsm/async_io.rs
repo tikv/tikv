@@ -29,8 +29,8 @@ pub struct SampleWindow {
 }
 
 impl SampleWindow {
-    pub fn new() -> SampleWindow {
-        SampleWindow {
+    pub fn new() -> Self {
+        Self {
             count: 0,
             buckets: VecDeque::default(),
             buckets_val_cnt: VecDeque::default(),
@@ -94,8 +94,8 @@ pub struct UnsyncedReady {
 }
 
 impl UnsyncedReady {
-    fn new(number: u64, region_id: u64, notifier: Arc<AtomicU64>) -> UnsyncedReady {
-        UnsyncedReady {
+    fn new(number: u64, region_id: u64, notifier: Arc<AtomicU64>) -> Self {
+        Self {
             number,
             region_id,
             notifier,
@@ -152,7 +152,7 @@ where
     WK: WriteBatch<EK>,
     WR: RaftLogBatch,
 {
-    fn new(kv_wb: WK, raft_wb: WR) -> AsyncWriteTask<EK, WK, WR> {
+    fn new(kv_wb: WK, raft_wb: WR) -> Self {
         Self {
             kv_wb,
             raft_wb,
@@ -364,17 +364,17 @@ where
         raft_engine: ER,
         router: RaftRouter<EK, ER>,
         config: &Config,
-    ) -> AsyncWriteWorker<EK, ER> {
+    ) -> Self {
         let writer = Arc::new((
             Mutex::new(AsyncWriteAdaptiveTasks::new(
                 &kv_engine,
                 &raft_engine,
-                config.store_io_queue_size + 1,
-                config.store_io_queue_init_bytes,
-                config.store_io_queue_bytes_step,
-                config.store_io_queue_adaptive_gain,
-                config.store_io_queue_sample_quantile,
-                Duration::from_micros(config.store_io_max_wait_us),
+                config.store_batch_system.io_queue_size + 1,
+                config.store_batch_system.io_queue_init_bytes,
+                config.store_batch_system.io_queue_bytes_step,
+                config.store_batch_system.io_queue_adaptive_gain,
+                config.store_batch_system.io_queue_sample_quantile,
+                Duration::from_micros(config.store_batch_system.io_max_wait_us),
             )),
             Condvar::new(),
         ));
@@ -385,7 +385,7 @@ where
             raft_engine,
             router,
             writer,
-            cv_wait: Duration::from_micros(config.store_io_max_wait_us / 2),
+            cv_wait: Duration::from_micros(config.store_batch_system.io_max_wait_us / 2),
         }
     }
 
@@ -403,7 +403,7 @@ where
             };
 
             // TODO: metric change name?
-            STORE_WRITE_RAFTDB_TICK_DURATION_HISTOGRAM
+            STORE_WRITE_WAIT_DURATION_HISTOGRAM
                 .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);
 
             self.sync_write(&mut task);
@@ -426,7 +426,7 @@ where
             self.kv_engine
                 .write_opt(&task.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to save kv wb: {:?}", self.tag, e);
+                    panic!("{} failed to write to kv engine: {:?}", self.tag, e);
                 });
             if task.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                 task.kv_wb = self.kv_engine.write_batch_with_cap(4 * 1024);
@@ -441,7 +441,7 @@ where
             self.raft_engine
                 .consume_and_shrink(&mut task.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
-                    panic!("{} failed to save raft wb: {:?}", self.tag, e);
+                    panic!("{} failed to write to raft engine: {:?}", self.tag, e);
                 });
 
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
@@ -460,7 +460,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub writers: Vec<AsyncWriter<EK, ER>>,
+    writers: Vec<AsyncWriter<EK, ER>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
@@ -469,11 +469,15 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new() -> AsyncWriters<EK, ER> {
+    pub fn new() -> Self {
         Self {
             writers: vec![],
             handlers: vec![],
         }
+    }
+
+    pub fn writers(&self) -> &Vec<AsyncWriter<EK, ER>> {
+        &self.writers
     }
 
     pub fn spawn(
@@ -485,7 +489,7 @@ where
         config: &Config,
     ) -> Result<()> {
         for i in 0..config.store_batch_system.io_pool_size {
-            let tag = format!("raftdb-async-writer-{}", i);
+            let tag = format!("store-writer-{}", i);
             let mut worker = AsyncWriteWorker::new(
                 store_id,
                 tag.clone(),

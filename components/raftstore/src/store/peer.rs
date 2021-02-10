@@ -1691,7 +1691,9 @@ where
             id
         } else {
             assert!(ctx.async_writers.len() > 0);
-            rand::thread_rng().gen_range(0, ctx.async_writers.len())
+            let id = rand::thread_rng().gen_range(0, ctx.async_writers.len());
+            self.async_writer_id = Some(id);
+            id
         };
         let invoke_ctx = match self.mut_store().handle_raft_ready(
             ctx,
