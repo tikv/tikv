@@ -20,7 +20,10 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
-use engine_traits::{CF_DEFAULT, CF_WRITE, Engines, MetricsFlusher, RaftEngine, WriteBatch, WriteBatchExt, compaction_job::CompactionJobInfo};
+use engine_traits::{
+    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, WriteBatch,
+    WriteBatchExt, CF_DEFAULT, CF_WRITE,
+};
 use fs2::FileExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};

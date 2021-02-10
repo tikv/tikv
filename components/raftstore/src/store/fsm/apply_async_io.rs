@@ -7,14 +7,15 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::coprocessor::CoprocessorHost;
 use crate::store::config::Config;
-use crate::store::util::PerfContextStatistics;
-use crate::store::fsm::ApplyNotifier;
 use crate::store::fsm::apply::{ApplyCallback, ApplyRes};
+use crate::store::fsm::async_io::SampleWindow;
+use crate::store::fsm::ApplyNotifier;
 use crate::store::local_metrics::AsyncWriterApplyMetrics;
 use crate::store::metrics::*;
-use crate::coprocessor::CoprocessorHost;
-use crate::store::fsm::async_io::SampleWindow;
+use crate::store::util::PerfContextStatistics;
+use crate::store::PeerMsg;
 use crate::{observe_perf_context_type, report_perf_context, Result};
 
 use engine_rocks::{PerfContext, PerfLevel};
@@ -22,10 +23,8 @@ use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, Wri
 
 use tikv_util::time::{duration_to_sec, Instant};
 
-
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
-
 
 pub struct ApplyAsyncWriteTask<EK, WK>
 where
@@ -38,6 +37,7 @@ where
     _phantom: PhantomData<EK>,
     pub cbs: Vec<ApplyCallback<EK>>,
     pub apply_res: Vec<ApplyRes<EK::Snapshot>>,
+    pub destroy_res: Vec<(u64, PeerMsg<EK>)>,
 }
 
 impl<EK, WK> ApplyAsyncWriteTask<EK, WK>
@@ -52,7 +52,8 @@ where
             begin: None,
             _phantom: PhantomData,
             cbs: vec![],
-            apply_res: vec![]
+            apply_res: vec![],
+            destroy_res: vec![],
         }
     }
 
@@ -62,7 +63,7 @@ where
         }
     }
 
-    pub fn update_to_prepare_write(
+    pub fn update_apply(
         &mut self,
         sync_log: bool,
         cb: ApplyCallback<EK>,
@@ -73,8 +74,15 @@ where
         self.apply_res.push(apply_res);
     }
 
+    pub fn update_destroy(&mut self, region_id: u64, msg: PeerMsg<EK>) {
+        self.destroy_res.push((region_id, msg));
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.kv_wb.is_empty() && self.cbs.is_empty() && self.apply_res.is_empty()
+        self.kv_wb.is_empty()
+            && self.cbs.is_empty()
+            && self.apply_res.is_empty()
+            && self.destroy_res.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -83,6 +91,7 @@ where
         self.begin = None;
         self.cbs.clear();
         self.apply_res.clear();
+        self.destroy_res.clear();
     }
 }
 
@@ -123,9 +132,10 @@ where
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
-            wbs.push_back(ApplyAsyncWriteTask::new(
-                W::with_capacity(&kv_engine, DEFAULT_APPLY_WB_SIZE),
-            ));
+            wbs.push_back(ApplyAsyncWriteTask::new(W::with_capacity(
+                &kv_engine,
+                DEFAULT_APPLY_WB_SIZE,
+            )));
         }
         let mut size_limits = vec![];
         let mut size_limit = queue_init_bytes;
@@ -151,9 +161,7 @@ where
         }
     }
 
-    pub fn prepare_current_for_write(
-        &mut self,
-    ) -> (&mut ApplyAsyncWriteTask<EK, W>, bool) {
+    pub fn prepare_current_for_write(&mut self) {
         let current_size = self.wbs[self.current_idx].kv_wb.data_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
@@ -164,12 +172,18 @@ where
                 // do nothing, adaptive IO size
             }
         }
-        let current = &mut self.wbs[self.current_idx];
-        current.on_taken_for_write();
-        (current, self.current_idx == 0)
+        self.wbs[self.current_idx].on_taken_for_write();
     }
 
-    pub fn detach_task(&mut self) -> ApplyAsyncWriteTask<EK, W> {
+    pub fn get_current_task(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
+        &mut self.wbs[self.current_idx]
+    }
+
+    pub fn should_notify(&self) -> bool {
+        self.current_idx == 0 && self.should_write_first_task()
+    }
+
+    fn detach_task(&mut self) -> ApplyAsyncWriteTask<EK, W> {
         self.metrics.queue_size.observe(self.current_idx as f64);
         self.metrics.adaptive_idx.observe(self.adaptive_idx as f64);
 
@@ -205,15 +219,12 @@ where
         task
     }
 
-    pub fn push_back_done_task(
-        &mut self,
-        mut task: ApplyAsyncWriteTask<EK, W>,
-    ) {
+    fn push_back_done_task(&mut self, mut task: ApplyAsyncWriteTask<EK, W>) {
         task.clear();
         self.wbs.push_back(task);
     }
 
-    pub fn should_write_first_task(&self) -> bool {
+    fn should_write_first_task(&self) -> bool {
         let first_task = self.wbs.front().unwrap();
         if first_task.is_empty() {
             return false;
@@ -223,7 +234,7 @@ where
             || first_task.begin.unwrap().elapsed() >= self.io_wait_max
     }
 
-    pub fn flush_metrics(&mut self) {
+    fn flush_metrics(&mut self) {
         self.metrics.flush();
     }
 }
@@ -318,7 +329,7 @@ where
             task.kv_wb
                 .write_to_engine(&self.kv_engine, &write_opts)
                 .unwrap_or_else(|e| {
-                    panic!("failed to write to kv engine: {:?}", e);
+                    panic!("{} failed to write to kv engine: {:?}", self.tag, e);
                 });
             if task.kv_wb.data_size() > APPLY_WB_SHRINK_SIZE {
                 task.kv_wb = W::with_capacity(&self.kv_engine, DEFAULT_APPLY_WB_SIZE);
@@ -338,8 +349,13 @@ where
 
         let apply_res = std::mem::replace(&mut task.apply_res, vec![]);
         self.notifier.notify(apply_res);
+
+        for (region_id, msg) in task.destroy_res.drain(..) {
+            self.notifier.notify_one(region_id, msg);
+        }
     }
 }
+
 pub struct ApplyAsyncWriters<EK, W>
 where
     EK: KvEngine,

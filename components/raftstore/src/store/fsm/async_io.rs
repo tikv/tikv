@@ -168,7 +168,7 @@ where
         }
     }
 
-    pub fn on_wb_written(
+    pub fn update_ready(
         &mut self,
         region_id: u64,
         ready_number: u64,
@@ -259,9 +259,7 @@ where
         }
     }
 
-    pub fn prepare_current_for_write(
-        &mut self,
-    ) -> (&mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>, bool) {
+    pub fn prepare_current_for_write(&mut self) {
         let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
@@ -272,12 +270,18 @@ where
                 // do nothing, adaptive IO size
             }
         }
-        let current = &mut self.wbs[self.current_idx];
-        current.on_taken_for_write();
-        (current, self.current_idx == 0)
+        self.wbs[self.current_idx].on_taken_for_write();
     }
 
-    pub fn detach_task(&mut self) -> AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
+    pub fn get_current_task(&mut self) -> &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
+        &mut self.wbs[self.current_idx]
+    }
+
+    pub fn should_notify(&self) -> bool {
+        self.current_idx == 0 && self.should_write_first_task()
+    }
+
+    fn detach_task(&mut self) -> AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
         self.metrics.queue_size.observe(self.current_idx as f64);
         self.metrics.adaptive_idx.observe(self.adaptive_idx as f64);
 
@@ -313,15 +317,12 @@ where
         task
     }
 
-    pub fn push_back_done_task(
-        &mut self,
-        mut task: AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>,
-    ) {
+    fn push_back_done_task(&mut self, mut task: AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>) {
         task.clear();
         self.wbs.push_back(task);
     }
 
-    pub fn should_write_first_task(&self) -> bool {
+    fn should_write_first_task(&self) -> bool {
         let first_task = self.wbs.front().unwrap();
         if first_task.is_empty() {
             return false;
@@ -331,7 +332,7 @@ where
             || first_task.begin.unwrap().elapsed() >= self.io_wait_max
     }
 
-    pub fn flush_metrics(&mut self) {
+    fn flush_metrics(&mut self) {
         self.metrics.flush();
     }
 }

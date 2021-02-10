@@ -341,11 +341,11 @@ where
 {
     fn new(
         ctx: &'a mut ApplyContext<EK, W>,
-        locked_writer: MutexGuard<'a, ApplyAsyncWriteTasks<EK, W>>,
+        mut locked_writer: MutexGuard<'a, ApplyAsyncWriteTasks<EK, W>>,
         cv: &'a Condvar,
         delegate: &ApplyDelegate<EK>,
     ) -> ApplyEntriesContext<'a, EK, W> {
-        //let (current, is_first) = locked_writer.prepare_current_for_write();
+        locked_writer.prepare_current_for_write();
         ApplyEntriesContext {
             ctx,
             locked_writer,
@@ -382,16 +382,14 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if !delegate.pending_remove
-            && self.ctx.last_applied_index < delegate.apply_state.get_applied_index()
-        {
+        if self.ctx.last_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
         delegate.update_metrics(&mut self);
 
-        let (current, is_first) = self.locked_writer.prepare_current_for_write();
+        let current = self.locked_writer.get_current_task();
 
-        current.update_to_prepare_write(
+        current.update_apply(
             self.ctx.sync_log_hint,
             self.cb,
             ApplyRes {
@@ -402,24 +400,19 @@ where
                 applied_index_term: delegate.applied_index_term,
             },
         );
-        if is_first && self.locked_writer.should_write_first_task() {
+        if self.locked_writer.should_notify() {
             self.cv.notify_one();
         }
     }
 
-    pub fn current_task(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
-        let (current, is_first) = self.locked_writer.prepare_current_for_write();
-        current
-    }
-
     #[inline]
     pub fn kv_wb(&mut self) -> &W {
-        &self.current_task().kv_wb
+        &self.locked_writer.get_current_task().kv_wb
     }
 
     #[inline]
     pub fn kv_wb_mut(&mut self) -> &mut W {
-        &mut self.current_task().kv_wb
+        &mut self.locked_writer.get_current_task().kv_wb
     }
 
     pub fn delta_bytes(&mut self) -> u64 {
@@ -836,7 +829,7 @@ where
 
         let writer_id = self.async_writer_id(apply_ctx);
         let mut async_writers = std::mem::replace(&mut apply_ctx.async_writers, vec![]);
-        let mut locked_writer = async_writers[writer_id].0.lock().unwrap();
+        let locked_writer = async_writers[writer_id].0.lock().unwrap();
         let cv = &async_writers[writer_id].1;
         let mut apply_entries_ctx = ApplyEntriesContext::new(apply_ctx, locked_writer, &cv, self);
         apply_entries_ctx.prepare_for(self);
@@ -3094,11 +3087,6 @@ where
     }
 
     fn destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
-        let region_id = self.delegate.region_id();
-        if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
-            // Flush before destroying to avoid reordering messages.
-            ctx.flush();
-        }
         fail_point!(
             "before_peer_destroy_1003",
             self.delegate.id() == 1003,
@@ -3120,7 +3108,11 @@ where
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            ctx.notifier.notify_one(
+            let writer_id = self.delegate.async_writer_id(ctx);
+            let mut locked_writer = ctx.async_writers[writer_id].0.lock().unwrap();
+            locked_writer.prepare_current_for_write();
+            let current = locked_writer.get_current_task();
+            current.update_destroy(
                 self.delegate.region_id(),
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
@@ -3531,11 +3523,12 @@ where
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         let is_synced = self.apply_ctx.flush();
-        if is_synced {
+        // TODO: remove this code(last_sync_apply_index belongs to the logic of `handle_snapshot`)
+        /*if is_synced {
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
-        }
+        }*/
     }
 }
 

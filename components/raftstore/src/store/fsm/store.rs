@@ -79,8 +79,8 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
-use crate::store::fsm::async_io::{AsyncWriter, AsyncWriters};
 use crate::store::fsm::apply_async_io::{ApplyAsyncWriter, ApplyAsyncWriters};
+use crate::store::fsm::async_io::{AsyncWriter, AsyncWriters};
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -809,7 +809,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 }
 
-pub struct RaftPollerBuilder<EK, ER, T, W> 
+pub struct RaftPollerBuilder<EK, ER, T, W>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -1089,10 +1089,10 @@ struct Workers<EK: KvEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 }
 
-pub struct RaftBatchSystem<EK, ER, W> 
+pub struct RaftBatchSystem<EK, ER, W>
 where
-    EK: KvEngine, 
-    ER: RaftEngine, 
+    EK: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch<EK> + 'static,
 {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm<EK>>,
@@ -1104,10 +1104,10 @@ where
     apply_async_writers: ApplyAsyncWriters<EK, W>,
 }
 
-impl<EK, ER, W> RaftBatchSystem<EK, ER, W> 
+impl<EK, ER, W> RaftBatchSystem<EK, ER, W>
 where
-    EK: KvEngine, 
-    ER: RaftEngine, 
+    EK: KvEngine,
+    ER: RaftEngine,
     W: WriteBatch<EK> + 'static,
 {
     pub fn router(&self) -> RaftRouter<EK, ER> {
@@ -1226,7 +1226,6 @@ where
             apply_async_writers: self.apply_async_writers.writers().clone(),
         };
         let region_peers = builder.init()?;
-        let engine = builder.engines.kv.clone();
         self.start_system::<T, C>(
             workers,
             region_peers,

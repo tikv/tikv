@@ -1364,8 +1364,9 @@ where
         let mut snapshot_index = 0;
 
         let async_writer = ready_ctx.async_writer(async_writer_id);
-        let mut writer = async_writer.0.lock().unwrap();
-        let (current, is_first) = writer.prepare_current_for_write();
+        let mut locked_writer = async_writer.0.lock().unwrap();
+        locked_writer.prepare_current_for_write();
+        let current = locked_writer.get_current_task();
 
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
@@ -1408,10 +1409,10 @@ where
         }
 
         if ready.must_sync() {
-            current.on_wb_written(region_id, ready.number(), region_notifier);
+            current.update_ready(region_id, ready.number(), region_notifier);
         }
 
-        if is_first && writer.should_write_first_task() {
+        if locked_writer.should_notify() {
             async_writer.1.notify_one();
         }
 
