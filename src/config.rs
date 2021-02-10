@@ -176,7 +176,7 @@ fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimi
         2,
         cmp::min(defaults.max_background_jobs, (cpu_num - 1.0) as u32),
     );
-    // Scale flush threads proportionally to max_background_jobs. Also make sure the number of flush
+    // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
         cmp::min(defaults.max_background_flushes, (cpu_num as u32) / 4),
