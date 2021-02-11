@@ -312,15 +312,10 @@ pub fn rpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = match str::from_utf8(&*arg) {
-        Ok(arg) => arg,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
-    let pad = match str::from_utf8(&*pad) {
-        Ok(pad) => pad,
-        Err(err) => return Err(box_err!("invalid input value: {:?}", err)),
-    };
+    let input = str::from_utf8(&*arg)?;
+    let pad = str::from_utf8(&*pad)?;
     let input_len = input.chars().count();
+
     match validate_target_len_for_pad(*len < 0, *len, input_len, 4, pad.is_empty()) {
         None => Ok(writer.write(None)),
         Some(0) => Ok(writer.write_ref(Some(b""))),
