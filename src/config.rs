@@ -180,7 +180,7 @@ fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimi
     let max_background_flushes = cmp::min(
         cmp::min(
             cmp::max(defaults.max_background_flushes, (cpu_num as u32) / 4),
-            BACKGROUND_FLUSHES_HARDLIMIT,
+            BACKGROUND_FLUSHES_HARD_LIMIT,
         ),
         max_background_jobs - 1,
     );
