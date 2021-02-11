@@ -167,6 +167,8 @@ struct BackgroundJobLimits {
 }
 
 fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimits {
+    // The hard limit of background flushes.
+    const BACKGROUND_FLUSHES_HARD_LIMIT: u32 = 4;
     let cpu_num = SysQuota::new().cpu_cores_quota();
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
@@ -174,12 +176,18 @@ fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimi
     // the rest shared by flush and compaction.
     let max_background_jobs = cmp::max(
         2,
-        cmp::min(defaults.max_background_jobs, (cpu_num - 1.0) as u32),
+        cmp::min(
+            defaults.max_background_jobs,
+            cmp::max(cpu_num as u32, 1) - 1,
+        ),
     );
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        cmp::min(defaults.max_background_flushes, (cpu_num as u32) / 4),
+        cmp::min(
+            cmp::max(defaults.max_background_flushes, (cpu_num as u32) / 4),
+            BACKGROUND_FLUSHES_HARDLIMIT,
+        ),
         max_background_jobs - 1,
     );
     // Cap max_sub_compactions to allow at least two compactions.
@@ -991,7 +999,7 @@ impl Default for DbConfig {
     fn default() -> DbConfig {
         let bg_job_limits = get_background_job_limits(BackgroundJobLimits {
             max_background_jobs: 10,
-            max_background_flushes: 3,
+            max_background_flushes: 2,
             max_sub_compactions: 3,
             max_titan_background_gc: 4,
         });
