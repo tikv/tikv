@@ -169,18 +169,12 @@ struct BackgroundJobLimits {
 fn get_background_job_limits(defaults: BackgroundJobLimits) -> BackgroundJobLimits {
     // The hard limit of background flushes.
     const BACKGROUND_FLUSHES_HARD_LIMIT: u32 = 4;
-    let cpu_num = SysQuota::new().cpu_cores_quota();
+    let cpu_num: u32 = cmp::max(SysQuota::new().cpu_cores_quota() as u32, 1);
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
-    let max_background_jobs = cmp::max(
-        2,
-        cmp::min(
-            defaults.max_background_jobs,
-            cmp::max(cpu_num as u32, 1) - 1,
-        ),
-    );
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
