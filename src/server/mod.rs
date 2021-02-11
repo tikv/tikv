@@ -17,7 +17,7 @@ pub mod service;
 pub mod snap;
 pub mod status_server;
 pub mod transport;
-pub mod ttl_checker;
+pub mod ttl;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};

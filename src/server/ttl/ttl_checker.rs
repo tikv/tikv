@@ -5,8 +5,9 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use engine_rocks::TTLProperties;
-use engine_traits::{KvEngine, Range, TableProperties, TablePropertiesCollection, CF_DEFAULT};
+use engine_traits::{
+    KvEngine, Range, TTLProperties, TableProperties, TablePropertiesCollection, CF_DEFAULT,
+};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 
@@ -108,10 +109,11 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
 
     pub fn check_ttl_for_range(&self, start_key: &[u8], end_key: &[u8]) {
         let current_ts = UnixSecs::now().into_inner();
-        let range = Range::new(start_key, end_key);
-        let collection = match self
+
+        let mut files = Vec::new();
+        let res = match self
             .engine
-            .get_properties_of_tables_in_range(CF_DEFAULT, &[range])
+            .get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key)
         {
             Ok(v) => v,
             Err(e) => {
@@ -119,24 +121,15 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     "execute ttl compact files failed";
                     "range_start" => log_wrappers::Value::key(&start_key),
                     "range_end" => log_wrappers::Value::key(&end_key),
+                    "files" => ?files,
                     "err" => %e,
                 );
                 return;
             }
         };
-
-        if collection.is_empty() {
-            return;
-        }
-
-        let mut files = Vec::new();
-        for (file_name, v) in collection.iter() {
-            let prop = match TTLProperties::decode(&v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
+        for (file_name, prop) in res {
             if prop.max_expire_ts <= current_ts {
-                files.push(file_name.to_string());
+                files.push(file_name);
             }
         }
 
