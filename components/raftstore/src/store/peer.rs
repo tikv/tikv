@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
-use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions};
+use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteOptions, Peekable, CF_RAFT};
 use error_code::ErrorCodeExt;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
@@ -1617,14 +1617,33 @@ where
             }
         }
 
-        if !self.raft_group.has_ready() {
-            // Generating snapshot task won't set ready for raft group.
-            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            let snapshot = ctx.engines.kv.snapshot();
+            let apply_state: RaftApplyState = match snapshot.get_msg_cf(CF_RAFT, &keys::apply_state_key(self.region_id)) {
+                Ok(Some(s)) => s,
+                e => panic!("{} failed to get apply state: {:?}", self.tag, e),
+            };
+            let term = self.get_store().term(apply_state.get_applied_index()).unwrap();
+            if let Err(e) = gen_task.generate_and_schedule_snapshot::<EK>(
+                snapshot,
+                term,
+                apply_state,
+                &ctx.region_scheduler,
+            ) {
+                error!(
+                    "schedule snapshot failed";
+                    "error" => ?e,
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
             }
+            /*self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));*/
+        }
+
+        if !self.raft_group.has_ready() {
             return None;
         }
 

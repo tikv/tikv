@@ -12,8 +12,11 @@ use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
 use crate::store::local_metrics::AsyncWriterStoreMetrics;
 use crate::store::metrics::*;
+use crate::store::util::PerfContextStatistics;
 use crate::store::PeerMsg;
-use crate::Result;
+use crate::{observe_perf_context_type, report_perf_context, Result};
+
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant};
@@ -351,6 +354,7 @@ where
     router: RaftRouter<EK, ER>,
     pub writer: AsyncWriter<EK, ER>,
     cv_wait: Duration,
+    perf_context_statistics: PerfContextStatistics,
 }
 
 impl<EK, ER> AsyncWriteWorker<EK, ER>
@@ -387,6 +391,7 @@ where
             router,
             writer,
             cv_wait: Duration::from_micros(config.store_batch_system.io_max_wait_us / 2),
+            perf_context_statistics: PerfContextStatistics::new(config.perf_level),
         }
     }
 
@@ -419,6 +424,7 @@ where
     }
 
     fn sync_write(&mut self, task: &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>) {
+        self.perf_context_statistics.start();
         fail_point!("raft_before_save");
         if !task.kv_wb.is_empty() {
             let now = Instant::now_coarse();
@@ -447,6 +453,10 @@ where
 
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
+        report_perf_context!(
+            self.perf_context_statistics,
+            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+        );
 
         for (_, r) in &task.unsynced_readies {
             r.flush(&self.router);

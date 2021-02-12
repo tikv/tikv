@@ -162,21 +162,30 @@ where
     }
 
     pub fn prepare_current_for_write(&mut self) {
-        let current_size = self.wbs[self.current_idx].kv_wb.data_size();
-        if current_size
-            >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
-        {
-            if self.current_idx + 1 < self.wbs.len() {
-                self.current_idx += 1;
-            } else {
-                // do nothing, adaptive IO size
-            }
+        if self.is_current_task_full() {
+            self.current_idx += 1;
         }
         self.wbs[self.current_idx].on_taken_for_write();
     }
 
     pub fn get_current_task(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
         &mut self.wbs[self.current_idx]
+    }
+
+    pub fn is_current_task_full(&self) -> bool {
+        let current_size = self.wbs[self.current_idx].kv_wb.data_size();
+        if current_size
+            >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
+        {
+            if self.current_idx + 1 < self.wbs.len() {
+                true
+            } else {
+                // do nothing, adaptive IO size
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub fn should_notify(&self) -> bool {
@@ -322,6 +331,7 @@ where
     }
 
     fn sync_write(&mut self, task: &mut ApplyAsyncWriteTask<EK, W>) {
+        self.perf_context_statistics.start();
         if !task.kv_wb.is_empty() {
             let now = Instant::now_coarse();
             let mut write_opts = WriteOptions::new();

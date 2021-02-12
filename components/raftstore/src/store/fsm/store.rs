@@ -624,12 +624,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             self.poll_ctx.trans.flush();
         }
 
-        // TODO(ASYNC_IO): move it to async io
-        report_perf_context!(
-            self.poll_ctx.perf_context_statistics,
-            STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
-        );
-
         // TODO(ASYNC_IO): change the logic
         let dur = self.timer.elapsed();
         if !self.poll_ctx.store_stat.is_busy {
@@ -695,7 +689,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         STORE_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
         self.loop_timer = TiInstant::now_coarse();
         // update config
-        self.poll_ctx.perf_context_statistics.start();
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
                 &incoming.messages_per_tick,

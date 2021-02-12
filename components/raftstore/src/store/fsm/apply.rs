@@ -3454,8 +3454,6 @@ where
                 _ => {}
             }
         }
-        // TODO
-        //self.apply_ctx.perf_context_statistics.start();
     }
 
     /// There is no control fsm in apply poller.
