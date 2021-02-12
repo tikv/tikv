@@ -675,6 +675,7 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
+    offset: usize,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -695,6 +696,11 @@ pub struct NewSplitPeer {
     // `None` => success,
     // `Some(s)` => fail due to `s`.
     pub result: Option<String>,
+}
+
+enum EntryCmd {
+    None,
+    Cmd(RaftCmdRequest),
 }
 
 /// The apply delegate of a Region which is responsible for handling committed
@@ -821,10 +827,25 @@ where
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        mut committed_entries_drainer: Drain<Entry>,
+        committed_entries: Vec<Entry>,
+        offset: usize,
     ) {
-        if committed_entries_drainer.len() == 0 {
+        if committed_entries.is_empty() || offset >= committed_entries.len() {
             return;
+        }
+
+        let mut entry_cmd = Vec::new();
+        for i in offset..committed_entries.len() {
+            let entry = &committed_entries[i];
+            if let EntryType::EntryNormal = entry.get_entry_type() {
+                entry_cmd.push(Some(EntryCmd::Cmd(util::parse_data_at(
+                    entry.get_data(),
+                    entry.get_index(),
+                    &self.tag,
+                ))));
+            } else {
+                entry_cmd.push(Some(EntryCmd::None));
+            }
         }
 
         let writer_id = self.async_writer_id(apply_ctx);
@@ -836,14 +857,18 @@ where
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
-        apply_entries_ctx.committed_count += committed_entries_drainer.len();
+        apply_entries_ctx.committed_count += committed_entries.len() - offset;
         let mut results = VecDeque::new();
-        while let Some(entry) = committed_entries_drainer.next() {
+        let mut forward = 0;
+        for i in offset..committed_entries.len() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
             }
 
+            let entry = &committed_entries[i];
+            let cmd = entry_cmd[forward].take().unwrap();
+            forward += 1;
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
                 panic!(
@@ -859,7 +884,7 @@ where
             // but PD will reject old version tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => {
-                    self.handle_raft_entry_normal(&mut apply_entries_ctx, &entry)
+                    self.handle_raft_entry_normal(&mut apply_entries_ctx, &entry, cmd)
                 }
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
                     self.handle_raft_entry_conf_change(&mut apply_entries_ctx, &entry)
@@ -871,18 +896,14 @@ where
                 ApplyResult::Res(res) => results.push_back(res),
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
-                    apply_entries_ctx.committed_count -= committed_entries_drainer.len() + 1;
-                    let mut pending_entries =
-                        Vec::with_capacity(committed_entries_drainer.len() + 1);
-                    // Note that current entry is skipped when yield.
-                    pending_entries.push(entry);
-                    pending_entries.extend(committed_entries_drainer);
+                    apply_entries_ctx.committed_count -= committed_entries.len() - i;
                     apply_entries_ctx.finish_for(self, results);
                     std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
 
                     self.yield_state = Some(YieldState {
-                        pending_entries,
+                        pending_entries: committed_entries,
                         pending_msgs: Vec::default(),
+                        offset: i,
                     });
                     if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
@@ -926,6 +947,7 @@ where
         &mut self,
         apply_entries_ctx: &mut ApplyEntriesContext<EK, W>,
         entry: &Entry,
+        cmd: EntryCmd,
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!("yield_apply_1000", self.region_id() == 1000, |_| {
             ApplyResult::Yield
@@ -936,7 +958,12 @@ where
         let data = entry.get_data();
 
         if !data.is_empty() {
-            let cmd = util::parse_data_at(data, index, &self.tag);
+            //let cmd = util::parse_data_at(data, index, &self.tag);
+            let cmd = if let EntryCmd::Cmd(x) = cmd {
+                x
+            } else {
+                panic!("logic error");
+            };
 
             // TODO: fix it
             /*if should_write_to_engine(&cmd) {
@@ -3048,8 +3075,9 @@ where
         }
 
         self.append_proposal(apply.cbs.drain(..));
+        let entries = std::mem::take(&mut apply.entries);
         self.delegate
-            .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
+            .handle_raft_committed_entries(apply_ctx, entries, 0);
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
@@ -3142,7 +3170,7 @@ where
         }
         if !state.pending_entries.is_empty() {
             self.delegate
-                .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
+                .handle_raft_committed_entries(ctx, state.pending_entries, state.offset);
             if let Some(ref mut s) = self.delegate.yield_state {
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
