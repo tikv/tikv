@@ -5,9 +5,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use engine_traits::{
-    KvEngine, Range, TTLProperties, TableProperties, TablePropertiesCollection, CF_DEFAULT,
-};
+use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 

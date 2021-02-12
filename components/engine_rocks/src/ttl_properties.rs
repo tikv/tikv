@@ -93,3 +93,49 @@ impl TablePropertiesCollectorFactory for TTLPropertiesCollectorFactory {
         Box::new(TTLPropertiesCollector::default())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_traits::util::append_expire_ts;
+    use tikv_util::time::UnixSecs;
+
+    #[test]
+    fn test_ttl_properties() {
+        let get_properties = |case: &[(&'static str, u64)]| -> Result<TTLProperties> {
+            let mut collector = TTLPropertiesCollector::default();
+            for &(k, ts) in case {
+                let mut v = vec![0; 10];
+                append_expire_ts(&mut v, ts);
+                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+            }
+            for &(k, _) in case {
+                let v = vec![0; 10];
+                collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
+            }
+            let result = UserProperties(collector.finish());
+            RocksTTLProperties::decode(&result)
+        };
+
+        let case1 = [
+            ("a", 0),
+            ("b", UnixSecs::now().into_inner()),
+            ("c", 1),
+            ("d", u64::MAX),
+        ];
+        let props = get_properties(&case1).unwrap();
+        assert_eq!(props.max_expire_ts, u64::MAX);
+        assert_eq!(props.min_expire_ts, 1);
+
+        let case2 = [("a", 0)];
+        assert!(get_properties(&case2).is_err());
+
+        let case3 = [];
+        assert!(get_properties(&case3).is_err());
+
+        let case4 = [("a", 1)];
+        let props = get_properties(&case4).unwrap();
+        assert_eq!(props.max_expire_ts, 1);
+        assert_eq!(props.min_expire_ts, 1);
+    }
+}
