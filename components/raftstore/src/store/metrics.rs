@@ -210,36 +210,43 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_STORE_QUEUE_SIZE: Histogram =
+    pub static ref STORE_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_loop_duration_seconds",
+            "TODO",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_QUEUE_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_queue_size",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_STORE_ADAPTIVE_IDX: Histogram =
+    pub static ref STORE_WRITE_ADAPTIVE_IDX_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_adaptive_idx",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_BYTES: Histogram =
+    pub static ref STORE_WRITE_TASK_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_task_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_LIMIT_BYTES: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_task_limit_bytes",
-            "TODO",
-            exponential_buckets(256.0, 2.0, 30).unwrap()
-        ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_STORE_TASK_SUGGEST_BYTES: Histogram =
+    pub static ref STORE_WRITE_TASK_SUGGEST_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_task_suggest_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
+    pub static ref STORE_WRITE_LIMIT_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_task_limit_bytes",
+            "TODO",
+            exponential_buckets(256.0, 2.0, 30).unwrap()
+        ).unwrap();
+
 
     pub static ref APPLY_WRITE_KVDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
@@ -253,36 +260,43 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_APPLY_QUEUE_SIZE: Histogram =
+    pub static ref APPLY_WRITE_LOOP_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_write_loop_duration_seconds",
+            "TODO",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref APPLY_WRITE_QUEUE_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_write_queue_size",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_APPLY_ADAPTIVE_IDX: Histogram =
+    pub static ref APPLY_WRITE_ADAPTIVE_IDX_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_adaptive_idx",
             "TODO",
             exponential_buckets(1.0, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_APPLY_TASK_BYTES: Histogram =
+    pub static ref APPLY_WRITE_TASK_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_task_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_APPLY_TASK_LIMIT_BYTES: Histogram =
-        register_histogram!(
-            "tikv_raftstore_apply_task_limit_bytes",
-            "TODO",
-            exponential_buckets(256.0, 2.0, 30).unwrap()
-        ).unwrap();
-    pub static ref RAFT_ASYNC_WRITER_APPLY_TASK_SUGGEST_BYTES: Histogram =
+    pub static ref APPLY_WRITE_TASK_SUGGEST_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_task_suggest_bytes",
             "TODO",
             exponential_buckets(256.0, 2.0, 30).unwrap()
         ).unwrap();
+    pub static ref APPLY_WRITE_TASK_LIMIT_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_task_limit_bytes",
+            "TODO",
+            exponential_buckets(256.0, 2.0, 30).unwrap()
+        ).unwrap();
+
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(

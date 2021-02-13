@@ -18,10 +18,17 @@ use crate::store::util::PerfContextStatistics;
 use crate::store::PeerMsg;
 use crate::{observe_perf_context_type, report_perf_context, Result};
 
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
+use kvproto::raft_serverpb::RaftApplyState;
 
+use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::{
+    KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions, CF_RAFT,
+};
+
+use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::time::{duration_to_sec, Instant};
+
+use super::apply;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -36,7 +43,7 @@ where
     pub begin: Option<Instant>,
     _phantom: PhantomData<EK>,
     pub cbs: Vec<ApplyCallback<EK>>,
-    pub apply_res: Vec<ApplyRes<EK::Snapshot>>,
+    pub apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>,
     pub destroy_res: Vec<(u64, PeerMsg<EK>)>,
 }
 
@@ -52,40 +59,62 @@ where
             begin: None,
             _phantom: PhantomData,
             cbs: vec![],
-            apply_res: vec![],
+            apply_res: HashMap::default(),
             destroy_res: vec![],
-        }
-    }
-
-    pub fn on_taken_for_write(&mut self) {
-        if self.is_empty() {
-            self.begin = Some(Instant::now_coarse());
         }
     }
 
     pub fn update_apply(
         &mut self,
+        region_id: u64,
         sync_log: bool,
         cb: ApplyCallback<EK>,
-        apply_res: ApplyRes<EK::Snapshot>,
+        mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
         self.cbs.push(cb);
-        self.apply_res.push(apply_res);
+        if let Some(res) = self.apply_res.get_mut(&region_id) {
+            res.apply_state = apply_res.apply_state;
+            res.applied_index_term = apply_res.applied_index_term;
+            res.exec_res.append(&mut apply_res.exec_res);
+            res.metrics.combine(&apply_res.metrics);
+        } else {
+            self.apply_res.insert(region_id, apply_res);
+        }
     }
 
     pub fn update_destroy(&mut self, region_id: u64, msg: PeerMsg<EK>) {
         self.destroy_res.push((region_id, msg));
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn before_write_to_db(&mut self) {
+        for (region_id, res) in &self.apply_res {
+            self.kv_wb
+                .put_msg_cf(
+                    CF_RAFT,
+                    &keys::apply_state_key(*region_id),
+                    &res.apply_state,
+                )
+                .unwrap_or_else(|e| {
+                    panic!("failed to save apply state to write batch, error: {:?}", e);
+                });
+        }
+    }
+
+    fn on_taken_for_write(&mut self) {
+        if self.is_empty() {
+            self.begin = Some(Instant::now_coarse());
+        }
+    }
+
+    fn is_empty(&self) -> bool {
         self.kv_wb.is_empty()
             && self.cbs.is_empty()
             && self.apply_res.is_empty()
             && self.destroy_res.is_empty()
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         // TODO: need shrink
         self.kv_wb.clear();
         self.begin = None;
@@ -304,6 +333,7 @@ where
 
     fn run(&mut self) {
         loop {
+            let loop_begin = Instant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
                 while !w.stop && !w.should_write_first_task() {
@@ -327,10 +357,15 @@ where
                 tasks.push_back_done_task(task);
                 tasks.flush_metrics();
             }
+
+            APPLY_WRITE_LOOP_DURATION_HISTOGRAM
+                .observe(duration_to_sec(loop_begin.elapsed()) as f64);
         }
     }
 
     fn sync_write(&mut self, task: &mut ApplyAsyncWriteTask<EK, W>) {
+        task.before_write_to_db();
+
         self.perf_context_statistics.start();
         if !task.kv_wb.is_empty() {
             let now = Instant::now_coarse();
@@ -357,7 +392,7 @@ where
             cb.invoke_all(&self.coprocessor_host);
         }
 
-        let apply_res = std::mem::replace(&mut task.apply_res, vec![]);
+        let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
         self.notifier.notify(apply_res);
 
         for (region_id, msg) in task.destroy_res.drain(..) {

@@ -191,10 +191,10 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-        for r in apply_res {
+    fn notify(&self, apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>) {
+        for (region_id, r) in apply_res {
             self.router.try_send(
-                r.region_id,
+                region_id,
                 PeerMsg::ApplyRes {
                     res: ApplyTaskRes::Apply(r),
                 },

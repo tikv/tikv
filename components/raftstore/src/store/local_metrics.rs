@@ -459,11 +459,11 @@ pub struct AsyncWriterStoreMetrics {
 impl Default for AsyncWriterStoreMetrics {
     fn default() -> Self {
         Self {
-            queue_size: RAFT_ASYNC_WRITER_STORE_QUEUE_SIZE.local(),
-            adaptive_idx: RAFT_ASYNC_WRITER_STORE_ADAPTIVE_IDX.local(),
-            task_real_bytes: RAFT_ASYNC_WRITER_STORE_TASK_BYTES.local(),
-            task_suggest_bytes: RAFT_ASYNC_WRITER_STORE_TASK_SUGGEST_BYTES.local(),
-            task_limit_bytes: RAFT_ASYNC_WRITER_STORE_TASK_LIMIT_BYTES.local(),
+            queue_size: STORE_WRITE_QUEUE_SIZE_HISTOGRAM.local(),
+            adaptive_idx: STORE_WRITE_ADAPTIVE_IDX_HISTOGRAM.local(),
+            task_real_bytes: STORE_WRITE_TASK_BYTES_HISTOGRAM.local(),
+            task_suggest_bytes: STORE_WRITE_TASK_SUGGEST_BYTES_HISTOGRAM.local(),
+            task_limit_bytes: STORE_WRITE_LIMIT_BYTES_HISTOGRAM.local(),
         }
     }
 }
@@ -490,11 +490,11 @@ pub struct AsyncWriterApplyMetrics {
 impl Default for AsyncWriterApplyMetrics {
     fn default() -> Self {
         Self {
-            queue_size: RAFT_ASYNC_WRITER_APPLY_QUEUE_SIZE.local(),
-            adaptive_idx: RAFT_ASYNC_WRITER_APPLY_ADAPTIVE_IDX.local(),
-            task_real_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_BYTES.local(),
-            task_suggest_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_SUGGEST_BYTES.local(),
-            task_limit_bytes: RAFT_ASYNC_WRITER_APPLY_TASK_LIMIT_BYTES.local(),
+            queue_size: APPLY_WRITE_QUEUE_SIZE_HISTOGRAM.local(),
+            adaptive_idx: APPLY_WRITE_ADAPTIVE_IDX_HISTOGRAM.local(),
+            task_real_bytes: APPLY_WRITE_TASK_BYTES_HISTOGRAM.local(),
+            task_suggest_bytes: APPLY_WRITE_TASK_SUGGEST_BYTES_HISTOGRAM.local(),
+            task_limit_bytes: APPLY_WRITE_TASK_LIMIT_BYTES_HISTOGRAM.local(),
         }
     }
 }

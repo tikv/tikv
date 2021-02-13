@@ -318,7 +318,7 @@ where
 }
 
 pub trait Notifier<EK: KvEngine>: Send {
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify(&self, apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
@@ -359,9 +359,9 @@ where
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
+        delegate.metrics = ApplyMetrics::default();
         self.ctx.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.ctx.kv_wb_last_keys = self.kv_wb().count() as u64;
-        self.ctx.last_applied_index = delegate.apply_state.get_applied_index();
         self.ctx.sync_log_hint = false;
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
@@ -382,22 +382,19 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if self.ctx.last_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self.kv_wb_mut());
-        }
         delegate.update_metrics(&mut self);
 
         let current = self.locked_writer.get_current_task();
 
         current.update_apply(
+            delegate.region_id(),
             self.ctx.sync_log_hint,
             self.cb,
             ApplyRes {
-                region_id: delegate.region_id(),
                 apply_state: delegate.apply_state.clone(),
+                applied_index_term: delegate.applied_index_term,
                 exec_res: results,
                 metrics: delegate.metrics.clone(),
-                applied_index_term: delegate.applied_index_term,
             },
         );
         if self.locked_writer.should_notify() {
@@ -465,7 +462,6 @@ where
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -514,7 +510,6 @@ where
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
             committed_count: 0,
             exec_ctx: None,
             sync_log_hint: false,
@@ -834,6 +829,11 @@ where
             return;
         }
 
+        // If we send multiple ConfChange commands, only first one will be proposed correctly,
+        // others will be saved as a normal entry with no data, so we must re-propose these
+        // commands again.
+        apply_ctx.committed_count += committed_entries.len() - offset;
+
         let mut entry_cmd = Vec::new();
         for i in offset..committed_entries.len() {
             let entry = &committed_entries[i];
@@ -850,75 +850,82 @@ where
 
         let writer_id = self.async_writer_id(apply_ctx);
         let mut async_writers = std::mem::replace(&mut apply_ctx.async_writers, vec![]);
-        let locked_writer = async_writers[writer_id].0.lock().unwrap();
-        let cv = &async_writers[writer_id].1;
-        let mut apply_entries_ctx = ApplyEntriesContext::new(apply_ctx, locked_writer, &cv, self);
-        apply_entries_ctx.prepare_for(self);
-        // If we send multiple ConfChange commands, only first one will be proposed correctly,
-        // others will be saved as a normal entry with no data, so we must re-propose these
-        // commands again.
-        apply_entries_ctx.committed_count += committed_entries.len() - offset;
-        let mut results = VecDeque::new();
-        let mut forward = 0;
-        for i in offset..committed_entries.len() {
+
+        let mut off = offset;
+        let mut entry_off = 0;
+        while off < committed_entries.len() {
+            let locked_writer = async_writers[writer_id].0.lock().unwrap();
+            let cv = &async_writers[writer_id].1;
+            let mut apply_entries_ctx =
+                ApplyEntriesContext::new(apply_ctx, locked_writer, &cv, self);
+            apply_entries_ctx.prepare_for(self);
+
+            let mut results = VecDeque::new();
+
+            while off < committed_entries.len() {
+                if apply_entries_ctx.delta_bytes() >= 1000 {
+                    break;
+                }
+
+                let entry = &committed_entries[off];
+                let cmd = entry_cmd[entry_off].take().unwrap();
+                let expect_index = self.apply_state.get_applied_index() + 1;
+                if expect_index != entry.get_index() {
+                    panic!(
+                        "{} expect index {}, but got {}",
+                        self.tag,
+                        expect_index,
+                        entry.get_index()
+                    );
+                }
+
+                // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
+                // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
+                // but PD will reject old version tikv join the cluster, so this should not happen.
+                let res = match entry.get_entry_type() {
+                    EntryType::EntryNormal => {
+                        self.handle_raft_entry_normal(&mut apply_entries_ctx, &entry, cmd)
+                    }
+                    EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                        self.handle_raft_entry_conf_change(&mut apply_entries_ctx, &entry)
+                    }
+                };
+
+                match res {
+                    ApplyResult::None => {}
+                    ApplyResult::Res(res) => results.push_back(res),
+                    ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
+                        // Both cancel and merge will yield current processing.
+                        apply_entries_ctx.committed_count -= committed_entries.len() - off;
+                        apply_entries_ctx.finish_for(self, results);
+                        std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
+
+                        self.yield_state = Some(YieldState {
+                            pending_entries: committed_entries,
+                            pending_msgs: Vec::default(),
+                            offset: off,
+                        });
+                        if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                            self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                        }
+                        return;
+                    }
+                }
+
+                entry_off += 1;
+                off += 1;
+            }
+
+            apply_entries_ctx.finish_for(self, results);
+
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
+                self.destroy(apply_ctx);
                 break;
             }
-
-            let entry = &committed_entries[i];
-            let cmd = entry_cmd[forward].take().unwrap();
-            forward += 1;
-            let expect_index = self.apply_state.get_applied_index() + 1;
-            if expect_index != entry.get_index() {
-                panic!(
-                    "{} expect index {}, but got {}",
-                    self.tag,
-                    expect_index,
-                    entry.get_index()
-                );
-            }
-
-            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
-            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
-            // but PD will reject old version tikv join the cluster, so this should not happen.
-            let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => {
-                    self.handle_raft_entry_normal(&mut apply_entries_ctx, &entry, cmd)
-                }
-                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
-                    self.handle_raft_entry_conf_change(&mut apply_entries_ctx, &entry)
-                }
-            };
-
-            match res {
-                ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
-                    // Both cancel and merge will yield current processing.
-                    apply_entries_ctx.committed_count -= committed_entries.len() - i;
-                    apply_entries_ctx.finish_for(self, results);
-                    std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
-
-                    self.yield_state = Some(YieldState {
-                        pending_entries: committed_entries,
-                        pending_msgs: Vec::default(),
-                        offset: i,
-                    });
-                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
-                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
-                    }
-                    return;
-                }
-            }
         }
 
-        apply_entries_ctx.finish_for(self, results);
         std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
-
-        if self.pending_remove {
-            self.destroy(apply_ctx);
-        }
     }
 
     fn update_metrics<W: WriteBatch<EK>>(
@@ -2963,12 +2970,21 @@ pub struct ApplyMetrics {
     pub lock_cf_written_bytes: u64,
 }
 
+impl ApplyMetrics {
+    pub fn combine(&mut self, other: &ApplyMetrics) {
+        self.size_diff_hint += other.size_diff_hint;
+        self.delete_keys_hint += other.delete_keys_hint;
+        self.written_bytes += other.written_bytes;
+        self.written_keys += other.written_keys;
+        self.lock_cf_written_bytes += other.lock_cf_written_bytes;
+    }
+}
+
 #[derive(Debug)]
 pub struct ApplyRes<S>
 where
     S: Snapshot,
 {
-    pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
@@ -3056,7 +3072,6 @@ where
             return;
         }
 
-        self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
         if let Some(entry) = apply.entries.last() {
             let prev_state = (
@@ -3841,8 +3856,8 @@ mod tests {
     }
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
-        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-            for r in apply_res {
+        fn notify(&self, apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>) {
+            for (_, r) in apply_res {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }

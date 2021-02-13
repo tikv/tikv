@@ -397,6 +397,7 @@ where
 
     fn run(&mut self) {
         loop {
+            let loop_begin = Instant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
                 while !w.stop && !w.should_write_first_task() {
@@ -420,6 +421,9 @@ where
                 tasks.push_back_done_task(task);
                 tasks.flush_metrics();
             }
+
+            STORE_WRITE_LOOP_DURATION_HISTOGRAM
+                .observe(duration_to_sec(loop_begin.elapsed()) as f64);
         }
     }
 
