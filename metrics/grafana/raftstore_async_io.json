@@ -1,0 +1,2482 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_18000",
+      "label": "18000",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "6.1.6"
+    },
+    {
+      "type": "panel",
+      "id": "graph",
+      "name": "Graph",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "${DS_18000}",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "iteration": 1613256387483,
+  "links": [],
+  "panels": [
+    {
+      "aliasColors": {
+        "duration-99%": "blue",
+        "duration-999%": "super-light-red",
+        "duration-avg": "dark-red",
+        "kv_commit": "green",
+        "wait-duration": "semi-dark-red",
+        "wait-duration-99%": "dark-red",
+        "wait-duration-999%": "dark-purple",
+        "wait-sched": "semi-dark-red",
+        "write-duration-99%": "rgb(15, 142, 191)",
+        "write-duration-999%": "dark-red",
+        "write-duration-avg": "dark-orange",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_18000}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 11990,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/duration-(.)*/",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": 3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "duration-999%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-99%",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "duration-max",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tikv_storage_engine_async_request_duration_seconds_sum{instance=~\"$instance\", type=\"write\"}[1m])) / sum(rate(tikv_storage_engine_async_request_duration_seconds_count{instance=~\"$instance\", type=\"write\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Storage async write duration",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "999%": "dark-red",
+        "apply-after-w": "light-green",
+        "apply-msg-handle": "rgb(171, 225, 233)",
+        "apply-w": "light-red",
+        "apply-wait": "rgb(248, 242, 213)",
+        "count": "rgb(33, 250, 2)",
+        "in-store-loop-total": "rgb(219, 240, 216)",
+        "stg-w": "rgb(255, 0, 4)",
+        "sum": "semi-dark-blue"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_18000}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "grid": {},
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 11985,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "current",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [
+        {
+          "alias": "count",
+          "dashLength": 1,
+          "dashes": true,
+          "spaceLength": 1,
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(rate(tikv_raftstore_store_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "avg",
+          "refId": "C",
+          "step": 4
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "99%",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "999%",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_store_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "count",
+          "refId": "D"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Total duration in store loop",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "999%": "dark-red",
+        "apply-after-w": "light-green",
+        "apply-msg-handle": "rgb(171, 225, 233)",
+        "apply-w": "light-red",
+        "apply-wait": "rgb(248, 242, 213)",
+        "count": "rgb(33, 250, 2)",
+        "in-store-loop-total": "rgb(219, 240, 216)",
+        "stg-w": "rgb(255, 0, 4)",
+        "sum": "semi-dark-blue"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_18000}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 1,
+      "grid": {},
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 11988,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "current",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [
+        {
+          "alias": "count",
+          "dashLength": 1,
+          "dashes": true,
+          "spaceLength": 1,
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(rate(tikv_raftstore_apply_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "avg",
+          "refId": "C",
+          "step": 4
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "99%",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_apply_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "999%",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_apply_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "count",
+          "refId": "D"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Total duration in apply loop",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 11746,
+      "panels": [
+        {
+          "aliasColors": {
+            "99%": "light-orange",
+            "999%": "dark-red",
+            "Q": "super-light-blue",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(29, 252, 1)",
+            "in-apply-loop-total": "super-light-green",
+            "in-store-loop": "super-light-green",
+            "in-store-loop + in-apply-loop": "super-light-blue",
+            "in-store-loop-total": "light-blue",
+            "max": "rgb(179, 13, 255)",
+            "stg-async-write": "dark-red",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "id": 11640,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "stg-async-write",
+              "dashLength": 4,
+              "dashes": true,
+              "fill": 0,
+              "linewidth": 2,
+              "spaceLength": 3,
+              "stack": false,
+              "zindex": 3
+            },
+            {
+              "alias": "/count|acc-(.)*/",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_queue_size_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_write_queue_size_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_queue_size_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_write_queue_size_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_queue_size_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_store_write_queue_size_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "max",
+              "refId": "E"
+            },
+            {
+              "expr": "tikv_raftstore_store_write_queue_size_sum",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "acc-{{instance}}",
+              "refId": "F"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Async Writer Q",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 3,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "99%": "light-orange",
+            "999%": "dark-red",
+            "Q": "super-light-blue",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(31, 247, 4)",
+            "in-apply-loop-total": "super-light-green",
+            "in-store-loop": "super-light-green",
+            "in-store-loop + in-apply-loop": "super-light-blue",
+            "in-store-loop-total": "light-blue",
+            "max": "rgb(161, 3, 234)",
+            "stg-async-write": "dark-red",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
+          "id": 11818,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "stg-async-write",
+              "dashLength": 4,
+              "dashes": true,
+              "fill": 0,
+              "linewidth": 2,
+              "spaceLength": 3,
+              "stack": false,
+              "zindex": 3
+            },
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_adaptive_idx_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_adaptive_idx_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_adaptive_idx_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_adaptive_idx_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_adaptive_idx_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_store_adaptive_idx_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "max",
+              "refId": "E"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Async Writer Adaptive Idx",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 2,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "99%": "light-orange",
+            "999%": "dark-red",
+            "Q": "super-light-blue",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(31, 247, 4)",
+            "in-apply-loop-total": "super-light-green",
+            "in-store-loop": "super-light-green",
+            "in-store-loop + in-apply-loop": "super-light-blue",
+            "in-store-loop-total": "light-blue",
+            "max": "rgb(133, 0, 195)",
+            "stg-async-write": "dark-red",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
+          "id": 11851,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "stg-async-write",
+              "dashLength": 4,
+              "dashes": true,
+              "fill": 0,
+              "linewidth": 2,
+              "spaceLength": 3,
+              "stack": false,
+              "zindex": 3
+            },
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_task_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_task_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_task_bytes_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_task_bytes_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_task_bytes_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_store_task_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "max",
+              "refId": "E"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Async Writer Store IO Size",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "decbytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "99%": "light-orange",
+            "999%": "dark-red",
+            "Q": "super-light-blue",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(31, 247, 4)",
+            "in-apply-loop-total": "super-light-green",
+            "in-store-loop": "super-light-green",
+            "in-store-loop + in-apply-loop": "super-light-blue",
+            "in-store-loop-total": "light-blue",
+            "max": "rgb(160, 20, 234)",
+            "stg-async-write": "dark-red",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "id": 11884,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "stg-async-write",
+              "dashLength": 4,
+              "dashes": true,
+              "fill": 0,
+              "linewidth": 2,
+              "spaceLength": 3,
+              "stack": false,
+              "zindex": 3
+            },
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_task_limit_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_task_limit_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_task_limit_bytes_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_task_limit_bytes_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_task_limit_bytes_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_store_task_limit_bytes_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "max",
+              "refId": "E"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Async Writer Store Expect IO Size",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "decbytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(33, 250, 2)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 17
+          },
+          "id": 11780,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_store_loop_work_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_loop_work_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_loop_work_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_loop_work_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_loop_work_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store loop work duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(31, 249, 3)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 17
+          },
+          "id": 11782,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_store_loop_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_loop_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_loop_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_loop_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_loop_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store loop tick duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(31, 244, 3)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 22
+          },
+          "id": 11785,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_raftdb_tick_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_write_raftdb_tick_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_raftdb_tick_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_write_raftdb_tick_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_raftdb_tick_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store write raftdb tick duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(30, 250, 3)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 22
+          },
+          "id": 11917,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_raftdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store write raftdb duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(33, 249, 4)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 27
+          },
+          "id": 11783,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_store_write_kvdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store write kvdb duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(33, 247, 5)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 27
+          },
+          "id": 11781,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_raft_process_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_raft_process_duration_secs_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le, type))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le, type))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_raft_process_duration_secs_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Store loop work duration (old)",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "title": "StoreLoop",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 11987,
+      "panels": [
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(33, 250, 2)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 33
+          },
+          "id": 11950,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_kvdb_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_write_kvdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_write_kvdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_apply_write_kvdb_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_kvdb_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Apply write kvdb duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(30, 250, 3)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 12,
+            "y": 33
+          },
+          "id": 11784,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_wait_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_write_wait_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_write_wait_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_apply_write_wait_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_wait_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Apply write wait duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {
+            "999%": "dark-red",
+            "apply-after-w": "light-green",
+            "apply-msg-handle": "rgb(171, 225, 233)",
+            "apply-w": "light-red",
+            "apply-wait": "rgb(248, 242, 213)",
+            "count": "rgb(33, 250, 2)",
+            "in-store-loop-total": "rgb(219, 240, 216)",
+            "stg-w": "rgb(255, 0, 4)",
+            "sum": "semi-dark-blue"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_18000}",
+          "decimals": 1,
+          "description": "The time consumed by processing asynchronous snapshot requests",
+          "editable": true,
+          "error": false,
+          "fill": 1,
+          "grid": {},
+          "gridPos": {
+            "h": 5,
+            "w": 12,
+            "x": 0,
+            "y": 38
+          },
+          "id": 11984,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "hideEmpty": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "dashLength": 1,
+              "dashes": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_loop_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_write_loop_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "refId": "C",
+              "step": 4
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_write_loop_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_apply_write_loop_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "999%",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_apply_write_loop_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "refId": "D"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Appl loop write tick duration",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "cumulative"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "title": "ApplyLoop",
+      "type": "row"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 18,
+  "style": "dark",
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": "${DS_18000}",
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Instance",
+        "multi": true,
+        "name": "instance",
+        "options": [],
+        "query": "label_values(tikv_engine_size_bytes, instance)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "time_options": [
+      "5m",
+      "15m",
+      "1h",
+      "6h",
+      "12h",
+      "24h",
+      "2d",
+      "7d",
+      "30d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Raftstore Async IO",
+  "uid": "MyLab",
+  "version": 7
+}

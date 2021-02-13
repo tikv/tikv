@@ -1,7 +1,7 @@
 {
   "__inputs": [
     {
-      "name": "DS_TEST-CLUSTER",
+      "name": "DS_PROMETHEUS",
       "label": "Prometheus",
       "description": "",
       "type": "datasource",
@@ -14,26 +14,26 @@
       "type": "grafana",
       "id": "grafana",
       "name": "Grafana",
-      "version": "6.0.1"
+      "version": "6.1.6"
     },
     {
       "type": "panel",
       "id": "graph",
       "name": "Graph",
-      "version": "5.0.0"
+      "version": ""
     },
     {
       "type": "datasource",
       "id": "prometheus",
       "name": "Prometheus",
-      "version": "5.0.0"
+      "version": "1.0.0"
     }
   ],
   "annotations": {
     "list": [
       {
         "builtIn": 1,
-        "datasource": "${DS_TEST-CLUSTER}",
+        "datasource": "${DS_PROMETHEUS}",
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -46,7 +46,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1606814402924,
+  "iteration": 1613255842272,
   "links": [],
   "panels": [
     {
@@ -76,7 +76,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -203,7 +203,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -338,7 +338,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -470,7 +470,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -600,7 +600,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -729,7 +729,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -856,7 +856,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -1004,7 +1004,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -1150,7 +1150,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -1292,7 +1292,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -1436,7 +1436,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -1584,7 +1584,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -1735,7 +1735,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -1877,7 +1877,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2007,7 +2007,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2056,6 +2056,14 @@
           "alias": "transfer-leader-opm",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "/write-rpc-(.)*/",
+          "dashLength": 1,
+          "dashes": true,
+          "fill": 0,
+          "legend": false,
+          "spaceLength": 1
         }
       ],
       "spaceLength": 10,
@@ -2084,6 +2092,13 @@
           "intervalFactor": 1,
           "legendFormat": "transfer-leader-opm",
           "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m])) by (instance)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc-{{instance}}",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -2146,7 +2161,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2195,6 +2210,14 @@
           "alias": "/transfer-leader-op(.*)/",
           "transform": "negative-Y",
           "yaxis": 2
+        },
+        {
+          "alias": "/write-rpc-(.)*/",
+          "dashLength": 1,
+          "dashes": true,
+          "fill": 0,
+          "legend": false,
+          "spaceLength": 1
         }
       ],
       "spaceLength": 10,
@@ -2216,6 +2239,13 @@
           "intervalFactor": 1,
           "legendFormat": "write-rpc",
           "refId": "A"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m])) by (instance)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc-{{instance}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -2274,7 +2304,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2400,7 +2430,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2529,7 +2559,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2653,15 +2683,23 @@
     },
     {
       "aliasColors": {
+        "duration-99%": "blue",
+        "duration-999%": "super-light-red",
+        "duration-avg": "dark-red",
         "kv_commit": "green",
-        "wait-queue": "dark-purple",
+        "wait-duration": "semi-dark-red",
+        "wait-duration-99%": "dark-red",
+        "wait-duration-999%": "dark-purple",
         "wait-sched": "semi-dark-red",
+        "write-duration-99%": "rgb(15, 142, 191)",
+        "write-duration-999%": "dark-red",
+        "write-duration-avg": "dark-orange",
         "write-rpc": "green"
       },
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2672,127 +2710,6 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 54
-      },
-      "id": 9255,
-      "legend": {
-        "alignAsTable": false,
-        "avg": false,
-        "current": false,
-        "hideEmpty": true,
-        "max": false,
-        "min": false,
-        "rightSide": false,
-        "show": true,
-        "sideWidth": null,
-        "sort": "max",
-        "sortDesc": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "paceLength": 10,
-      "percentage": false,
-      "pointradius": 5,
-      "points": false,
-      "renderer": "flot",
-      "repeatedByRow": true,
-      "seriesOverrides": [
-        {
-          "alias": "wait-queue",
-          "transform": "negative-Y",
-          "yaxis": 2
-        }
-      ],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{instance=~\"$instance\", name=~\"sched-worker-pool\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "wait-queue",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "write-rpc",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Wait for available scheduler threads ?",
-      "tooltip": {
-        "msResolution": false,
-        "shared": true,
-        "sort": 0,
-        "value_type": "cumulative"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": "0",
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {
-        "kv_commit": "green",
-        "wait-duration": "semi-dark-red",
-        "wait-duration-99%": "dark-red",
-        "wait-duration-999%": "dark-purple",
-        "wait-sched": "semi-dark-red",
-        "write-rpc": "green"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "decimals": 1,
-      "description": "",
-      "editable": true,
-      "error": false,
-      "fill": 2,
-      "grid": {},
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 12,
         "y": 54
       },
       "id": 8947,
@@ -2823,17 +2740,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "wait-duration-999%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "wait-duration-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "wait-duration-max",
+          "alias": "/duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -2843,11 +2750,11 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.999, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-999%",
+          "legendFormat": "duration-999%",
           "refId": "D"
         },
         {
@@ -2858,26 +2765,33 @@
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-99%",
+          "legendFormat": "duration-99%",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(1, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"write\"}[1m])) by (le))",
           "format": "time_series",
           "hide": true,
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-max",
+          "legendFormat": "duration-max",
           "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tikv_storage_engine_async_request_duration_seconds_sum{instance=~\"$instance\", type=\"write\"}[1m])) / sum(rate(tikv_storage_engine_async_request_duration_seconds_count{instance=~\"$instance\", type=\"write\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "E"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Wait for available scheduler threads (no use now) ?",
+      "title": "Storage async write duration has jitter ?",
       "tooltip": {
         "msResolution": false,
         "shared": true,
@@ -2917,9 +2831,152 @@
     },
     {
       "aliasColors": {
+        "duration-99%": "rgb(1, 255, 180)",
+        "duration-999%": "light-red",
+        "duration-avg": "dark-orange",
+        "duration-max": "light-red",
         "kv_commit": "green",
-        "wait-duration-99%": "rgb(39, 22, 196)",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "id": 11289,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/duration-(.)*/",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{instance=~\"$instance\", type='ready'}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "duration-99%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_raft_process_duration_secs_bucket{instance=~\"$instance\", type='ready'}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "duration-999%",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_raft_process_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_raft_process_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Raftstore: store loop working duration has jitter ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "duration-99%": "rgb(3, 220, 206)",
+        "duration-999%": "super-light-red",
+        "duration-avg": "dark-red",
+        "kv_commit": "green",
+        "wait-duration-99%": "rgb(3, 220, 206)",
         "wait-duration-999%": "super-light-red",
+        "wait-duration-avg": "dark-red",
         "wait-max": "semi-dark-red",
         "wait-queue": "semi-dark-red",
         "wait-sched": "semi-dark-red",
@@ -2928,7 +2985,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -2969,17 +3026,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "wait-duration-999%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "wait-duration-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "wait-max",
+          "alias": "/duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         },
@@ -2997,7 +3044,7 @@
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-999%",
+          "legendFormat": "duration-999%",
           "refId": "D"
         },
         {
@@ -3012,7 +3059,7 @@
           "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_request_wait_time_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-99%",
+          "legendFormat": "duration-99%",
           "refId": "B"
         },
         {
@@ -3020,8 +3067,15 @@
           "format": "time_series",
           "hide": true,
           "intervalFactor": 1,
-          "legendFormat": "wait-max",
+          "legendFormat": "duration-max",
           "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_request_wait_time_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_request_wait_time_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "E"
         }
       ],
       "thresholds": [],
@@ -3068,9 +3122,13 @@
     },
     {
       "aliasColors": {
+        "duration-99%": "rgb(3, 220, 206)",
+        "duration-999%": "super-light-red",
+        "duration-avg": "dark-red",
         "kv_commit": "green",
-        "wait-duration-99%": "rgb(39, 22, 196)",
+        "wait-duration-99%": "rgb(3, 220, 206)",
         "wait-duration-999%": "super-light-red",
+        "wait-duration-avg": "dark-red",
         "wait-queue": "semi-dark-red",
         "wait-sched": "semi-dark-red",
         "write-rpc": "green"
@@ -3078,7 +3136,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -3119,12 +3177,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "wait-duration-999%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "wait-duration-99%",
+          "alias": "/duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -3138,7 +3191,7 @@
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-999%",
+          "legendFormat": "duration-999%",
           "refId": "D"
         },
         {
@@ -3153,8 +3206,15 @@
           "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_wait_time_duration_secs_bucket{instance=~\"$instance\"}[1m])) by (le))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "wait-duration-99%",
+          "legendFormat": "duration-99%",
           "refId": "B"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_apply_wait_time_duration_secs_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_wait_time_duration_secs_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -3201,11 +3261,12 @@
     },
     {
       "aliasColors": {
-        "duration-99%": "rgb(1, 255, 180)",
-        "duration-999%": "yellow",
-        "duration-max": "light-red",
+        "duration-avg": "dark-red",
         "kv_commit": "green",
-        "wait-duration-999%": "orange",
+        "wait-duration-99%": "rgb(3, 220, 206)",
+        "wait-duration-999%": "super-light-red",
+        "wait-duration-avg": "dark-red",
+        "wait-max": "semi-dark-red",
         "wait-queue": "semi-dark-red",
         "wait-sched": "semi-dark-red",
         "write-rpc": "green"
@@ -3213,7 +3274,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -3225,6 +3286,305 @@
         "w": 12,
         "x": 0,
         "y": 64
+      },
+      "id": 11290,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/duration-(.)*/",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_commit_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "wait-duration-999%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_commit_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-99%",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_commit_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "duration-max",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_commit_log_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_commit_log_duration_seconds_count{instance=~\"$instance\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Raft commit log duration",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "kv_commit": "green",
+        "wait-duration-99%": "rgb(3, 220, 206)",
+        "wait-duration-999%": "super-light-red",
+        "wait-duration-avg": "dark-red",
+        "wait-max": "semi-dark-red",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "id": 11291,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/duration-(.)*/",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_raftstore_apply_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "wait-duration-999%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_raftstore_apply_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-99%",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(tikv_raftstore_apply_log_duration_seconds_bucket{instance=~\"$instance\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "duration-max",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_apply_log_duration_seconds_sum{instance=~\"$instance\"}[1m])) / sum(rate(tikv_raftstore_apply_log_duration_seconds_count{instance=~\"$instance\"}[1m])) ",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Raft apply log duration",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "duration-99%": "rgb(1, 255, 180)",
+        "duration-999%": "yellow",
+        "duration-avg": "dark-orange",
+        "duration-max": "light-red",
+        "kv_commit": "green",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 69
       },
       "id": 10486,
       "legend": {
@@ -3254,12 +3614,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "duration-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "duration-max",
+          "alias": "/duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -3291,6 +3646,13 @@
           "intervalFactor": 1,
           "legendFormat": "duration-max",
           "refId": "B"
+        },
+        {
+          "expr": "avg(tikv_engine_write_micro_seconds{instance=~\"$instance\", db=\"raft\",type=\"write_average\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -3339,6 +3701,7 @@
       "aliasColors": {
         "duration-99%": "rgb(1, 255, 180)",
         "duration-999%": "yellow",
+        "duration-avg": "dark-orange",
         "duration-max": "light-red",
         "kv_commit": "green",
         "wait-duration-999%": "orange",
@@ -3349,7 +3712,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -3360,7 +3723,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 69
       },
       "id": 11258,
       "legend": {
@@ -3390,12 +3753,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "duration-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "duration-max",
+          "alias": "/duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -3427,6 +3785,13 @@
           "intervalFactor": 1,
           "legendFormat": "duration-max",
           "refId": "B"
+        },
+        {
+          "expr": "avg(tikv_engine_write_micro_seconds{instance=~\"$instance\", db=\"kv\",type=\"write_average\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "duration-avg",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -3484,7 +3849,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -3492,7 +3857,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 69
+        "y": 74
       },
       "id": 8945,
       "legend": {
@@ -3615,7 +3980,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -3623,7 +3988,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 69
+        "y": 74
       },
       "id": 8946,
       "legend": {
@@ -3735,6 +4100,270 @@
     },
     {
       "aliasColors": {
+        "kv_commit": "green",
+        "wait-queue": "dark-purple",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 79
+      },
+      "id": 9255,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "wait-queue",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(tikv_futurepool_pending_task_total{instance=~\"$instance\", name=~\"sched-worker-pool\"})",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "wait-queue",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Wait for available scheduler threads ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "kv_commit": "green",
+        "wait-duration": "semi-dark-red",
+        "wait-duration-99%": "dark-red",
+        "wait-duration-999%": "dark-purple",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 79
+      },
+      "id": 11285,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "wait-duration-999%",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "wait-duration-99%",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "wait-duration-max",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "wait-duration-999%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "wait-duration-99%",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(tikv_scheduler_wait_for_process_duration_seconds_bucket{instance=~\"$instance\", type=~\"prewrite|commit|acquire_pessimistic_lock\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "wait-duration-max",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Wait for available scheduler threads (no use now) ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
         "172.16.4.55:23581-compaction-flow": "semi-dark-yellow",
         "compaction": "green",
         "flow": "rgb(1, 120, 152)",
@@ -3747,7 +4376,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -3755,7 +4384,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 74
+        "y": 84
       },
       "id": 11281,
       "legend": {
@@ -3810,14 +4439,6 @@
           "intervalFactor": 1,
           "legendFormat": "write-rpc",
           "refId": "K"
-        },
-        {
-          "expr": "sum(rate(tikv_engine_compaction_flow_bytes{instance=~\"$instance\", db=\"kv\", type=\"bytes_read\"}[1m]))",
-          "format": "time_series",
-          "hide": true,
-          "intervalFactor": 1,
-          "legendFormat": "read-flow",
-          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -3880,7 +4501,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -3888,7 +4509,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 74
+        "y": 84
       },
       "id": 11270,
       "legend": {
@@ -4004,7 +4625,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -4015,7 +4636,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 79
+        "y": 89
       },
       "id": 11261,
       "legend": {
@@ -4045,12 +4666,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "batch-size-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "batch-size-max",
+          "alias": "/batch-size-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         },
@@ -4064,7 +4680,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"raft\",type=\"bytes_per_write_percentile99\"})",
+          "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"raft\",type=\"bytes_per_write_percentile99\"})",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -4080,12 +4696,19 @@
           "refId": "A"
         },
         {
-          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"raft\",type=\"bytes_per_write_max\"})",
+          "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"raft\",type=\"bytes_per_write_max\"})",
           "format": "time_series",
-          "hide": false,
+          "hide": true,
           "intervalFactor": 1,
           "legendFormat": "batch-size-max",
           "refId": "B"
+        },
+        {
+          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"raft\",type=\"bytes_per_write_average\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "batch-size-avg",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -4145,7 +4768,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -4156,7 +4779,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 79
+        "y": 89
       },
       "id": 11262,
       "legend": {
@@ -4186,12 +4809,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "batch-size-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "batch-size-max",
+          "alias": "/batch-size-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         },
@@ -4205,7 +4823,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"kv\",type=\"bytes_per_write_percentile99\"})",
+          "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"kv\",type=\"bytes_per_write_percentile99\"})",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -4221,12 +4839,19 @@
           "refId": "A"
         },
         {
-          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"kv\",type=\"bytes_per_write_max\"})",
+          "expr": "max(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"kv\",type=\"bytes_per_write_max\"})",
           "format": "time_series",
-          "hide": false,
+          "hide": true,
           "intervalFactor": 1,
           "legendFormat": "batch-size-max",
           "refId": "B"
+        },
+        {
+          "expr": "avg(tikv_engine_bytes_per_write{instance=~\"$instance\", db=\"kv\",type=\"bytes_per_write_average\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "batch-size-avg",
+          "refId": "C"
         }
       ],
       "thresholds": [],
@@ -4290,7 +4915,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -4301,7 +4926,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 84
+        "y": 94
       },
       "id": 11263,
       "legend": {
@@ -4440,7 +5065,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -4451,7 +5076,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 84
+        "y": 94
       },
       "id": 9571,
       "legend": {
@@ -4586,7 +5211,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -4594,7 +5219,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 99
       },
       "id": 9099,
       "legend": {
@@ -4719,7 +5344,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -4727,7 +5352,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 99
       },
       "id": 9101,
       "legend": {
@@ -4853,7 +5478,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -4861,7 +5486,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 94
+        "y": 104
       },
       "id": 8025,
       "legend": {
@@ -4986,7 +5611,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -4994,7 +5619,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 94
+        "y": 104
       },
       "id": 9100,
       "legend": {
@@ -5106,19 +5731,19 @@
     },
     {
       "aliasColors": {
+        "172.16.4.55:23581-compaction-flow": "semi-dark-yellow",
+        "compaction": "green",
+        "flow": "rgb(1, 120, 152)",
         "kv_commit": "green",
-        "kv_pessimistic_lock": "rgba(255, 29, 6, 0.84)",
-        "kv_prewrite": "rgb(11, 38, 239)",
-        "neg-raftdb-wal-duration": "rgb(226, 49, 85)",
-        "raftdb-wal-duration": "semi-dark-red",
-        "raftdb-wal-duration-99%": "rgb(1, 255, 180)",
-        "raftdb-wal-duration-max": "light-red",
+        "read-flow": "light-red",
+        "total": "orange",
+        "write-flow": "rgb(239, 232, 103)",
         "write-rpc": "green"
       },
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -5126,7 +5751,128 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 99
+        "y": 109
+      },
+      "id": 11288,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "current",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/disk-write(.*)/",
+          "legend": false,
+          "transform": "negative-Y",
+          "yaxis": 2,
+          "zindex": 3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "irate(node_disk_write_time_seconds_total[1m]) / irate(node_disk_writes_completed_total[1m])",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "disk-write: {{ instance }} - {{ device }}",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "K"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Some disks' Write too slow ?",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "kv_commit": "green",
+        "kv_pessimistic_lock": "rgba(255, 29, 6, 0.84)",
+        "kv_prewrite": "rgb(11, 38, 239)",
+        "neg-raftdb-wal-duration": "rgb(226, 49, 85)",
+        "raftdb-wal-duration": "semi-dark-red",
+        "raftdb-wal-duration-99%": "rgb(1, 255, 188)",
+        "raftdb-wal-duration-avg": "dark-orange",
+        "raftdb-wal-duration-max": "light-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "fill": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 109
       },
       "id": 9102,
       "legend": {
@@ -5154,12 +5900,7 @@
       "renderer": "flot",
       "seriesOverrides": [
         {
-          "alias": "raftdb-wal-duration-99%",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "raftdb-wal-duration-max",
+          "alias": "/raftdb-wal-duration-(.)*/",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -5193,6 +5934,13 @@
           "intervalFactor": 1,
           "legendFormat": "raftdb-wal-duration-max",
           "refId": "C"
+        },
+        {
+          "expr": "avg(tikv_engine_wal_file_sync_micro_seconds{instance=~\"$instance\", db=\"raft\",type=\"wal_file_sync_average\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "raftdb-wal-duration-avg",
+          "refId": "D"
         }
       ],
       "thresholds": [],
@@ -5242,12 +5990,287 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 104
+        "y": 114
       },
       "id": 8792,
       "panels": [],
       "title": "TiKV-Read affected TiDB-Write ?",
       "type": "row"
+    },
+    {
+      "aliasColors": {
+        "duration-99%": "super-light-yellow",
+        "duration-999%": "semi-dark-red",
+        "duration-max": "dark-orange",
+        "kv_commit": "green",
+        "wait-duration": "semi-dark-red",
+        "wait-duration-99%": "dark-red",
+        "wait-duration-999%": "dark-purple",
+        "wait-sched": "semi-dark-red",
+        "write-duration-99%": "super-light-red",
+        "write-duration-999%": "dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 11286,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "duration-999%",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "duration-99%",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "duration-max",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "duration-999%",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "duration-99%",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(tikv_storage_engine_async_request_duration_seconds_bucket{instance=~\"$instance\", type=\"snapshot\"}[1m])) by (le))",
+          "format": "time_series",
+          "hide": true,
+          "intervalFactor": 1,
+          "legendFormat": "duration-max",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Storage async snapshot duration has jitter ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "data-miss-rate": "dark-orange",
+        "duration-99%": "blue",
+        "duration-999%": "yellow",
+        "fall-to-raft-rate": "dark-orange",
+        "kv_commit": "green",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 11259,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "fall-to-raft-rate",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(tikv_raftstore_proposal_total{instance=~\"$instance\", type=~\"local_read|read_index\"}[1m])) / sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_commit|kv_prewrite|kv_pessimistic_lock|kv_get|kv_scan|kv_batch_get|kv_batch_get_command|coprocessor\"}[1m]))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "fall-to-raft-rate",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Too much get-request fall to raftstore ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "percentunit",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
     },
     {
       "aliasColors": {
@@ -5272,7 +6295,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "fill": 2,
@@ -5280,7 +6303,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 105
+        "y": 120
       },
       "id": 10942,
       "legend": {
@@ -5409,7 +6432,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -5420,7 +6443,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 105
+        "y": 120
       },
       "id": 10334,
       "legend": {
@@ -5568,7 +6591,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -5579,7 +6602,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 110
+        "y": 125
       },
       "id": 9563,
       "legend": {
@@ -5712,7 +6735,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -5723,7 +6746,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 110
+        "y": 125
       },
       "id": 10790,
       "legend": {
@@ -5763,20 +6786,19 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{instance=~\"$instance\", name=~\"cop-normal\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "wait-queue",
-          "refId": "D"
-        },
-        {
           "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
           "legendFormat": "write-rpc",
           "refId": "A"
+        },
+        {
+          "expr": "sum(tikv_futurepool_pending_task_total{instance=~\"$instance\", name=~\"cop-normal\"})",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "wait-queue",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -5833,7 +6855,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -5844,7 +6866,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 115
+        "y": 130
       },
       "id": 9561,
       "legend": {
@@ -5960,7 +6982,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -5971,7 +6993,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 115
+        "y": 130
       },
       "id": 10030,
       "legend": {
@@ -6092,7 +7114,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -6103,7 +7125,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 120
+        "y": 135
       },
       "id": 10182,
       "legend": {
@@ -6215,7 +7237,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -6226,7 +7248,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 120
+        "y": 135
       },
       "id": 9569,
       "legend": {
@@ -6341,8 +7363,8 @@
         "data-miss-rate": "dark-orange",
         "duration-99%": "blue",
         "duration-999%": "yellow",
-        "fall-to-raft-rate": "dark-orange",
         "kv_commit": "green",
+        "kvdb-memtable-miss-rate": "dark-orange",
         "wait-duration-999%": "orange",
         "wait-queue": "semi-dark-red",
         "wait-sched": "semi-dark-red",
@@ -6351,7 +7373,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -6362,129 +7384,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 125
-      },
-      "id": 11259,
-      "legend": {
-        "alignAsTable": false,
-        "avg": false,
-        "current": false,
-        "hideEmpty": true,
-        "max": false,
-        "min": false,
-        "rightSide": false,
-        "show": true,
-        "sideWidth": null,
-        "sort": "max",
-        "sortDesc": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "paceLength": 10,
-      "percentage": false,
-      "pointradius": 5,
-      "points": false,
-      "renderer": "flot",
-      "repeatedByRow": true,
-      "seriesOverrides": [
-        {
-          "alias": "fall-to-raft-rate",
-          "transform": "negative-Y",
-          "yaxis": 2
-        }
-      ],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "write-rpc",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(rate(tikv_raftstore_proposal_total{instance=~\"$instance\", type=~\"local_read|read_index\"}[1m])) / sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_commit|kv_prewrite|kv_pessimistic_lock|kv_get|kv_scan|kv_batch_get|kv_batch_get_command|coprocessor\"}[1m]))",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "fall-to-raft-rate",
-          "refId": "B"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Too much get-request fall to raftstore ?",
-      "tooltip": {
-        "msResolution": false,
-        "shared": true,
-        "sort": 0,
-        "value_type": "cumulative"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "percentunit",
-          "label": null,
-          "logBase": 1,
-          "max": "0",
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {
-        "data-miss-rate": "dark-orange",
-        "duration-99%": "blue",
-        "duration-999%": "yellow",
-        "kv_commit": "green",
-        "wait-duration-999%": "orange",
-        "wait-queue": "semi-dark-red",
-        "wait-sched": "semi-dark-red",
-        "write-rpc": "green"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "decimals": 1,
-      "description": "",
-      "editable": true,
-      "error": false,
-      "fill": 2,
-      "grid": {},
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 12,
-        "y": 125
+        "y": 140
       },
       "id": 9570,
       "legend": {
@@ -6514,7 +7414,7 @@
       "repeatedByRow": true,
       "seriesOverrides": [
         {
-          "alias": "data-miss-rate",
+          "alias": "kvdb-memtable-miss-rate",
           "transform": "negative-Y",
           "yaxis": 2
         }
@@ -6532,10 +7432,10 @@
           "refId": "A"
         },
         {
-          "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"kv\", type=\"block_cache_data_miss\"}[1m])) / (sum(rate(tikv_engine_cache_efficiency{db=\"kv\", type=\"block_cache_data_hit\"}[1m])) + sum(rate(tikv_engine_cache_efficiency{db=\"kv\", type=\"block_cache_data_miss\"}[1m])))",
+          "expr": "1 - sum(rate(tikv_engine_memtable_efficiency{instance=~\"$instance\", db=\"kv\", type=\"memtable_hit\"}[1m])) / (sum(rate(tikv_engine_memtable_efficiency{db=\"kv\", type=\"memtable_hit\"}[1m])) + sum(rate(tikv_engine_memtable_efficiency{db=\"kv\", type=\"memtable_miss\"}[1m])))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "data-miss-rate",
+          "legendFormat": "kvdb-memtable-miss-rate",
           "refId": "B"
         }
       ],
@@ -6543,7 +7443,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "KVDB block cache miss ?",
+      "title": "KVDB memtable miss rate has jitter ?",
       "tooltip": {
         "msResolution": false,
         "shared": true,
@@ -6583,131 +7483,6 @@
     },
     {
       "aliasColors": {
-        "count": "dark-orange",
-        "hit-count": "dark-orange",
-        "kv_commit": "green",
-        "wait-queue": "orange",
-        "wait-sched": "semi-dark-red",
-        "write-rpc": "green"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "decimals": 1,
-      "description": "",
-      "editable": true,
-      "error": false,
-      "fill": 2,
-      "grid": {},
-      "gridPos": {
-        "h": 5,
-        "w": 12,
-        "x": 0,
-        "y": 130
-      },
-      "id": 9568,
-      "legend": {
-        "alignAsTable": false,
-        "avg": false,
-        "current": false,
-        "hideEmpty": true,
-        "max": false,
-        "min": false,
-        "rightSide": false,
-        "show": true,
-        "sideWidth": null,
-        "sort": "max",
-        "sortDesc": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "links": [],
-      "nullPointMode": "null",
-      "paceLength": 10,
-      "percentage": false,
-      "pointradius": 5,
-      "points": false,
-      "renderer": "flot",
-      "repeatedByRow": true,
-      "seriesOverrides": [
-        {
-          "alias": "count",
-          "transform": "negative-Y",
-          "yaxis": 2
-        },
-        {
-          "alias": "write-rpc",
-          "zindex": -3
-        }
-      ],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "sum(rate(tikv_engine_locate{instance=~\"$instance\", db=\"kv\", type=\"number_db_next\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "count",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
-          "format": "time_series",
-          "hide": false,
-          "intervalFactor": 1,
-          "legendFormat": "write-rpc",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "KVDB seek too much times ?",
-      "tooltip": {
-        "msResolution": false,
-        "shared": true,
-        "sort": 0,
-        "value_type": "cumulative"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": "0",
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {
         "duration-99%": "dark-red",
         "duration-999%": "yellow",
         "duration-max": "super-light-blue",
@@ -6720,7 +7495,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -6731,7 +7506,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 130
+        "y": 140
       },
       "id": 9567,
       "legend": {
@@ -6847,16 +7622,20 @@
     },
     {
       "aliasColors": {
-        "hit-count": "super-light-blue",
+        "data-miss-rate": "dark-orange",
+        "duration-99%": "blue",
+        "duration-999%": "yellow",
         "kv_commit": "green",
-        "wait-queue": "orange",
+        "kvdb-data-miss-rate": "dark-orange",
+        "wait-duration-999%": "orange",
+        "wait-queue": "semi-dark-red",
         "wait-sched": "semi-dark-red",
         "write-rpc": "green"
       },
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
+      "datasource": "${DS_PROMETHEUS}",
       "decimals": 1,
       "description": "",
       "editable": true,
@@ -6867,7 +7646,371 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 135
+        "y": 145
+      },
+      "id": 11284,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "kvdb-data-miss-rate",
+          "transform": "negative-Y",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(tikv_engine_cache_efficiency{instance=~\"$instance\", db=\"kv\", type=\"block_cache_data_miss\"}[1m])) / (sum(rate(tikv_engine_cache_efficiency{db=\"kv\", type=\"block_cache_data_hit\"}[1m])) + sum(rate(tikv_engine_cache_efficiency{db=\"kv\", type=\"block_cache_data_miss\"}[1m])))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "kvdb-data-miss-rate",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "KVDB block cache miss rate has jitter ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "percentunit",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "count": "dark-orange",
+        "hit-count": "dark-orange",
+        "kv_commit": "green",
+        "wait-queue": "orange",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 145
+      },
+      "id": 9568,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "hideEmpty": true,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "max",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "count",
+          "transform": "negative-Y",
+          "yaxis": 2
+        },
+        {
+          "alias": "write-rpc",
+          "zindex": -3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(rate(tikv_engine_locate{instance=~\"$instance\", db=\"kv\", type=\"number_db_next\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "count",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "KVDB seek too much times ?",
+      "tooltip": {
+        "msResolution": false,
+        "shared": true,
+        "sort": 0,
+        "value_type": "cumulative"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": "0",
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "172.16.4.55:23581-compaction-flow": "semi-dark-yellow",
+        "compaction": "green",
+        "flow": "rgb(1, 120, 152)",
+        "kv_commit": "green",
+        "read-flow": "light-red",
+        "total": "orange",
+        "write-flow": "rgb(239, 232, 103)",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "fill": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 150
+      },
+      "id": 11287,
+      "legend": {
+        "alignAsTable": false,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "rightSide": false,
+        "show": true,
+        "sideWidth": null,
+        "sort": "current",
+        "sortDesc": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "paceLength": 10,
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "repeatedByRow": true,
+      "seriesOverrides": [
+        {
+          "alias": "/disk-read(.*)/",
+          "legend": false,
+          "transform": "negative-Y",
+          "yaxis": 2,
+          "zindex": 3
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "irate(node_disk_read_time_seconds_total[1m]) / irate(node_disk_reads_completed_total[1m])",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "disk-read: {{ instance }} - {{ device }}",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{instance=~\"$instance\", type=~\"kv_prewrite|kv_commit|kv_pessimistic_lock\"}[1m]))",
+          "format": "time_series",
+          "hide": false,
+          "intervalFactor": 1,
+          "legendFormat": "write-rpc",
+          "refId": "K"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Some disks' Read too slow ?",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {
+        "hit-count": "super-light-blue",
+        "kv_commit": "green",
+        "wait-queue": "orange",
+        "wait-sched": "semi-dark-red",
+        "write-rpc": "green"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "decimals": 1,
+      "description": "",
+      "editable": true,
+      "error": false,
+      "fill": 2,
+      "grid": {},
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 150
       },
       "id": 9566,
       "legend": {
@@ -6966,7 +8109,7 @@
       }
     }
   ],
-  "refresh": "5m",
+  "refresh": "10s",
   "schemaVersion": 18,
   "style": "dark",
   "tags": [],
@@ -6975,7 +8118,7 @@
       {
         "allValue": ".*",
         "current": {},
-        "datasource": "${DS_TEST-CLUSTER}",
+        "datasource": "${DS_PROMETHEUS}",
         "definition": "",
         "hide": 0,
         "includeAll": true,
@@ -6997,7 +8140,7 @@
     ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-24h",
     "to": "now"
   },
   "timepicker": {
@@ -7028,5 +8171,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiKV-FastTune",
   "uid": "TiKVFastTune",
-  "version": 7
+  "version": 34
 }
