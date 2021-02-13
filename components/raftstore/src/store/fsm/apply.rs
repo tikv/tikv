@@ -863,7 +863,7 @@ where
             let mut results = VecDeque::new();
 
             while off < committed_entries.len() {
-                if apply_entries_ctx.delta_bytes() >= 1000 {
+                if apply_entries_ctx.delta_bytes() >= 1000 || self.pending_remove {
                     break;
                 }
 
