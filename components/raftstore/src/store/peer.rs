@@ -1841,13 +1841,14 @@ where
                     p.cb.invoke_committed();
                 }
             });
-            let apply = Apply::new(
+            let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
                 self.term(),
                 committed_entries,
                 cbs,
             );
+            apply.on_schedule();
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }

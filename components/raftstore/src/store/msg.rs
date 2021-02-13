@@ -68,7 +68,7 @@ pub enum Callback<S: Snapshot> {
     Read(ReadCallback<S>),
     /// Write callback.
     Write {
-        cb: WriteCallback,
+        cb: (WriteCallback, Instant),
         /// `proposed_cb` is called after a request is proposed to the raft group successfully.
         /// It's used to notify the caller to move on early because it's very likely the request
         /// will be applied to the raftstore.
@@ -93,15 +93,15 @@ where
         committed_cb: Option<ExtCallback>,
     ) -> Self {
         Callback::Write {
-            cb,
+            cb: (cb, Instant::now()),
             proposed_cb,
             committed_cb,
         }
     }
 
-    pub fn invoke_with_response(self, resp: RaftCmdResponse) {
+    pub fn invoke_with_response(self, resp: RaftCmdResponse) -> Option<Instant> {
         match self {
-            Callback::None => (),
+            Callback::None => None,
             Callback::Read(read) => {
                 let resp = ReadResponse {
                     response: resp,
@@ -109,10 +109,12 @@ where
                     txn_extra_op: TxnExtraOp::Noop,
                 };
                 read(resp);
+                None
             }
-            Callback::Write { cb, .. } => {
+            Callback::Write { cb: (cb, scheduled_ts), .. } => {
                 let resp = WriteResponse { response: resp };
                 cb(resp);
+                Some(scheduled_ts)
             }
         }
     }

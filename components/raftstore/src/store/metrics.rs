@@ -180,6 +180,19 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref STORE_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_duration_secs",
+            "TODO",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref APPLY_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_duration_secs",
+            "TODO",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
     pub static ref STORE_LOOP_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_loop_duration_seconds",

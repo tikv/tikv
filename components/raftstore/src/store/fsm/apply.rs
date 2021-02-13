@@ -65,6 +65,8 @@ use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
 use crate::{Error, Result};
 
 use super::metrics::*;
+use crate::store::metrics::STORE_TIME_HISTOGRAM;
+use crate::store::metrics::APPLY_TIME_HISTOGRAM;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -307,7 +309,9 @@ where
         for (cb, mut cmd) in self.cbs {
             host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
-                cb.invoke_with_response(cmd.response)
+                if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response) {
+                    APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                }
             };
         }
     }
@@ -2719,6 +2723,18 @@ impl<S: Snapshot> Apply<S> {
             cbs,
             entries_mem_size,
             entries_count,
+        }
+    }
+
+    pub fn on_schedule(&mut self) {
+        for cb in &mut self.cbs {
+            match &mut cb.cb {
+                Callback::Write { cb, .. } => {
+                    STORE_TIME_HISTOGRAM.observe(duration_to_sec(cb.1.elapsed()) as f64);
+                    cb.1 = std::time::Instant::now();
+                }
+                _ => {}
+            }
         }
     }
 }
