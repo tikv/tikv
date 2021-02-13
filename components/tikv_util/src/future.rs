@@ -81,27 +81,15 @@ struct BatchCommandsWaker(Mutex<Option<BoxFuture<'static, ()>>>);
 
 impl ArcWake for BatchCommandsWaker {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        match arc_self.0.try_lock() {
-            Ok(mut future_slot) => {
-                if let Some(mut future) = future_slot.take() {
-                    let waker = task::waker_ref(&arc_self);
-                    let cx = &mut Context::from_waker(&*waker);
-                    match future.as_mut().poll(cx) {
-                        Poll::Pending => {
-                            *future_slot = Some(future);
-                        }
-                        Poll::Ready(()) => {}
-                    }
+        let mut future_slot = arc_self.0.lock().unwrap();
+        if let Some(mut future) = future_slot.take() {
+            let waker = task::waker_ref(&arc_self);
+            let cx = &mut Context::from_waker(&*waker);
+            match future.as_mut().poll(cx) {
+                Poll::Pending => {
+                    *future_slot = Some(future);
                 }
-            }
-            Err(_) => {
-                let thread = std::thread::current();
-                let name = thread.name().unwrap_or("<unnamed>");
-                let bt = backtrace::Backtrace::new();
-                error!("dead lock may occur, try later";
-                    "thread_name" => name,
-                    "backtrace" => format_args!("{:?}", bt),
-                );
+                Poll::Ready(()) => {}
             }
         }
     }

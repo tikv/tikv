@@ -11,6 +11,7 @@ use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
 use super::metrics::*;
+use crate::future::poll_future_notify;
 use crate::timer::GLOBAL_TIMER_HANDLE;
 use crate::yatp_pool::{DefaultTicker, YatpPoolBuilder};
 use futures::executor::block_on;
@@ -338,17 +339,15 @@ impl Worker {
         )
     }
 
-    async fn delay_notify<T: Display + Send + 'static>(
-        tx: UnboundedSender<Msg<T>>,
-        timeout: Duration,
-    ) {
-        GLOBAL_TIMER_HANDLE
-            .delay(Instant::now() + timeout)
+    fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
+        let now = Instant::now();
+        let f = GLOBAL_TIMER_HANDLE
+            .delay(now + timeout)
             .compat()
             .map(move |_| {
                 let _ = tx.unbounded_send(Msg::<T>::Timeout);
-            })
-            .await;
+            });
+        poll_future_notify(f);
     }
 
     pub fn lazy_build<T: Display + Send + 'static, S: Into<String>>(
@@ -417,8 +416,8 @@ impl Worker {
     {
         let counter = self.counter.clone();
         let timeout = runner.get_interval();
+        Self::delay_notify(tx.clone(), timeout);
         self.remote.spawn(async move {
-            Self::delay_notify(tx.clone(), timeout).await;
             let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
                 match msg {
@@ -429,7 +428,7 @@ impl Worker {
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
-                        Self::delay_notify(tx.clone(), timeout).await;
+                        Self::delay_notify(tx.clone(), timeout);
                     }
                 }
             }
