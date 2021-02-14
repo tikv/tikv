@@ -1365,8 +1365,7 @@ where
 
         let async_writer = ready_ctx.async_writer(async_writer_id);
         let mut locked_writer = async_writer.0.lock().unwrap();
-        locked_writer.prepare_current_for_write();
-        let current = locked_writer.get_current_task();
+        let current = locked_writer.prepare_current_for_write();
 
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");

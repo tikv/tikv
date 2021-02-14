@@ -54,6 +54,10 @@ impl WriteBatchExt for RocksEngine {
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
     }
+
+    fn append(&mut self, dst: &mut RocksWriteBatchVec, src: &mut RocksWriteBatchVec) {
+        dst.append(src);
+    }
 }
 
 pub struct RocksWriteBatch {
@@ -98,6 +102,11 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
 
     fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
         e.write_opt(self, opts)
+    }
+
+    fn append(&mut self, _: &mut Self) {
+        // not implemented yet
+        panic!("append is not implemented for write batch");
     }
 }
 
@@ -200,6 +209,27 @@ impl RocksWriteBatchVec {
         self.db.as_ref()
     }
 
+    pub fn append(&mut self, src: &mut RocksWriteBatchVec) {
+        let len = self.index + 1;
+        let mut src_wbs = std::mem::take(&mut src.wbs);
+        for (i, wb) in src_wbs.drain(..).enumerate() {
+            if i > src.index {
+                break;
+            }
+            self.wbs.push(wb);
+            self.index += 1;
+        }
+        for p in &src.save_points {
+            self.save_points.push(*p + len);
+        }
+        self.cur_batch_size = src.cur_batch_size;
+        // Clear src write batch
+        src.wbs.push(RawWriteBatch::default());
+        src.save_points.clear();
+        src.index = 0;
+        src.cur_batch_size = 0;
+    }
+
     /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
     /// a large WriteBatch blocking write_thread too long.
     fn check_switch_batch(&mut self) {
@@ -221,6 +251,10 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
 
     fn write_to_engine(&self, e: &RocksEngine, opts: &WriteOptions) -> Result<()> {
         e.write_vec_opt(self, opts)
+    }
+
+    fn append(&mut self, src: &mut RocksWriteBatchVec) {
+        self.append(src);
     }
 }
 
