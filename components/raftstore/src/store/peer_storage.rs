@@ -26,7 +26,9 @@ use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
 use tikv_util::worker::Scheduler;
+use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
 
+use super::local_metrics::StoreIOLockMetrics;
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
@@ -299,7 +301,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn async_writer(&mut self, id: usize) -> &AsyncWriter<EK, ER>;
+    fn async_writer(&mut self, id: usize) -> (&AsyncWriter<EK, ER>, &mut StoreIOLockMetrics);
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -1363,8 +1365,15 @@ where
         let mut ctx = InvokeContext::new(self);
         let mut snapshot_index = 0;
 
-        let async_writer = ready_ctx.async_writer(async_writer_id);
+        let (async_writer, io_lock_metrics) = ready_ctx.async_writer(async_writer_id);
+        let wait_lock = UtilInstant::now_coarse();
         let mut locked_writer = async_writer.0.lock().unwrap();
+        let hold_lock = UtilInstant::now_coarse();
+
+        io_lock_metrics
+            .wait_lock_sec
+            .observe(duration_to_sec(wait_lock.elapsed()) as f64);
+
         let current = locked_writer.prepare_current_for_write();
 
         if !ready.snapshot().is_empty() {
@@ -1414,6 +1423,9 @@ where
         if locked_writer.should_notify() {
             async_writer.1.notify_one();
         }
+        io_lock_metrics
+            .hold_lock_sec
+            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
 
         Ok(ctx)
     }

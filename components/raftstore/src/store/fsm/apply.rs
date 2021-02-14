@@ -52,6 +52,7 @@ use crate::store::fsm::apply_async_io::{
 };
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::metrics::*;
+use crate::store::local_metrics::ApplyIOLockMetrics;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{
@@ -366,6 +367,8 @@ where
 
     trigger_io_bytes: u64,
     trigger_io_keys: u64,
+
+    io_lock_metrics: ApplyIOLockMetrics,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -413,6 +416,7 @@ where
             async_writers,
             trigger_io_bytes: cfg.trigger_apply_io_bytes,
             trigger_io_keys: cfg.trigger_apply_io_keys,
+            io_lock_metrics: ApplyIOLockMetrics::default(),
         }
     }
 
@@ -448,8 +452,15 @@ where
         delegate.update_metrics(self);
         let apply_cb = self.cb.take();
 
-        let writer_id = delegate.async_writer_id.unwrap();
+        let writer_id = delegate.async_writer_id(self);
+        let wait_lock = Instant::now_coarse();
         let mut locked_writer = self.async_writers[writer_id].0.lock().unwrap();
+        let hold_lock = Instant::now_coarse();
+
+        self.io_lock_metrics
+            .wait_lock_sec
+            .observe(duration_to_sec(wait_lock.elapsed()) as f64);
+
         let current = locked_writer.prepare_current_for_write();
         // append write batch
         current.kv_wb.append(&mut self.kv_wb);
@@ -468,6 +479,9 @@ where
         if locked_writer.should_notify() {
             self.async_writers[writer_id].1.notify_one();
         }
+        self.io_lock_metrics
+            .hold_lock_sec
+            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
     }
 
     #[inline]
@@ -796,12 +810,6 @@ where
         // commands again.
         apply_ctx.committed_count += committed_entries.len() - offset;
 
-        // Update async writer id
-        if self.async_writer_id.is_none() {
-            let _ = self.async_writer_id(apply_ctx);
-        }
-        let mut async_writers = std::mem::replace(&mut apply_ctx.async_writers, vec![]);
-
         let mut off = offset;
         while off < committed_entries.len() {
             apply_ctx.prepare_for(self);
@@ -848,7 +856,6 @@ where
                         // Both cancel and merge will yield current processing.
                         apply_ctx.committed_count -= committed_entries.len() - off;
                         apply_ctx.finish_for(self, results);
-                        std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
 
                         self.yield_state = Some(YieldState {
                             pending_entries: committed_entries,
@@ -873,8 +880,6 @@ where
                 break;
             }
         }
-
-        std::mem::swap(&mut apply_ctx.async_writers, &mut async_writers);
     }
 
     fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
@@ -3515,6 +3520,7 @@ where
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
         let is_synced = self.apply_ctx.flush();
+        self.apply_ctx.io_lock_metrics.flush();
         // TODO: remove this code(last_sync_apply_index belongs to the logic of `handle_snapshot`)
         /*if is_synced {
             for fsm in fsms {
