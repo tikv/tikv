@@ -265,6 +265,7 @@ where
     pub fn prepare_current_for_write(
         &mut self,
     ) -> &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
+        /*
         let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
@@ -275,6 +276,7 @@ where
                 // do nothing, adaptive IO size
             }
         }
+        */
         self.wbs[self.current_idx].on_taken_for_write();
         &mut self.wbs[self.current_idx]
     }
