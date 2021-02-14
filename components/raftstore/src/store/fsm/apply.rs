@@ -51,8 +51,8 @@ use crate::store::fsm::apply_async_io::{
     ApplyAsyncWriteTask, ApplyAsyncWriteTasks, ApplyAsyncWriter,
 };
 use crate::store::fsm::RaftPollerBuilder;
-use crate::store::metrics::*;
 use crate::store::local_metrics::ApplyIOLockMetrics;
+use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
 use crate::store::peer_storage::{

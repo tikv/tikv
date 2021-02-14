@@ -19,7 +19,6 @@ pub trait WriteBatchExt: Sized {
     }
     fn write_batch(&self) -> Self::WriteBatch;
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
-    fn append(&mut self, dst: &mut Self::WriteBatchVec, src: &mut Self::WriteBatchVec);
 }
 
 pub trait Mutable: Send {

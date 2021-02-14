@@ -25,8 +25,8 @@ use crate::store::ProposalContext;
 use crate::{Error, Result};
 use engine_traits::{RaftEngine, RaftLogBatch};
 use into_other::into_other;
-use tikv_util::worker::Scheduler;
 use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use tikv_util::worker::Scheduler;
 
 use super::local_metrics::StoreIOLockMetrics;
 use super::metrics::*;

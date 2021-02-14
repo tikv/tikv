@@ -27,10 +27,6 @@ impl WriteBatchExt for PanicEngine {
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         panic!()
     }
-
-    fn append(&mut self, dst: &mut Self::WriteBatchVec, src: &mut Self::WriteBatchVec) {
-        panic!()
-    }
 }
 
 pub struct PanicWriteBatch;

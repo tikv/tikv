@@ -54,10 +54,6 @@ impl WriteBatchExt for RocksEngine {
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         Self::WriteBatch::with_capacity(Arc::clone(&self.as_inner()), cap)
     }
-
-    fn append(&mut self, dst: &mut RocksWriteBatchVec, src: &mut RocksWriteBatchVec) {
-        dst.append(src);
-    }
 }
 
 pub struct RocksWriteBatch {
@@ -210,19 +206,29 @@ impl RocksWriteBatchVec {
     }
 
     pub fn append(&mut self, src: &mut RocksWriteBatchVec) {
-        let len = self.index + 1;
-        let mut src_wbs = std::mem::take(&mut src.wbs);
-        for (i, wb) in src_wbs.drain(..).enumerate() {
-            if i > src.index {
-                break;
+        if src.is_empty() {
+            return;
+        }
+        if self.is_empty() {
+            self.wbs = std::mem::take(&mut src.wbs);
+            self.save_points = std::mem::take(&mut src.save_points);
+            self.index = src.index;
+            self.cur_batch_size = src.cur_batch_size;
+        } else {
+            let len = self.index + 1;
+            let mut src_wbs = std::mem::take(&mut src.wbs);
+            for (i, wb) in src_wbs.drain(..).enumerate() {
+                if i > src.index {
+                    break;
+                }
+                self.wbs.push(wb);
+                self.index += 1;
             }
-            self.wbs.push(wb);
-            self.index += 1;
+            for p in &src.save_points {
+                self.save_points.push(*p + len);
+            }
+            self.cur_batch_size = src.cur_batch_size;
         }
-        for p in &src.save_points {
-            self.save_points.push(*p + len);
-        }
-        self.cur_batch_size = src.cur_batch_size;
         // Clear src write batch
         src.wbs.push(RawWriteBatch::default());
         src.save_points.clear();
