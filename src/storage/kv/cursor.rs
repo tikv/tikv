@@ -61,6 +61,11 @@ impl<I: Iterator> Cursor<I> {
         Cursor::new(iter, self.scan_mode, self.prefix_seek)
     }
 
+    #[cfg(test)]
+    pub fn iter(self) -> I {
+        self.iter
+    }
+
     /// Mark key and value as unread. It will be invoked once cursor is moved.
     #[inline]
     fn mark_unread(&self) {
