@@ -305,6 +305,16 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
         ("cpu-vendor-id", processor.get_vendor_id().to_string()),
     ];
+    //Depend on Rust lib return CPU arch not matching
+    //Golang lib so need this match loop to conversion
+    //GOlang Doc:https://go.googlesource.com/go/+/go1.15.8/src/runtime/internal/sys/zgoarch_amd64.go#7
+    //Rust Doc:http://web.mit.edu/rust-lang_v1.26.0/arch/amd64_ubuntu1404/share/doc/rust/html/std/env/consts/constant.ARCH.html
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "x86" => "386",
+        _ => std::env::consts::ARCH,
+    };
+    infos.push(("cpu-arch", arch.to_string()));
     // cache
     let caches = vec![
         ("l1-cache-size", cache_size(1)),
