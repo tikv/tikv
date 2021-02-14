@@ -285,6 +285,16 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
         ("cpu-vendor-id", processor.get_vendor_id().to_string()),
     ];
+    //Depend Rust lib this sring need sync with GOARCH
+    //Golang Doc:https://golang.org/pkg/runtime/internal/sys/#GOARCH
+    //Rust Doc:http://web.mit.edu/rust-lang_v1.26.0/arch/amd64_ubuntu1404/share/doc/rust/html/std/env/consts/constant.ARCH.html
+    //This Feature maybe need midify
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "x86" => "386",
+        _ => std::env::consts::ARCH,
+    };
+    infos.push(("cpu-arch", arch.to_string()));
     // cache
     let caches = vec![
         ("l1-cache-size", cache_size::l1_cache_size()),
