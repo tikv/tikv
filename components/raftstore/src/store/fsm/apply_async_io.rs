@@ -31,7 +31,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 use super::apply;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
 
 pub struct ApplyAsyncWriteTask<EK, WK>
 where
@@ -190,31 +190,19 @@ where
         }
     }
 
-    pub fn prepare_current_for_write(&mut self) {
-        if self.is_current_task_full() {
-            self.current_idx += 1;
-        }
-        self.wbs[self.current_idx].on_taken_for_write();
-    }
-
-    pub fn get_current_task(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
-        &mut self.wbs[self.current_idx]
-    }
-
-    pub fn is_current_task_full(&self) -> bool {
+    pub fn prepare_current_for_write(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
         let current_size = self.wbs[self.current_idx].kv_wb.data_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
         {
             if self.current_idx + 1 < self.wbs.len() {
-                true
+                self.current_idx += 1;
             } else {
                 // do nothing, adaptive IO size
-                false
             }
-        } else {
-            false
         }
+        self.wbs[self.current_idx].on_taken_for_write();
+        &mut self.wbs[self.current_idx]
     }
 
     pub fn should_notify(&self) -> bool {
@@ -349,7 +337,9 @@ where
             APPLY_WRITE_WAIT_DURATION_HISTOGRAM
                 .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);
 
+            let now = Instant::now_coarse();
             self.sync_write(&mut task);
+            APPLY_WRITE_ALL_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
 
             // TODO: block if too many tasks
             {

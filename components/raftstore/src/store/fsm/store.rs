@@ -54,7 +54,7 @@ use crate::store::fsm::ApplyTaskRes;
 use crate::store::fsm::{
     create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRes, ApplyRouter,
 };
-use crate::store::local_metrics::RaftMetrics;
+use crate::store::local_metrics::{RaftMetrics, StoreIOLockMetrics};
 use crate::store::metrics::*;
 use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::store::transport::Transport;
@@ -337,6 +337,7 @@ where
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
     pub async_writers: Vec<AsyncWriter<EK, ER>>,
+    pub io_lock_metrics: StoreIOLockMetrics,
 }
 
 impl<EK, ER, T> HandleRaftReadyContext<EK, ER> for PollContext<EK, ER, T>
@@ -345,8 +346,8 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn async_writer(&mut self, id: usize) -> &AsyncWriter<EK, ER> {
-        &self.async_writers[id]
+    fn async_writer(&mut self, id: usize) -> (&AsyncWriter<EK, ER>, &mut StoreIOLockMetrics) {
+        (&self.async_writers[id], &mut self.io_lock_metrics)
     }
 
     #[inline]
@@ -789,6 +790,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             .observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
+        self.poll_ctx.io_lock_metrics.flush();
     }
 
     fn pause(&mut self) -> bool {
@@ -1051,6 +1053,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             async_writers: self.async_writers.clone(),
+            io_lock_metrics: StoreIOLockMetrics::default(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());

@@ -111,7 +111,10 @@ where
                 read(resp);
                 None
             }
-            Callback::Write { cb: (cb, scheduled_ts), .. } => {
+            Callback::Write {
+                cb: (cb, scheduled_ts),
+                ..
+            } => {
                 let resp = WriteResponse { response: resp };
                 cb(resp);
                 Some(scheduled_ts)

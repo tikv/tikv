@@ -508,3 +508,47 @@ impl AsyncWriterApplyMetrics {
         self.task_limit_bytes.flush();
     }
 }
+
+#[derive(Clone)]
+pub struct StoreIOLockMetrics {
+    pub wait_lock_sec: LocalHistogram,
+    pub hold_lock_sec: LocalHistogram,
+}
+
+impl Default for StoreIOLockMetrics {
+    fn default() -> Self {
+        Self {
+            wait_lock_sec: STORE_WRITE_WAIT_LOCK_DURATION_HISTOGRAM.local(),
+            hold_lock_sec: STORE_WRITE_HOLD_LOCK_DURATION_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl StoreIOLockMetrics {
+    pub fn flush(&mut self) {
+        self.wait_lock_sec.flush();
+        self.hold_lock_sec.flush();
+    }
+}
+
+#[derive(Clone)]
+pub struct ApplyIOLockMetrics {
+    pub wait_lock_sec: LocalHistogram,
+    pub hold_lock_sec: LocalHistogram,
+}
+
+impl Default for ApplyIOLockMetrics {
+    fn default() -> Self {
+        Self {
+            wait_lock_sec: APPLY_WRITE_WAIT_LOCK_DURATION_HISTOGRAM.local(),
+            hold_lock_sec: APPLY_WRITE_HOLD_LOCK_DURATION_HISTOGRAM.local(),
+        }
+    }
+}
+
+impl ApplyIOLockMetrics {
+    pub fn flush(&mut self) {
+        self.wait_lock_sec.flush();
+        self.hold_lock_sec.flush();
+    }
+}

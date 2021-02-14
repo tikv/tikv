@@ -28,6 +28,10 @@ with_prefix!(prefix_store "store-");
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[config(skip)]
+    pub trigger_apply_io_bytes: u64,
+    #[config(skip)]
+    pub trigger_apply_io_keys: u64,
+    #[config(skip)]
     pub cmd_batch: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
@@ -194,6 +198,8 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
+            trigger_apply_io_bytes: 1024,
+            trigger_apply_io_keys: 32,
             cmd_batch: true,
             prevote: true,
             raftdb_path: String::new(),

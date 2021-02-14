@@ -51,4 +51,5 @@ pub trait Mutable: Send {
 pub trait WriteBatch<E: WriteBatchExt + Sized>: Mutable {
     fn with_capacity(e: &E, cap: usize) -> Self;
     fn write_to_engine(&self, e: &E, opts: &WriteOptions) -> Result<()>;
+    fn append(&mut self, _: &mut Self);
 }
