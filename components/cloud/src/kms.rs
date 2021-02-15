@@ -1,4 +1,4 @@
-use crate::error::{empty_key_contents, Result};
+use crate::error::{Error, KmsError, Result};
 use kvproto::encryptionpb::MasterKeyKms;
 use tokio::runtime::Runtime;
 
@@ -37,7 +37,8 @@ pub struct KeyId(String);
 impl KeyId {
     pub fn new(id: String) -> Result<KeyId> {
         if id.is_empty() {
-            Err(empty_key_contents("KMS key id can not be empty"))
+            let msg = "KMS key id can not be empty";
+            Err(Error::KmsError(KmsError::EmptyKey(msg.to_owned())))
         } else {
             Ok(KeyId(id))
         }
@@ -59,7 +60,9 @@ pub struct EncryptedKey(Vec<u8>);
 impl EncryptedKey {
     pub fn new(key: Vec<u8>) -> Result<Self> {
         if key.is_empty() {
-            Err(empty_key_contents("Encrypted Key"))
+            Err(Error::KmsError(KmsError::EmptyKey(
+                "Encrypted Key".to_owned(),
+            )))
         } else {
             Ok(Self(key))
         }

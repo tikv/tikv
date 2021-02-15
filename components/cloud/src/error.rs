@@ -40,10 +40,6 @@ pub enum KmsError {
     Other(Box<dyn error::Error + Sync + Send>),
 }
 
-pub fn empty_key_contents(msg: &str) -> Error {
-    Error::KmsError(KmsError::EmptyKey(msg.to_owned()))
-}
-
 impl From<Error> for IoError {
     fn from(err: Error) -> IoError {
         match err {

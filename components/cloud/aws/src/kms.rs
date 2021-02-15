@@ -127,7 +127,7 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
     if let RusotoError::Service(e) = &err {
         match &e {
             GenerateDataKeyError::InvalidKeyUsage(_) => {
-                Error::KmsError(KmsError::WrongMasterKey(err.into()))
+                Error::KmsError(KmsError::Other(err.into()))
             }
             GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
