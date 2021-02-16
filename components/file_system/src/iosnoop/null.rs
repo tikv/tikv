@@ -8,6 +8,8 @@ pub fn init_io_snooper() -> Result<(), String> {
     Err("IO snooper is not started due to not compiling with BCC".to_string())
 }
 
+pub fn stop_io_snooper() {}
+
 thread_local! {
     static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other)
 }

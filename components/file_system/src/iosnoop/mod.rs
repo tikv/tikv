@@ -9,4 +9,4 @@ mod imp;
 mod imp;
 
 pub(crate) use imp::{fetch_io_bytes, flush_io_latency_metrics};
-pub use imp::{get_io_type, init_io_snooper, set_io_type};
+pub use imp::{get_io_type, init_io_snooper, set_io_type, stop_io_snooper};
