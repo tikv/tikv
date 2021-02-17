@@ -270,7 +270,7 @@ mod tests {
     use tikv::server::raftkv::modifies_to_requests;
     use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
     use tikv::storage::lock_manager::DummyLockManager;
-    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn};
+    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
     use tikv::storage::txn::commands::one_pc_commit_ts;
     use tikv::storage::txn::tests::*;
     use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
@@ -360,9 +360,11 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(42.into());
-        let mut txn = MvccTxn::new(snapshot, 10.into(), false, cm);
+        let mut txn = MvccTxn::new(10.into(), cm);
+        let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         prewrite(
             &mut txn,
+            &mut reader,
             &TransactionProperties {
                 start_ts: 10.into(),
                 kind: TransactionKind::Optimistic(false),

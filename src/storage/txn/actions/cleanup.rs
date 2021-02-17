@@ -33,7 +33,6 @@ pub fn cleanup<S: Snapshot>(
                 );
             }
 
-            let overlapped_write = reader.get_txn_commit_record(&key)?.unwrap_none();
             let is_pessimistic_txn = !lock.for_update_ts.is_zero();
             rollback_lock(
                 txn,
@@ -42,11 +41,11 @@ pub fn cleanup<S: Snapshot>(
                 lock,
                 is_pessimistic_txn,
                 !protect_rollback,
-                overlapped_write,
             )
         }
         l => match check_txn_status_missing_lock(
             txn,
+            reader,
             key.clone(),
             l,
             MissingLockAction::rollback_protect(protect_rollback),

@@ -9,6 +9,8 @@ use crate::storage::{
 };
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
+// Check whether there's an overlapped write record, and then perform rollback. The actual behavior
+// to do the rollback differs according to whether there's an overlapped write record.
 pub fn check_txn_status_lock_exists(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -43,16 +45,8 @@ pub fn check_txn_status_lock_exists(
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
             Ok((TxnStatus::PessimisticRollBack, released))
         } else {
-            let overlapped_write = reader.get_txn_commit_record(&primary_key)?.unwrap_none();
-            let released = rollback_lock(
-                txn,
-                reader,
-                primary_key,
-                &lock,
-                is_pessimistic_txn,
-                true,
-                overlapped_write,
-            )?;
+            let released =
+                rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
             Ok((TxnStatus::TtlExpire, released))
         };
@@ -145,8 +139,6 @@ pub fn check_txn_status_missing_lock(
     }
 }
 
-// Check whether there's an overlapped write record, and then perform rollback. The actual behavior
-// to do the rollback differs according to whether there's an overlapped write record.
 pub fn rollback_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -154,17 +146,13 @@ pub fn rollback_lock(
     lock: &Lock,
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
-    overlapped_write: Option<OverlappedWrite>,
 ) -> Result<Option<ReleasedLock>> {
-    // TODO caller should do this, but note we call txn.unlock_key now.
-    let overlapped_write = match self.reader.get_txn_commit_record(&key, self.start_ts)? {
+    let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
-        TxnCommitRecord::SingleRecord { write, .. }
-            if write.write_type != WriteType::Rollback =>
-        {
-            panic!("txn record found but not expected: {:?}", self)
+        TxnCommitRecord::SingleRecord { write, .. } if write.write_type != WriteType::Rollback => {
+            panic!("txn record found but not expected: {:?}", txn)
         }
-        _ => return Ok(self.unlock_key(key, is_pessimistic_txn)),
+        _ => return Ok(txn.unlock_key(key, is_pessimistic_txn)),
     };
 
     // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
