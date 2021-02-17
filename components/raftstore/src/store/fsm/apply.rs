@@ -11,15 +11,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+//use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
@@ -42,14 +42,12 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{Either, MustConsumeVec};
+use tikv_util::{Either};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::apply_async_io::{
-    ApplyAsyncWriteTask, ApplyAsyncWriteTasks, ApplyAsyncWriter,
-};
+use crate::store::fsm::apply_async_io::{ApplyAsyncWriter};
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::local_metrics::ApplyIOLockMetrics;
 use crate::store::metrics::*;
@@ -70,7 +68,7 @@ use crate::store::metrics::APPLY_TIME_HISTOGRAM;
 use crate::store::metrics::STORE_TIME_HISTOGRAM;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+//const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd<S>
@@ -355,7 +353,7 @@ where
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-    yield_duration: Duration,
+    //yield_duration: Duration,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -410,7 +408,7 @@ where
             exec_ctx: None,
             sync_log_hint: false,
             use_delete_range: cfg.use_delete_range,
-            yield_duration: cfg.apply_yield_duration.0,
+            //yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,
             async_writers,
@@ -565,6 +563,7 @@ pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     cb.invoke_with_response(resp);
 }
 
+/*
 /// Checks if a write is needed to be issued before handling the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
@@ -591,6 +590,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 
     false
 }
+*/
 
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
@@ -887,6 +887,7 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
+/*
     fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
         wb.put_msg_cf(
             CF_RAFT,
@@ -900,6 +901,7 @@ where
             );
         });
     }
+*/
 
     fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
@@ -3432,6 +3434,7 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
+    loop_timer: Instant,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3453,6 +3456,8 @@ where
                 _ => {}
             }
         }
+        APPLY_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
+        self.loop_timer = Instant::now_coarse();
     }
 
     /// There is no control fsm in apply poller.
@@ -3518,8 +3523,9 @@ where
         expected_msg_count
     }
 
-    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
+    fn end(&mut self, _fsms: &mut [Box<ApplyFsm<EK>>]) {
+        //let is_synced = self.apply_ctx.flush();
+        self.apply_ctx.flush();
         self.apply_ctx.io_lock_metrics.flush();
         // TODO: remove this code(last_sync_apply_index belongs to the logic of `handle_snapshot`)
         /*if is_synced {
@@ -3527,6 +3533,8 @@ where
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
         }*/
+        APPLY_LOOP_WORK_DURATION_HISTOGRAM
+            .observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
     }
 }
 
@@ -3597,6 +3605,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
+            loop_timer: Instant::now_coarse(),
         }
     }
 }

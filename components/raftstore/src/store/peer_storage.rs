@@ -48,7 +48,6 @@ pub const INIT_EPOCH_VER: u64 = 1;
 pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 // One extra slot for VecDeque internal usage.
-const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
@@ -2281,6 +2280,7 @@ mod tests {
         exp_res.push(new_entry(7, 8));
         validate_cache(&store, &exp_res);
 
+        let MAX_CACHE_CAPACITY: usize = 1024 - 1;
         let cap = MAX_CACHE_CAPACITY as u64;
 
         // result overflow

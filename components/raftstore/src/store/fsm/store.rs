@@ -7,12 +7,12 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{mem, thread, u64};
+use std::{thread, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{Engines, KvEngine, Mutable, WriteBatch, WriteBatchExt};
+//use engine_rocks::{PerfContext, PerfLevel};
+use engine_traits::{Engines, KvEngine, Mutable, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
-use raft::{Ready, StateRole};
+use raft::{StateRole};
 use time::{self, Timespec};
 
 use engine_traits::CompactedEvent;
@@ -42,8 +42,8 @@ use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
-use crate::observe_perf_context_type;
-use crate::report_perf_context;
+//use crate::observe_perf_context_type;
+//use crate::report_perf_context;
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -56,7 +56,7 @@ use crate::store::fsm::{
 };
 use crate::store::local_metrics::{RaftMetrics, StoreIOLockMetrics};
 use crate::store::metrics::*;
-use crate::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
+use crate::store::peer_storage::{self, HandleRaftReadyContext};
 use crate::store::transport::Transport;
 use crate::store::util::{is_initial_msg, PerfContextStatistics};
 use crate::store::worker::{

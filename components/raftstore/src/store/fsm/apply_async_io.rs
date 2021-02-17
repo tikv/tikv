@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -18,17 +17,13 @@ use crate::store::util::PerfContextStatistics;
 use crate::store::PeerMsg;
 use crate::{observe_perf_context_type, report_perf_context, Result};
 
-use kvproto::raft_serverpb::RaftApplyState;
-
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
-    KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions, CF_RAFT,
+    KvEngine, WriteBatch, WriteOptions, CF_RAFT,
 };
 
-use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::collections::{HashMap};
 use tikv_util::time::{duration_to_sec, Instant};
-
-use super::apply;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
@@ -132,9 +127,9 @@ where
     stop: bool,
     wbs: VecDeque<ApplyAsyncWriteTask<EK, W>>,
     metrics: AsyncWriterApplyMetrics,
-    queue_size: usize,
-    queue_init_bytes: usize,
-    queue_bytes_step: f64,
+    //queue_size: usize,
+    //queue_init_bytes: usize,
+    //queue_bytes_step: f64,
     size_limits: Vec<usize>,
     current_idx: usize,
     adaptive_idx: usize,
@@ -176,9 +171,9 @@ where
             stop: false,
             wbs,
             metrics: AsyncWriterApplyMetrics::default(),
-            queue_size,
-            queue_init_bytes,
-            queue_bytes_step,
+            //queue_size,
+            //queue_init_bytes,
+            //queue_bytes_step,
             size_limits,
             current_idx: 0,
             adaptive_idx: 0,
@@ -191,7 +186,6 @@ where
     }
 
     pub fn prepare_current_for_write(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
-        /*
         let current_size = self.wbs[self.current_idx].kv_wb.data_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
@@ -202,7 +196,6 @@ where
                 // do nothing, adaptive IO size
             }
         }
-        */
         self.wbs[self.current_idx].on_taken_for_write();
         &mut self.wbs[self.current_idx]
     }

@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -203,9 +202,9 @@ where
     stop: bool,
     wbs: VecDeque<AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>>,
     metrics: AsyncWriterStoreMetrics,
-    queue_size: usize,
-    queue_init_bytes: usize,
-    queue_bytes_step: f64,
+    //queue_size: usize,
+    //queue_init_bytes: usize,
+    //queue_bytes_step: f64,
     size_limits: Vec<usize>,
     current_idx: usize,
     adaptive_idx: usize,
@@ -248,9 +247,9 @@ where
             stop: false,
             wbs,
             metrics: AsyncWriterStoreMetrics::default(),
-            queue_size,
-            queue_init_bytes,
-            queue_bytes_step,
+            //queue_size,
+            //queue_init_bytes,
+            //queue_bytes_step,
             size_limits,
             current_idx: 0,
             adaptive_idx: 0,
@@ -265,7 +264,6 @@ where
     pub fn prepare_current_for_write(
         &mut self,
     ) -> &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
-        /*
         let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
@@ -276,7 +274,6 @@ where
                 // do nothing, adaptive IO size
             }
         }
-        */
         self.wbs[self.current_idx].on_taken_for_write();
         &mut self.wbs[self.current_idx]
     }

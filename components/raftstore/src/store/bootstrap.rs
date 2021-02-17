@@ -9,7 +9,7 @@ use engine_traits::{Engines, KvEngine, Mutable, RaftEngine};
 use engine_traits::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
-use kvproto::raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent};
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
