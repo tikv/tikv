@@ -95,7 +95,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     return Duration::new(0, 0);
                 }
                 Ok(Some(mut region)) => {
-                    self.check_ttl_for_range(region.get_start_key(), region.get_end_key());
+                    Self::check_ttl_for_range(&self.engine, region.get_start_key(), region.get_end_key());
                     key = region.take_end_key();
                 }
                 Err(e) => {
@@ -105,12 +105,11 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
         }
     }
 
-    pub fn check_ttl_for_range(&self, start_key: &[u8], end_key: &[u8]) {
+    pub fn check_ttl_for_range(engine: &E, start_key: &[u8], end_key: &[u8]) {
         let current_ts = UnixSecs::now().into_inner();
 
         let mut files = Vec::new();
-        let res = match self
-            .engine
+        let res = match engine
             .get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key)
         {
             Ok(v) => v,
@@ -135,7 +134,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
         // let compact_range_timer = COMPACT_RANGE_CF
         //     .with_label_values(&[cf])
         //     .start_coarse_timer();
-        if let Err(e) = self.engine.compact_files_cf(CF_DEFAULT, &files, None) {
+        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, &files, None) {
             error!(
                 "execute ttl compact files failed";
                 "range_start" => log_wrappers::Value::key(&start_key),
@@ -153,5 +152,71 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
 
         // wait a while
         thread::sleep(Duration::from_secs(1));
+    }
+}
+
+mod tests {
+    use super::*;
+    use super::super::ttl_compaction_filter::TEST_CURRENT_TS;
+    
+    use crate::config::DbConfig;
+    use crate::storage::kv::TestEngineBuilder;
+    use engine_traits::util::append_expire_ts;
+    use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT};
+    use raftstore::RegionInfoAccessor;
+
+    #[test]
+    fn test_ttl_checker() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path()).ttl(true);
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+
+        let kvdb = engine.get_rocksdb();
+        let key1 = b"key1";
+        let mut value1 = vec![0; 10];
+        append_expire_ts(&mut value1, 10);
+        kvdb.put_cf(CF_DEFAULT, key1, &value1).unwrap();
+        kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+        let key2 = b"key2";
+        let mut value2 = vec![0; 10];
+        append_expire_ts(&mut value2, TEST_CURRENT_TS + 20);
+        kvdb.put_cf(CF_DEFAULT, key2, &value2).unwrap();
+        let key3 = b"key3";
+        let mut value3 = vec![0; 10];
+        append_expire_ts(&mut value3, 20);
+        kvdb.put_cf(CF_DEFAULT, key3, &value3).unwrap();
+        kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+        let key4 = b"key4";
+        let mut value4 = vec![0; 10];
+        append_expire_ts(&mut value4, 0);
+        kvdb.put_cf(CF_DEFAULT, key4, &value4).unwrap();
+        kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+        let key5 = b"key5";
+        let mut value5 = vec![0; 10];
+        append_expire_ts(&mut value5, 10);
+        kvdb.put_cf(CF_DEFAULT, key5, &value5).unwrap();
+        kvdb.flush_cf(CF_DEFAULT, true).unwrap();
+
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
+
+        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"key1", b"key25");
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
+
+        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"key2", b"key6");
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
+        assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_none());
     }
 }
