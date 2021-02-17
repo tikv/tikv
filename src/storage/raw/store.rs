@@ -16,9 +16,9 @@ pub enum RawStore<S: Snapshot> {
 impl<S: Snapshot> RawStore<S> {
     pub fn new(snapshot: S, enable_ttl: bool) -> Self {
         if enable_ttl {
-            RawStore::Vanilla(RawStoreInner::new(snapshot))
+            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
         } else {
-            RawStore::TTL(RawStoreInner::new(snapshot.into()))
+            RawStore::Vanilla(RawStoreInner::new(snapshot))
         }
     }
 
@@ -43,12 +43,19 @@ impl<S: Snapshot> RawStore<S> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOptions::default();
+        if let Some(end) = end_key {
+            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
         match self {
             RawStore::Vanilla(inner) => {
-                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+                if key_only {
+                    option.set_key_only(key_only);
+                }
+                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
             }
             RawStore::TTL(inner) => {
-                inner.forward_raw_scan(cf, start_key, end_key, limit, statistics, false)
+                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
             }
         }
     }
@@ -62,12 +69,19 @@ impl<S: Snapshot> RawStore<S> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
+        let mut option = IterOptions::default();
+        if let Some(end) = end_key {
+            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+        }
         match self {
             RawStore::Vanilla(inner) => {
-                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, key_only)
+                if key_only {
+                    option.set_key_only(key_only);
+                }
+                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
             }
             RawStore::TTL(inner) => {
-                inner.reverse_raw_scan(cf, start_key, end_key, limit, statistics, false)
+                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
             }
         }
     }
@@ -107,18 +121,11 @@ impl<S: Snapshot> RawStoreInner<S> {
         &self,
         cf: CfName,
         start_key: &Key,
-        end_key: Option<&Key>,
         limit: usize,
         statistics: &mut Statistics,
+        option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
         let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(&start_key, statistics)? {
@@ -148,18 +155,11 @@ impl<S: Snapshot> RawStoreInner<S> {
         &self,
         cf: CfName,
         start_key: &Key,
-        end_key: Option<&Key>,
         limit: usize,
         statistics: &mut Statistics,
+        option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
         let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(&start_key, statistics)? {

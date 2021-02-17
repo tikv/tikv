@@ -1459,10 +1459,11 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
-    pub fn new(lock_mgr: DummyLockManager) -> Self {
-        let config = Config::default();
+    pub fn new(lock_mgr: DummyLockManager, enable_ttl: bool) -> Self {
+        let mut config = Config::default();
+        config.enable_ttl = enable_ttl;
         Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
+            engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
             config,
             pipelined_pessimistic_lock: Arc::new(atomic::AtomicBool::new(false)),
             lock_mgr,
@@ -1695,7 +1696,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
 
@@ -1732,7 +1733,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -1881,7 +1882,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2441,7 +2442,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2516,7 +2517,7 @@ mod tests {
 
     #[test]
     fn test_batch_get_command() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2590,7 +2591,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2674,7 +2675,7 @@ mod tests {
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .config(config)
             .build()
             .unwrap();
@@ -2717,7 +2718,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -2755,7 +2756,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_check_ttl() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2813,7 +2814,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -2868,7 +2869,7 @@ mod tests {
     fn test_high_priority_no_block() {
         let mut config = Config::default();
         config.scheduler_worker_pool_size = 1;
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .config(config)
             .build()
             .unwrap();
@@ -2922,7 +2923,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3024,7 +3025,16 @@ mod tests {
 
     #[test]
     fn test_raw_delete_range() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_delete_range_impl(false)
+    }
+
+    #[test]
+    fn test_raw_delete_range_ttl() {
+        test_raw_delete_range_impl(true)
+    }
+
+    fn test_raw_delete_range_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3128,7 +3138,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_batch_put_impl(false)
+    }
+
+    #[test]
+    fn test_raw_batch_put_ttl() {
+        test_raw_batch_put_impl(true)
+    }
+
+    fn test_raw_batch_put_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3164,7 +3183,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_get() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_batch_get_impl(false)
+    }
+
+    #[test]
+    fn test_raw_batch_get_ttl() {
+        test_raw_batch_get_impl(true)
+    }
+
+    fn test_raw_batch_get_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3203,7 +3231,16 @@ mod tests {
 
     #[test]
     fn test_batch_raw_get() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_batch_raw_get_impl(false)
+    }
+
+    #[test]
+    fn test_batch_raw_get_ttl() {
+        test_batch_raw_get_impl(true)
+    }
+
+    fn test_batch_raw_get_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3251,7 +3288,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_batch_delete_impl(false)
+    }
+
+    #[test]
+    fn test_raw_batch_delete_ttl() {
+        test_raw_batch_delete_impl(true)
+    }
+
+    fn test_raw_batch_delete_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3337,7 +3383,16 @@ mod tests {
 
     #[test]
     fn test_raw_scan() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_scan_impl(false)
+    }
+
+    #[test]
+    fn test_raw_scan_ttl() {
+        test_raw_scan_impl(true)
+    }
+
+    fn test_raw_scan_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3576,61 +3631,30 @@ mod tests {
         ]
         .into_iter()
         .map(|(k, v)| Some((k, v)));
-        let engine = storage.get_engine();
         expect_multi_values(
             results.clone().collect(),
-            block_on(async {
-                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
-                    &engine,
-                    SnapContext::default(),
-                )
-                .await?;
-                let store = RawStore::new(snapshot, false);
-                store
-                    .forward_raw_scan(
-                        "",
-                        &Key::from_encoded(b"c1".to_vec()),
-                        Some(&Key::from_encoded(b"d3".to_vec())),
-                        20,
-                        &mut Statistics::default(),
-                        false,
-                    )
-                    .map_err(Error::from)
-                    .map(|results| {
-                        results
-                            .into_iter()
-                            .map(|x| x.map_err(Error::from))
-                            .collect()
-                    })
-            })
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"c1".to_vec(),
+                Some(b"d3".to_vec()),
+                20,
+                false,
+                false,
+            ))
             .unwrap(),
         );
         expect_multi_values(
             results.rev().collect(),
-            block_on(async move {
-                let snapshot = <Storage<RocksEngine, DummyLockManager>>::snapshot(
-                    &engine,
-                    SnapContext::default(),
-                )
-                .await?;
-                let store = RawStore::new(snapshot, false);
-                store
-                    .reverse_raw_scan(
-                        "",
-                        &Key::from_encoded(b"d3".to_vec()),
-                        Some(&Key::from_encoded(b"c1".to_vec())),
-                        20,
-                        &mut Statistics::default(),
-                        false,
-                    )
-                    .map_err(Error::from)
-                    .map(|results| {
-                        results
-                            .into_iter()
-                            .map(|x| x.map_err(Error::from))
-                            .collect()
-                    })
-            })
+            block_on(storage.raw_scan(
+                Context::default(),
+                "".to_string(),
+                b"d3".to_vec(),
+                Some(b"c1".to_vec()),
+                20,
+                false,
+                true,
+            ))
             .unwrap(),
         );
     }
@@ -3735,7 +3759,16 @@ mod tests {
 
     #[test]
     fn test_raw_batch_scan() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        test_raw_batch_scan_impl(false)
+    }
+
+    #[test]
+    fn test_raw_batch_scan_ttl() {
+        test_raw_batch_scan_impl(true)
+    }
+
+    fn test_raw_batch_scan_impl(ttl: bool) {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, ttl)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4001,7 +4034,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4210,7 +4243,7 @@ mod tests {
     fn test_resolve_lock() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4329,7 +4362,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock_lite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4445,7 +4478,7 @@ mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4531,7 +4564,7 @@ mod tests {
 
     #[test]
     fn test_check_txn_status() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -4737,7 +4770,7 @@ mod tests {
 
     #[test]
     fn test_check_secondary_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -4850,7 +4883,7 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .set_pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
@@ -5535,7 +5568,7 @@ mod tests {
 
     #[test]
     fn test_check_memory_locks() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let cm = storage.get_concurrency_manager();
@@ -5603,7 +5636,7 @@ mod tests {
 
     #[test]
     fn test_async_commit_prewrite() {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();

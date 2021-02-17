@@ -95,7 +95,7 @@ mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         let dir = tempfile::TempDir::new().unwrap();
-        let builder = TestEngineBuilder::new().path(dir.path()).enable_ttl();
+        let builder = TestEngineBuilder::new().path(dir.path()).ttl(true);
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let kvdb = engine.get_rocksdb();
 

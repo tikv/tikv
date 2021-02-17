@@ -194,8 +194,8 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn enable_ttl(mut self) -> Self {
-        self.enable_ttl = true;
+    pub fn ttl(mut self, b: bool) -> Self {
+        self.enable_ttl = b;
         self
     }
 
