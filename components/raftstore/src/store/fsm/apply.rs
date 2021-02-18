@@ -965,16 +965,9 @@ where
                     }
                 }
             }
-            if has_high_latency_operation(&cmd) {
-                if apply_ctx.priority != Priority::Low {
-                    self.priority = Priority::Low;
-                    return ApplyResult::Yield;
-                }
-            } else {
-                if apply_ctx.priority != Priority::Normal {
-                    self.priority = Priority::Normal;
-                    return ApplyResult::Yield;
-                }
+            if has_high_latency_operation(&cmd) && apply_ctx.priority != Priority::Low {
+                self.priority = Priority::Low;
+                return ApplyResult::Yield;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -3390,6 +3383,7 @@ where
                         state.pending_msgs = drainer.collect();
                         break;
                     }
+                    self.delegate.priority = Priority::Normal;
                 }
                 Some(Msg::Registration(reg)) => self.handle_registration(reg),
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
