@@ -283,12 +283,6 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-    pub static ref APPLY_IN_CALLBACK_QUEUE_HISTOGRAM2: Histogram =
-        register_histogram!(
-            "tikv_raftstore_apply_in_callback_queue_duration_seconds2",
-            "TODO",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
     pub static ref APPLY_BEFORE_CALLBACK_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_before_callback_duration_seconds",

@@ -33,6 +33,8 @@ pub struct Config {
     pub trigger_apply_io_keys: u64,
     #[config(skip)]
     pub cmd_batch: bool,
+    #[config(skip)]
+    pub async_callback: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[config(skip)]
     pub prevote: bool,
@@ -201,6 +203,7 @@ impl Default for Config {
             trigger_apply_io_bytes: 1024,
             trigger_apply_io_keys: 32,
             cmd_batch: true,
+            async_callback: true,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
@@ -422,6 +425,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch"])
             .set((self.cmd_batch as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["async_callback"])
+            .set((self.async_callback as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());

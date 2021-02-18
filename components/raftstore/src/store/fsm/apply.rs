@@ -359,17 +359,6 @@ where
         }
     }
 
-    pub fn on_to_callback_queue2(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM2
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
-                }
-            };
-        }
-    }
-
     pub fn on_before_callback(&self) {
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {

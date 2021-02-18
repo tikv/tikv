@@ -21,9 +21,49 @@ use engine_traits::{KvEngine, WriteBatch, WriteOptions, CF_RAFT};
 
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant};
+use std::sync::mpsc::{channel, Sender};
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
+
+pub struct ApplyAsyncWriteCallback<EK>
+where
+    EK: KvEngine,
+{
+    pub cbs: Vec<ApplyCallback<EK>>,
+    pub apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>,
+    pub destroy_res: Vec<(u64, PeerMsg<EK>)>,
+}
+
+impl<EK> ApplyAsyncWriteCallback<EK>
+where
+    EK: KvEngine,
+{
+    fn invoke(&mut self, notifier: &Box<dyn ApplyNotifier<EK>>, coprocessor_host: &CoprocessorHost<EK>) {
+        for cb in self.cbs.drain(..) {
+            cb.invoke_all(coprocessor_host);
+        }
+
+        let apply_res = std::mem::replace(&mut self.apply_res, HashMap::default());
+        notifier.notify(apply_res);
+
+        for (region_id, msg) in self.destroy_res.drain(..) {
+            notifier.notify_one(region_id, msg);
+        }
+    }
+
+    fn in_callback_queue(&self) {
+        for cb in &self.cbs {
+            cb.on_to_callback_queue();
+        }
+    }
+
+    fn before_callback(&self) {
+        for cb in &self.cbs {
+            cb.on_before_callback();
+        }
+    }
+}
 
 pub struct ApplyAsyncWriteTask<EK, WK>
 where
@@ -279,6 +319,8 @@ where
     notifier: Box<dyn ApplyNotifier<EK>>,
     coprocessor_host: CoprocessorHost<EK>,
     perf_context_statistics: PerfContextStatistics,
+    callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
+    async_callback: bool,
 }
 
 impl<EK, W> ApplyAsyncWriteWorker<EK, W>
@@ -293,6 +335,7 @@ where
         notifier: Box<dyn ApplyNotifier<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
         config: &Config,
+        callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
     ) -> Self {
         let writer = Arc::new((
             Mutex::new(ApplyAsyncWriteTasks::new(
@@ -313,6 +356,8 @@ where
             notifier,
             coprocessor_host,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
+            callback_tx,
+            async_callback: config.async_callback,
         }
     }
 
@@ -377,15 +422,31 @@ where
 
         self.coprocessor_host.on_flush_apply(self.kv_engine.clone());
 
-        for cb in task.cbs.drain(..) {
-            cb.invoke_all(&self.coprocessor_host);
-        }
+        if self.async_callback {
+            let cbs = std::mem::replace(&mut task.cbs, vec![]);
+            let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
+            let destroy_res = std::mem::replace(&mut task.destroy_res, vec![]);
+            let cb_task = ApplyAsyncWriteCallback {
+                cbs,
+                apply_res,
+                destroy_res,
+            };
+            cb_task.in_callback_queue();
+            self.callback_tx.send(cb_task).unwrap();
+        } else {
+            let callback_begin = Instant::now_coarse();
+            for cb in task.cbs.drain(..) {
+                cb.invoke_all(&self.coprocessor_host);
+            }
 
-        let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
-        self.notifier.notify(apply_res);
+            let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
+            self.notifier.notify(apply_res);
 
-        for (region_id, msg) in task.destroy_res.drain(..) {
-            self.notifier.notify_one(region_id, msg);
+            for (region_id, msg) in task.destroy_res.drain(..) {
+                self.notifier.notify_one(region_id, msg);
+            }
+            APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+                .observe(duration_to_sec(callback_begin.elapsed()) as f64);
         }
     }
 }
@@ -423,6 +484,26 @@ where
         coprocessor_host: &CoprocessorHost<EK>,
         config: &Config,
     ) -> Result<()> {
+        let (callback_tx, callback_rx) = channel::<ApplyAsyncWriteCallback<EK>>();
+        if config.async_callback {
+            let callback_notifier = notifier.clone_box();
+            let callback_copr_host = coprocessor_host.clone();
+            let callback_t = thread::Builder::new().name(thd_name!("apply-writer-callback")).spawn(move || {
+                let mut callback_begin = Instant::now_coarse();
+                loop {
+                    let mut cb_task = callback_rx.recv().unwrap();
+                    cb_task.before_callback();
+                    APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                    callback_begin = Instant::now_coarse();
+                    cb_task.invoke(&callback_notifier, &callback_copr_host);
+                    APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                }
+            })?;
+            self.handlers.push(callback_t);
+        }
+
         for i in 0..config.apply_batch_system.io_pool_size {
             let tag = format!("apply-writer-{}", i);
             let mut worker = ApplyAsyncWriteWorker::new(
@@ -432,6 +513,7 @@ where
                 notifier.clone_box(),
                 coprocessor_host.clone(),
                 config,
+                callback_tx.clone(),
             );
             let writer = worker.writer.clone();
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {
