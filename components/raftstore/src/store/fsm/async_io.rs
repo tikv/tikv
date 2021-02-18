@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
@@ -212,7 +211,6 @@ where
     sample_window: SampleWindow,
     sample_quantile: f64,
     task_suggest_bytes_cache: usize,
-    io_wait_max: Duration,
 }
 
 impl<EK, ER> AsyncWriteAdaptiveTasks<EK, ER>
@@ -228,7 +226,6 @@ where
         queue_bytes_step: f64,
         queue_adaptive_gain: usize,
         queue_sample_quantile: f64,
-        io_wait_max: Duration,
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
@@ -257,7 +254,6 @@ where
             sample_window: SampleWindow::new(),
             sample_quantile: queue_sample_quantile,
             task_suggest_bytes_cache: 0,
-            io_wait_max,
         }
     }
 
@@ -279,7 +275,7 @@ where
     }
 
     pub fn should_notify(&self) -> bool {
-        self.current_idx == 0 && self.should_write_first_task()
+        self.current_idx == 0 && self.has_task()
     }
 
     fn detach_task(&mut self) -> AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
@@ -323,14 +319,12 @@ where
         self.wbs.push_back(task);
     }
 
-    fn should_write_first_task(&self) -> bool {
+    fn has_task(&self) -> bool {
         let first_task = self.wbs.front().unwrap();
         if first_task.is_empty() {
             return false;
         }
-        self.task_suggest_bytes_cache == 0
-            || first_task.raft_wb.persist_size() >= self.task_suggest_bytes_cache
-            || first_task.begin.unwrap().elapsed() >= self.io_wait_max
+        true
     }
 
     fn flush_metrics(&mut self) {
@@ -351,7 +345,6 @@ where
     raft_engine: ER,
     router: RaftRouter<EK, ER>,
     pub writer: AsyncWriter<EK, ER>,
-    cv_wait: Duration,
     perf_context_statistics: PerfContextStatistics,
 }
 
@@ -377,7 +370,6 @@ where
                 config.store_batch_system.io_queue_bytes_step,
                 config.store_batch_system.io_queue_adaptive_gain,
                 config.store_batch_system.io_queue_sample_quantile,
-                Duration::from_micros(config.store_batch_system.io_max_wait_us),
             )),
             Condvar::new(),
         ));
@@ -388,7 +380,6 @@ where
             raft_engine,
             router,
             writer,
-            cv_wait: Duration::from_micros(config.store_batch_system.io_max_wait_us / 2),
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
         }
     }
@@ -398,8 +389,8 @@ where
             let loop_begin = Instant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                while !w.stop && !w.should_write_first_task() {
-                    w = self.writer.1.wait_timeout(w, self.cv_wait).unwrap().0;
+                while !w.stop && !w.has_task() {
+                    w = self.writer.1.wait(w).unwrap();
                 }
                 if w.stop {
                     return;
@@ -460,9 +451,12 @@ where
             STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
         );
 
+        let callback_begin = Instant::now_coarse();
         for (_, r) in &task.unsynced_readies {
             r.flush(&self.router);
         }
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
+            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
 
         fail_point!("raft_after_save");
     }

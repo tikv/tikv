@@ -176,20 +176,22 @@ pub struct RocksWriteBatchVec {
     wbs: Vec<RawWriteBatch>,
     save_points: Vec<usize>,
     index: usize,
-    cur_batch_size: usize,
-    batch_size_limit: usize,
+    pre_data_size: usize,
+    pre_count_size: usize,
+    count_size_limit: usize,
 }
 
 impl RocksWriteBatchVec {
-    pub fn new(db: Arc<DB>, batch_size_limit: usize, cap: usize) -> RocksWriteBatchVec {
+    pub fn new(db: Arc<DB>, count_size_limit: usize, cap: usize) -> RocksWriteBatchVec {
         let wb = RawWriteBatch::with_capacity(cap);
         RocksWriteBatchVec {
             db,
             wbs: vec![wb],
             save_points: vec![],
             index: 0,
-            cur_batch_size: 0,
-            batch_size_limit,
+            pre_data_size: 0,
+            pre_count_size: 0,
+            count_size_limit,
         }
     }
 
@@ -213,8 +215,11 @@ impl RocksWriteBatchVec {
             self.wbs = std::mem::take(&mut src.wbs);
             self.save_points = std::mem::take(&mut src.save_points);
             self.index = src.index;
-            self.cur_batch_size = src.cur_batch_size;
+            self.pre_data_size = src.pre_data_size;
+            self.pre_count_size = src.pre_count_size;
         } else {
+            self.pre_data_size += self.current_wb().data_size() + src.pre_data_size;
+            self.pre_count_size += self.current_wb().count() + src.pre_count_size;
             let len = self.index + 1;
             let mut src_wbs = std::mem::take(&mut src.wbs);
             for (i, wb) in src_wbs.drain(..).enumerate() {
@@ -227,26 +232,30 @@ impl RocksWriteBatchVec {
             for p in &src.save_points {
                 self.save_points.push(*p + len);
             }
-            self.cur_batch_size = src.cur_batch_size;
         }
         // Clear src write batch
         src.wbs.push(RawWriteBatch::default());
         src.save_points.clear();
         src.index = 0;
-        src.cur_batch_size = 0;
+        src.pre_data_size = 0;
+        src.pre_count_size = 0;
+    }
+
+    fn current_wb(&self) -> &RawWriteBatch {
+        &self.wbs[self.index]
     }
 
     /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
     /// a large WriteBatch blocking write_thread too long.
     fn check_switch_batch(&mut self) {
-        if self.batch_size_limit > 0 && self.cur_batch_size >= self.batch_size_limit {
+        if self.count_size_limit > 0 && self.current_wb().count() >= self.count_size_limit {
+            self.pre_data_size += self.wbs[self.index].data_size();
+            self.pre_count_size += self.wbs[self.index].count();
             self.index += 1;
-            self.cur_batch_size = 0;
             if self.index >= self.wbs.len() {
                 self.wbs.push(RawWriteBatch::default());
             }
         }
-        self.cur_batch_size += 1;
     }
 }
 
@@ -266,15 +275,15 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
 
 impl Mutable for RocksWriteBatchVec {
     fn data_size(&self) -> usize {
-        self.wbs.iter().fold(0, |a, b| a + b.data_size())
+        self.pre_data_size + self.current_wb().data_size()
     }
 
     fn count(&self) -> usize {
-        self.cur_batch_size + self.index * self.batch_size_limit
+        self.pre_count_size + self.current_wb().count()
     }
 
     fn is_empty(&self) -> bool {
-        self.wbs[0].is_empty()
+        self.count() == 0
     }
 
     fn should_write_to_engine(&self) -> bool {
@@ -287,7 +296,8 @@ impl Mutable for RocksWriteBatchVec {
         }
         self.save_points.clear();
         self.index = 0;
-        self.cur_batch_size = 0;
+        self.pre_data_size = 0;
+        self.pre_count_size = 0;
     }
 
     fn set_save_point(&mut self) {
@@ -305,9 +315,17 @@ impl Mutable for RocksWriteBatchVec {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         if let Some(x) = self.save_points.pop() {
             for i in x + 1..=self.index {
+                if i < self.index {
+                    self.pre_data_size -= self.wbs[i].data_size();
+                    self.pre_count_size -= self.wbs[i].count();
+                }
                 self.wbs[i].clear();
             }
-            self.index = x;
+            if x < self.index {
+                self.pre_data_size -= self.wbs[x].data_size();
+                self.pre_count_size -= self.wbs[x].count();
+                self.index = x;
+            }
             return self.wbs[x].rollback_to_save_point().map_err(Error::Engine);
         }
         Err(Error::Engine("no save point".into()))

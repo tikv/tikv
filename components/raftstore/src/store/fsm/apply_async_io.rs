@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use crate::coprocessor::CoprocessorHost;
 use crate::store::config::Config;
@@ -18,11 +17,9 @@ use crate::store::PeerMsg;
 use crate::{observe_perf_context_type, report_perf_context, Result};
 
 use engine_rocks::{PerfContext, PerfLevel};
-use engine_traits::{
-    KvEngine, WriteBatch, WriteOptions, CF_RAFT,
-};
+use engine_traits::{KvEngine, WriteBatch, WriteOptions, CF_RAFT};
 
-use tikv_util::collections::{HashMap};
+use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant};
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
@@ -67,6 +64,7 @@ where
         mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
+        cb.on_to_write_queue();
         self.cbs.push(cb);
         if let Some(res) = self.apply_res.get_mut(&region_id) {
             res.apply_state = apply_res.apply_state;
@@ -82,7 +80,16 @@ where
         self.destroy_res.push((region_id, msg));
     }
 
+    fn after_write_to_db(&self) {
+        for cb in &self.cbs {
+            cb.on_write_end();
+        }
+    }
+
     fn before_write_to_db(&mut self) {
+        for cb in &self.cbs {
+            cb.on_write();
+        }
         for (region_id, res) in &self.apply_res {
             self.kv_wb
                 .put_msg_cf(
@@ -137,7 +144,6 @@ where
     sample_window: SampleWindow,
     sample_quantile: f64,
     task_suggest_bytes_cache: usize,
-    io_wait_max: Duration,
 }
 
 impl<EK, W> ApplyAsyncWriteTasks<EK, W>
@@ -152,7 +158,6 @@ where
         queue_bytes_step: f64,
         queue_adaptive_gain: usize,
         queue_sample_quantile: f64,
-        io_wait_max: Duration,
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
@@ -181,7 +186,6 @@ where
             sample_window: SampleWindow::new(),
             sample_quantile: queue_sample_quantile,
             task_suggest_bytes_cache: 0,
-            io_wait_max,
         }
     }
 
@@ -201,7 +205,7 @@ where
     }
 
     pub fn should_notify(&self) -> bool {
-        self.current_idx == 0 && self.should_write_first_task()
+        self.current_idx == 0 && self.has_task()
     }
 
     fn detach_task(&mut self) -> ApplyAsyncWriteTask<EK, W> {
@@ -245,14 +249,15 @@ where
         self.wbs.push_back(task);
     }
 
-    fn should_write_first_task(&self) -> bool {
+    fn has_task(&self) -> bool {
         let first_task = self.wbs.front().unwrap();
         if first_task.is_empty() {
             return false;
         }
-        self.task_suggest_bytes_cache == 0
-            || first_task.kv_wb.data_size() >= self.task_suggest_bytes_cache
-            || first_task.begin.unwrap().elapsed() >= self.io_wait_max
+        true
+        //self.task_suggest_bytes_cache == 0
+        //    || first_task.kv_wb.data_size() >= self.task_suggest_bytes_cache
+        //    || first_task.begin.unwrap().elapsed() >= self.io_wait_max
     }
 
     fn flush_metrics(&mut self) {
@@ -271,7 +276,6 @@ where
     tag: String,
     kv_engine: EK,
     pub writer: ApplyAsyncWriter<EK, W>,
-    cv_wait: Duration,
     notifier: Box<dyn ApplyNotifier<EK>>,
     coprocessor_host: CoprocessorHost<EK>,
     perf_context_statistics: PerfContextStatistics,
@@ -298,7 +302,6 @@ where
                 config.apply_batch_system.io_queue_bytes_step,
                 config.apply_batch_system.io_queue_adaptive_gain,
                 config.apply_batch_system.io_queue_sample_quantile,
-                Duration::from_micros(config.apply_batch_system.io_max_wait_us),
             )),
             Condvar::new(),
         ));
@@ -307,7 +310,6 @@ where
             tag,
             kv_engine,
             writer,
-            cv_wait: Duration::from_micros(config.apply_batch_system.io_max_wait_us / 2),
             notifier,
             coprocessor_host,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
@@ -319,8 +321,8 @@ where
             let loop_begin = Instant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                while !w.stop && !w.should_write_first_task() {
-                    w = self.writer.1.wait_timeout(w, self.cv_wait).unwrap().0;
+                while !w.stop && !w.has_task() {
+                    w = self.writer.1.wait(w).unwrap();
                 }
                 if w.stop {
                     return;
@@ -371,6 +373,8 @@ where
 
             APPLY_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
+        task.after_write_to_db();
+
         self.coprocessor_host.on_flush_apply(self.kv_engine.clone());
 
         for cb in task.cbs.drain(..) {
@@ -419,7 +423,7 @@ where
         coprocessor_host: &CoprocessorHost<EK>,
         config: &Config,
     ) -> Result<()> {
-        for i in 0..config.store_batch_system.io_pool_size {
+        for i in 0..config.apply_batch_system.io_pool_size {
             let tag = format!("apply-writer-{}", i);
             let mut worker = ApplyAsyncWriteWorker::new(
                 store_id,

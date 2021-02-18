@@ -24,7 +24,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
-use raft::{StateRole};
+use raft::StateRole;
 use time::{self, Timespec};
 
 use engine_traits::CompactedEvent;
