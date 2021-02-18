@@ -719,13 +719,13 @@ mod tests {
                     "cpu-physical-cores",
                     "cpu-frequency",
                     "cpu-vendor-id",
+                    "cpu-arch",
                     "l1-cache-size",
                     "l1-cache-line-size",
                     "l2-cache-size",
                     "l2-cache-line-size",
                     "l3-cache-size",
                     "l3-cache-line-size",
-                    "cpu-arch",
                 ]
             );
         }
