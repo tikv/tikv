@@ -232,8 +232,13 @@ pub trait Engine: Send + Clone + 'static {
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
 
+    /// Get the value associated with `key` in default column family
     fn get(&self, key: &Key) -> Result<Option<Value>>;
+
+    /// Get the value associated with `key` in `cf` column family
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
+
+    /// Get the value associated with `key` in `cf` column family, with Options in `opts`
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
     fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter>;
     fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;

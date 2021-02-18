@@ -323,7 +323,6 @@ impl<S: Snapshot> PointGetter<S> {
         write_start_ts: TimeStamp,
         user_key: &Key,
     ) -> Result<Value> {
-        // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
         let value = self

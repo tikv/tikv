@@ -108,6 +108,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
+    /// load the value associated with `key` and pointed by `write`
     fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         assert_eq!(write.write_type, WriteType::Put);
         if let Some(val) = write.short_value {
@@ -1071,8 +1072,18 @@ pub mod tests {
         engine.prewrite(m.clone(), k, 1);
         engine.commit(k, 1, 5);
 
-        engine.rollback(k, 3);
-        engine.rollback(k, 7);
+        engine.write(vec![
+            Modify::Put(
+                CF_WRITE,
+                Key::from_raw(k).append_ts(TimeStamp::new(3)),
+                vec![b'R', 3],
+            ),
+            Modify::Put(
+                CF_WRITE,
+                Key::from_raw(k).append_ts(TimeStamp::new(7)),
+                vec![b'R', 7],
+            ),
+        ]);
 
         engine.prewrite(m.clone(), k, 15);
         engine.commit(k, 15, 17);
@@ -1441,9 +1452,9 @@ pub mod tests {
     }
 
     #[test]
-    fn test_get() {
+    fn test_load_data() {
         let path = tempfile::Builder::new()
-            .prefix("_test_storage_mvcc_reader_get_write")
+            .prefix("_test_storage_mvcc_reader_load_data")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
@@ -1456,48 +1467,179 @@ pub mod tests {
             b"v",
             "v".repeat(txn_types::SHORT_VALUE_MAX_LEN + 1).into_bytes(),
         );
-        let m = Mutation::Put((Key::from_raw(k), short_value.to_vec()));
-        engine.prewrite(m, k, 1);
-        engine.commit(k, 1, 2);
 
-        engine.rollback(k, 5);
+        struct Case {
+            expected: Result<Value>,
 
-        engine.lock(k, 6, 7);
+            // modifies to put into the engine
+            modifies: Vec<Modify>,
+            // these are used to construct the mvcc reader
+            scan_mode: Option<ScanMode>,
+            key: Key,
+            write: Write,
+        }
 
-        engine.delete(k, 8, 9);
+        let cases = vec![
+            Case {
+                // write has short_value
+                expected: Ok(short_value.to_vec()),
 
-        let m = Mutation::Put((Key::from_raw(k), long_value.to_vec()));
-        engine.prewrite(m, k, 10);
+                modifies: vec![Modify::Put(
+                    CF_DEFAULT,
+                    Key::from_raw(k).append_ts(TimeStamp::new(1)),
+                    vec![],
+                )],
+                scan_mode: None,
+                key: Key::from_raw(k),
+                write: Write::new(
+                    WriteType::Put,
+                    TimeStamp::new(1),
+                    Some(short_value.to_vec()),
+                ),
+            },
+            Case {
+                // write has no short_value, the reader has a cursor, got something
+                expected: Ok(long_value.to_vec()),
+                modifies: vec![Modify::Put(
+                    CF_DEFAULT,
+                    Key::from_raw(k).append_ts(TimeStamp::new(2)),
+                    long_value.to_vec(),
+                )],
+                scan_mode: Some(ScanMode::Forward),
+                key: Key::from_raw(k),
+                write: Write::new(WriteType::Put, TimeStamp::new(2), None),
+            },
+            Case {
+                // write has no short_value, the reader has a cursor, got nothing
+                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                modifies: vec![Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(1)),
+                    Write::new(WriteType::Put, TimeStamp::new(1), None)
+                        .as_ref()
+                        .to_bytes(),
+                )],
+                scan_mode: Some(ScanMode::Forward),
+                key: Key::from_raw(k),
+                write: Write::new(WriteType::Put, TimeStamp::new(3), None),
+            },
+            Case {
+                // write has no short_value, the reader has no cursor, got something
+                expected: Ok(long_value.to_vec()),
+                modifies: vec![Modify::Put(
+                    CF_DEFAULT,
+                    Key::from_raw(k).append_ts(TimeStamp::new(4)),
+                    long_value.to_vec(),
+                )],
+                scan_mode: None,
+                key: Key::from_raw(k),
+                write: Write::new(WriteType::Put, TimeStamp::new(4), None),
+            },
+            Case {
+                // write has no short_value, the reader has no cursor, got nothing
+                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                modifies: vec![],
+                scan_mode: None,
+                key: Key::from_raw(k),
+                write: Write::new(WriteType::Put, TimeStamp::new(5), None),
+            },
+        ];
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-        let mut reader = MvccReader::new(snap, None, false);
-        let key = Key::from_raw(k);
+        for case in cases {
+            engine.write(case.modifies);
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let mut reader = MvccReader::new(snap, case.scan_mode, false);
+            let result = reader.load_data(&case.key, case.write);
+            assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
+        }
+    }
 
-        assert_eq!(
-            reader.get(&key, 2.into(), None).unwrap(),
-            Some(short_value.to_vec())
+    #[test]
+    fn test_get() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_get")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        let (k, long_value) = (
+            b"k",
+            "v".repeat(txn_types::SHORT_VALUE_MAX_LEN + 1).into_bytes(),
         );
-        assert_eq!(
-            reader.get(&key, 5.into(), None).unwrap(),
-            Some(short_value.to_vec())
-        );
-        assert_eq!(
-            reader.get(&key, 7.into(), None).unwrap(),
-            Some(short_value.to_vec())
-        );
-        assert_eq!(reader.get(&key, 9.into(), None).unwrap(), None);
 
-        assert!(reader.get(&key, 11.into(), None).is_err());
-        assert_eq!(reader.get(&key, 9.into(), None).unwrap(), None);
+        struct Case {
+            expected: Result<Option<Value>>,
+            // modifies to put into the engine
+            modifies: Vec<Modify>,
+            // arguments to do the function call
+            key: Key,
+            ts: TimeStamp,
+            gc_fence_limit: Option<TimeStamp>,
+        }
 
-        // Commit the long value
-        engine.commit(k, 10, 11);
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
-        let mut reader = MvccReader::new(snap, None, false);
-        assert_eq!(
-            reader.get(&key, 11.into(), None).unwrap(),
-            Some(long_value.to_vec())
-        );
+        let cases = vec![
+            Case {
+                // no write for `key` at `ts` exists
+                expected: Ok(None),
+                modifies: vec![Modify::Delete(
+                    CF_DEFAULT,
+                    Key::from_raw(k).append_ts(TimeStamp::new(1)),
+                )],
+                key: Key::from_raw(k),
+                ts: TimeStamp::new(1),
+                gc_fence_limit: None,
+            },
+            Case {
+                // some write for `key` at `ts` exists, load data return Err
+                // todo: "some write for `key` at `ts` exists" should be checked by `test_get_write`
+                // "load data return Err" is checked by test_load_data
+                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                modifies: vec![Modify::Put(
+                    CF_WRITE,
+                    Key::from_raw(k).append_ts(TimeStamp::new(2)),
+                    Write::new(WriteType::Put, TimeStamp::new(2), None)
+                        .as_ref()
+                        .to_bytes(),
+                )],
+                key: Key::from_raw(k),
+                ts: TimeStamp::new(3),
+                gc_fence_limit: None,
+            },
+            Case {
+                // some write for `key` at `ts` exists, load data success
+                // todo: "some write for `key` at `ts` exists" should be checked by `test_get_write`
+                // "load data success" is checked by test_load_data
+                expected: Ok(Some(long_value.to_vec())),
+                modifies: vec![
+                    Modify::Put(
+                        CF_WRITE,
+                        Key::from_raw(k).append_ts(TimeStamp::new(4)),
+                        Write::new(WriteType::Put, TimeStamp::new(4), None)
+                            .as_ref()
+                            .to_bytes(),
+                    ),
+                    Modify::Put(
+                        CF_DEFAULT,
+                        Key::from_raw(k).append_ts(TimeStamp::new(4)),
+                        long_value,
+                    ),
+                ],
+                key: Key::from_raw(k),
+                ts: TimeStamp::new(5),
+                gc_fence_limit: None,
+            },
+        ];
+
+        for case in cases {
+            engine.write(case.modifies);
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let mut reader = MvccReader::new(snap, None, false);
+            let result = reader.get(&case.key, case.ts, case.gc_fence_limit);
+            assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
+        }
     }
 
     #[test]
