@@ -2468,13 +2468,6 @@ impl TiKvConfig {
             }
         }
 
-        if self.storage.enable_ttl {
-            // if default cf is non-empty, write cf and lock cf should be empty
-            // not to make mixture of txnkv and rawkv
-
-            // TODO:
-        }
-
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {
             return Err(format!(

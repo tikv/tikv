@@ -34,6 +34,7 @@ pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
 // Following keys are all local keys, so the first byte must be 0x01.
 pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];
 pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
+pub const TTL_SUPPORT_MARKER_KEY: &[u8] = &[LOCAL_PREFIX, 0x03];
 // We save two types region data in DB, for raft and other meta data.
 // When the store starts, we should iterate all region meta data to
 // construct peer, no need to travel large raft data, so we separate them

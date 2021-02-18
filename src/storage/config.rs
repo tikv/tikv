@@ -71,7 +71,7 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(MIN_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
-            enable_ttl: true,
+            enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(24),
             block_cache: BlockCacheConfig::default(),
         }

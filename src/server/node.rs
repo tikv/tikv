@@ -147,13 +147,14 @@ where
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        enable_ttl: bool,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
-        let mut store_id = self.check_store(&engines)?;
+        let mut store_id = self.check_store(&engines, enable_ttl)?;
         if store_id == INVALID_ID {
-            store_id = self.bootstrap_store(&engines)?;
+            store_id = self.bootstrap_store(&engines, enable_ttl)?;
             fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
                 "injected error: node_after_bootstrap_store"
             )));
@@ -211,7 +212,7 @@ where
 
     // check store, return store id for the engine.
     // If the store is not bootstrapped, use INVALID_ID.
-    fn check_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn check_store(&self, engines: &Engines<RocksEngine, ER>, enable_ttl: bool) -> Result<u64> {
         let res = engines.kv.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?;
         if res.is_none() {
             return Ok(INVALID_ID);
@@ -231,6 +232,14 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
+
+        let marker = engines.kv.get_value(keys::TTL_SUPPORT_MARKER_KEY)?;
+        if marker.is_none() && enable_ttl {
+            return Err(box_err!("enable ttl on a non-ttl store"));
+        } else if marker.is_some() && !enable_ttl {
+            return Err(box_err!("disable ttl on a ttl store"));
+        }
+
         Ok(store_id)
     }
 
@@ -256,11 +265,11 @@ where
         }
     }
 
-    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>) -> Result<u64> {
+    fn bootstrap_store(&self, engines: &Engines<RocksEngine, ER>, enable_ttl: bool) -> Result<u64> {
         let store_id = self.alloc_id()?;
         debug!("alloc store id"; "store_id" => store_id);
 
-        store::bootstrap_store(&engines, self.cluster_id, store_id)?;
+        store::bootstrap_store(&engines, self.cluster_id, store_id, enable_ttl)?;
 
         Ok(store_id)
     }
@@ -424,5 +433,6 @@ where
         let store_id = self.store.get_id();
         self.stop_store(store_id);
         self.bg_worker.stop();
+        self.has_started = false;
     }
 }
