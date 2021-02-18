@@ -953,10 +953,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| {
-                            if v.is_ok() {
-                                Ok((k.into_encoded(), v.unwrap().unwrap()))
-                            } else {
-                                Err(v.unwrap_err())
+                            match v {
+                                Ok(v) => Ok((k.into_encoded(), v.unwrap())),
+                                Err(v) => Err(v),
                             }
                         })
                         .collect();

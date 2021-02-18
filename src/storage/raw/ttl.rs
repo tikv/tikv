@@ -31,11 +31,10 @@ impl<S: Snapshot> TTLSnapshot<S> {
             }
         }
 
-        value_with_ttl
+        if let Some(v) = value_with_ttl
             .as_mut()
             .unwrap()
-            .as_mut()
-            .map(|v| truncate_expire_ts(v).unwrap());
+            .as_mut() { truncate_expire_ts(v).unwrap() }
         value_with_ttl
     }
 
@@ -129,7 +128,7 @@ impl<I: Iterator> TTLIterator<I> {
                 break;
             }
 
-            if *res.as_ref().unwrap() == true {
+            if *res.as_ref().unwrap() {
                 let expire_ts = get_expire_ts(self.i.value())?;
                 if expire_ts != 0 && expire_ts < self.current_ts {
                     res = if forward {

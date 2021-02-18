@@ -14,7 +14,7 @@ use tidb_query_executors::interface::*;
 use tidb_query_executors::BatchIndexScanExecutor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Statistics, Store};
+use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
 
 use crate::util::executor_descriptor::index_scan;
 use crate::util::scan_bencher;
@@ -25,7 +25,7 @@ pub struct BatchIndexScanExecutorBuilder<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: Store + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScanExecutorBuilder<T> {
+impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScanExecutorBuilder<T> {
     type T = T;
     type E = Box<dyn BatchExecutor<StorageStats = Statistics>>;
     type P = IndexScanParam;

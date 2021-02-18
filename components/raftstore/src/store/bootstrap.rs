@@ -62,7 +62,7 @@ where
 
     engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
     if enable_ttl {
-        engines.kv.put(keys::TTL_SUPPORT_MARKER_KEY, &vec![])?;
+        engines.kv.put(keys::TTL_SUPPORT_MARKER_KEY, &[])?;
     }
     engines.sync_kv()?;
     Ok(())

@@ -34,7 +34,7 @@ pub fn get_expire_ts(value_with_ttl: &[u8]) -> Result<u64> {
         return Err(Error::Codec(codec::Error::ValueLength));
     }
     let mut ts = &value_with_ttl[len - number::U64_SIZE..];
-    Ok(number::decode_u64(&mut ts)?.into())
+    Ok(number::decode_u64(&mut ts)?)
 }
 
 pub fn strip_expire_ts(value_with_ttl: &[u8]) -> &[u8] {

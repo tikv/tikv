@@ -13,7 +13,7 @@ use test_coprocessor::*;
 
 use tidb_query_datatype::expr::EvalConfig;
 use tikv::coprocessor::dag::TiKVStorage;
-use tikv::storage::{RocksEngine, Store};
+use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::bencher::Bencher;
 use crate::util::store::StoreDescriber;
@@ -46,11 +46,11 @@ where
 }
 
 /// A bencher that will use batch executor to execute the given request.
-pub struct BatchBencher<T: Store + 'static> {
+pub struct BatchBencher<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: Store + 'static> BatchBencher<T> {
+impl<T: TxnStore + 'static> BatchBencher<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -60,7 +60,7 @@ impl<T: Store + 'static> BatchBencher<T> {
 
 impl<T, M> IntegratedBencher<M> for BatchBencher<T>
 where
-    T: Store + 'static,
+    T: TxnStore + 'static,
     M: Measurement,
 {
     fn name(&self) -> String {
@@ -92,12 +92,12 @@ where
     }
 }
 
-pub struct DAGBencher<T: Store + 'static> {
+pub struct DAGBencher<T: TxnStore + 'static> {
     pub batch: bool,
     _phantom: PhantomData<T>,
 }
 
-impl<T: Store + 'static> DAGBencher<T> {
+impl<T: TxnStore + 'static> DAGBencher<T> {
     pub fn new(batch: bool) -> Self {
         Self {
             batch,
@@ -108,7 +108,7 @@ impl<T: Store + 'static> DAGBencher<T> {
 
 impl<T, M> IntegratedBencher<M> for DAGBencher<T>
 where
-    T: Store + 'static,
+    T: TxnStore + 'static,
     M: Measurement,
 {
     fn name(&self) -> String {

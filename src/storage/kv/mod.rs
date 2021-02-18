@@ -85,10 +85,7 @@ impl Modify {
     }
 
     pub fn with_ttl(&mut self, expire_ts: u64) {
-        match self {
-            Modify::Put(_, _, ref mut v) => append_expire_ts(v, expire_ts),
-            _ => {}
-        }
+        if let Modify::Put(_, _, ref mut v) = self { append_expire_ts(v, expire_ts) };
     }
 }
 

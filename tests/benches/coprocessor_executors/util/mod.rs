@@ -16,7 +16,7 @@ use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::{RocksEngine, Store};
+use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use std::marker::PhantomData;
 
@@ -31,7 +31,7 @@ pub fn bench_level() -> usize {
 }
 
 /// A simple helper function to build the DAG handler.
-pub fn build_dag_handler<TargetTxnStore: Store + 'static>(
+pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     executors: &[PbExecutor],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
