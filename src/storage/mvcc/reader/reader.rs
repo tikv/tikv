@@ -848,6 +848,8 @@ mod tests {
             get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
         );
         engine.flush();
+        engine.compact(); // L0 is ignored when checking GC.
+
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
         assert!(
@@ -974,13 +976,8 @@ mod tests {
         engine.put(&[2], 3, 3);
         engine.put(&[3], 4, 4);
         engine.flush();
-        // After this flush, we have a SST file w/ properties, plus the SST
-        // file w/o properties from previous flush. We always need GC as
-        // long as we can't get properties from any SST files.
-        assert!(
-            get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).is_none()
-        );
-        engine.compact();
+        engine.compact(); // L0 is ignored when checking GC.
+
         // After this compact, the two SST files are compacted into a new
         // SST file with properties. Now all SST files have properties and
         // all keys have only one version, so we don't need gc.
@@ -999,6 +996,8 @@ mod tests {
         engine.delete(&[5], 7, 7);
         engine.delete(&[6], 8, 8);
         engine.flush();
+        engine.compact(); // L0 is ignored when checking GC.
+
         // After this flush, keys 5,6 in the new SST file have more than one
         // versions, so we need gc.
         let props =
@@ -1037,6 +1036,7 @@ mod tests {
         // A single lock version need gc.
         engine.lock(&[7], 9, 9);
         engine.flush();
+        engine.compact(); // L0 is ignored when checking GC.
         let props =
             get_mvcc_properties_and_check_gc(Arc::clone(&db), region.clone(), 10, true).unwrap();
         assert_eq!(props.min_ts, 1.into());
