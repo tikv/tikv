@@ -104,9 +104,7 @@ where
             Callback::Write {
                 cb: (_cb, scheduled_ts),
                 ..
-            } => {
-                Some(scheduled_ts.clone())
-            }
+            } => Some(scheduled_ts.clone()),
             _ => None,
         }
     }

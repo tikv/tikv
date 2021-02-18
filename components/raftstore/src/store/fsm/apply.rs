@@ -42,12 +42,12 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::{Either};
+use tikv_util::Either;
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::apply_async_io::{ApplyAsyncWriter};
+use crate::store::fsm::apply_async_io::ApplyAsyncWriter;
 use crate::store::fsm::RaftPollerBuilder;
 use crate::store::local_metrics::ApplyIOLockMetrics;
 use crate::store::metrics::*;
@@ -319,7 +319,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_QUEUE_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_TO_WRITE_QUEUE_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -329,7 +330,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_TO_WRITE_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -339,7 +341,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_WRITE_END_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_WRITE_END_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -349,7 +352,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -359,7 +363,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM2.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM2
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -369,7 +374,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_BEFORE_CALLBACK_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_BEFORE_CALLBACK_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
         }
@@ -414,7 +420,6 @@ where
     use_delete_range: bool,
 
     //yield_duration: Duration,
-
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
@@ -947,21 +952,21 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-/*
-    fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
-        wb.put_msg_cf(
-            CF_RAFT,
-            &keys::apply_state_key(self.region.get_id()),
-            &self.apply_state,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to save apply state to write batch, error: {:?}",
-                self.tag, e
-            );
-        });
-    }
-*/
+    /*
+        fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
+            wb.put_msg_cf(
+                CF_RAFT,
+                &keys::apply_state_key(self.region.get_id()),
+                &self.apply_state,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save apply state to write batch, error: {:?}",
+                    self.tag, e
+                );
+            });
+        }
+    */
 
     fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
