@@ -492,7 +492,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
     };
     let control_scheduler = ControlScheduler {
         sender: tx,
-        low_sender: tx2.clone(),
+        low_sender: tx2,
     };
     let router = Router::new(control_box, normal_scheduler, control_scheduler);
     let system = BatchSystem {
