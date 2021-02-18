@@ -46,6 +46,7 @@ pub mod logger;
 pub mod lru;
 pub mod metrics;
 pub mod mpsc;
+pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;

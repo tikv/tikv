@@ -214,3 +214,10 @@ region = "us-west-2"
 endpoint = "http://localhost:4566"
 key-id = "KMS key id"
 ```
+
+When you run TiKV, make sure to set the localstck credentials
+
+```
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+```

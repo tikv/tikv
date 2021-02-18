@@ -239,7 +239,6 @@ members = [
   "components/test_pd",
   "components/tikv_alloc",
   "components/match_template",
-  "components/engine_traits/tests",
   "components/codec",
   "components/configuration",
   "components/panic_hook",
