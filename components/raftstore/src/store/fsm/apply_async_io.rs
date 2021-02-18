@@ -24,9 +24,55 @@ use engine_traits::{
 
 use tikv_util::collections::{HashMap};
 use tikv_util::time::{duration_to_sec, Instant};
+use std::sync::mpsc::{channel, Sender};
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
+
+pub struct ApplyAsyncWriteCallback<EK>
+where
+    EK: KvEngine,
+{
+    pub cbs: Vec<ApplyCallback<EK>>,
+    pub apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>,
+    pub destroy_res: Vec<(u64, PeerMsg<EK>)>,
+}
+
+impl<EK> ApplyAsyncWriteCallback<EK>
+where
+    EK: KvEngine,
+{
+    fn invoke(&mut self, notifier: &Box<dyn ApplyNotifier<EK>>, coprocessor_host: &CoprocessorHost<EK>) {
+        for cb in self.cbs.drain(..) {
+            cb.invoke_all(coprocessor_host);
+        }
+
+        let apply_res = std::mem::replace(&mut self.apply_res, HashMap::default());
+        notifier.notify(apply_res);
+
+        for (region_id, msg) in self.destroy_res.drain(..) {
+            notifier.notify_one(region_id, msg);
+        }
+    }
+
+    fn in_callback_queue(&self) {
+        for cb in &self.cbs {
+            cb.on_to_callback_queue();
+        }
+    }
+
+    fn in_callback_queue2(&self) {
+        for cb in &self.cbs {
+            cb.on_to_callback_queue2();
+        }
+    }
+
+    fn before_callback(&self) {
+        for cb in &self.cbs {
+            cb.on_before_callback();
+        }
+    }
+}
 
 pub struct ApplyAsyncWriteTask<EK, WK>
 where
@@ -67,6 +113,7 @@ where
         mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
+        cb.on_to_write_queue();
         self.cbs.push(cb);
         if let Some(res) = self.apply_res.get_mut(&region_id) {
             res.apply_state = apply_res.apply_state;
@@ -82,7 +129,16 @@ where
         self.destroy_res.push((region_id, msg));
     }
 
+    fn after_write_to_db(&self) {
+        for cb in &self.cbs {
+            cb.on_write_end();
+        }
+    }
+
     fn before_write_to_db(&mut self) {
+        for cb in &self.cbs {
+            cb.on_write();
+        }
         for (region_id, res) in &self.apply_res {
             self.kv_wb
                 .put_msg_cf(
@@ -272,9 +328,10 @@ where
     kv_engine: EK,
     pub writer: ApplyAsyncWriter<EK, W>,
     cv_wait: Duration,
-    notifier: Box<dyn ApplyNotifier<EK>>,
+    //notifier: Box<dyn ApplyNotifier<EK>>,
     coprocessor_host: CoprocessorHost<EK>,
     perf_context_statistics: PerfContextStatistics,
+    callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
 }
 
 impl<EK, W> ApplyAsyncWriteWorker<EK, W>
@@ -286,9 +343,10 @@ where
         store_id: u64,
         tag: String,
         kv_engine: EK,
-        notifier: Box<dyn ApplyNotifier<EK>>,
+        //notifier: Box<dyn ApplyNotifier<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
         config: &Config,
+        callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
     ) -> Self {
         let writer = Arc::new((
             Mutex::new(ApplyAsyncWriteTasks::new(
@@ -308,9 +366,10 @@ where
             kv_engine,
             writer,
             cv_wait: Duration::from_micros(config.apply_batch_system.io_max_wait_us / 2),
-            notifier,
+            //notifier,
             coprocessor_host,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
+            callback_tx,
         }
     }
 
@@ -371,18 +430,23 @@ where
 
             APPLY_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
+        task.after_write_to_db();
+
         self.coprocessor_host.on_flush_apply(self.kv_engine.clone());
 
-        for cb in task.cbs.drain(..) {
-            cb.invoke_all(&self.coprocessor_host);
-        }
-
+        let cbs = std::mem::replace(&mut task.cbs, vec![]);
         let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
-        self.notifier.notify(apply_res);
+        let destroy_res = std::mem::replace(&mut task.destroy_res, vec![]);
 
-        for (region_id, msg) in task.destroy_res.drain(..) {
-            self.notifier.notify_one(region_id, msg);
-        }
+        let cb_task = ApplyAsyncWriteCallback {
+            cbs,
+            apply_res,
+            destroy_res,
+        };
+
+        cb_task.in_callback_queue();
+        cb_task.in_callback_queue2();
+        self.callback_tx.send(cb_task).unwrap();
     }
 }
 
@@ -419,15 +483,34 @@ where
         coprocessor_host: &CoprocessorHost<EK>,
         config: &Config,
     ) -> Result<()> {
+        let (callback_tx, callback_rx) = channel::<ApplyAsyncWriteCallback<EK>>();
+        let callback_notifier = notifier.clone_box();
+        let callback_copr_host = coprocessor_host.clone();
+        let callback_t = thread::Builder::new().name(thd_name!("apply-writer-callback")).spawn(move || {
+            let mut callback_begin = Instant::now_coarse();
+            loop {
+                let mut cb_task = callback_rx.recv().unwrap();
+                cb_task.before_callback();
+                APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                callback_begin = Instant::now_coarse();
+                cb_task.invoke(&callback_notifier, &callback_copr_host);
+                APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+            }
+        })?;
+        self.handlers.push(callback_t);
+
         for i in 0..config.store_batch_system.io_pool_size {
             let tag = format!("apply-writer-{}", i);
             let mut worker = ApplyAsyncWriteWorker::new(
                 store_id,
                 tag.clone(),
                 kv_engine.clone(),
-                notifier.clone_box(),
+                //notifier.clone_box(),
                 coprocessor_host.clone(),
                 config,
+                callback_tx.clone(),
             );
             let writer = worker.writer.clone();
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {

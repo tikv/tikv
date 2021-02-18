@@ -460,9 +460,12 @@ where
             STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
         );
 
+        let callback_begin = Instant::now_coarse();
         for (_, r) in &task.unsynced_readies {
             r.flush(&self.router);
         }
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
+            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
 
         fail_point!("raft_after_save");
     }
