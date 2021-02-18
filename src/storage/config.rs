@@ -51,12 +51,12 @@ pub struct Config {
     pub reserve_space: ReadableSize,
     #[config(skip)]
     pub enable_async_apply_prewrite: bool,
-    #[config(submodule)]
-    pub block_cache: BlockCacheConfig,
     #[config(skip)]
     pub enable_ttl: bool,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[config(submodule)]
+    pub block_cache: BlockCacheConfig,
 }
 
 impl Default for Config {
@@ -71,9 +71,9 @@ impl Default for Config {
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(MIN_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
-            block_cache: BlockCacheConfig::default(),
-            enable_ttl: false,
+            enable_ttl: true,
             ttl_check_poll_interval: ReadableDuration::hours(24),
+            block_cache: BlockCacheConfig::default(),
         }
     }
 }

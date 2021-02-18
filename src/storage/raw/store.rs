@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::ttl::TTLSnapshot;
 
-// use crate::storage::Result;
 use crate::storage::kv::{Result, ScanMode, Snapshot};
 use crate::storage::Statistics;
 

@@ -639,6 +639,8 @@ fn test_serde_custom_tikv_config() {
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        enable_ttl: false,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
@@ -647,8 +649,6 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         },
-        enable_ttl: false,
-        ttl_check_poll_interval: ReadableDuration::hours(0),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

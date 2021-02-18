@@ -8,8 +8,10 @@ use engine_rocks::raw::{
 };
 use engine_rocks::{RocksTTLProperties, RocksUserCollectedPropertiesNoRc};
 use engine_traits::util::get_expire_ts;
+#[cfg(not(test))]
 use tikv_util::time::UnixSecs;
 
+#[cfg(test)]
 pub(crate) const TEST_CURRENT_TS: u64 = 100;
 
 pub struct TTLCompactionFilterFactory;

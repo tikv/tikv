@@ -78,6 +78,8 @@ scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
 reserve-space = "10GB"
+enable-ttl = true
+ttl-check-poll-interval = "0s"
 
 [storage.block-cache]
 shared = true

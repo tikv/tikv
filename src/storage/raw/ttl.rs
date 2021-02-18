@@ -1,13 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-// use crate::storage::{Error, Result};
+
 use crate::storage::kv::{Cursor, Iterator, Result, ScanMode, Snapshot};
 
 use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
 use engine_traits::CfName;
 use engine_traits::{IterOptions, ReadOptions};
+#[cfg(not(test))]
 use tikv_util::time::UnixSecs;
 use txn_types::{Key, Value};
 
+#[cfg(test)]
 const TEST_CURRENT_TS: u64 = 15;
 
 #[derive(Clone)]
@@ -192,6 +194,7 @@ impl<I: Iterator> Iterator for TTLIterator<I> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::kv::Engine;

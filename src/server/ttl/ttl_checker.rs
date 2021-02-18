@@ -95,7 +95,11 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     return Duration::new(0, 0);
                 }
                 Ok(Some(mut region)) => {
-                    Self::check_ttl_for_range(&self.engine, region.get_start_key(), region.get_end_key());
+                    Self::check_ttl_for_range(
+                        &self.engine,
+                        region.get_start_key(),
+                        region.get_end_key(),
+                    );
                     key = region.take_end_key();
                 }
                 Err(e) => {
@@ -109,9 +113,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
         let current_ts = UnixSecs::now().into_inner();
 
         let mut files = Vec::new();
-        let res = match engine
-            .get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key)
-        {
+        let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
             Ok(v) => v,
             Err(e) => {
                 error!(
@@ -155,10 +157,11 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ttl_compaction_filter::TEST_CURRENT_TS;
-    
+    use super::*;
+
     use crate::config::DbConfig;
     use crate::storage::kv::TestEngineBuilder;
     use engine_traits::util::append_expire_ts;
