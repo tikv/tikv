@@ -1,11 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::READ_BUF_SIZE;
-
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
 use rand::{thread_rng, Rng};
+use rusoto_core::RusotoError;
 use std::{
     future::Future,
     io, iter,
@@ -28,6 +27,8 @@ pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // buffer.
     buf: Vec<u8>,
 }
+
+pub const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 impl<R> AsyncReadAsSyncStreamOfBytes<R> {
     pub fn new(reader: R) -> Self {
@@ -122,4 +123,19 @@ where
     }
 
     result
+}
+
+impl<E> RetryError for RusotoError<E> {
+    fn placeholder() -> Self {
+        Self::Blocking
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::HttpDispatch(_) => true,
+            Self::Unknown(resp) if resp.status.is_server_error() => true,
+            // FIXME: Retry NOT_READY & THROTTLED (403).
+            _ => false,
+        }
+    }
 }
