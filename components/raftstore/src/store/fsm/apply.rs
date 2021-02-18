@@ -15,7 +15,9 @@ use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
-use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
+use batch_system::{
+    BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler, Priority,
+};
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::PerfContext;
@@ -366,6 +368,7 @@ where
     /// happened before `WriteBatch::write` and after `SSTImporter::delete`. We shall make sure that
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMeta>,
+    priority: Priority,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -384,6 +387,7 @@ where
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+        priority: Priority,
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
@@ -413,6 +417,7 @@ where
             delete_ssts: vec![],
             store_id,
             pending_create_peers,
+            priority: priority,
         }
     }
 
@@ -640,6 +645,19 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     false
 }
 
+/// Checks if a write has high-latency operation.
+fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
@@ -789,6 +807,10 @@ where
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
+
+    /// Priority in batch system. When applying some commands which have high latency,
+    /// we decrease the priority of current fsm to reduce the impact on other normal commands.
+    priority: Priority,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -816,6 +838,7 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
+            priority: Priority::Normal,
         }
     }
 
@@ -940,6 +963,17 @@ where
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
+                }
+            }
+            if has_high_latency_operation(&cmd) {
+                if apply_ctx.priority != Priority::Low {
+                    self.priority = Priority::Low;
+                    return ApplyResult::Yield;
+                }
+            } else {
+                if apply_ctx.priority != Priority::Normal {
+                    self.priority = Priority::Normal;
+                    return ApplyResult::Yield;
                 }
             }
 
@@ -3408,6 +3442,11 @@ where
     {
         self.mailbox.take()
     }
+
+    #[inline]
+    fn get_priority(&self) -> Priority {
+        self.delegate.priority
+    }
 }
 
 impl<EK> Drop for ApplyFsm<EK>
@@ -3535,6 +3574,10 @@ where
             }
         }
     }
+
+    fn get_priority(&self) -> Priority {
+        self.apply_ctx.priority
+    }
 }
 
 pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
@@ -3583,7 +3626,7 @@ where
 {
     type Handler = ApplyPoller<EK, W>;
 
-    fn build(&mut self) -> ApplyPoller<EK, W> {
+    fn build(&mut self, priority: Priority) -> ApplyPoller<EK, W> {
         let cfg = self.cfg.value();
         ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
@@ -3598,6 +3641,7 @@ where
                 &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
+                priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
