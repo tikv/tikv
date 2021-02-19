@@ -620,16 +620,30 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 concurrency_manager.update_max_ts(start_ts);
                 if ctx.get_isolation_level() == IsolationLevel::Si {
-                    concurrency_manager
-                        .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
-                            Lock::check_ts_conflict(
-                                Cow::Borrowed(lock),
-                                &key,
-                                start_ts,
-                                &bypass_locks,
-                            )
+                    let mut mem_lock_check_start_key = Cow::Borrowed(&start_key);
+                    CHECK_MEM_LOCK_BACKOFF
+                        .create_async_backoff()
+                        .retry(|| {
+                            concurrency_manager
+                                .read_range_check(
+                                    Some(&mem_lock_check_start_key),
+                                    end_key.as_ref(),
+                                    |key, lock| {
+                                        Lock::check_ts_conflict(
+                                            Cow::Borrowed(lock),
+                                            &key,
+                                            start_ts,
+                                            &bypass_locks,
+                                        )
+                                        .map_err(|err| (err, key.clone()))
+                                    },
+                                )
+                                .map_err(|(err, key)| {
+                                    mem_lock_check_start_key = Cow::Owned(key);
+                                    mvcc::Error::from(err)
+                                })
                         })
-                        .map_err(mvcc::Error::from)?;
+                        .await?;
                 }
 
                 let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
@@ -745,24 +759,35 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 concurrency_manager.update_max_ts(max_ts);
-                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
-                // a good idea to return an error to the client, making the GC fail. A better
-                // approach is to wait for these locks to be unlocked.
-                concurrency_manager.read_range_check(
-                    start_key.as_ref(),
-                    end_key.as_ref(),
-                    |key, lock| {
-                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
-                        // can't be ignored in this case.
-                        if lock.ts <= max_ts {
-                            Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
-                                lock.clone().into_lock_info(key.to_raw()?),
-                            )))
-                        } else {
-                            Ok(())
-                        }
-                    },
-                )?;
+                let mut mem_lock_check_start_key = Cow::Borrowed(&start_key);
+                CHECK_MEM_LOCK_BACKOFF
+                    .create_async_backoff()
+                    .retry(|| {
+                        concurrency_manager
+                            .read_range_check(
+                                (*mem_lock_check_start_key).as_ref(),
+                                end_key.as_ref(),
+                                |key, lock| {
+                                    // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                                    // can't be ignored in this case.
+                                    if lock.ts <= max_ts {
+                                        Err((
+                                            mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
+                                                lock.clone().into_lock_info(key.to_raw().unwrap()),
+                                            )),
+                                            key.clone(),
+                                        ))
+                                    } else {
+                                        Ok(())
+                                    }
+                                },
+                            )
+                            .map_err(|(err, key)| {
+                                mem_lock_check_start_key = Cow::Owned(Some(key));
+                                err
+                            })
+                    })
+                    .await?;
 
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -1585,9 +1610,9 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
 }
 
 const CHECK_MEM_LOCK_BACKOFF: BackoffBuilder = BackoffBuilder {
-    base: Duration::from_micros(50),
-    cap: Duration::from_millis(5),
-    total_limit: Duration::from_millis(50),
+    base: Duration::from_micros(100),
+    cap: Duration::from_millis(20),
+    total_limit: Duration::from_millis(100),
 };
 
 async fn prepare_snap_ctx<'a>(
