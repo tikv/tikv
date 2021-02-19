@@ -390,13 +390,7 @@ pub mod root {
             Running = 1,
             Stopped = 2,
         }
-        #[repr(u32)]
-        #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-        pub enum RawCppPtrType {
-            None = 0,
-            String = 1,
-            PreHandledSnapshot = 2,
-        }
+        pub type RawCppPtrType = u32;
         #[repr(C)]
         #[derive(Debug)]
         pub struct RawCppPtr {

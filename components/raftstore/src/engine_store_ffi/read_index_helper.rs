@@ -1,6 +1,5 @@
 use crate::router::RaftStoreRouter;
 use crate::store::{Callback, RaftRouter};
-use crate::{DiscardReason, Error as RaftStoreError};
 use engine_rocks::RocksEngine;
 use engine_traits::RaftEngine;
 use futures::executor::block_on;
@@ -52,37 +51,24 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
 
             let (cb, f) = paired_future_callback();
 
-            if let Err(e) = self
+            let _ = self
                 .router
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb))
-            {
-                // Retrun region error instead a gRPC error.
-                let mut resp = ReadIndexResponse::default();
-                let region_error = if let RaftStoreError::Transport(DiscardReason::Disconnected) = e
-                {
-                    RaftStoreError::RegionNotFound(region_id).into()
-                } else {
-                    e.into()
-                };
-                resp.set_region_error(region_error);
-                return vec![(resp, region_id)];
-            }
+                .send_command(cmd, Callback::Read(cb));
             router_cb_vec.push((f, region_id));
         }
 
         let mut read_index_res = Vec::with_capacity(req_vec.len());
         for (cb, region_id) in router_cb_vec {
             let mut resp = ReadIndexResponse::default();
-            let mut res = match block_on(cb) {
-                Ok(r) => r,
-                Err(_) => {
-                    resp.set_region_error(Default::default());
-                    return vec![(resp, region_id)];
-                }
-            };
-            let mut success = false;
+            let res = block_on(cb);
+            if res.is_err() {
+                resp.set_region_error(Default::default());
+                read_index_res.push((resp, region_id));
+                continue;
+            }
+            let mut res = res.unwrap();
             if res.response.get_header().has_error() {
                 resp.set_region_error(res.response.mut_header().take_error());
             } else {
@@ -102,14 +88,10 @@ impl<ER: RaftEngine> ReadIndex for ReadIndexClient<ER> {
                         resp.set_locked(read_index_resp.take_locked());
                     } else {
                         resp.set_read_index(read_index_resp.get_read_index());
-                        success = true;
                     }
                 }
             }
             read_index_res.push((resp, region_id));
-            if !success {
-                return read_index_res;
-            }
         }
         debug!("batch_read_index success"; "response"=>?read_index_res);
         read_index_res

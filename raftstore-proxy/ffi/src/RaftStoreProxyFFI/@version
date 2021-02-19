@@ -1,4 +1,4 @@
-//d5fc82530a15753c9e45f4e5efcfec02//401006//
+//bf1ef9d1149cad25d98a7fd693d3df6d//401006//
 #pragma once
 #include <cstdint>
 namespace DB { constexpr uint32_t RAFT_STORE_PROXY_VERSION = 401006; }

@@ -77,19 +77,13 @@ enum class EngineStoreServerStatus : uint8_t {
   Stopped,
 };
 
-enum class RawCppPtrType : uint32_t {
-  None = 0,
-  String,
-  PreHandledSnapshot,
-};
+using RawCppPtrType = uint32_t;
 
 struct RawCppPtr {
   RawVoidPtr ptr;
   RawCppPtrType type;
 
-  RawCppPtr(RawVoidPtr ptr_ = nullptr,
-            RawCppPtrType type_ = RawCppPtrType::None)
-      : ptr(ptr_), type(type_) {}
+  RawCppPtr(RawVoidPtr ptr_, RawCppPtrType type_) : ptr(ptr_), type(type_) {}
   RawCppPtr(const RawCppPtr &) = delete;
   RawCppPtr(RawCppPtr &&) = delete;
 };
