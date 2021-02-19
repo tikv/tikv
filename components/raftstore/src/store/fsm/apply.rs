@@ -304,6 +304,10 @@ where
         ApplyCallback { region, cbs }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.cbs.is_empty()
+    }
+
     pub fn invoke_all(self, host: &CoprocessorHost<EK>) {
         for (cb, mut cmd) in self.cbs {
             host.post_apply(&self.region, &mut cmd);
