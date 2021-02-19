@@ -51,25 +51,15 @@ macro_rules! impl_sched {
 
             #[inline]
             fn schedule(&self, fsm: Box<Self::Fsm>) {
-                match fsm.get_priority() {
-                    Priority::Normal => {
-                        match self.sender.send($ty(fsm)) {
-                            Ok(()) => {}
-                            // TODO: use debug instead.
-                            Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
-                            _ => unreachable!(),
-                        }
-                    }
-                    Priority::Low => {
-                        match self.low_sender.send($ty(fsm)) {
-                            Ok(()) => {}
-                            // TODO: use debug instead.
-                            Err(SendError($ty(fsm))) => {
-                                warn!("failed to schedule low priority fsm {:p}", fsm)
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
+                let sender = match fsm.get_priority() {
+                    Priority::Normal => &self.sender,
+                    Priority::Low => &self.low_sender,
+                };
+                match sender.send($ty(fsm)) {
+                    Ok(()) => {}
+                    // TODO: use debug instead.
+                    Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
+                    _ => unreachable!(),
                 }
             }
 
