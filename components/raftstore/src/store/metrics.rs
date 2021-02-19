@@ -295,6 +295,55 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
+    pub static ref APPLY_LEADER_WRITE_BYTES: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_leader_write_bytes",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_LEADER_WRITE_KEYS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_leader_write_keys",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_FOLLOWER_WRITE_BYTES: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_follower_write_bytes",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_FOLLOWER_WRITE_KEYS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_follower_write_keys",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_LEADER_BATCH_WRITE_BYTES: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_leader_batch_write_bytes",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_LEADER_BATCH_WRITE_KEYS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_leader_batch_write_keys",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_FOLLOWER_BATCH_WRITE_BYTES: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_follower_batch_write_bytes",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+    pub static ref APPLY_FOLLOWER_BATCH_WRITE_KEYS: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_follower_batch_write_keys",
+            "TODO",
+            exponential_buckets(1.0, 2.0, 30).unwrap()
+        ).unwrap();
+
     pub static ref STORE_WRITE_QUEUE_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_queue_size",
@@ -337,7 +386,6 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
-
 
     pub static ref APPLY_WRITE_KVDB_DURATION_HISTOGRAM: Histogram =
         register_histogram!(

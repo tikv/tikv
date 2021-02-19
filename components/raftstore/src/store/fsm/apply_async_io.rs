@@ -37,6 +37,10 @@ where
     pub cbs: Vec<ApplyCallback<EK>>,
     pub apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>,
     pub destroy_res: Vec<(u64, PeerMsg<EK>)>,
+    pub leader_written_bytes: u64,
+    pub leader_written_keys: u64,
+    pub follower_written_bytes: u64,
+    pub follower_written_keys: u64,
 }
 
 impl<EK, WK> ApplyAsyncWriteTask<EK, WK>
@@ -53,6 +57,10 @@ where
             cbs: vec![],
             apply_res: HashMap::default(),
             destroy_res: vec![],
+            leader_written_bytes: 0,
+            leader_written_keys: 0,
+            follower_written_bytes: 0,
+            follower_written_keys: 0,
         }
     }
 
@@ -64,8 +72,19 @@ where
         mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
-        cb.on_to_write_queue();
-        self.cbs.push(cb);
+        if !cb.is_empty() {
+            cb.on_to_write_queue();
+            self.cbs.push(cb);
+            APPLY_LEADER_WRITE_BYTES.observe(apply_res.metrics.written_bytes as f64);
+            APPLY_LEADER_WRITE_KEYS.observe(apply_res.metrics.written_keys as f64);
+            self.leader_written_bytes += apply_res.metrics.written_bytes;
+            self.leader_written_keys += apply_res.metrics.written_keys;
+        } else {
+            APPLY_FOLLOWER_WRITE_BYTES.observe(apply_res.metrics.written_bytes as f64);
+            APPLY_FOLLOWER_WRITE_KEYS.observe(apply_res.metrics.written_keys as f64);
+            self.follower_written_bytes += apply_res.metrics.written_bytes;
+            self.follower_written_keys += apply_res.metrics.written_keys;
+        }
         if let Some(res) = self.apply_res.get_mut(&region_id) {
             res.apply_state = apply_res.apply_state;
             res.applied_index_term = apply_res.applied_index_term;
@@ -123,6 +142,10 @@ where
         self.cbs.clear();
         self.apply_res.clear();
         self.destroy_res.clear();
+        self.leader_written_bytes = 0;
+        self.leader_written_keys = 0;
+        self.follower_written_bytes = 0;
+        self.follower_written_keys = 0;
     }
 }
 
@@ -370,6 +393,11 @@ where
                 self.perf_context_statistics,
                 APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
             );
+
+            APPLY_LEADER_BATCH_WRITE_BYTES.observe(task.leader_written_bytes as f64);
+            APPLY_LEADER_BATCH_WRITE_KEYS.observe(task.leader_written_keys as f64);
+            APPLY_FOLLOWER_BATCH_WRITE_BYTES.observe(task.follower_written_bytes as f64);
+            APPLY_FOLLOWER_BATCH_WRITE_KEYS.observe(task.follower_written_keys as f64);
 
             APPLY_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
