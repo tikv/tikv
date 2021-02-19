@@ -4,8 +4,8 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::{self, tests::must_locked};
-use tikv::storage::txn::commands;
 use tikv::storage::txn::tests::{must_commit, must_prewrite_put, must_prewrite_put_err};
+use tikv::storage::txn::{self, commands};
 use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -60,8 +60,8 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
-        Err(storage::Error(box storage::ErrorInner::Mvcc(mvcc::Error(
-            box mvcc::ErrorInner::KeyIsLocked(lock),
+        Err(storage::Error(box storage::ErrorInner::Txn(txn::Error(
+            box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(lock))),
         )))) => {
             assert_eq!(lock.get_min_commit_ts(), 41);
         }

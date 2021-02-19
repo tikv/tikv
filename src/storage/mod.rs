@@ -1584,11 +1584,11 @@ fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-const CHECK_MEM_LOCK_BACKOFF: BackoffBuilder = BackoffBuilder::new(
-    Duration::from_micros(50),
-    Duration::from_millis(5),
-    Duration::from_millis(50),
-);
+const CHECK_MEM_LOCK_BACKOFF: BackoffBuilder = BackoffBuilder {
+    base: Duration::from_micros(50),
+    cap: Duration::from_millis(5),
+    total_limit: Duration::from_millis(50),
+};
 
 async fn prepare_snap_ctx<'a>(
     pb_ctx: &'a Context,
