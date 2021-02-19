@@ -97,6 +97,12 @@ impl MetricsManager {
         );
         flush_io_bytes!(
             self.fetcher,
+            gc,
+            IOType::Gc,
+            self.last_fetch[IOType::Gc as usize]
+        );
+        flush_io_bytes!(
+            self.fetcher,
             import,
             IOType::Import,
             self.last_fetch[IOType::Import as usize]

@@ -6,23 +6,18 @@ use rocksdb::FileSystemInspector as DBFileSystemInspector;
 use std::sync::Arc;
 
 // Use engine::Env directly since Env is not abstracted.
-pub fn get_env(
-    inspector: Option<Arc<EngineFileSystemInspector>>,
-    base_env: Option<Arc<Env>>,
-) -> Result<Arc<Env>, String> {
+pub fn get_env(base_env: Option<Arc<Env>>) -> Result<Arc<Env>, String> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
-    if let Some(inspector) = inspector {
-        Ok(Arc::new(Env::new_file_system_inspected_env(
-            base_env,
-            WrappedFileSystemInspector { inspector },
-        )?))
-    } else {
-        Ok(base_env)
-    }
+    Ok(Arc::new(Env::new_file_system_inspected_env(
+        base_env,
+        WrappedFileSystemInspector {
+            inspector: EngineFileSystemInspector::new(),
+        },
+    )?))
 }
 
 pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
-    inspector: Arc<T>,
+    inspector: T,
 }
 
 impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspector<T> {
@@ -43,20 +38,18 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{IOOp, IORateLimiter, IORateLimiterStatistics, IOType, WithIORateLimiter};
+    use file_system::{IOOp, IORateLimiterStatistics, IOType, WithIORateLimit};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>, WithIORateLimiter) {
-        let limiter = Arc::new(IORateLimiter::new(1, true));
-        let stats = limiter.statistics();
-        let guard = WithIORateLimiter::new(Some(limiter));
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>, WithIORateLimit) {
+        let (guard, stats) = WithIORateLimit::new(0);
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
-        let env = get_env(Some(Arc::new(EngineFileSystemInspector::new())), None).unwrap();
+        let env = get_env(None).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);

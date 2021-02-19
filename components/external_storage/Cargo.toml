@@ -36,6 +36,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tame-gcs = { version = "0.8.0", features = ["async-multipart"] }
 tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
 tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
 
