@@ -40,7 +40,7 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
-            .expect("should exist some cmd batch")
+            .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
             .push(observe_id, region_id, cmd);
     }
 
