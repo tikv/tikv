@@ -36,7 +36,7 @@ where
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         let txn_props = TransactionProperties {
-            start_ts: TimeStamp::default(),
+            start_ts,
             kind: TransactionKind::Optimistic(false),
             commit_kind: CommitKind::TwoPc,
             primary: &k.clone(),
