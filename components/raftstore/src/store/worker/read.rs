@@ -944,12 +944,11 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
 
         // Let's read.
-        let region = region1.clone();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let snap = resp.snapshot.unwrap();
-                assert_eq!(snap.get_region(), &region);
+                assert_eq!(snap.get_region(), &region1);
             })),
         );
         must_not_redirect(&mut reader, &rx, task);
@@ -1086,32 +1085,42 @@ mod tests {
         );
         assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
 
-        // stale read
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
-        assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
-
-        cmd.mut_header().set_read_ts(2);
-        must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
-
-        safe_ts.store(2, Ordering::Relaxed);
-        let task =
-            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
-        must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
-
         // Stale local ReadDelegate
-        cmd.mut_header().mut_region_epoch().set_version(4);
-        region1.mut_region_epoch().set_version(4);
-        let pg = Progress::region(region1);
+        cmd.mut_header().set_term(term6 + 3);
+        lease.expire_remote_lease();
+        let remote_lease = lease.maybe_new_remote_lease(term6 + 3).unwrap();
+        let pg = Progress::leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
-        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        let task =
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
+        // Stale read
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
+        assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
+
+        cmd.mut_header().set_read_ts(2);
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                let err = resp.response.get_header().get_error();
+                assert!(err.has_data_is_not_ready());
+                assert!(resp.snapshot.is_none());
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+
+        safe_ts.store(2, Ordering::SeqCst);
+        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        must_not_redirect(&mut reader, &rx, task);
+        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+
+        // Remove invalid delegate
         let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
         assert!(reader.get_delegate(1).is_some());
 
