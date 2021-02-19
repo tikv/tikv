@@ -113,7 +113,7 @@ where
     let nodes_coll = vec![1, 3, 5];
     let value_size_coll = vec![8, 128, 1024, 4096];
 
-    let mut group = c.benchmark_group(&format!("{}", label));
+    let mut group = c.benchmark_group(label);
 
     for nodes in nodes_coll {
         for &value_size in &value_size_coll {
