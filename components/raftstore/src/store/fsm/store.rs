@@ -18,6 +18,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::KeyRange;
 use kvproto::kvrpcpb::LeaderInfo;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -578,6 +579,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::CheckLeader { leaders, cb } => self.on_check_leader(leaders, cb),
+                StoreMsg::GetStoreSafeTS { key_range, cb } => {
+                    self.on_get_store_safe_ts(key_range, cb)
+                }
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
@@ -2405,6 +2409,42 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .collect();
         cb(regions);
     }
+
+    fn on_get_store_safe_ts(&self, key_range: KeyRange, cb: Box<dyn FnOnce(u64) + Send>) {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        cb(get_range_safe_ts(&meta, key_range));
+    }
+}
+
+// Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
+fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
+    if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
+        // Fast path to get the min `safe_ts` of all regions in this store
+        meta.region_read_progress
+            .iter()
+            .map(|(_, rrp)| rrp.safe_ts.load(Ordering::Relaxed))
+            .min()
+            .unwrap_or(0)
+    } else {
+        let (start_key, end_key) = (
+            data_key(key_range.get_start_key()),
+            data_end_key(key_range.get_end_key()),
+        );
+        meta.region_ranges
+            // get overlapped regions
+            .range((Excluded(start_key), Unbounded))
+            .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+            // get the min `safe_ts`
+            .map(|(_, id)| {
+                meta.region_read_progress
+                    .get(id)
+                    .unwrap()
+                    .safe_ts
+                    .load(Ordering::Relaxed)
+            })
+            .min()
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Clone)]
@@ -2482,8 +2522,7 @@ impl RegionReadProgress {
     }
 
     fn push_back(&self, queue: &mut VecDeque<(u64, u64)>, item: (u64, u64)) {
-        if queue.len() == self.cap {
-            // drop the oldest item
+        if queue.len() >= self.cap {
             queue.pop_front();
         }
         queue.push_back(item);
@@ -2604,5 +2643,49 @@ mod tests {
         rrp.forward_safe_ts(400, 0);
         rrp.forward_safe_ts(0, 700);
         assert_eq!(pending_ts_num(&rrp), 0);
+    }
+
+    #[test]
+    fn test_get_range_min_safe_ts() {
+        fn add_region(meta: &mut StoreMeta, id: u64, kr: KeyRange, safe_ts: u64) {
+            let mut region = Region::default();
+            region.set_id(id);
+            region.set_start_key(kr.get_start_key().to_vec());
+            region.set_end_key(kr.get_end_key().to_vec());
+            region.set_peers(vec![kvproto::metapb::Peer::default()].into());
+            let rrp = RegionReadProgress::new(id, 0, 1);
+            rrp.safe_ts.store(safe_ts, Ordering::Relaxed);
+            meta.region_ranges.insert(enc_end_key(&region), id);
+            meta.regions.insert(id, region);
+            meta.region_read_progress.insert(id, rrp);
+        }
+
+        fn key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
+            let mut kr = KeyRange::default();
+            kr.set_start_key(start_key.to_vec());
+            kr.set_end_key(end_key.to_vec());
+            kr
+        }
+
+        let mut meta = StoreMeta::new(0);
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"", b"")));
+        add_region(&mut meta, 1, key_range(b"", b"k1"), 100);
+        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"")));
+
+        add_region(&mut meta, 2, key_range(b"k5", b"k6"), 80);
+        add_region(&mut meta, 3, key_range(b"k6", b"k9"), 70);
+        add_region(&mut meta, 4, key_range(b"k9", b""), 90);
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"", b"")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"", b"k6")));
+        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k99", b"")));
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k5", b"k99")));
+        assert_eq!(70, get_range_safe_ts(&meta, key_range(b"k", b"k9")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k4", b"k6")));
+        assert_eq!(100, get_range_safe_ts(&meta, key_range(b"", b"k1")));
+        assert_eq!(90, get_range_safe_ts(&meta, key_range(b"k9", b"")));
+        assert_eq!(80, get_range_safe_ts(&meta, key_range(b"k5", b"k6")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k1", b"k4")));
+        assert_eq!(0, get_range_safe_ts(&meta, key_range(b"k2", b"k3")));
     }
 }
