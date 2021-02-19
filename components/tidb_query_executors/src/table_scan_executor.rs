@@ -42,6 +42,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         primary_column_ids: Vec<i64>,
         is_backward: bool,
         is_scanned_range_aware: bool,
+        primary_prefix_column_ids: Vec<i64>,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -51,6 +52,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut column_id_index = HashMap::default();
 
         let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
+        let primary_prefix_column_ids_set =
+            primary_prefix_column_ids.iter().collect::<HashSet<_>>();
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -65,6 +68,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
                 handle_indices.push(index);
             } else {
                 if !primary_column_ids_set.contains(&ci.get_column_id()) {
+                    is_key_only = false;
+                } else if primary_prefix_column_ids_set.contains(&ci.get_column_id()) {
                     is_key_only = false;
                 }
                 column_id_index.insert(ci.get_column_id(), index);
@@ -658,6 +663,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap();
 
@@ -741,6 +747,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap()
         .collect_summary(1);
@@ -880,6 +887,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -986,6 +994,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1022,6 +1031,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1060,6 +1070,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1113,6 +1124,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1162,6 +1174,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap();
 
@@ -1266,6 +1279,7 @@ mod tests {
             primary_column_ids,
             false,
             false,
+            vec![],
         )
         .unwrap();
 
