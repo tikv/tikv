@@ -1236,7 +1236,7 @@ where
             self.fsm
                 .peer
                 .read_progress
-                .forward_safe_ts(msg.get_applied_index(), msg.get_read_ts());
+                .forward_safe_ts(msg.get_applied_index(), msg.get_safe_ts());
         }
 
         if is_snapshot {

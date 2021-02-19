@@ -3450,7 +3450,7 @@ where
             && self.has_applied_to_current_term()
         {
             send_msg.set_applied_index(self.read_progress.applied_index());
-            send_msg.set_read_ts(self.read_progress.safe_ts());
+            send_msg.set_safe_ts(self.read_progress.safe_ts());
         }
 
         send_msg.set_message(msg);

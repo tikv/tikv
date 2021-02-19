@@ -2008,7 +2008,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/NingLin-P/kvproto.git?branch=stale-read#c65e6d45e6bb08434677f3ec9e459075d2ae8b8c"
+source = "git+https://github.com/NingLin-P/kvproto.git?branch=stale-read#f2651a3358c68dfa52ed2f7e8488b80d095894d3"
 dependencies = [
  "futures 0.3.7",
  "grpcio",

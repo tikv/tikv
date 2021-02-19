@@ -231,7 +231,7 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 e.set_peer_id(peer_id);
                 e.set_epoch(epoch);
-                e.set_max_ts(max_ts);
+                e.set_safe_ts(max_ts);
                 errorpb.set_data_is_not_ready(e);
             }
             _ => {}
