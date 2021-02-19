@@ -2,11 +2,8 @@
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Error as SerError, Serialize, SerializeMap, SerializeTuple, Serializer};
-<<<<<<< HEAD:components/tidb_query/src/codec/mysql/json/serde.rs
 use serde_json;
-=======
 use serde_json::Serializer as JsonSerializer;
->>>>>>> f4b03f0a3... copr: fix missing space in json format (#9660):components/tidb_query_datatype/src/codec/mysql/json/serde.rs
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
