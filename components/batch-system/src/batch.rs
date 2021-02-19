@@ -315,8 +315,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             let mut hot_fsm_count = 0;
             for (i, p) in batch.normals.iter_mut().enumerate() {
                 let len = self.handler.handle_normal(p);
-                if p.is_stopped() || p.get_priority() != self.handler.get_priority() {
+                if p.is_stopped() {
                     reschedule_fsms.push((i, ReschedulePolicy::Remove));
+                } else if p.get_priority() != self.handler.get_priority() {
+                    reschedule_fsms.push((i, ReschedulePolicy::Schedule));
                 } else {
                     if batch.timers[i].elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
