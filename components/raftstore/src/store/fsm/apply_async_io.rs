@@ -18,10 +18,11 @@ use crate::{observe_perf_context_type, report_perf_context, Result};
 
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, WriteBatch, WriteOptions, CF_RAFT};
+use kvproto::metapb::Region;
 
+use std::sync::mpsc::{channel, Sender};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant};
-use std::sync::mpsc::{channel, Sender};
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
@@ -39,9 +40,14 @@ impl<EK> ApplyAsyncWriteCallback<EK>
 where
     EK: KvEngine,
 {
-    fn invoke(&mut self, notifier: &Box<dyn ApplyNotifier<EK>>, coprocessor_host: &CoprocessorHost<EK>) {
+    fn invoke(
+        &mut self,
+        notifier: &Box<dyn ApplyNotifier<EK>>,
+        coprocessor_host: &CoprocessorHost<EK>,
+    ) {
+        let fake_region = Region::default();
         for cb in self.cbs.drain(..) {
-            cb.invoke_all(coprocessor_host);
+            cb.invoke_all(coprocessor_host, &fake_region);
         }
 
         let apply_res = std::mem::replace(&mut self.apply_res, HashMap::default());
@@ -112,9 +118,7 @@ where
         mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
-        if !cb.is_empty() {
-            cb.on_to_write_queue();
-            self.cbs.push(cb);
+        if !cb.has_callback() {
             APPLY_LEADER_WRITE_BYTES.observe(apply_res.metrics.written_bytes as f64);
             APPLY_LEADER_WRITE_KEYS.observe(apply_res.metrics.written_keys as f64);
             self.leader_written_bytes += apply_res.metrics.written_bytes;
@@ -125,6 +129,8 @@ where
             self.follower_written_bytes += apply_res.metrics.written_bytes;
             self.follower_written_keys += apply_res.metrics.written_keys;
         }
+        cb.on_to_write_queue();
+        self.cbs.push(cb);
         if let Some(res) = self.apply_res.get_mut(&region_id) {
             res.apply_state = apply_res.apply_state;
             res.applied_index_term = apply_res.applied_index_term;
@@ -463,8 +469,9 @@ where
             self.callback_tx.send(cb_task).unwrap();
         } else {
             let callback_begin = Instant::now_coarse();
+            let fake_region = Region::default();
             for cb in task.cbs.drain(..) {
-                cb.invoke_all(&self.coprocessor_host);
+                cb.invoke_all(&self.coprocessor_host, &fake_region);
             }
 
             let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
@@ -516,19 +523,21 @@ where
         if config.async_callback {
             let callback_notifier = notifier.clone_box();
             let callback_copr_host = coprocessor_host.clone();
-            let callback_t = thread::Builder::new().name(thd_name!("apply-writer-callback")).spawn(move || {
-                let mut callback_begin = Instant::now_coarse();
-                loop {
-                    let mut cb_task = callback_rx.recv().unwrap();
-                    cb_task.before_callback();
-                    APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(callback_begin.elapsed()) as f64);
-                    callback_begin = Instant::now_coarse();
-                    cb_task.invoke(&callback_notifier, &callback_copr_host);
-                    APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(callback_begin.elapsed()) as f64);
-                }
-            })?;
+            let callback_t = thread::Builder::new()
+                .name(thd_name!("apply-writer-callback"))
+                .spawn(move || {
+                    let mut callback_begin = Instant::now_coarse();
+                    loop {
+                        let mut cb_task = callback_rx.recv().unwrap();
+                        cb_task.before_callback();
+                        APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                        callback_begin = Instant::now_coarse();
+                        cb_task.invoke(&callback_notifier, &callback_copr_host);
+                        APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                    }
+                })?;
             self.handlers.push(callback_t);
         }
 

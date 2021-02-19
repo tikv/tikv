@@ -291,26 +291,31 @@ pub struct ApplyCallback<EK>
 where
     EK: KvEngine,
 {
-    region: Region,
+    //region: Region,
     cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
+    has_callback: bool,
 }
 
 impl<EK> ApplyCallback<EK>
 where
     EK: KvEngine,
 {
-    fn new(region: Region) -> Self {
+    fn new() -> Self {
         let cbs = vec![];
-        ApplyCallback { region, cbs }
+        ApplyCallback {
+            //region,
+            cbs,
+            has_callback: false,
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.cbs.is_empty()
+    pub fn has_callback(&self) -> bool {
+        self.has_callback
     }
 
-    pub fn invoke_all(self, host: &CoprocessorHost<EK>) {
+    pub fn invoke_all(self, host: &CoprocessorHost<EK>, region: &Region) {
         for (cb, mut cmd) in self.cbs {
-            host.post_apply(&self.region, &mut cmd);
+            host.post_apply(&region, &mut cmd);
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response) {
                     APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
@@ -375,6 +380,9 @@ where
     }
 
     fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
+        if cb.is_some() {
+            self.has_callback = true;
+        }
         self.cbs.push((cb, cmd));
     }
 }
@@ -482,7 +490,7 @@ where
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         delegate.metrics = ApplyMetrics::default();
-        self.cb = Some(ApplyCallback::new(delegate.region.clone()));
+        self.cb = Some(ApplyCallback::new());
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
         self.sync_log_hint = false;
