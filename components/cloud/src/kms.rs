@@ -1,6 +1,7 @@
+use async_trait::async_trait;
+
 use crate::error::{Error, KmsError, Result};
 use kvproto::encryptionpb::MasterKeyKms;
-use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -109,9 +110,10 @@ pub struct DataKeyPair {
     pub plaintext: PlainKey,
 }
 
+#[async_trait]
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
-    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<DataKeyPair>;
-    fn decrypt_data_key(&self, runtime: &mut Runtime, data_key: &EncryptedKey) -> Result<Vec<u8>>;
+    async fn generate_data_key(&self) -> Result<DataKeyPair>;
+    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
     fn name(&self) -> &[u8];
 }
 

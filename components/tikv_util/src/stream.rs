@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use bytes::Bytes;
+use futures::future::{self};
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
 use http::status::StatusCode;
@@ -119,6 +120,22 @@ where
         break;
     }
     final_result
+}
+
+// Return an error if the future does not finish by the timeout
+pub async fn with_timeout<T, E, Fut>(timeout_duration: Duration, fut: Fut) -> Result<T, E>
+where
+    Fut: Future<Output = Result<T, E>> + std::marker::Unpin,
+    E: From<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let timeout = tokio::time::delay_for(timeout_duration);
+    match future::select(fut, timeout).await {
+        future::Either::Left((resp, _)) => resp,
+        future::Either::Right(((), _)) => Err(box_err!(
+            "request timeout. duration: {:?}",
+            timeout_duration
+        )),
+    }
 }
 
 pub fn http_retriable(status: StatusCode) -> bool {

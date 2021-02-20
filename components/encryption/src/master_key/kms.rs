@@ -1,14 +1,44 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use kvproto::encryptionpb::EncryptedContent;
 use tokio::runtime::{Builder, Runtime};
 
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::crypter::{Iv, PlainKey};
 use crate::{Error, Result};
-use cloud::{EncryptedKey, KmsProvider};
+use tikv_util::stream::{retry, with_timeout};
+
+#[async_trait]
+pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
+    async fn generate_data_key(&self) -> Result<DataKeyPair>;
+    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
+    fn name(&self) -> &[u8];
+}
+
+// EncryptedKey is a newtype used to mark data as an encrypted key
+// It requires the vec to be non-empty
+#[derive(PartialEq, Clone, Debug)]
+pub struct EncryptedKey(Vec<u8>);
+
+impl EncryptedKey {
+    pub fn new(key: Vec<u8>) -> Result<Self> {
+        if key.is_empty() {
+            error!("Encrypted content is empty");
+        }
+        Ok(Self(key))
+    }
+}
+
+impl std::ops::Deref for EncryptedKey {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Debug)]
 pub struct DataKeyPair {
@@ -68,10 +98,13 @@ impl KmsBackend {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
             let mut runtime = self.runtime.lock().unwrap();
-            let data_key = self.kms_provider.generate_data_key(&mut runtime)?;
+            let timeout_duration = Duration::from_secs(10);
+            let data_key = runtime.block_on(retry(|| {
+                with_timeout(timeout_duration, self.kms_provider.generate_data_key())
+            }))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
                 plaintext: PlainKey::new(data_key.plaintext.clone())?,
-                encrypted: data_key.encrypted,
+                encrypted: EncryptedKey::new((*data_key.encrypted).clone())?,
             })?);
         }
         let state = opt_state.as_ref().unwrap();
@@ -127,10 +160,14 @@ impl KmsBackend {
                 }
             }
             {
+                let timeout_duration = Duration::from_secs(10);
                 let mut runtime = self.runtime.lock().unwrap();
-                let plaintext = self
-                    .kms_provider
-                    .decrypt_data_key(&mut runtime, &ciphertext_key)?;
+                let plaintext = runtime.block_on(retry(|| {
+                    with_timeout(
+                        timeout_duration,
+                        self.kms_provider.decrypt_data_key(&ciphertext_key),
+                    )
+                }))?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
                     plaintext: PlainKey::new(plaintext)?,

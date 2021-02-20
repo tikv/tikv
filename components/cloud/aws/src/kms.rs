@@ -1,13 +1,12 @@
+use async_trait::async_trait;
 use std::ops::Deref;
 
-use futures_util::TryFutureExt;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::RusotoError;
 use rusoto_credential::ProvideAwsCredentials;
 use rusoto_kms::{DecryptError, GenerateDataKeyError};
 use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
-use tikv_util::stream::{retry, RetryError};
-use tokio::runtime::Runtime;
+use tikv_util::stream::RetryError;
 
 use crate::util;
 use cloud::error::{Error, KmsError, Result};
@@ -73,6 +72,7 @@ impl AwsKms {
     }
 }
 
+#[async_trait]
 impl KmsProvider for AwsKms {
     fn name(&self) -> &[u8] {
         AWS_KMS_VENDOR_NAME
@@ -80,7 +80,7 @@ impl KmsProvider for AwsKms {
 
     // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
     // a wrong master key has been used, or other error otherwise.
-    fn decrypt_data_key(&self, runtime: &mut Runtime, data_key: &EncryptedKey) -> Result<Vec<u8>> {
+    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: bytes::Bytes::copy_from_slice(&*data_key),
             // Use default algorithm SYMMETRIC_DEFAULT.
@@ -91,16 +91,14 @@ impl KmsProvider for AwsKms {
             encryption_context: None,
             grant_tokens: None,
         };
-        let client = &self.client;
-        let decrypt_response = runtime.block_on(retry(|| {
-            client
-                .decrypt(decrypt_request.clone())
-                .map_err(classify_decrypt_error)
-        }))?;
-        Ok(decrypt_response.plaintext.unwrap().as_ref().to_vec())
+        self.client
+            .decrypt(decrypt_request.clone())
+            .await
+            .map_err(classify_decrypt_error)
+            .map(|response| response.plaintext.unwrap().as_ref().to_vec())
     }
 
-    fn generate_data_key(&self, runtime: &mut Runtime) -> Result<DataKeyPair> {
+    async fn generate_data_key(&self) -> Result<DataKeyPair> {
         let generate_request = GenerateDataKeyRequest {
             encryption_context: None,
             grant_tokens: None,
@@ -108,18 +106,18 @@ impl KmsProvider for AwsKms {
             key_spec: Some(AWS_KMS_DATA_KEY_SPEC.to_owned()),
             number_of_bytes: None,
         };
-        let client = &self.client;
-        let generate_response = runtime.block_on(retry(|| {
-            client
-                .generate_data_key(generate_request.clone())
-                .map_err(classify_generate_data_key_error)
-        }))?;
-        let ciphertext_key = generate_response.ciphertext_blob.unwrap().as_ref().to_vec();
-        let plaintext_key = generate_response.plaintext.unwrap().as_ref().to_vec();
-        Ok(DataKeyPair {
-            encrypted: EncryptedKey::new(ciphertext_key)?,
-            plaintext: PlainKey::new(plaintext_key)?,
-        })
+        self.client
+            .generate_data_key(generate_request)
+            .await
+            .map_err(classify_generate_data_key_error)
+            .and_then(|response| {
+                let ciphertext_key = response.ciphertext_blob.unwrap().as_ref().to_vec();
+                let plaintext_key = response.plaintext.unwrap().as_ref().to_vec();
+                Ok(DataKeyPair {
+                    encrypted: EncryptedKey::new(ciphertext_key)?,
+                    plaintext: PlainKey::new(plaintext_key)?,
+                })
+            })
     }
 }
 
@@ -183,20 +181,9 @@ mod tests {
     // use rusoto_mock::MockRequestDispatcher;
     use cloud::kms::Location;
     use rusoto_mock::MockRequestDispatcher;
-    use tokio::runtime::{Builder, Runtime};
 
-    fn runtime() -> Runtime {
-        Builder::new()
-            .basic_scheduler()
-            .thread_name("kms-runtime")
-            .core_threads(1)
-            .enable_all()
-            .build()
-            .unwrap()
-    }
-
-    #[test]
-    fn test_aws_kms() {
+    #[tokio::test]
+    async fn test_aws_kms() {
         let magic_contents = b"5678" as &[u8];
         let key_contents = vec![1u8; 32];
         let config = Config {
@@ -207,7 +194,6 @@ mod tests {
                 endpoint: String::new(),
             },
         };
-        let mut runtime = runtime();
 
         let dispatcher =
             MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
@@ -220,7 +206,7 @@ mod tests {
         let aws_kms =
             AwsKms::new_creds_dispatcher(config.clone(), dispatcher, credentials_provider.clone())
                 .unwrap();
-        let data_key = aws_kms.generate_data_key(&mut runtime).unwrap();
+        let data_key = aws_kms.generate_data_key().await.unwrap();
         assert_eq!(
             data_key.encrypted,
             EncryptedKey::new(magic_contents.to_vec()).unwrap()
@@ -234,14 +220,12 @@ mod tests {
         });
         let aws_kms =
             AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
-        let plaintext = aws_kms
-            .decrypt_data_key(&mut runtime, &data_key.encrypted)
-            .unwrap();
+        let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
         assert_eq!(plaintext, key_contents);
     }
 
-    #[test]
-    fn test_kms_wrong_key_id() {
+    #[tokio::test]
+    async fn test_kms_wrong_key_id() {
         let config = Config {
             key_id: KeyId::new("test_key_id".to_string()).unwrap(),
             vendor: String::new(),
@@ -268,10 +252,9 @@ mod tests {
             StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
         let aws_kms =
             AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
-        match aws_kms.decrypt_data_key(
-            &mut runtime(),
-            &EncryptedKey::new(b"invalid".to_vec()).unwrap(),
-        ) {
+        let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();
+        let fut = aws_kms.decrypt_data_key(&enc_key);
+        match fut.await {
             Err(Error::KmsError(KmsError::WrongMasterKey(_))) => (),
             other => panic!("{:?}", other),
         }

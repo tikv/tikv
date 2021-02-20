@@ -38,10 +38,10 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { path = "../../tikv_util", default-features = false }
-tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
 
 [dev-dependencies]
 matches = "0.1.8"
 futures = "0.3"
 rusoto_mock = "0.45.0"
+tokio = { version = "0.2" }

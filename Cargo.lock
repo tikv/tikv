@@ -596,6 +596,7 @@ dependencies = [
 name = "cloud"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "error_code",
  "failure",
  "futures-io",
@@ -606,7 +607,6 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "tokio",
  "url",
 ]
 
@@ -1164,9 +1164,9 @@ dependencies = [
 name = "encryption"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "byteorder",
  "bytes 0.5.3",
- "cloud",
  "configuration",
  "crc32fast",
  "crossbeam",

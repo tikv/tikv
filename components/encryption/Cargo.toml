@@ -23,6 +23,7 @@ prost-codec = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+async-trait = "0.1"
 byteorder = "1.2"
 bytes = "0.5"
 crossbeam = "0.7"
