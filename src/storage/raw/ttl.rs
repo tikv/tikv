@@ -11,7 +11,7 @@ use tikv_util::time::UnixSecs;
 use txn_types::{Key, Value};
 
 #[cfg(test)]
-const TEST_CURRENT_TS: u64 = 15;
+pub const TEST_CURRENT_TS: u64 = 15;
 
 #[derive(Clone)]
 pub struct TTLSnapshot<S: Snapshot> {
@@ -27,7 +27,7 @@ impl<S: Snapshot> TTLSnapshot<S> {
 
         if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
             let expire_ts = get_expire_ts(v)?;
-            if expire_ts != 0 && expire_ts < self.current_ts {
+            if expire_ts != 0 && expire_ts <= self.current_ts {
                 return Ok(None);
             }
         }
@@ -66,7 +66,11 @@ impl<S: Snapshot> TTLSnapshot<S> {
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
         if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
             stats.data.flow_stats.read_bytes += v.len();
-            return Ok(Some(get_expire_ts(v)?));
+            let expire_ts = get_expire_ts(v)?;
+            if expire_ts != 0 && expire_ts <= self.current_ts {
+                return Ok(None);
+            }
+            return Ok(Some(expire_ts - self.current_ts));
         }
         Ok(None)
     }
@@ -151,7 +155,7 @@ impl<I: Iterator> TTLIterator<I> {
 
             if *res.as_ref().unwrap() {
                 let expire_ts = get_expire_ts(self.i.value())?;
-                if expire_ts != 0 && expire_ts < self.current_ts {
+                if expire_ts != 0 && expire_ts <= self.current_ts {
                     res = if forward {
                         self.i.next()
                     } else {
@@ -267,6 +271,25 @@ mod tests {
         assert_eq!(
             ttl_snapshot.get(&Key::from_encoded_slice(b"key3")).unwrap(),
             Some(b"value3".to_vec())
+        );
+        let mut stats = Statistics::default();
+        assert_eq!(
+            ttl_snapshot
+                .get_key_ttl_cf(CF_DEFAULT, &Key::from_encoded_slice(b"key1"), &mut stats)
+                .unwrap(),
+            Some(10)
+        );
+        assert_eq!(
+            ttl_snapshot
+                .get_key_ttl_cf(CF_DEFAULT, &Key::from_encoded_slice(b"key2"), &mut stats)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            ttl_snapshot
+                .get_key_ttl_cf(CF_DEFAULT, &Key::from_encoded_slice(b"key3"), &mut stats)
+                .unwrap(),
+            Some(0)
         );
     }
 

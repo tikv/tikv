@@ -1722,6 +1722,7 @@ mod tests {
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
+    use crate::storage::raw::TEST_CURRENT_TS;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
         config::BlockCacheConfig,
@@ -4084,6 +4085,50 @@ mod tests {
             ))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn test_raw_get_key_ttl() {
+        let storage = TestStorageBuilder::new(DummyLockManager {}, true)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec(), 10),
+            (b"b".to_vec(), b"bb".to_vec(), 20),
+            (b"c".to_vec(), b"cc".to_vec(), 0),
+            (b"d".to_vec(), b"dd".to_vec(), 10),
+            (b"e".to_vec(), b"ee".to_vec(), 20),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value, ttl) in &test_data {
+            storage
+                .raw_put(
+                    Context::default(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    ttl,
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        for &(ref key, _, ttl) in &test_data {
+            let res =
+                block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
+                    .unwrap();
+            if ttl != 0 && ttl <= TEST_CURRENT_TS {
+                assert_eq!(res, None);
+            } else if ttl == 0 {
+                assert_eq!(res, Some(0));
+            } else {
+                assert_eq!(res, Some(ttl - TEST_CURRENT_TS));
+            }
+        }
     }
 
     #[test]

@@ -77,7 +77,7 @@ impl CompactionFilter for TTLCompactionFilter {
         if expire_ts == 0 {
             return false;
         }
-        expire_ts < self.ts
+        expire_ts <= self.ts
     }
 }
 
