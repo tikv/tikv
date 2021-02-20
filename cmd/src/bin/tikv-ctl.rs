@@ -25,6 +25,7 @@ use protobuf::Message;
 use encryption::{
     encryption_method_from_db_encryption_method, DataKeyManager, DecrypterReader, Iv,
 };
+use engine_rocks::config::LogLevel;
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
 use engine_traits::{EncryptionKeyManager, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -1030,18 +1031,6 @@ fn warning_prompt(message: &str) -> bool {
 }
 
 fn main() {
-    // The config is only used to initialize the global logger.
-    let rocksdb_info_dir = tempfile::tempdir().unwrap();
-    let raftdb_info_dir = tempfile::tempdir().unwrap();
-    #[allow(clippy::field_reassign_with_default)]
-    {
-        let mut cfg = TiKvConfig::default();
-        cfg.log_file = "./tikv-ctl.log".to_owned();
-        cfg.rocksdb.info_log_dir = rocksdb_info_dir.path().to_str().unwrap().to_owned();
-        cfg.raftdb.info_log_dir = raftdb_info_dir.path().to_str().unwrap().to_owned();
-        cmd::setup::initial_logger(&cfg);
-    }
-
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
@@ -1054,6 +1043,12 @@ fn main() {
         .version(version_info.as_ref())
         .long_version(version_info.as_ref())
         .setting(AppSettings::AllowExternalSubcommands)
+        .arg(
+            Arg::with_name("log")
+                .long("log")
+                .takes_value(true)
+                .help("Log file for tikv-ctl")
+        )
         .arg(
             Arg::with_name("db")
                 .long("db")
@@ -1838,6 +1833,15 @@ fn main() {
         );
 
     let matches = app.clone().get_matches();
+
+    #[allow(clippy::field_reassign_with_default)]
+    if let Some(log) = matches.value_of("log") {
+        let mut cfg = TiKvConfig::default();
+        cfg.log_file = log.to_owned();
+        cfg.rocksdb.info_log_level = LogLevel::Fatal;
+        cfg.raftdb.info_log_level = LogLevel::Fatal;
+        cmd::setup::initial_logger(&cfg);
+    }
 
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
