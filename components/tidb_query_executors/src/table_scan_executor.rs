@@ -1091,6 +1091,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
