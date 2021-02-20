@@ -76,6 +76,8 @@ scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
+enable-ttl = true
+ttl-check-poll-interval = "0s"
 
 [storage.block-cache]
 shared = true

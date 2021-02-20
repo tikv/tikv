@@ -35,11 +35,14 @@ pub trait CompactExt {
     /// Compacts all files to the bottommost level if the output level is not specified.
     fn compact_files_in_range_cf(
         &self,
-        cf_name: &str,
+        cf: &str,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()>;
+
+    fn compact_files_cf(&self, cf: &str, files: &[String], output_level: Option<i32>)
+        -> Result<()>;
 }
 
 pub trait CompactedEvent: Send {

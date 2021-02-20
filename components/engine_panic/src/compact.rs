@@ -33,9 +33,18 @@ impl CompactExt for PanicEngine {
 
     fn compact_files_in_range_cf(
         &self,
-        cf_name: &str,
+        cf: &str,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
+        output_level: Option<i32>,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn compact_files_cf(
+        &self,
+        cf: &str,
+        files: &[String],
         output_level: Option<i32>,
     ) -> Result<()> {
         panic!()

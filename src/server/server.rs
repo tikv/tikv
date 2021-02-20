@@ -411,7 +411,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
 

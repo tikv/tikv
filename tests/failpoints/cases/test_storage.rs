@@ -213,7 +213,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .set_pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -239,7 +239,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {})
+    let storage = TestStorageBuilder::new(DummyLockManager {}, false)
         .set_pipelined_pessimistic_lock(true)
         .build()
         .unwrap();

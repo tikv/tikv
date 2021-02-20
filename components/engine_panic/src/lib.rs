@@ -39,5 +39,7 @@ pub mod range_properties;
 pub use crate::range_properties::*;
 pub mod mvcc_properties;
 pub use crate::mvcc_properties::*;
+pub mod ttl_properties;
+pub use crate::ttl_properties::*;
 
 mod raft_engine;

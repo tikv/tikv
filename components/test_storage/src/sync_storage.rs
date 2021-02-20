@@ -298,7 +298,7 @@ impl<E: Engine> SyncTestStorage<E> {
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
 
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {

@@ -56,24 +56,18 @@ impl CompactExt for RocksEngine {
 
     fn compact_files_in_range_cf(
         &self,
-        cf_name: &str,
+        cf: &str,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
         let db = self.as_inner();
-        let cf = util::get_cf_handle(db, cf_name)?;
-        let cf_opts = db.get_options_cf(cf);
+        let handle = util::get_cf_handle(db, cf)?;
+        let cf_opts = db.get_options_cf(handle);
         let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
-        let output_compression = cf_opts
-            .get_compression_per_level()
-            .get(output_level as usize)
-            .cloned()
-            .unwrap_or(DBCompressionType::No);
-        let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
 
         let mut input_files = Vec::new();
-        let cf_meta = db.get_column_family_meta_data(cf);
+        let cf_meta = db.get_column_family_meta_data(handle);
         for (i, level) in cf_meta.get_levels().iter().enumerate() {
             if i as i32 >= output_level {
                 break;
@@ -92,14 +86,33 @@ impl CompactExt for RocksEngine {
             return Ok(());
         }
 
+        self.compact_files_cf(cf, &input_files, Some(output_level))
+    }
+
+    fn compact_files_cf(
+        &self,
+        cf: &str,
+        files: &[String],
+        output_level: Option<i32>,
+    ) -> Result<()> {
+        let db = self.as_inner();
+        let handle = util::get_cf_handle(db, cf)?;
+        let cf_opts = db.get_options_cf(handle);
+        let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
+        let output_compression = cf_opts
+            .get_compression_per_level()
+            .get(output_level as usize)
+            .cloned()
+            .unwrap_or(DBCompressionType::No);
+        let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
+
+        let max_subcompactions = cmp::min(num_cpus::get(), 32);
         let mut opts = CompactionOptions::new();
         opts.set_compression(output_compression);
-        let max_subcompactions = num_cpus::get();
-        let max_subcompactions = cmp::min(max_subcompactions, 32);
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
-        db.compact_files_cf(cf, &opts, &input_files, output_level)?;
 
+        db.compact_files_cf(handle, &opts, files, output_level)?;
         Ok(())
     }
 }

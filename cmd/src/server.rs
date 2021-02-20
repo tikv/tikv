@@ -21,7 +21,8 @@ use concurrency_manager::ConcurrencyManager;
 use encryption::DataKeyManager;
 use engine_rocks::{encryption::get_env, RocksEngine};
 use engine_traits::{
-    compaction_job::CompactionJobInfo, Engines, MetricsFlusher, RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, Engines, KvEngine, MetricsFlusher, RaftEngine, CF_DEFAULT,
+    CF_WRITE,
 };
 use fs2::FileExt;
 use futures::executor::block_on;
@@ -35,7 +36,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor, RegionInfoProvider,
     },
     router::ServerRaftStoreRouter,
     store::{
@@ -61,9 +62,10 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
+        ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
-    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver},
+    storage::{self, config::StorageConfigManger, mvcc::MvccConsistencyCheckObserver, Engine},
 };
 use tikv_util::config::VersionTrack;
 use tikv_util::{
@@ -108,8 +110,7 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_encryption();
             let engines = tikv.init_raw_engines();
             tikv.init_engines(engines);
-            let gc_worker = tikv.init_gc_worker();
-            let server_config = tikv.init_servers(&gc_worker);
+            let server_config = tikv.init_servers();
             tikv.register_services();
             tikv.init_metrics_flusher();
             tikv.run_server(server_config);
@@ -456,13 +457,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(
-        &mut self,
-        gc_worker: &GcWorker<
-            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
-            RaftRouter<RocksEngine, ER>,
-        >,
-    ) -> Arc<ServerConfig> {
+    fn init_servers(&mut self) -> Arc<ServerConfig> {
+        let gc_worker = self.init_gc_worker();
+        let ttl_checker = Box::new(TTLChecker::new(
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.region_info_accessor.clone(),
+            self.config.storage.ttl_check_poll_interval.into(),
+        ));
+        self.to_stop.push(ttl_checker);
+
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
 
         // Create cdc.
@@ -663,6 +666,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             split_check_scheduler,
             auto_split_controller,
             self.concurrency_manager.clone(),
+            self.config.storage.enable_ttl,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -901,10 +905,11 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -963,10 +968,11 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -1115,5 +1121,11 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+impl<E: KvEngine, R: RegionInfoProvider> Stop for TTLChecker<E, R> {
+    fn stop(mut self: Box<Self>) {
+        (*self).stop()
     }
 }

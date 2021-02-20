@@ -5,10 +5,10 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use std::sync::Arc;
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
-use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
+use tikv::storage::{Engine, Statistics, Store, TxnStore};
 use txn_types::{Key, Mutation};
 
-fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
+fn table_lookup_gen_data() -> (TxnStore<Arc<RocksSnapshot>>, Vec<Key>) {
     let store = SyncTestStorageBuilder::new().build().unwrap();
     let mut mutations = Vec::new();
     let mut keys = Vec::new();
@@ -35,7 +35,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     let snapshot = engine.snapshot(Default::default()).unwrap();
-    let store = SnapshotStore::new(
+    let store = TxnStore::new(
         snapshot,
         10.into(),
         IsolationLevel::Si,
