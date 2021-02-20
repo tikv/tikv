@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Cursor, Iterator, Result, ScanMode, Snapshot};
+use crate::storage::Statistics;
 
 use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
 use engine_traits::CfName;
@@ -47,6 +48,27 @@ impl<S: Snapshot> TTLSnapshot<S> {
     #[inline]
     fn current_ts() -> u64 {
         TEST_CURRENT_TS
+    }
+
+    pub fn get_key_ttl_cf(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<u64>> {
+        let value_with_ttl = self.s.get_cf(cf, key);
+
+        if let Err(e) = value_with_ttl {
+            return Err(e);
+        }
+
+        stats.data.flow_stats.read_keys = 1;
+        stats.data.flow_stats.read_bytes = key.as_encoded().len();
+        if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
+            stats.data.flow_stats.read_bytes += v.len();
+            return Ok(Some(get_expire_ts(v)?));
+        }
+        Ok(None)
     }
 }
 

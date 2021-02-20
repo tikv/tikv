@@ -264,10 +264,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
-
-    fn raw_get_key_ttl(&mut self, _: RpcContext<'_>, _: RawGetKeyTtlRequest, _: UnarySink<RawGetKeyTtlResponse>) {
-        unimplemented!();
-    }
+    handle_request!(
+        raw_get_key_ttl,
+        future_raw_get_key_ttl,
+        RawGetKeyTtlRequest,
+        RawGetKeyTtlResponse
+    );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
@@ -1517,6 +1519,28 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawGetKeyTtlRequest,
+) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
+    let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetKeyTtlResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(ttl)) => resp.set_ttl(ttl),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
         }
         Ok(resp)
     }

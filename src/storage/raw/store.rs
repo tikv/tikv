@@ -34,6 +34,18 @@ impl<S: Snapshot> RawStore<S> {
         }
     }
 
+    pub fn raw_get_key_ttl(
+        &self,
+        cf: CfName,
+        key: &Key,
+        stats: &mut Statistics,
+    ) -> Result<Option<u64>> {
+        match self {
+            RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
+            RawStore::TTL(inner) => inner.snapshot.get_key_ttl_cf(cf, key, stats),
+        }
+    }
+
     pub fn forward_raw_scan(
         &self,
         cf: CfName,
