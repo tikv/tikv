@@ -67,9 +67,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             if ci.get_pk_handle() {
                 handle_indices.push(index);
             } else {
-                if !primary_column_ids_set.contains(&ci.get_column_id()) {
-                    is_key_only = false;
-                } else if primary_prefix_column_ids_set.contains(&ci.get_column_id()) {
+                if !primary_column_ids_set.contains(&ci.get_column_id())
+                    || primary_prefix_column_ids_set.contains(&ci.get_column_id())
+                {
                     is_key_only = false;
                 }
                 column_id_index.insert(ci.get_column_id(), index);
@@ -1217,6 +1217,7 @@ mod tests {
     struct Column {
         is_primary_column: bool,
         has_column_info: bool,
+        is_primary_prefix_column: bool,
     }
 
     fn test_common_handle_impl(columns: &[Column]) {
@@ -1227,6 +1228,7 @@ mod tests {
         let mut schema = vec![];
         let mut handle = vec![];
         let mut primary_column_ids = vec![];
+        let mut primary_prefix_column_ids = vec![];
         let mut missed_columns_info = vec![];
         let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
         let mut row = vec![];
@@ -1235,6 +1237,7 @@ mod tests {
             let Column {
                 is_primary_column,
                 has_column_info,
+                is_primary_prefix_column,
             } = column;
 
             if has_column_info {
@@ -1252,6 +1255,10 @@ mod tests {
             if is_primary_column {
                 handle.push(Datum::I64(i as i64));
                 primary_column_ids.push(i as i64);
+            }
+
+            if is_primary_prefix_column {
+                primary_prefix_column_ids.push(i as i64);
             }
 
             row.push(Datum::I64(i as i64));
@@ -1279,7 +1286,7 @@ mod tests {
             primary_column_ids,
             false,
             false,
-            vec![],
+            primary_prefix_column_ids,
         )
         .unwrap();
 
@@ -1313,10 +1320,12 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1324,14 +1333,17 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1339,14 +1351,17 @@ mod tests {
             Column {
                 is_primary_column: false,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1354,14 +1369,17 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1369,26 +1387,81 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
+                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
+                is_primary_prefix_column: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                is_primary_prefix_column: true,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                is_primary_prefix_column: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                is_primary_prefix_column: false,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                is_primary_prefix_column: true,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                is_primary_prefix_column: false,
+            },
+        ]);
+
+        test_common_handle_impl(&[
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                is_primary_prefix_column: true,
+            },
+            Column {
+                is_primary_column: true,
+                has_column_info: true,
+                is_primary_prefix_column: true,
+            },
+            Column {
+                is_primary_column: false,
+                has_column_info: true,
+                is_primary_prefix_column: false,
             },
         ]);
     }
