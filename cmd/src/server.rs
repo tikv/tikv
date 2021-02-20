@@ -459,12 +459,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_servers(&mut self) -> Arc<ServerConfig> {
         let gc_worker = self.init_gc_worker();
-        let ttl_checker = Box::new(TTLChecker::new(
+        let mut ttl_checker = Box::new(TTLChecker::new(
             self.engines.as_ref().unwrap().engine.kv_engine(),
             self.region_info_accessor.clone(),
             self.config.storage.ttl_check_poll_interval.into(),
         ));
-        self.to_stop.push(ttl_checker);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
 
@@ -682,6 +681,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         initial_metric(&self.config.metric);
+
+        if let Err(e) = ttl_checker.start() {
+            fatal!("failed to start ttl checker, error: {}", e);
+        }
+        self.to_stop.push(ttl_checker);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
