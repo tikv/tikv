@@ -265,6 +265,10 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawDeleteRangeResponse
     );
 
+    fn raw_get_key_ttl(&mut self, _: RpcContext<'_>, _: RawGetKeyTtlRequest, _: UnarySink<RawGetKeyTtlResponse>) {
+        unimplemented!();
+    }
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
