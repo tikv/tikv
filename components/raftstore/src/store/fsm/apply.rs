@@ -313,15 +313,18 @@ where
         self.has_callback
     }
 
-    pub fn invoke_all(self, host: &CoprocessorHost<EK>, region: &Region) {
+    pub fn invoke_all(self, host: &CoprocessorHost<EK>, region: &Region) -> Vec<Cmd> {
+        let mut cmds = vec![];
         for (cb, mut cmd) in self.cbs {
             host.post_apply(&region, &mut cmd);
             if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response) {
+                if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response.clone()) {
                     APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
                 }
             };
+            cmds.push(cmd);
         }
+        cmds
     }
 
     pub fn on_to_write_queue(&self) {

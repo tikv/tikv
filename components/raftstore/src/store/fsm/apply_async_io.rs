@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::coprocessor::CoprocessorHost;
+use crate::coprocessor::{Cmd, CoprocessorHost};
 use crate::store::config::Config;
 use crate::store::fsm::apply::{ApplyCallback, ApplyRes};
 use crate::store::fsm::async_io::SampleWindow;
@@ -348,7 +348,7 @@ where
     notifier: Box<dyn ApplyNotifier<EK>>,
     coprocessor_host: CoprocessorHost<EK>,
     perf_context_statistics: PerfContextStatistics,
-    callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
+    callback_tx: Sender<Vec<Cmd>>,
     async_callback: bool,
 }
 
@@ -364,7 +364,7 @@ where
         notifier: Box<dyn ApplyNotifier<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
         config: &Config,
-        callback_tx: Sender<ApplyAsyncWriteCallback<EK>>,
+        callback_tx: Sender<Vec<Cmd>>,
     ) -> Self {
         let writer = Arc::new((
             Mutex::new(ApplyAsyncWriteTasks::new(
@@ -456,33 +456,24 @@ where
 
         self.coprocessor_host.on_flush_apply(self.kv_engine.clone());
 
-        if self.async_callback {
-            let cbs = std::mem::replace(&mut task.cbs, vec![]);
-            let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
-            let destroy_res = std::mem::replace(&mut task.destroy_res, vec![]);
-            let cb_task = ApplyAsyncWriteCallback {
-                cbs,
-                apply_res,
-                destroy_res,
-            };
-            cb_task.in_callback_queue();
-            self.callback_tx.send(cb_task).unwrap();
-        } else {
-            let callback_begin = Instant::now_coarse();
-            let fake_region = Region::default();
-            for cb in task.cbs.drain(..) {
-                cb.invoke_all(&self.coprocessor_host, &fake_region);
+        let callback_begin = Instant::now_coarse();
+        let fake_region = Region::default();
+        for cb in task.cbs.drain(..) {
+            let cmds = cb.invoke_all(&self.coprocessor_host, &fake_region);
+            if self.async_callback {
+                //cb.on_to_callback_queue();
+                self.callback_tx.send(cmds).unwrap();
             }
-
-            let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
-            self.notifier.notify(apply_res);
-
-            for (region_id, msg) in task.destroy_res.drain(..) {
-                self.notifier.notify_one(region_id, msg);
-            }
-            APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
-                .observe(duration_to_sec(callback_begin.elapsed()) as f64);
         }
+
+        let apply_res = std::mem::replace(&mut task.apply_res, HashMap::default());
+        self.notifier.notify(apply_res);
+
+        for (region_id, msg) in task.destroy_res.drain(..) {
+            self.notifier.notify_one(region_id, msg);
+        }
+        APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
     }
 }
 
@@ -519,23 +510,23 @@ where
         coprocessor_host: &CoprocessorHost<EK>,
         config: &Config,
     ) -> Result<()> {
-        let (callback_tx, callback_rx) = channel::<ApplyAsyncWriteCallback<EK>>();
+        let (callback_tx, callback_rx) = channel::<Vec<Cmd>>();
         if config.async_callback {
-            let callback_notifier = notifier.clone_box();
-            let callback_copr_host = coprocessor_host.clone();
+            //let callback_notifier = notifier.clone_box();
+            //let callback_copr_host = coprocessor_host.clone();
             let callback_t = thread::Builder::new()
                 .name(thd_name!("apply-writer-callback"))
                 .spawn(move || {
                     let mut callback_begin = Instant::now_coarse();
                     loop {
-                        let mut cb_task = callback_rx.recv().unwrap();
-                        cb_task.before_callback();
+                        let _cmds = callback_rx.recv().unwrap();
+                        //cb_task.before_callback();
                         APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
                             .observe(duration_to_sec(callback_begin.elapsed()) as f64);
                         callback_begin = Instant::now_coarse();
-                        cb_task.invoke(&callback_notifier, &callback_copr_host);
-                        APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
-                            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+                        //cb_task.invoke(&callback_notifier, &callback_copr_host);
+                        //APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
+                        //    .observe(duration_to_sec(callback_begin.elapsed()) as f64);
                     }
                 })?;
             self.handlers.push(callback_t);
