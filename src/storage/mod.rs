@@ -250,6 +250,42 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         unsafe { with_tls_engine(f) }
     }
 
+    /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
+    /// The CF name can be one of `"default"`, `"write"` and `"lock"`. If given `cf` is empty,
+    /// `CF_DEFAULT` (`"default"`) will be returned.
+    fn rawkv_cf(cf: &str) -> Result<CfName> {
+        if cf.is_empty() {
+            return Ok(CF_DEFAULT);
+        }
+        for c in DATA_CFS {
+            if cf == *c {
+                return Ok(c);
+            }
+        }
+        Err(Error::from(ErrorInner::InvalidCf(cf.to_owned())))
+    }
+
+    /// Check if key range is valid
+    ///
+    /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is the lower bound.
+    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper bound.
+    fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
+        let ranges_len = ranges.len();
+        for i in 0..ranges_len {
+            let start_key = ranges[i].get_start_key();
+            let mut end_key = ranges[i].get_end_key();
+            if end_key.is_empty() && i + 1 != ranges_len {
+                end_key = ranges[i + 1].get_start_key();
+            }
+            if !end_key.is_empty()
+                && (!reverse && start_key >= end_key || reverse && start_key <= end_key)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -1240,42 +1276,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         }
     }
 
-    /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
-    /// The CF name can be one of `"default"`, `"write"` and `"lock"`. If given `cf` is empty,
-    /// `CF_DEFAULT` (`"default"`) will be returned.
-    fn rawkv_cf(cf: &str) -> Result<CfName> {
-        if cf.is_empty() {
-            return Ok(CF_DEFAULT);
-        }
-        for c in DATA_CFS {
-            if cf == *c {
-                return Ok(c);
-            }
-        }
-        Err(Error::from(ErrorInner::InvalidCf(cf.to_owned())))
-    }
-
-    /// Check if key range is valid
-    ///
-    /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is the lower bound.
-    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper bound.
-    fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
-        let ranges_len = ranges.len();
-        for i in 0..ranges_len {
-            let start_key = ranges[i].get_start_key();
-            let mut end_key = ranges[i].get_end_key();
-            if end_key.is_empty() && i + 1 != ranges_len {
-                end_key = ranges[i + 1].get_start_key();
-            }
-            if !end_key.is_empty()
-                && (!reverse && start_key >= end_key || reverse && start_key <= end_key)
-            {
-                return false;
-            }
-        }
-        true
-    }
-
     /// Scan raw keys in multiple ranges in a batch.
     pub fn raw_batch_scan(
         &self,
@@ -1375,6 +1375,63 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         .get(CMD)
                         .observe(command_duration.elapsed_secs());
                     Ok(result)
+                }
+            },
+            priority,
+            thread_rng().next_u64(),
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+    }
+
+    /// Get the value of a raw key.
+    pub fn raw_get_key_ttl(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+    ) -> impl Future<Output = Result<Option<u64>>> {
+        const CMD: CommandKind = CommandKind::raw_get_key_ttl;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let enable_ttl = self.enable_ttl;
+
+        let res = self.read_pool.spawn_handle(
+            async move {
+                tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                let store = RawStore::new(snapshot, enable_ttl);
+                let cf = Self::rawkv_cf(&cf)?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut stats = Statistics::default();
+                    let r = store
+                        .raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats)
+                        .map_err(Error::from);
+                    KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+                    r
                 }
             },
             priority,
