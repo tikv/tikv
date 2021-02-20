@@ -221,9 +221,6 @@ protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
 
-[patch.'https://github.com/pingcap/kvproto.git']
-kvproto = { git = "https://github.com/Connor1996/kvproto", branch = "ttl" }
-
 [workspace]
 resolver = "2"
 members = [
