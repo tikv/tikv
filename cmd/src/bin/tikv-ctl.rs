@@ -1030,6 +1030,15 @@ fn warning_prompt(message: &str) -> bool {
 }
 
 fn main() {
+    // The config is only used to initialize the global logger.
+    let rocksdb_info_dir = tempfile::tempdir().unwrap();
+    let raftdb_info_dir = tempfile::tempdir().unwrap();
+    let mut cfg = TiKvConfig::default();
+    cfg.log_file = "./tikv-ctl.log".to_owned();
+    cfg.rocksdb.info_log_dir = rocksdb_info_dir.path().to_str().unwrap().to_owned();
+    cfg.raftdb.info_log_dir = raftdb_info_dir.path().to_str().unwrap().to_owned();
+    cmd::setup::initial_logger(&cfg);
+
     vlog::set_verbosity_level(1);
 
     let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
