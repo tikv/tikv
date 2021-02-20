@@ -12,5 +12,5 @@ prost-codec = ["fuzz-targets/prost-codec"]
 fuzz-targets = { path = "../targets", default-features = false }
 
 # AFL only works for x86 targets
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+[target.'cfg(all(not(target_os = "windows"), target_arch = "x86_64"))'.dependencies]
 afl = "0.6"

@@ -3217,6 +3217,7 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
+        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {

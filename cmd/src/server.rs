@@ -25,10 +25,7 @@ use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
-use engine_traits::{
-    compaction_job::CompactionJobInfo, EngineFileSystemInspector, Engines, RaftEngine, CF_DEFAULT,
-    CF_WRITE,
-};
+use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{
     set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
@@ -938,8 +935,7 @@ impl TiKVServer<RocksEngine> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RocksEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env =
-            get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
+        let env = get_inspected_env(Some(env)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.
@@ -1004,8 +1000,7 @@ impl TiKVServer<RaftLogEngine> {
     fn init_raw_engines(&mut self) -> Engines<RocksEngine, RaftLogEngine> {
         let env =
             get_encrypted_env(self.encryption_key_manager.clone(), None /*base_env*/).unwrap();
-        let env =
-            get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
+        let env = get_inspected_env(Some(env)).unwrap();
         let block_cache = self.config.storage.block_cache.build_shared_cache();
 
         // Create raft engine.

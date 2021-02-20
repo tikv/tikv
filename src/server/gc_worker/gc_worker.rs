@@ -10,6 +10,7 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use pd_client::{FeatureGate, PdClient};
@@ -426,6 +427,7 @@ where
 {
     #[inline]
     fn run(&mut self, task: GcTask) {
+        let _io_type_guard = WithIOType::new(IOType::Gc);
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();

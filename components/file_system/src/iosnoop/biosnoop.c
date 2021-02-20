@@ -18,6 +18,7 @@ typedef enum {
   Compaction,
   Replication,
   LoadBalance,
+  Gc,
   Import,
   Export,
 } io_type;
@@ -41,6 +42,7 @@ BPF_HISTOGRAM(flush_read_latency, int, 25);
 BPF_HISTOGRAM(compaction_read_latency, int, 25);
 BPF_HISTOGRAM(replication_read_latency, int, 25);
 BPF_HISTOGRAM(load_balance_read_latency, int, 25);
+BPF_HISTOGRAM(gc_read_latency, int, 25);
 BPF_HISTOGRAM(import_read_latency, int, 25);
 BPF_HISTOGRAM(export_read_latency, int, 25);
 
@@ -51,6 +53,7 @@ BPF_HISTOGRAM(flush_write_latency, int, 25);
 BPF_HISTOGRAM(compaction_write_latency, int, 25);
 BPF_HISTOGRAM(replication_write_latency, int, 25);
 BPF_HISTOGRAM(load_balance_write_latency, int, 25);
+BPF_HISTOGRAM(gc_write_latency, int, 25);
 BPF_HISTOGRAM(import_write_latency, int, 25);
 BPF_HISTOGRAM(export_write_latency, int, 25);
 
@@ -173,6 +176,13 @@ int trace_req_completion(struct pt_regs *ctx, struct request *req) {
       load_balance_write_latency.increment(bpf_log2l(delta));
     } else {
       load_balance_read_latency.increment(bpf_log2l(delta));
+    }
+    break;
+  case Gc:
+    if (rwflag == 1) {
+      gc_write_latency.increment(bpf_log2l(delta));
+    } else {
+      gc_read_latency.increment(bpf_log2l(delta));
     }
     break;
   case Import:
