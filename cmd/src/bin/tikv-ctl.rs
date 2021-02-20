@@ -1033,11 +1033,14 @@ fn main() {
     // The config is only used to initialize the global logger.
     let rocksdb_info_dir = tempfile::tempdir().unwrap();
     let raftdb_info_dir = tempfile::tempdir().unwrap();
-    let mut cfg = TiKvConfig::default();
-    cfg.log_file = "./tikv-ctl.log".to_owned();
-    cfg.rocksdb.info_log_dir = rocksdb_info_dir.path().to_str().unwrap().to_owned();
-    cfg.raftdb.info_log_dir = raftdb_info_dir.path().to_str().unwrap().to_owned();
-    cmd::setup::initial_logger(&cfg);
+    #[allow(clippy::field_reassign_with_default)]
+    {
+        let mut cfg = TiKvConfig::default();
+        cfg.log_file = "./tikv-ctl.log".to_owned();
+        cfg.rocksdb.info_log_dir = rocksdb_info_dir.path().to_str().unwrap().to_owned();
+        cfg.raftdb.info_log_dir = raftdb_info_dir.path().to_str().unwrap().to_owned();
+        cmd::setup::initial_logger(&cfg);
+    }
 
     vlog::set_verbosity_level(1);
 
