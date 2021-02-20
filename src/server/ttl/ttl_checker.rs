@@ -98,6 +98,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
 
             match rx.recv() {
                 Ok(None) => {
+                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&["get"])
+                        .set(0);
                     // checks a round
                     let round_time = Instant::now() - round_start_time;
                     if self.poll_interval > round_time {
