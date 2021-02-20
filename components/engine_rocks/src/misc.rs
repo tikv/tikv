@@ -3,7 +3,7 @@
 use crate::engine::RocksEngine;
 use crate::import::RocksIngestExternalFileOptions;
 use crate::sst::RocksSstWriterBuilder;
-use crate::{util, RocksSstWriter};
+use crate::{util, RocksEngineIterator, RocksSstWriter, RocksWriteBatchVec};
 use engine_traits::{
     CFNamesExt, DeleteStrategy, ImportExt, IngestExternalFileOptions, IterOptions, Iterable,
     Iterator, MiscExt, Mutable, Range, Result, SstWriter, SstWriterBuilder, WriteBatch,
@@ -12,7 +12,8 @@ use engine_traits::{
 use rocksdb::Range as RocksRange;
 use tikv_util::keybuilder::KeyBuilder;
 
-pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
+pub const MAX_DELETE_COUNT_BY_KEY: usize = 16 * 1024;
+const DEFAULT_DELETE_WB_SIZE: usize = 16 * 1024;
 
 impl RocksEngine {
     fn is_titan(&self) -> bool {
@@ -85,16 +86,12 @@ impl RocksEngine {
             opt.move_files(true);
             self.ingest_external_file_cf(cf, &opt, &[sst_path.as_str()])?;
         } else {
-            let mut wb = self.write_batch();
-            for key in data.iter() {
-                wb.delete_cf(cf, key)?;
-                if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                    wb.write()?;
-                    wb.clear();
-                }
-            }
-            if wb.count() > 0 {
-                wb.write()?;
+            if self.support_write_batch_vec() {
+                let wb = RocksWriteBatchVec::with_capacity(self, DEFAULT_DELETE_WB_SIZE);
+                self.delete_keys(cf, wb, &data)?;
+            } else {
+                let wb = self.write_batch();
+                self.delete_keys(cf, wb, &data)?;
             }
         }
         Ok(())
@@ -109,9 +106,44 @@ impl RocksEngine {
             // to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
-        let mut it = self.iterator_cf_opt(cf, opts)?;
-        let mut it_valid = it.seek(range.start_key.into())?;
-        let mut wb = self.write_batch();
+        let it = self.iterator_cf_opt(cf, opts)?;
+        if self.support_write_batch_vec() {
+            let wb = RocksWriteBatchVec::with_capacity(self, DEFAULT_DELETE_WB_SIZE);
+            self.scan_and_delete_keys(cf, range.start_key.into(), wb, it)?;
+        } else {
+            let wb = self.write_batch();
+            self.scan_and_delete_keys(cf, range.start_key.into(), wb, it)?;
+        }
+        Ok(())
+    }
+
+    fn delete_keys<W: WriteBatch<RocksEngine>>(
+        &self,
+        cf: &str,
+        mut wb: W,
+        data: &[Vec<u8>],
+    ) -> Result<()> {
+        for key in data.iter() {
+            wb.delete_cf(cf, key)?;
+            if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
+                wb.write()?;
+                wb.clear();
+            }
+        }
+        if wb.count() > 0 {
+            wb.write()?;
+        }
+        Ok(())
+    }
+
+    fn scan_and_delete_keys<W: WriteBatch<RocksEngine>>(
+        &self,
+        cf: &str,
+        key: engine_traits::SeekKey,
+        mut wb: W,
+        mut it: RocksEngineIterator,
+    ) -> Result<()> {
+        let mut it_valid = it.seek(key)?;
         while it_valid {
             wb.delete_cf(cf, it.key())?;
             if wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
@@ -123,7 +155,6 @@ impl RocksEngine {
         if wb.count() > 0 {
             wb.write()?;
         }
-        self.sync_wal()?;
         Ok(())
     }
 }
@@ -356,10 +387,11 @@ mod tests {
         }
     }
 
-    fn test_delete_all_in_range(
+    fn test_delete_all_in_range_with_writebatch(
         strategy: DeleteStrategy,
         origin_keys: &[Vec<u8>],
         ranges: &[Range],
+        use_wb_vec: bool,
     ) {
         let path = Builder::new()
             .prefix("engine_delete_all_in_range")
@@ -371,13 +403,15 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
             .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
+        let options = DBOptions::new();
+        options.enable_multi_batch_write(use_wb_vec);
+        let db = new_engine_opt(path_str, options, cfs_opts).unwrap();
         let db = Arc::new(db);
         let db = RocksEngine::from_db(db);
-
+        assert_eq!(use_wb_vec, db.support_write_batch_vec());
         let mut wb = db.write_batch();
         let ts: u8 = 12;
-        let keys: Vec<_> = origin_keys
+        let mut keys: Vec<_> = origin_keys
             .iter()
             .map(|k| {
                 let mut k2 = k.clone();
@@ -385,6 +419,7 @@ mod tests {
                 k2
             })
             .collect();
+        keys.sort();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
@@ -409,6 +444,15 @@ mod tests {
                 .collect();
         }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
+    }
+
+    fn test_delete_all_in_range(
+        strategy: DeleteStrategy,
+        origin_keys: &[Vec<u8>],
+        ranges: &[Range],
+    ) {
+        test_delete_all_in_range_with_writebatch(strategy.clone(), origin_keys, ranges, false);
+        test_delete_all_in_range_with_writebatch(strategy, origin_keys, ranges, true);
     }
 
     #[test]
@@ -448,13 +492,18 @@ mod tests {
 
     #[test]
     fn test_delete_all_in_range_by_key() {
-        let data = vec![
+        let mut data = vec![
             b"k0".to_vec(),
             b"k1".to_vec(),
             b"k2".to_vec(),
             b"k3".to_vec(),
             b"k4".to_vec(),
         ];
+        for i in 1000..4000 {
+            let mut key = b"k".to_vec();
+            key.extend_from_slice(i.to_string().as_bytes());
+            data.push(key);
+        }
         // Single range.
         test_delete_all_in_range(
             DeleteStrategy::DeleteByKey,
@@ -490,19 +539,19 @@ mod tests {
         let path_str = path.path();
         let sst_path = path_str.join("tmp_file").to_str().unwrap().to_owned();
         let mut data = vec![];
-        for i in 1000..5000 {
+        for i in 10000..40000 {
             data.push(i.to_string().as_bytes().to_vec());
         }
         test_delete_all_in_range(
             DeleteStrategy::DeleteByWriter { sst_path },
             &data,
             &[
-                Range::new(&data[2], &data[499]),
-                Range::new(&data[502], &data[999]),
-                Range::new(&data[1002], &data[1999]),
-                Range::new(&data[1499], &data[2499]),
-                Range::new(&data[2502], &data[3999]),
-                Range::new(&data[3002], &data[3499]),
+                Range::new(&data[2], &data[4999]),
+                Range::new(&data[5002], &data[9999]),
+                Range::new(&data[10002], &data[19999]),
+                Range::new(&data[14999], &data[24999]),
+                Range::new(&data[25002], &data[26999]),
+                Range::new(&data[27000], &data[29999]),
             ],
         );
     }

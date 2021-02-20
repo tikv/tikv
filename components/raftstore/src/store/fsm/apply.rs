@@ -20,11 +20,11 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_traits::PerfContext;
 use engine_traits::PerfContextKind;
 use engine_traits::{
-    DeleteStrategy, IterOptions, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
+    DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
-use engine_traits::{Iterator as EngineIterator, PerfContext, SeekKey};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
@@ -42,7 +42,6 @@ use raft::eraftpb::{
 use raft_proto::ConfChangeI;
 use sst_importer::SSTImporter;
 use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
@@ -345,7 +344,6 @@ where
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -408,7 +406,6 @@ where
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
             committed_count: 0,
             sync_log_hint: false,
             exec_ctx: None,
@@ -429,7 +426,6 @@ where
     /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
-        self.last_applied_index = delegate.apply_state.get_applied_index();
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
@@ -448,7 +444,7 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        if delegate.last_sync_apply_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
@@ -461,6 +457,7 @@ where
         if persistent {
             self.write_to_db();
             self.prepare_for(delegate);
+            delegate.last_sync_apply_index = delegate.apply_state.get_applied_index();
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -546,11 +543,11 @@ where
 
     /// Flush all pending writes to engines.
     /// If it returns true, all pending writes are persisted in engines.
-    pub fn flush(&mut self) -> bool {
+    pub fn flush(&mut self) {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return false,
+            None => return,
         };
 
         // Write to engine
@@ -558,7 +555,7 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let is_synced = self.write_to_db();
+        self.write_to_db();
 
         if !self.apply_res.is_empty() {
             let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
@@ -575,7 +572,6 @@ where
             self.committed_count
         );
         self.committed_count = 0;
-        is_synced
     }
 }
 
@@ -947,16 +943,20 @@ where
             let cmd = util::parse_data_at(data, index, &self.tag);
 
             let low_prioty_request = has_high_latency_operation(&cmd);
-
-            if low_prioty_request
-                || should_write_to_engine(&cmd)
-                || apply_ctx.kv_wb().should_write_to_engine()
-            {
-                apply_ctx.commit(self);
-                if low_prioty_request && apply_ctx.priority != Priority::Low {
+            if low_prioty_request {
+                let has_unsync_data =
+                    self.last_sync_apply_index != self.apply_state.get_applied_index();
+                if apply_ctx.priority != Priority::Low {
+                    if has_unsync_data {
+                        apply_ctx.commit(self);
+                    }
                     self.priority = Priority::Low;
                     return ApplyResult::Yield;
+                } else if has_unsync_data || apply_ctx.kv_wb().should_write_to_engine() {
+                    apply_ctx.commit(self);
                 }
+            } else if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
+                apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
@@ -1331,7 +1331,6 @@ where
                 CmdType::Put => self.handle_put(ctx.kv_wb_mut(), req),
                 CmdType::Delete => self.handle_delete(ctx.kv_wb_mut(), req),
                 CmdType::DeleteRange => {
-                    assert!(ctx.kv_wb.is_empty());
                     self.handle_delete_range(ctx, req, &mut ranges, ctx.use_delete_range)
                 }
                 CmdType::IngestSst => {
@@ -1523,21 +1522,15 @@ where
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
 
+            // Delete all remaining keys.
             if use_delete_range {
-                // Delete all remaining keys.
                 ctx.engine
                     .delete_ranges_cf(cf, DeleteStrategy::DeleteByRange, &range)
                     .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteByRange));
             } else {
-                let start = KeyBuilder::from_slice(&start_key, 0, 0);
-                let end = KeyBuilder::from_slice(&end_key, 0, 0);
-                let iter_opt = IterOptions::new(Some(start), Some(end), false);
-                let mut it = ctx.engine.iterator_cf_opt(cf, iter_opt)?;
-                let mut it_valid = it.seek(SeekKey::Key(&start_key))?;
-                while it_valid {
-                    ctx.kv_wb.delete_cf(cf, it.key())?;
-                    it_valid = it.next()?;
-                }
+                ctx.engine
+                    .delete_ranges_cf(cf, DeleteStrategy::DeleteByKey, &range)
+                    .unwrap_or_else(move |e| fail_f(e, DeleteStrategy::DeleteByKey));
             };
             ctx.engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
@@ -3564,11 +3557,9 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
-        let is_synced = self.apply_ctx.flush();
-        if is_synced {
-            for fsm in fsms {
-                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
-            }
+        self.apply_ctx.flush();
+        for fsm in fsms {
+            fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
         }
     }
 

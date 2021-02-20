@@ -561,7 +561,7 @@ where
             };
             box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
         }
-
+        box_try!(self.engine.sync_wal());
         Ok(())
     }
 }
