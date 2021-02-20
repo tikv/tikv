@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::server::metrics::*;
 use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
@@ -75,14 +76,24 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             if let Err(e) = self.region_info_provider.seek_region(
                 &key,
                 Box::new(move |iter| {
+                    let mut scanned_regions = 0;
+                    let mut start_key = None;
                     for info in iter {
-                        let _ = tx.send(Some(info.region.clone()));
-                        return;
+                        if start_key.is_none() {
+                            start_key = Some(info.region.get_start_key().to_owned());
+                        }
+                        TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC.with_label_values(&["get"]).add(1);
+                        scanned_regions += 1;
+                        if scanned_regions == 10 {
+                            let _ = tx.send(Some((start_key.unwrap(), info.region.get_end_key().to_owned())));
+                            return;
+                        }
                     }
                     let _ = tx.send(None);
                 }),
             ) {
                 error!(?e; "ttl checker: failed to get next region information");
+                continue;
             }
 
             match rx.recv() {
@@ -94,13 +105,13 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     }
                     return Duration::new(0, 0);
                 }
-                Ok(Some(mut region)) => {
+                Ok(Some((start_key, end_key))) => {
                     Self::check_ttl_for_range(
                         &self.engine,
-                        region.get_start_key(),
-                        region.get_end_key(),
+                        &start_key,
+                        &end_key,
                     );
-                    key = region.take_end_key();
+                    key = end_key;
                 }
                 Err(e) => {
                     error!(?e; "ttl checker: failed to get next region information");
@@ -131,11 +142,14 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 files.push(file_name);
             }
         }
+        if files.is_empty() {
+            TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC.with_label_values(&["skip"]).add(1);
+            return;
+        }
 
         let timer = Instant::now();
-        // let compact_range_timer = COMPACT_RANGE_CF
-        //     .with_label_values(&[cf])
-        //     .start_coarse_timer();
+        let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM
+            .start_coarse_timer();
         if let Err(e) = engine.compact_files_cf(CF_DEFAULT, &files, None) {
             error!(
                 "execute ttl compact files failed";
@@ -145,7 +159,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 "err" => %e,
             );
         }
-        // compact_range_timer.observe_duration();
+        compact_range_timer.observe_duration();
         info!(
             "compact files finished";
             "files" => ?files,
