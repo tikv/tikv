@@ -4,3 +4,5 @@ mod store;
 mod ttl;
 
 pub use store::RawStore;
+#[cfg(test)]
+pub use ttl::TEST_CURRENT_TS;
