@@ -1315,6 +1315,7 @@ mod tests {
         test_common_handle_impl(&[Column {
             is_primary_column: true,
             has_column_info: true,
+            is_primary_prefix_column: false,
         }]);
 
         test_common_handle_impl(&[
