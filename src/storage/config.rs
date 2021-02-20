@@ -142,7 +142,9 @@ impl ConfigManager for StorageConfigManger {
             let limiter = limiter.unwrap();
             if let Some(limit) = io_rate_limit.remove("total") {
                 if let OptionReadableSize(Some(limit)) = limit.into() {
-                    limiter.set_io_rate_limit(limit.as_b() as usize);
+                    limiter.set_io_rate_limit(limit.0 as usize);
+                } else {
+                    limiter.set_io_rate_limit(0);
                 }
             }
         }
@@ -268,16 +270,16 @@ pub struct IORateLimitConfig {
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
-            total: OptionReadableSize(Some(ReadableSize::mb(2000))),
+            total: OptionReadableSize(None),
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
-            flush_priority: IOPriority::High,
-            compaction_priority: IOPriority::High,
+            flush_priority: IOPriority::Medium,
+            compaction_priority: IOPriority::Medium,
             replication_priority: IOPriority::High,
             load_balance_priority: IOPriority::High,
-            gc_priority: IOPriority::High,
-            import_priority: IOPriority::High,
-            export_priority: IOPriority::High,
+            gc_priority: IOPriority::Medium,
+            import_priority: IOPriority::Low,
+            export_priority: IOPriority::Low,
             other_priority: IOPriority::High,
         }
     }
@@ -287,7 +289,7 @@ impl IORateLimitConfig {
     pub fn build(&self) -> IORateLimiter {
         let mut limiter = IORateLimiter::new();
         if let Some(limit) = self.total.0 {
-            limiter.set_io_rate_limit(limit.as_b() as usize);
+            limiter.set_io_rate_limit(limit.0 as usize);
         }
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);

@@ -31,6 +31,7 @@ pub use std::fs::{
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
@@ -119,19 +120,23 @@ impl IOPriority {
             IOPriority::High => "high",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for IOPriority {
+    type Err = String;
+    fn from_str(s: &str) -> Result<IOPriority, String> {
         match s {
-            "low" => Some(IOPriority::Low),
-            "medium" => Some(IOPriority::Medium),
-            "high" => Some(IOPriority::High),
-            _ => None,
+            "low" => Ok(IOPriority::Low),
+            "medium" => Ok(IOPriority::Medium),
+            "high" => Ok(IOPriority::High),
+            s => Err(format!("expect: low, medium or high, got: {:?}", s)),
         }
     }
 }
 
 pub mod io_priority_serde {
     use std::fmt;
+    use std::str::FromStr;
 
     use serde::de::{Error, Unexpected, Visitor};
     use serde::{Deserializer, Serializer};
@@ -162,7 +167,7 @@ pub mod io_priority_serde {
                 E: Error,
             {
                 let p = match IOPriority::from_str(&*value.trim().to_lowercase()) {
-                    Some(p) => p,
+                    Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
                             Unexpected::Other(&"invalid compression type".to_string()),

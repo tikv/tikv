@@ -69,8 +69,11 @@ fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usiz
 /// Rate limit is disabled when total IO threshold is set to zero.
 #[derive(Debug)]
 struct RawIORateLimiter {
+    // IO amount passed through within current epoch
     ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    // Maximum IOs permitted within current epoch
     ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    // IO amount that is drew from the next epoch in advance
     pending_ios: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
     protected: RwLock<RawIORateLimiterProtected>,
 }
@@ -87,13 +90,13 @@ macro_rules! sleep_impl {
     ($duration:expr, "async") => {
         tokio::time::delay_for($duration).await
     };
-    ($duration:expr, "non-blocking") => {
-        return 0
-    };
 }
 
+/// Actual implementation for requesting IOs from RawIORateLimiter.
+/// An attempt will be recorded first. If the attempted amount exceeds the available quotas of
+/// current epoch, the requester will register itself for next epoch and sleep until next epoch.
 macro_rules! request_impl {
-    ($self:expr, $priority:expr, $amount:expr, $mode:tt) => {{
+    ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
         loop {
             let cached_ios_per_refill = $self.ios_per_sec[priority_idx].load(Ordering::Relaxed);
@@ -112,7 +115,6 @@ macro_rules! request_impl {
                 if locked.last_refill_time + Duration::from_millis(1) >= now {
                     continue;
                 }
-                // scoped by lock, relaxed order suffice.
                 let pending =
                     $self.pending_ios[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
                 let since_last_refill = now.duration_since(locked.last_refill_time);
@@ -124,7 +126,7 @@ macro_rules! request_impl {
                         .observe(wait.as_secs_f64());
                     sleep_impl!(wait, $mode);
                 }
-                // our request is already recorded in `pending_ios`.
+                // our attempt is already registered in `pending_ios`.
                 if pending <= cached_ios_per_refill {
                     return amount;
                 }
@@ -162,7 +164,8 @@ impl RawIORateLimiter {
         }
     }
 
-    /// Dynamically changes the total IO flow threshold, effective after at most `DEFAULT_REFILL_PERIOD`.
+    /// Dynamically changes the total IO flow threshold, effective after at most
+    /// `DEFAULT_REFILL_PERIOD`.
     #[allow(dead_code)]
     fn set_ios_per_sec(&self, ios_per_sec: usize) {
         let now = calculate_ios_per_refill(ios_per_sec, DEFAULT_REFILL_PERIOD);
@@ -186,8 +189,9 @@ impl RawIORateLimiter {
         request_impl!(self, priority, amount, "async")
     }
 
-    // Called by a daemon thread every `DEFAULT_REFILL_PERIOD`.
-    // It is done so because the algorithm correctness relies on refill epoch being faithful to physical time.
+    /// Called by a daemon thread every `DEFAULT_REFILL_PERIOD`.
+    /// It is done so because the algorithm correctness relies on refill epoch being
+    /// faithful to physical time.
     fn refill(&self) {
         let locked = self.protected.try_write_for(DEFAULT_REFILL_PERIOD);
         if locked.is_none() {

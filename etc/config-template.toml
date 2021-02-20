@@ -243,17 +243,7 @@
 # capacity = "1GB"
 
 [storage.io-rate-limit]
-# total = "1GB"
-# foreground-read-priority = "high"
-# foreground-write-priority = "high"
-# flush-priority = "high"
-# compaction-priority = "high"
-# replication-priority = "high"
-# load-balance-priority = "high"
-# gc-priority = "high"
-# import-priority = "high"
-# export-priority = "high"
-# other-priority = "high"
+# total = "0MB"
 
 [pd]
 ## PD endpoints.

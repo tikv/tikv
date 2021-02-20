@@ -73,6 +73,8 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatch {
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        // Indiscriminately increase the priority because RocksDB merges write
+        // batches with different IO types.
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let opt: RocksWriteOptions = opts.into();
         self.get_db()
@@ -206,6 +208,8 @@ impl engine_traits::WriteBatch<RocksEngine> for RocksWriteBatchVec {
     }
 
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+        // Indiscriminately increase the priority because RocksDB merges write
+        // batches with different IO types.
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
         let opt: RocksWriteOptions = opts.into();
         if self.index > 0 {
