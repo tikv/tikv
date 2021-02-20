@@ -8,8 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::{RocksEngine, RocksWriteBatch};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -79,6 +81,11 @@ pub enum GcTask {
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     },
+    /// If GC in compaction filter is enabled, versions on default CF will be handled with
+    /// `DB::delete` in write CF's compaction filter. However if the compaction filter finds
+    /// the DB is stalled, it will send the task to GC worker to ensure the compaction can be
+    /// continued.
+    OrphanVersions(RocksWriteBatch),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
@@ -89,6 +96,7 @@ impl GcTask {
             GcTask::Gc { .. } => GcCommandKind::gc,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
             GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
+            GcTask::OrphanVersions(..) => GcCommandKind::orphan_versions,
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => GcCommandKind::validate_config,
         }
@@ -120,6 +128,7 @@ impl Display for GcTask {
                 .debug_struct("PhysicalScanLock")
                 .field("max_ts", max_ts)
                 .finish(),
+            GcTask::OrphanVersions(..) => write!(f, "OrphanVersions"),
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
         }
@@ -500,6 +509,14 @@ where
                     limit,
                 );
             }
+            GcTask::OrphanVersions(wb) => {
+                info!("handling GcTask::OrphanVersions"; "size" => wb.as_inner().count());
+                let mut wopts = WriteOptions::default();
+                wopts.set_sync(true);
+                if let Err(e) = wb.write_opt(&wopts) {
+                    error!("write GcTask::OrphanVersions fail"; "err" => ?e);
+                }
+            }
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(f) => {
                 f(&self.cfg, &self.limiter);
@@ -658,10 +675,18 @@ where
             "AutoGcConfig::self_store_id shouldn't be 0"
         );
 
-        let kvdb = self.engine.kv_engine();
-        let cfg_mgr = self.config_manager.clone();
-        let feature_gate = self.feature_gate.clone();
-        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, feature_gate);
+        info!("initialize compaction filter to perform GC when necessary");
+        let scheduler = self.scheduler();
+        self.engine.kv_engine().init_compaction_filter(
+            safe_point.clone(),
+            self.config_manager.clone(),
+            self.feature_gate.clone(),
+            Arc::new(move |wb: RocksWriteBatch| {
+                if let Err(e) = scheduler.schedule(GcTask::OrphanVersions(wb)) {
+                    error!("schedule GcTask::OrphanVersions fail"; "err" => ?e);
+                }
+            }),
+        );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());

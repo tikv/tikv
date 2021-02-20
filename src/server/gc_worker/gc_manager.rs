@@ -633,6 +633,7 @@ mod tests {
                 ref mut callback, ..
             } => callback,
             GcTask::PhysicalScanLock { .. } => unreachable!(),
+            GcTask::OrphanVersions(..) => unreachable!(),
             GcTask::Validate(_) => unreachable!(),
         };
         mem::replace(callback, Box::new(|_| {}))

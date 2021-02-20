@@ -60,6 +60,7 @@ make_auto_flush_static_metric! {
         unsafe_destroy_range,
         physical_scan_lock,
         validate_config,
+        orphan_versions,
     }
 
     pub label_enum SnapTask {
