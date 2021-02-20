@@ -22,6 +22,7 @@ cloud-aws = ["aws"]
 cloud-gcp = []
 
 [dependencies]
+async-trait = "0.1"
 aws = { path = "../../cloud/aws", optional = true, default-features = false }
 cloud = { path = "../../cloud/", default-features = false }
 encryption = { path = "../", default-features = false }

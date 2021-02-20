@@ -13,5 +13,4 @@ pub use error::{Error, ErrorTrait, Result};
 
 pub mod kms;
 #[cfg(test)]
-pub use kms::fake;
 pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};

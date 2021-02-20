@@ -9,7 +9,7 @@ use tikv_util::stream::RetryError;
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub trait ErrorTrait: Debug + Display + RetryError + Send + Sync + 'static {}
+pub trait ErrorTrait: Debug + Display + ErrorCodeExt + RetryError + Send + Sync + 'static {}
 
 /// The error type for the cloud.
 #[derive(Debug, Fail)]

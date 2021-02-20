@@ -196,9 +196,48 @@ impl Backend for KmsBackend {
 }
 
 #[cfg(test)]
-mod tests {
+mod fake {
     use super::*;
-    use cloud::kms::fake::FakeKms;
+
+    const FAKE_VENDOR_NAME: &[u8] = b"FAKE";
+    const FAKE_DATA_KEY_ENCRYPTED: &[u8] = b"encrypted                       ";
+
+    #[derive(Debug)]
+    pub struct FakeKms {
+        plaintext_key: PlainKey,
+    }
+
+    impl FakeKms {
+        pub fn new(plaintext_key: Vec<u8>) -> Self {
+            Self {
+                plaintext_key: PlainKey::new(plaintext_key).unwrap(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl KmsProvider for FakeKms {
+        async fn generate_data_key(&self) -> Result<DataKeyPair> {
+            Ok(DataKeyPair {
+                encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
+                plaintext: PlainKey::new(self.plaintext_key.clone()).unwrap(),
+            })
+        }
+
+        async fn decrypt_data_key(&self, _ciphertext: &EncryptedKey) -> Result<Vec<u8>> {
+            Ok(vec![1u8, 32])
+        }
+
+        fn name(&self) -> &[u8] {
+            FAKE_VENDOR_NAME
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fake::FakeKms;
+    use super::*;
     use hex::FromHex;
     use matches::assert_matches;
 
