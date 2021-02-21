@@ -118,7 +118,7 @@ where
         mut apply_res: ApplyRes<EK::Snapshot>,
     ) {
         self.sync_log |= sync_log;
-        if !cb.has_callback() {
+        if cb.has_callback() {
             APPLY_LEADER_WRITE_BYTES.observe(apply_res.metrics.written_bytes as f64);
             APPLY_LEADER_WRITE_KEYS.observe(apply_res.metrics.written_keys as f64);
             self.leader_written_bytes += apply_res.metrics.written_bytes;
@@ -183,6 +183,7 @@ where
 
     fn clear(&mut self) {
         // TODO: need shrink
+        self.sync_log = false;
         self.kv_wb.clear();
         self.begin = None;
         self.cbs.clear();
