@@ -324,6 +324,25 @@ pub fn add_datetime_and_string(
     }
 }
 
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn add_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &Duration,
+    arg1: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let parsed_duration = parse_duration(ctx, arg1)?;
+    let added: Result<Option<Duration>> = match parsed_duration {
+        Some(dur) => add_duration_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
+    };
+    added.map(|result| match result {
+        Some(dur) => writer.write(Some(duration_to_string(dur).into_bytes())),
+        None => writer.write(None),
+    })
+}
+
 #[rpn_fn(capture=[ctx])]
 #[inline]
 pub fn sub_duration_and_duration(
@@ -381,6 +400,25 @@ pub fn sub_datetime_and_string(
         Some(dur) => sub_datetime_and_duration(ctx, datetime, &dur),
         None => Ok(None),
     }
+}
+
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn sub_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &Duration,
+    arg1: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let parsed_duration = parse_duration(ctx, arg1)?;
+    let subbed: Result<Option<Duration>> = match parsed_duration {
+        Some(dur) => sub_duration_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
+    };
+    subbed.map(|result| match result {
+        Some(dur) => writer.write(Some(duration_to_string(dur).into_bytes())),
+        None => writer.write(None),
+    })
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -692,6 +730,7 @@ mod tests {
 
     use crate::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::codec::convert::ConvertTo;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
     use tidb_query_datatype::codec::mysql::MAX_FSP;
     use tidb_query_datatype::FieldTypeTp;
@@ -2059,6 +2098,64 @@ mod tests {
                 )
                 .evaluate::<Duration>(ScalarFuncSig::MakeTime);
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_add_sub_date_and_string() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (None, None, None, None),
+            (None, Some("1 00:00:00"), None, None),
+            (Some("2021-02-03"), Some("invalid"), None, None),
+            (Some("2021-02-03"), Some("2021-02-04"), None, None),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00"),
+                Some("01:00:00"),
+                Some("-01:00:00"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("1 00:00:00"),
+                Some("24:00:00"),
+                Some("-24:00:00"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00.555941"),
+                Some("01:00:00.555941"),
+                Some("-01:00:00.555941"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00.5559"),
+                Some("01:00:00.555900"),
+                Some("-01:00:00.555900"),
+            ),
+        ];
+        for (date, duration, add_expected, sub_expected) in cases {
+            let date: Option<DateTime> =
+                date.map(|date| DateTime::parse_date(&mut ctx, date).unwrap());
+            // similates implicit cast from date to duration that is inserted in tidb
+            let date_cast_as_duration: Option<Duration> =
+                date.map(|d| d.convert(&mut ctx).unwrap());
+            let duration: Option<Vec<u8>> = duration.map(|str| str.as_bytes().to_vec());
+
+            let add_output = RpnFnScalarEvaluator::new()
+                .push_param(date_cast_as_duration)
+                .push_param(duration.clone())
+                .evaluate::<Bytes>(ScalarFuncSig::AddDateAndString)
+                .unwrap();
+            assert_eq!(add_output, add_expected.map(|str| str.as_bytes().to_vec()));
+
+            let sub_output = RpnFnScalarEvaluator::new()
+                .push_param(date_cast_as_duration)
+                .push_param(duration)
+                .evaluate::<Bytes>(ScalarFuncSig::SubDateAndString)
+                .unwrap();
+            assert_eq!(sub_output, sub_expected.map(|str| str.as_bytes().to_vec()));
         }
     }
 }
