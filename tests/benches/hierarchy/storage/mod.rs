@@ -95,11 +95,19 @@ pub fn bench_storage<E: Engine, F: EngineFactory<E>>(
     c: &mut Criterion,
     configs: &[BenchConfig<F>],
 ) {
-    c.bench_function_over_inputs(
-        "storage_async_prewrite",
-        storage_prewrite,
-        configs.to_owned(),
-    );
-    c.bench_function_over_inputs("storage_async_commit", storage_commit, configs.to_owned());
-    c.bench_function_over_inputs("storage_async_raw_get", storage_raw_get, configs.to_owned());
+    let mut group = c.benchmark_group("storage");
+    for config in configs {
+        group.bench_with_input(
+            format!("async_prewrite/{:?}", config),
+            config,
+            storage_prewrite,
+        );
+        group.bench_with_input(format!("async_commit/{:?}", config), config, storage_commit);
+        group.bench_with_input(
+            format!("async_raw_get/{:?}", config),
+            config,
+            storage_raw_get,
+        );
+    }
+    group.finish();
 }
