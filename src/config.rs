@@ -158,7 +158,7 @@ impl TitanCfConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BackgroundJobLimits {
     max_background_jobs: u32,
     max_background_flushes: u32,
@@ -166,24 +166,34 @@ struct BackgroundJobLimits {
     max_titan_background_gc: u32,
 }
 
-fn get_background_job_limits(
-    defaults: BackgroundJobLimits,
-    min_background_flushes: u32,
+const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
+    max_background_jobs: 10,
+    max_background_flushes: 4,
+    max_sub_compactions: 3,
+    max_titan_background_gc: 4,
+};
+
+const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
+    max_background_jobs: 4,
+    max_background_flushes: 1,
+    max_sub_compactions: 2,
+    max_titan_background_gc: 4,
+};
+
+fn get_background_job_limits_impl(
+    cpu_num: u32,
+    defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
-    let cpu_num: u32 = cmp::max(SysQuota::new().cpu_cores_quota() as u32, 1);
     // At the minimum, we should have two background jobs: one for flush and one for compaction.
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
+    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
     // threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
-        cmp::min(
-            cmp::max(min_background_flushes, (cpu_num as u32) / 4),
-            defaults.max_background_flushes,
-        ),
-        max_background_jobs - 1,
+        (max_background_jobs + 2) / 3,
+        defaults.max_background_flushes,
     );
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_flushes;
@@ -192,7 +202,7 @@ fn get_background_job_limits(
         cmp::min(defaults.max_sub_compactions, (max_compactions - 1) as u32),
     );
     // Maximum background GC threads for Titan
-    let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num as u32);
+    let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num);
 
     BackgroundJobLimits {
         max_background_jobs,
@@ -200,6 +210,11 @@ fn get_background_job_limits(
         max_sub_compactions,
         max_titan_background_gc,
     }
+}
+
+fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLimits {
+    let cpu_num = cmp::max(SysQuota::new().cpu_cores_quota() as u32, 1);
+    get_background_job_limits_impl(cpu_num, defaults)
 }
 
 macro_rules! cf_config {
@@ -992,15 +1007,7 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let bg_job_limits = get_background_job_limits(
-            BackgroundJobLimits {
-                max_background_jobs: 10,
-                max_background_flushes: 4,
-                max_sub_compactions: 3,
-                max_titan_background_gc: 4,
-            },
-            2, /*min_background_flushes*/
-        );
+        let bg_job_limits = get_background_job_limits(&KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDBConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
@@ -1292,15 +1299,7 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let bg_job_limits = get_background_job_limits(
-            BackgroundJobLimits {
-                max_background_jobs: 4,
-                max_background_flushes: 1,
-                max_sub_compactions: 2,
-                max_titan_background_gc: 4,
-            },
-            1, /*min_background_flushes*/
-        );
+        let bg_job_limits = get_background_job_limits(&RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDBConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
@@ -3677,6 +3676,55 @@ mod tests {
         assert_eq!(
             cfg.raft_store.region_split_check_diff.0,
             default_region_split_check_diff + 1
+        );
+    }
+
+    #[test]
+    fn test_background_job_limits() {
+        assert_eq!(
+            get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 1,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 2,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 4,
+                max_background_flushes: 2,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 8,
+                max_background_flushes: 3,
+                max_sub_compactions: 3,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(16 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            BackgroundJobLimits {
+                max_background_jobs: 10,
+                max_background_flushes: 4,
+                max_sub_compactions: 3,
+                max_titan_background_gc: 4,
+            }
         );
     }
 }
