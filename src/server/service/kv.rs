@@ -269,6 +269,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         unimplemented!();
     }
 
+    fn raw_get_key_ttl(
+        &mut self,
+        _: RpcContext<'_>,
+        _: RawGetKeyTtlRequest,
+        _: UnarySink<RawGetKeyTtlResponse>,
+    ) {
+        unimplemented!()
+    }
+
     fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
         let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
         ctx.spawn(
