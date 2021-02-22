@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use derive_more::Deref;
 use std::fmt::Debug;
 use std::path::Path;
-use tikv_util::stream::RetryError;
+use tikv_util::impl_format_delegate_newtype;
+use tikv_util::stream::{RetryError};
 
 #[cfg(feature = "aws")]
 use aws::AwsKms;
@@ -103,10 +104,12 @@ impl KmsProvider for CloudKms {
 
 // CloudConverError adapts cloud errors to encryption errors
 // As the abstract RetryCodedError
-#[derive(Debug)]
+#[derive(Debug, Deref)]
 pub struct CloudConvertError(CloudError);
 
 impl RetryCodedError for CloudConvertError {}
+
+impl_format_delegate_newtype!(CloudConvertError);
 
 impl std::convert::From<CloudConvertError> for Error {
     fn from(err: CloudConvertError) -> Error {
@@ -117,11 +120,5 @@ impl std::convert::From<CloudConvertError> for Error {
 impl RetryError for CloudConvertError {
     fn is_retryable(&self) -> bool {
         self.0.is_retryable()
-    }
-}
-
-impl std::fmt::Display for CloudConvertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
     }
 }
