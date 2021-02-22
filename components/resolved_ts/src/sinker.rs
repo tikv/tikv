@@ -3,7 +3,10 @@
 use engine_traits::Snapshot;
 use raftstore::store::fsm::ObserveID;
 use raftstore::store::RegionSnapshot;
+<<<<<<< HEAD
 use std::marker::PhantomData;
+=======
+>>>>>>> copr: added sub duration and string
 use txn_types::TimeStamp;
 
 use crate::cmd::ChangeLog;
@@ -15,6 +18,7 @@ pub struct SinkCmd {
 }
 
 pub trait CmdSinker<S: Snapshot>: Send {
+<<<<<<< HEAD
     fn sink_cmd(&mut self, sink_cmd: Vec<SinkCmd>);
 
     fn sink_cmd_with_old_value(&mut self, sink_cmd: Vec<SinkCmd>, snapshot: RegionSnapshot<S>);
@@ -37,3 +41,9 @@ impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
 
     fn sink_resolved_ts(&mut self, _regions: Vec<u64>, _ts: TimeStamp) {}
 }
+=======
+    fn sink_cmd(&mut self, sink_cmd: Vec<SinkCmd>, snapshot: RegionSnapshot<S>);
+
+    fn sink_resolved_ts(&mut self, regions: Vec<u64>, ts: TimeStamp);
+}
+>>>>>>> copr: added sub duration and string

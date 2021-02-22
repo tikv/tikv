@@ -8,10 +8,10 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo, ReadState};
+use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
-use pd_client::{Feature, PdClient};
+use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::msg::{Callback, SignificantMsg};
@@ -23,9 +23,6 @@ use txn_types::TimeStamp;
 
 use crate::endpoint::Task;
 use crate::errors::Result;
-use crate::metrics::RESOLVED_TS_ADVANCE_METHOD;
-
-const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 
 pub struct AdvanceTsWorker<T, E: KvEngine> {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -113,6 +110,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                 info!("failed to schedule register advance event"; "err" => ?e);
             }
 
+<<<<<<< HEAD
             let gate = pd_client.feature_gate();
 
             let regions =
@@ -132,6 +130,22 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                     RESOLVED_TS_ADVANCE_METHOD.set(0);
                     Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
                 };
+=======
+            let regions = if hibernate_regions_compatible {
+                Self::region_resolved_ts_store(
+                    regions,
+                    store_meta,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    tikv_clients,
+                    min_ts,
+                )
+                .await
+            } else {
+                Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
+            };
+>>>>>>> copr: added sub duration and string
 
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
@@ -145,8 +159,11 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         self.worker.spawn(fut);
     }
 
+<<<<<<< HEAD
     // Confirms leadership of region peer before trying to advance resolved ts.
     // This function sends a raft read command to raftstore to inspect leadership.
+=======
+>>>>>>> copr: added sub duration and string
     async fn region_resolved_ts_raft(
         regions: Vec<u64>,
         raft_router: T,
@@ -155,7 +172,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         // TODO: send a message to raftstore would consume too much cpu time,
         // try to handle it outside raftstore.
         let regions: Vec<_> = regions
+<<<<<<< HEAD
             .into_iter()
+=======
+            .iter()
+            .copied()
+>>>>>>> copr: added sub duration and string
             .map(|region_id| {
                 let raft_router_clone = raft_router.clone();
                 async move {
@@ -181,12 +203,21 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             })
             .collect();
         let resps = futures::future::join_all(regions).await;
+<<<<<<< HEAD
         resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     // Confirms leadership of region peer before trying to advance resolved ts.
     // This function broadcasts a special message to all stores, get the leader id of them to confirm whether
     // current peer has a quorum which accept its leadership.
+=======
+        resps
+            .into_iter()
+            .filter_map(|resp| resp)
+            .collect::<Vec<u64>>()
+    }
+
+>>>>>>> copr: added sub duration and string
     async fn region_resolved_ts_store(
         regions: Vec<u64>,
         store_meta: Arc<Mutex<StoreMeta>>,
@@ -196,6 +227,66 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
+<<<<<<< HEAD
+=======
+        let region_has_quorum = |region: &Region, stores: &[u64]| {
+            let mut voters = 0;
+            let mut incoming_voters = 0;
+            let mut demoting_voters = 0;
+
+            let mut resp_voters = 0;
+            let mut resp_incoming_voters = 0;
+            let mut resp_demoting_voters = 0;
+
+            region.get_peers().iter().for_each(|peer| {
+                let mut in_resp = false;
+                for store_id in stores {
+                    if *store_id == peer.store_id {
+                        in_resp = true;
+                        break;
+                    }
+                }
+                match peer.get_role() {
+                    PeerRole::Voter => {
+                        voters += 1;
+                        if in_resp {
+                            resp_voters += 1;
+                        }
+                    }
+                    PeerRole::IncomingVoter => {
+                        incoming_voters += 1;
+                        if in_resp {
+                            resp_incoming_voters += 1;
+                        }
+                    }
+                    PeerRole::DemotingVoter => {
+                        demoting_voters += 1;
+                        if in_resp {
+                            resp_demoting_voters += 1;
+                        }
+                    }
+                    PeerRole::Learner => (),
+                }
+            });
+
+            let has_incoming_majority =
+                (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+            let has_demoting_majority =
+                (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+            has_incoming_majority && has_demoting_majority
+        };
+
+        let find_store_id = |region: &Region, peer_id| {
+            for peer in region.get_peers() {
+                if peer.id == peer_id {
+                    return Some(peer.store_id);
+                }
+            }
+            None
+        };
+
+>>>>>>> copr: added sub duration and string
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -226,17 +317,23 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                             if peer.get_role() == PeerRole::Learner {
                                 continue;
                             }
+<<<<<<< HEAD
                             let mut read_state = ReadState::default();
                             if let Some(rp) = meta.region_read_progress.get(&region_id) {
                                 read_state.set_applied_index(rp.applied_index());
                                 read_state.set_safe_ts(rp.safe_ts());
                             }
+=======
+>>>>>>> copr: added sub duration and string
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);
                             leader_info.set_term(*term);
                             leader_info.set_region_id(region_id);
                             leader_info.set_region_epoch(region.get_region_epoch().clone());
+<<<<<<< HEAD
                             leader_info.set_read_state(read_state);
+=======
+>>>>>>> copr: added sub duration and string
                             store_map
                                 .entry(peer.store_id)
                                 .or_default()
@@ -303,6 +400,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             .collect()
     }
 }
+<<<<<<< HEAD
 
 fn region_has_quorum(region: &Region, stores: &[u64]) -> bool {
     let mut voters = 0;
@@ -360,3 +458,5 @@ fn find_store_id(region: &Region, peer_id: u64) -> Option<u64> {
     }
     None
 }
+=======
+>>>>>>> copr: added sub duration and string

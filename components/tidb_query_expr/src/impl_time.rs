@@ -766,6 +766,31 @@ pub fn duration_duration_time_diff(
     Ok(Some(res))
 }
 
+pub fn sub_duration_and_string(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: BytesRef,
+) -> Result<Option<Duration>> {
+    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
+    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match arg1.checked_sub(arg2) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} - {})", arg1, arg2),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
@@ -831,11 +856,36 @@ mod tests {
         for (duration, string, exp) in cases {
             let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
             let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
-            let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let string = string.map(|arg2| arg2.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(duration)
                 .push_param(string)
-                .evaluate(ScalarFuncSig::AddDurationAndDuration)
+                .evaluate(ScalarFuncSig::AddDurationAndString)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_sub_duration_and_string() {
+        let cases = vec![
+            (Some("00:02:02"), Some("00:01:01"), Some("00:01:01")),
+            (Some("12:00:00"), Some("00:00:01"), Some("11:59:59")),
+            (Some("24:00:00"), Some("00:00:01"), Some("23:59:59")),
+            (Some("24:00:01"), Some("00:00:02"), Some("23:59:59")),
+            // (None, None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (duration, string, exp) in cases {
+            let expected = exp.map(|exp| Duration::parse(&mut ctx, exp, MAX_FSP).unwrap());
+            let duration = duration.map(|arg1| Duration::parse(&mut ctx, arg1, MAX_FSP).unwrap());
+            let string = string.map(|arg2| arg2.as_bytes().to_vec());
+
+            // let string = string.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .push_param(string)
+                .evaluate(ScalarFuncSig::SubDurationAndString)
                 .unwrap();
             assert_eq!(output, expected);
         }

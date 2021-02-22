@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 //! Resolved TS is a timestamp that represents the lower bonud of incoming Commit TS
 //  and the upper bound of outgoing Commit TS.
 //! Through this timestamp we can get a consistent view in the transaction level.
@@ -9,6 +10,8 @@
 //!   2. If there is not any lock, use the latest timestamp as Resolved TS.
 //!   3. Resolved TS must be advanced by the region leader after it has applied on its term.
 
+=======
+>>>>>>> copr: added sub duration and string
 #![feature(box_patterns)]
 
 #[macro_use]
@@ -29,7 +32,10 @@ mod endpoint;
 pub use endpoint::*;
 mod errors;
 pub use errors::*;
+<<<<<<< HEAD
 mod scanner;
 pub use scanner::*;
 mod metrics;
 pub use metrics::*;
+=======
+>>>>>>> copr: added sub duration and string
