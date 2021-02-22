@@ -118,7 +118,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
     let name_enum = match name {
         "kv" => TickerName::kv,
         "raft" => TickerName::raft,
-        unexpected => panic!(format!("unexpected name {}", unexpected)),
+        unexpected => panic!("unexpected name {}", unexpected),
     };
 
     match t {

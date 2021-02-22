@@ -16,9 +16,9 @@ const DEFAULT_SPLIT_CONTAINED_SCORE: f64 = 0.5;
 const DEFAULT_SIZE_THRESHOLD: u64 = 4 * 1024 * 1024;
 const DEFAULT_KEY_THRESHOLD: u64 = 40960;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 pub struct SplitConfig {
     pub qps_threshold: usize,
     pub split_balance_score: f64,
