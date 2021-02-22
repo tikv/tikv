@@ -283,6 +283,8 @@ struct SampleBuilder<S: Snapshot> {
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
+    stats_version: i32,
+    top_n_size: usize,
     columns_info: Vec<tipb::ColumnInfo>,
     analyze_common_handle: bool,
     common_handle_col_ids: Vec<i64>,
@@ -319,6 +321,20 @@ impl<S: Snapshot> SampleBuilder<S> {
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
+            stats_version: if let Some(ref idx_req) = common_handle_req {
+                if idx_req.has_version() {
+                    idx_req.get_version()
+                } else {
+                    ANALYZE_VERSION_V1
+                }
+            } else {
+                ANALYZE_VERSION_V1
+            },
+            top_n_size: if let Some(ref idx_req) = common_handle_req {
+                idx_req.get_top_n_size() as usize
+            } else {
+                0 as usize
+            },
             common_handle_col_ids: req.take_primary_column_ids(),
             columns_info,
             analyze_common_handle: common_handle_req != None,
@@ -380,6 +396,11 @@ impl<S: Snapshot> SampleBuilder<S> {
             }
 
             if self.analyze_common_handle {
+                // cur_val recording the current value's data and its counts when iterating index's rows.
+                // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
+                // top-n information.
+                let mut cur_val: (u32, Vec<u8>) = (0, Vec::from(""));
+                let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
                     for handle_id in &self.common_handle_col_ids {
@@ -395,7 +416,36 @@ impl<S: Snapshot> SampleBuilder<S> {
                             common_handle_cms.insert(&data);
                         }
                     }
-                    common_handle_hist.append(&data)
+                    if self.stats_version == ANALYZE_VERSION_V2 {
+                        common_handle_hist.append(&data, true);
+                        if cur_val.1 == data {
+                            cur_val.0 += 1;
+                        } else {
+                            if cur_val.0 > 0 {
+                                topn_heap.push(Reverse(cur_val));
+                            }
+                            if topn_heap.len() > self.top_n_size {
+                                topn_heap.pop();
+                            }
+                            cur_val = (1, data);
+                        }
+                    } else {
+                        common_handle_hist.append(&data, false)
+                    }
+                }
+                if self.stats_version == ANALYZE_VERSION_V2 {
+                    if cur_val.0 > 0 {
+                        topn_heap.push(Reverse(cur_val));
+                        if topn_heap.len() > self.top_n_size {
+                            topn_heap.pop();
+                        }
+                    }
+                    if let Some(c) = common_handle_cms.as_mut() {
+                        for heap_item in topn_heap {
+                            c.sub(&(heap_item.0).1, (heap_item.0).0);
+                            c.push_to_top_n((heap_item.0).1, (heap_item.0).0 as u64);
+                        }
+                    }
                 }
             }
 
