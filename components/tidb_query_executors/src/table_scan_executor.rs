@@ -1215,58 +1215,54 @@ mod tests {
     }
 
     #[derive(Copy, Clone)]
-    struct Column {
-        is_primary_column: bool,
-        has_column_info: bool,
-        is_primary_prefix_column: bool,
+    struct VarcharColumn {
+        is_primary: bool,
+        prefix_len: usize,
     }
 
-    fn test_common_handle_impl(columns: &[Column]) {
+    fn test_prefix_column_handle_impl(columns: &[VarcharColumn]) {
         const TABLE_ID: i64 = 2333;
-
-        // Prepare some table meta data
         let mut columns_info = vec![];
         let mut schema = vec![];
         let mut handle = vec![];
         let mut primary_column_ids = vec![];
         let mut primary_prefix_column_ids = vec![];
-        let mut missed_columns_info = vec![];
         let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
         let mut row = vec![];
+        let mut column_bytes_val = vec![];
 
         for (i, &column) in columns.iter().enumerate() {
-            let Column {
-                is_primary_column,
-                has_column_info,
-                is_primary_prefix_column,
+            let VarcharColumn {
+                is_primary,
+                prefix_len,
             } = column;
 
-            if has_column_info {
-                let mut ci = ColumnInfo::default();
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(i as i64);
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            columns_info.push(ci);
+            schema.push(FieldTypeTp::VarChar.into());
 
-                ci.set_column_id(i as i64);
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-
-                columns_info.push(ci);
-                schema.push(FieldTypeTp::LongLong.into());
-            } else {
-                missed_columns_info.push(i as i64);
-            }
-
-            if is_primary_column {
-                handle.push(Datum::I64(i as i64));
+            if is_primary {
+                let str_val = i.to_string() + "0000";
+                let row_val = str_val.as_bytes();
+                let idx_val = if prefix_len > 0 {
+                    primary_prefix_column_ids.push(i as i64);
+                    &row_val[..prefix_len]
+                } else {
+                    row_val
+                };
+                handle.push(Datum::Bytes(idx_val.to_vec()));
                 primary_column_ids.push(i as i64);
+                row.push(Datum::Bytes(row_val.to_vec()));
+                column_bytes_val.push(str_val);
+            } else {
+                row.push(Datum::Bytes(i.to_string().as_bytes().to_vec()));
+                column_bytes_val.push(i.to_string());
             }
-
-            if is_primary_prefix_column {
-                primary_prefix_column_ids.push(i as i64);
-            }
-
-            row.push(Datum::I64(i as i64));
         }
 
         let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
-
         let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
         let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
 
@@ -1294,6 +1290,163 @@ mod tests {
         let mut result = executor.next_batch(10);
         assert_eq!(result.is_drained.unwrap(), true);
         assert_eq!(result.logical_rows.len(), 1);
+
+        // We expect we fill the primary column with the value embedded in the common handle.
+        for i in 0..result.physical_columns.columns_len() {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
+                .unwrap();
+
+            assert_eq!(
+                result.physical_columns[i].decoded().to_bytes_vec(),
+                &[Some(column_bytes_val[i].as_bytes().to_vec())],
+            );
+        }
+    }
+
+    #[test]
+    fn test_prefix_column_handle() {
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+        ]);
+    }
+
+    #[derive(Copy, Clone)]
+    struct Column {
+        is_primary_column: bool,
+        has_column_info: bool,
+    }
+
+    fn test_common_handle_impl(columns: &[Column]) {
+        const TABLE_ID: i64 = 2333;
+
+        // Prepare some table meta data
+        let mut columns_info = vec![];
+        let mut schema = vec![];
+        let mut handle = vec![];
+        let mut primary_column_ids = vec![];
+        let mut missed_columns_info = vec![];
+        let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
+        let mut row = vec![];
+
+        for (i, &column) in columns.iter().enumerate() {
+            let Column {
+                is_primary_column,
+                has_column_info,
+            } = column;
+
+            if has_column_info {
+                let mut ci = ColumnInfo::default();
+
+                ci.set_column_id(i as i64);
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+                columns_info.push(ci);
+                schema.push(FieldTypeTp::LongLong.into());
+            } else {
+                missed_columns_info.push(i as i64);
+            }
+
+            if is_primary_column {
+                handle.push(Datum::I64(i as i64));
+                primary_column_ids.push(i as i64);
+            }
+
+            row.push(Datum::I64(i as i64));
+        }
+
+        let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
+
+        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
+
+        // Constructs a range that includes the constructed key.
+        let mut key_range = KeyRange::default();
+        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        key_range.set_start(begin);
+        key_range.set_end(end);
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            vec![key_range],
+            primary_column_ids,
+            false,
+            false,
+            vec![],
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
         assert_eq!(
             result.physical_columns.columns_len(),
             columns.len() - missed_columns_info.len()
@@ -1310,24 +1463,22 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn test_common_handle() {
         test_common_handle_impl(&[Column {
             is_primary_column: true,
             has_column_info: true,
-            is_primary_prefix_column: false,
         }]);
 
         test_common_handle_impl(&[
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1335,17 +1486,14 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1353,17 +1501,14 @@ mod tests {
             Column {
                 is_primary_column: false,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1371,17 +1516,14 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
         ]);
 
@@ -1389,81 +1531,26 @@ mod tests {
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: false,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: true,
-                is_primary_prefix_column: false,
             },
             Column {
                 is_primary_column: true,
                 has_column_info: false,
-                is_primary_prefix_column: false,
-            },
-        ]);
-
-        test_common_handle_impl(&[
-            Column {
-                is_primary_column: true,
-                has_column_info: true,
-                is_primary_prefix_column: true,
-            },
-            Column {
-                is_primary_column: false,
-                has_column_info: true,
-                is_primary_prefix_column: false,
-            },
-        ]);
-
-        test_common_handle_impl(&[
-            Column {
-                is_primary_column: true,
-                has_column_info: true,
-                is_primary_prefix_column: false,
-            },
-            Column {
-                is_primary_column: true,
-                has_column_info: true,
-                is_primary_prefix_column: true,
-            },
-            Column {
-                is_primary_column: false,
-                has_column_info: true,
-                is_primary_prefix_column: false,
-            },
-        ]);
-
-        test_common_handle_impl(&[
-            Column {
-                is_primary_column: true,
-                has_column_info: true,
-                is_primary_prefix_column: true,
-            },
-            Column {
-                is_primary_column: true,
-                has_column_info: true,
-                is_primary_prefix_column: true,
-            },
-            Column {
-                is_primary_column: false,
-                has_column_info: true,
-                is_primary_prefix_column: false,
             },
         ]);
     }
