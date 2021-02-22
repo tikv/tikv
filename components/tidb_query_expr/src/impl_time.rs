@@ -700,6 +700,27 @@ pub fn add_duration_and_string(
     Ok(Some(res))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn duration_duration_time_diff(
+    ctx: &mut EvalContext,
+    arg1: &Duration,
+    arg2: &Duration,
+) -> Result<Option<Duration>> {
+    let res = match arg1.checked_sub(*arg2) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DURATION",
+                    format!("({} - {})", arg1, arg2),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
 /// Cast Duration into string representation and drop subsec if possible.
 fn duration_to_string(duration: Duration) -> String {
     match duration.subsec_micros() {
