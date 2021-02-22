@@ -5,6 +5,7 @@ use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
+use tikv_util::impl_display_as_debug;
 
 use crate::{Error, Result};
 
@@ -226,11 +227,7 @@ impl std::fmt::Debug for PlainKey {
 }
 
 // Don't expose the key in a display print
-impl std::fmt::Display for PlainKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(PlainKey);
 
 #[cfg(test)]
 mod tests {
