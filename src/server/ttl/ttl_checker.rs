@@ -41,6 +41,10 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                 let mut interval = runner.poll_interval;
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
                     interval = runner.run();
+                    info!(
+                        "ttl checker finishes a round, wait {:?} to start next round",
+                        interval
+                    );
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -78,6 +82,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 Box::new(move |iter| {
                     let mut scanned_regions = 0;
                     let mut start_key = None;
+                    let mut end_key = None;
                     for info in iter {
                         if start_key.is_none() {
                             start_key = Some(info.region.get_start_key().to_owned());
@@ -86,15 +91,16 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                             .with_label_values(&["get"])
                             .add(1);
                         scanned_regions += 1;
+                        end_key = Some(info.region.get_end_key().to_vec());
                         if scanned_regions == 10 {
-                            let _ = tx.send(Some((
-                                start_key.unwrap(),
-                                info.region.get_end_key().to_owned(),
-                            )));
-                            return;
+                            break;
                         }
                     }
-                    let _ = tx.send(None);
+                    if scanned_regions != 0 {
+                        let _ = tx.send(Some((start_key.unwrap(), end_key.unwrap())));
+                    } else {
+                        let _ = tx.send(None);
+                    }
                 }),
             ) {
                 error!(?e; "ttl checker: failed to get next region information");
@@ -102,25 +108,26 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             }
 
             match rx.recv() {
-                Ok(None) => {
-                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC
-                        .with_label_values(&["get"])
-                        .set(0);
-                    // checks a round
-                    let round_time = Instant::now() - round_start_time;
-                    if self.poll_interval > round_time {
-                        return self.poll_interval - round_time;
-                    }
-                    return Duration::new(0, 0);
-                }
+                Ok(None) => {}
                 Ok(Some((start_key, end_key))) => {
                     Self::check_ttl_for_range(&self.engine, &start_key, &end_key);
-                    key = end_key;
+                    if !end_key.is_empty() {
+                        key = end_key;
+                        continue;
+                    }
                 }
                 Err(e) => {
                     error!(?e; "ttl checker: failed to get next region information");
                 }
             }
+
+            TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
+            // checks a round
+            let round_time = Instant::now() - round_start_time;
+            if self.poll_interval > round_time {
+                return self.poll_interval - round_time;
+            }
+            return Duration::new(0, 0);
         }
     }
 
