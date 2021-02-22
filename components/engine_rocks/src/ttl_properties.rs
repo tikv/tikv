@@ -48,7 +48,7 @@ impl TTLPropertiesExt for RocksEngine {
         for (file_name, v) in collection.iter() {
             let prop = match RocksTTLProperties::decode(&v.user_collected_properties()) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => panic!("decode ttl properties err {:?}", e),
             };
             res.push((file_name.to_string(), prop));
         }
@@ -63,16 +63,21 @@ pub struct TTLPropertiesCollector {
 }
 
 impl TablePropertiesCollector for TTLPropertiesCollector {
-    fn add(&mut self, _key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if entry_type != DBEntryType::Put {
             return;
         }
-
-        let expire_ts = get_expire_ts(&value).unwrap_or(0);
-        if expire_ts > self.prop.max_expire_ts {
-            self.prop.max_expire_ts = expire_ts;
+        // only consider data keys
+        if !key.starts_with(keys::DATA_PREFIX_KEY) {
+            return;
         }
 
+        let expire_ts = get_expire_ts(&value).unwrap();
+        if expire_ts == 0 {
+            return;
+        }
+
+        self.prop.max_expire_ts = std::cmp::max(self.prop.max_expire_ts, expire_ts);
         if self.prop.min_expire_ts == 0 {
             self.prop.min_expire_ts = expire_ts;
         } else {
@@ -120,22 +125,23 @@ mod tests {
         };
 
         let case1 = [
-            ("a", 0),
-            ("b", UnixSecs::now().into_inner()),
-            ("c", 1),
-            ("d", u64::MAX),
+            ("za", 0),
+            ("zb", UnixSecs::now().into_inner()),
+            ("zc", 1),
+            ("zd", u64::MAX),
+            ("ze", 0),
         ];
         let props = get_properties(&case1).unwrap();
         assert_eq!(props.max_expire_ts, u64::MAX);
         assert_eq!(props.min_expire_ts, 1);
 
-        let case2 = [("a", 0)];
+        let case2 = [("za", 0)];
         assert!(get_properties(&case2).is_err());
 
         let case3 = [];
         assert!(get_properties(&case3).is_err());
 
-        let case4 = [("a", 1)];
+        let case4 = [("za", 1)];
         let props = get_properties(&case4).unwrap();
         assert_eq!(props.max_expire_ts, 1);
         assert_eq!(props.min_expire_ts, 1);
