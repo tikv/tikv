@@ -285,10 +285,14 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-
-    pub static ref TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref TTL_CHECKER_PROCESSED_REGIONS_GAUGE: IntGauge = register_int_gauge!(
         "tikv_ttl_checker_processed_regions",
-        "Processed regions by ttl checker",
+        "Processed regions by ttl checker"
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_ACTIONS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_ttl_checker_actions",
+        "Actions of ttl checker",
         &["type"]
     )
     .unwrap();

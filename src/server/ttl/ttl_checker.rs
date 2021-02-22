@@ -87,7 +87,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                         if start_key.is_none() {
                             start_key = Some(info.region.get_start_key().to_owned());
                         }
-                        TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC.with_label_values(&["get"]).add(1);
+                        TTL_CHECKER_PROCESSED_REGIONS_GAUGE.inc();
                         scanned_regions += 1;
                         end_key = Some(info.region.get_end_key().to_vec());
                         if scanned_regions == 10 {
@@ -102,6 +102,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 }),
             ) {
                 error!(?e; "ttl checker: failed to get next region information");
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["error"])
+                    .inc();
                 continue;
             }
 
@@ -116,6 +119,10 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 }
                 Err(e) => {
                     error!(?e; "ttl checker: failed to get next region information");
+                    TTL_CHECKER_ACTIONS_COUNTER_VEC
+                        .with_label_values(&["error"])
+                        .inc();
+                    continue;
                 }
             }
 
@@ -143,6 +150,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     "files" => ?files,
                     "err" => %e,
                 );
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["error"])
+                    .inc();
                 return;
             }
         };
@@ -152,7 +162,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             }
         }
         if files.is_empty() {
-            TTL_CHECKER_PROCESSED_REGIONS_GAUGE_VEC.with_label_values(&["skip"]).add(1);
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["skip"])
+                .inc();
             return;
         }
 
@@ -167,6 +179,10 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 "files" => ?files,
                 "err" => %e,
             );
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["error"])
+                .inc();
+            return;
         }
         compact_range_timer.observe_duration();
         info!(
@@ -174,6 +190,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             "files" => ?files,
             "time_takes" => ?timer.elapsed(),
         );
+        TTL_CHECKER_ACTIONS_COUNTER_VEC
+            .with_label_values(&["compact"])
+            .inc();
 
         // wait a while
         thread::sleep(Duration::from_secs(1));
