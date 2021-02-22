@@ -336,14 +336,18 @@ impl<ER: RaftEngine> Debugger<ER> {
         for region in regions {
             let region_id = region.get_id();
             if let Err(e) = set_region_tombstone(db.as_inner(), store_id, region, &mut wb) {
+                info!("set {} to tombstone fail: {}, will cancel all changes", region_id, e);
                 errors.push((region_id, e));
+                continue;
             }
+            info!("set {} to tombstone success, will persist the result later");
         }
 
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             box_try!(wb.write_opt(&write_opts));
+            info!("all regions are processed, the result has been installed to RocksDB");
         }
         Ok(errors)
     }
@@ -368,7 +372,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 }
             };
             if region_state.get_state() == PeerState::Tombstone {
-                v1!("skip because it's already tombstone");
+                info!("skip {} because it's already tombstone", region_id);
                 continue;
             }
             let region = &region_state.get_region();

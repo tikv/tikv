@@ -1838,8 +1838,8 @@ fn main() {
     if let Some(log) = matches.value_of("log") {
         let mut cfg = TiKvConfig::default();
         cfg.log_file = log.to_owned();
-        cfg.rocksdb.info_log_level = LogLevel::Fatal;
-        cfg.raftdb.info_log_level = LogLevel::Fatal;
+        cfg.rocksdb.info_log_level = LogLevel::Error;
+        cfg.raftdb.info_log_level = LogLevel::Error;
         cmd::setup::initial_logger(&cfg);
     }
 
