@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite};
+use crate::storage::mvcc::reader::{MvccReader, OverlappedWrite, TxnCommitRecord};
 use crate::storage::mvcc::Result;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -261,11 +261,17 @@ impl<S: Snapshot> MvccTxn<S> {
         lock: &Lock,
         is_pessimistic_txn: bool,
     ) -> Result<Option<ReleasedLock>> {
-        let overlapped_write = self
-            .reader
-            .get_txn_commit_record(&key, self.start_ts)?
-            .unwrap_none();
-        self.rollback_lock(key, lock, is_pessimistic_txn, overlapped_write)
+        match self.reader.get_txn_commit_record(&key, self.start_ts)? {
+            TxnCommitRecord::None { overlapped_write } => {
+                self.rollback_lock(key, lock, is_pessimistic_txn, overlapped_write)
+            }
+            TxnCommitRecord::SingleRecord { write, .. }
+                if write.write_type != WriteType::Rollback =>
+            {
+                panic!("txn record found but not expected: {:?}", self)
+            }
+            _ => Ok(self.unlock_key(key, is_pessimistic_txn)),
+        }
     }
 
     fn rollback_lock(

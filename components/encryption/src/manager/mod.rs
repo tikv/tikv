@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, atomic::Ordering, Arc, Mutex};
@@ -9,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
 use protobuf::Message;
 
@@ -730,11 +730,9 @@ mod tests {
     use crate::master_key::PlaintextBackend;
 
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
+    use file_system::{remove_file, File};
     use matches::assert_matches;
-    use std::{
-        fs::{remove_file, File},
-        io::Write,
-    };
+    use std::io::Write;
     use tempfile::TempDir;
 
     lazy_static::lazy_static! {
@@ -1004,7 +1002,7 @@ mod tests {
     fn test_key_manager_link() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let file_foo1 = tmp_dir.path().join("foo1");
-        let _ = std::fs::File::create(&file_foo1).unwrap();
+        let _ = File::create(&file_foo1).unwrap();
         let foo1_path = file_foo1.as_path().to_str().unwrap();
 
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
