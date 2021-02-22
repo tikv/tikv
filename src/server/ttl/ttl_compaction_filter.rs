@@ -68,12 +68,17 @@ impl CompactionFilter for TTLCompactionFilter {
     fn filter(
         &mut self,
         _level: usize,
-        _key: &[u8],
+        key: &[u8],
         value: &[u8],
         _new_value: &mut Vec<u8>,
         _value_changed: &mut bool,
     ) -> bool {
-        let expire_ts = get_expire_ts(&value).unwrap_or(0);
+        // only consider data keys
+        if !key.starts_with(keys::DATA_PREFIX_KEY) {
+            return false;
+        }
+
+        let expire_ts = get_expire_ts(&value).unwrap();
         if expire_ts == 0 {
             return false;
         }
@@ -101,7 +106,7 @@ mod tests {
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let kvdb = engine.get_rocksdb();
 
-        let key1 = b"key1";
+        let key1 = b"zkey1";
         let mut value1 = vec![0; 10];
         append_expire_ts(&mut value1, 10);
         kvdb.put_cf(CF_DEFAULT, key1, &value1).unwrap();
@@ -113,17 +118,17 @@ mod tests {
 
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
 
-        let key2 = b"key2";
+        let key2 = b"zkey2";
         let mut value2 = vec![0; 10];
         append_expire_ts(&mut value2, TEST_CURRENT_TS + 20);
         kvdb.put_cf(CF_DEFAULT, key2, &value2).unwrap();
-        let key3 = b"key3";
+        let key3 = b"zkey3";
         let mut value3 = vec![0; 10];
         append_expire_ts(&mut value3, 20);
         kvdb.put_cf(CF_DEFAULT, key3, &value3).unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
 
-        let key4 = b"key4";
+        let key4 = b"zkey4";
         let mut value4 = vec![0; 10];
         append_expire_ts(&mut value4, 0);
         kvdb.put_cf(CF_DEFAULT, key4, &value4).unwrap();

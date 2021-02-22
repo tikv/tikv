@@ -40,6 +40,7 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut interval = runner.poll_interval;
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
+                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
                     interval = runner.run();
                     info!(
                         "ttl checker finishes a round, wait {:?} to start next round",
@@ -126,7 +127,6 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 }
             }
 
-            TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
             // checks a round
             let round_time = Instant::now() - round_start_time;
             if self.poll_interval > round_time {
