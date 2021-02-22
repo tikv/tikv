@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Prometheus metrics for storage functionality.
+
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -8,11 +10,11 @@ use std::mem;
 
 use crate::server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail};
 use crate::storage::kv::{FlowStatsReporter, Statistics};
+use collections::HashMap;
 use kvproto::kvrpcpb::KeyRange;
 use kvproto::metapb;
 use raftstore::store::util::build_key_range;
 use raftstore::store::ReadStats;
-use tikv_util::collections::HashMap;
 
 struct StorageLocalMetrics {
     local_scan_details: HashMap<CommandKind, Statistics>,
@@ -221,9 +223,9 @@ make_auto_flush_static_metric! {
     }
 }
 
-impl Into<GcKeysCF> for ServerGcKeysCF {
-    fn into(self) -> GcKeysCF {
-        match self {
+impl From<ServerGcKeysCF> for GcKeysCF {
+    fn from(cf: ServerGcKeysCF) -> GcKeysCF {
+        match cf {
             ServerGcKeysCF::default => GcKeysCF::default,
             ServerGcKeysCF::lock => GcKeysCF::lock,
             ServerGcKeysCF::write => GcKeysCF::write,
@@ -231,9 +233,9 @@ impl Into<GcKeysCF> for ServerGcKeysCF {
     }
 }
 
-impl Into<GcKeysDetail> for ServerGcKeysDetail {
-    fn into(self) -> GcKeysDetail {
-        match self {
+impl From<ServerGcKeysDetail> for GcKeysDetail {
+    fn from(detail: ServerGcKeysDetail) -> GcKeysDetail {
+        match detail {
             ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
             ServerGcKeysDetail::get => GcKeysDetail::get,
             ServerGcKeysDetail::next => GcKeysDetail::next,

@@ -8,6 +8,7 @@ use std::{
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
+use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
@@ -23,7 +24,7 @@ use kvproto::raft_cmdpb::{
 };
 use kvproto::{errorpb, metapb};
 use raft::eraftpb::{self, MessageType};
-use txn_types::{Key, TimeStamp, TxnExtraScheduler, Value};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
@@ -243,6 +244,7 @@ where
         &self,
         ctx: &Context,
         reqs: Vec<Request>,
+        txn_extra: TxnExtra,
         write_cb: Callback<CmdRes>,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
@@ -270,10 +272,20 @@ where
         }
 
         let len = reqs.len();
-        let header = self.new_request_header(ctx);
+        let mut header = self.new_request_header(ctx);
+        if txn_extra.one_pc {
+            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+        }
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
+
+        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
+            if !txn_extra.is_empty() {
+                tx.schedule(txn_extra);
+            }
+        }
 
         self.router
             .send_command(
@@ -383,54 +395,14 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(batch.modifies.len());
-        for m in batch.modifies {
-            let mut req = Request::default();
-            match m {
-                Modify::Delete(cf, k) => {
-                    let mut delete = DeleteRequest::default();
-                    delete.set_key(k.into_encoded());
-                    if cf != CF_DEFAULT {
-                        delete.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Delete);
-                    req.set_delete(delete);
-                }
-                Modify::Put(cf, k, v) => {
-                    let mut put = PutRequest::default();
-                    put.set_key(k.into_encoded());
-                    put.set_value(v);
-                    if cf != CF_DEFAULT {
-                        put.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Put);
-                    req.set_put(put);
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                    let mut delete_range = DeleteRangeRequest::default();
-                    delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.into_encoded());
-                    delete_range.set_end_key(end_key.into_encoded());
-                    delete_range.set_notify_only(notify_only);
-                    req.set_cmd_type(CmdType::DeleteRange);
-                    req.set_delete_range(delete_range);
-                }
-            }
-            reqs.push(req);
-        }
-
+        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
-
-        if let Some(tx) = self.txn_extra_scheduler.as_ref() {
-            if !batch.extra.is_empty() {
-                tx.schedule(batch.extra);
-            }
-        }
 
         self.exec_write_requests(
             ctx,
             reqs,
+            batch.extra,
             Box::new(move |(cb_ctx, res)| match res {
                 Ok(CmdRes::Resp(_)) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -729,6 +701,55 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
     }
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+    }
+}
+
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
+    let mut reqs = Vec::with_capacity(modifies.len());
+    for m in modifies {
+        let mut req = Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        }
+        reqs.push(req);
+    }
+    reqs
 }
 
 #[cfg(test)]

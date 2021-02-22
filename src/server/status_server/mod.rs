@@ -39,11 +39,11 @@ use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::config::{log_level_serde, ConfigController};
+use collections::HashMap;
 use configuration::Configuration;
 use pd_client::RpcClient;
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
-use tikv_util::collections::HashMap;
 use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -714,16 +714,16 @@ where
                             }
                         }
 
-                        let should_check_cert = match (&method, path.as_ref()) {
-                            (&Method::GET, "/metrics") => false,
-                            (&Method::GET, "/status") => false,
-                            (&Method::GET, "/config") => false,
-                            (&Method::GET, "/debug/pprof/profile") => false,
-                            // 1. POST "/config" will modify the configuration of TiKV.
-                            // 2. GET "/region" will get start key and end key. These keys could be actual
-                            // user data since in some cases the data itself is stored in the key.
-                            _ => true,
-                        };
+                        // 1. POST "/config" will modify the configuration of TiKV.
+                        // 2. GET "/region" will get start key and end key. These keys could be actual
+                        // user data since in some cases the data itself is stored in the key.
+                        let should_check_cert = !matches!(
+                            (&method, path.as_ref()),
+                            (&Method::GET, "/metrics")
+                                | (&Method::GET, "/status")
+                                | (&Method::GET, "/config")
+                                | (&Method::GET, "/debug/pprof/profile")
+                        );
 
                         if should_check_cert && !check_cert(security_config, x509) {
                             return Ok(StatusServer::err_response(
@@ -1012,13 +1012,13 @@ mod tests {
 
     use crate::config::{ConfigController, TiKvConfig};
     use crate::server::status_server::{LogLevelRequest, StatusServer};
+    use collections::HashSet;
     use configuration::Configuration;
     use engine_rocks::RocksEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
     use test_util::new_security_cfg;
-    use tikv_util::collections::HashSet;
     use tikv_util::logger::get_log_level;
 
     #[derive(Clone)]

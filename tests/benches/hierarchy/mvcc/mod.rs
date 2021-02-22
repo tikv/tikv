@@ -6,7 +6,9 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
-use tikv::storage::txn::{cleanup, commit, prewrite};
+use tikv::storage::txn::{
+    cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -33,16 +35,21 @@ where
     )
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
+        let txn_props = TransactionProperties {
+            start_ts,
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: &k.clone(),
+            txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
+        };
         prewrite(
             &mut txn,
+            &txn_props,
             Mutation::Put((Key::from_raw(&k), v.clone())),
-            &k.clone(),
             &None,
-            false,
-            0,
-            0,
-            TimeStamp::default(),
-            TimeStamp::default(),
             false,
         )
         .unwrap();
@@ -74,19 +81,17 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                prewrite(
-                    &mut txn,
-                    mutation,
-                    &primary,
-                    &None,
-                    false,
-                    0,
-                    0,
-                    TimeStamp::default(),
-                    TimeStamp::default(),
-                    false,
-                )
-                .unwrap();
+                let txn_props = TransactionProperties {
+                    start_ts: TimeStamp::default(),
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: &primary,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                    need_old_value: false,
+                };
+                prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -233,27 +238,35 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
 }
 
 pub fn bench_mvcc<E: Engine, F: EngineFactory<E>>(c: &mut Criterion, configs: &[BenchConfig<F>]) {
-    c.bench_function_over_inputs("mvcc_prewrite", mvcc_prewrite, configs.to_owned());
-    c.bench_function_over_inputs("mvcc_commit", mvcc_commit, configs.to_owned());
-    c.bench_function_over_inputs(
-        "mvcc_rollback_prewrote",
-        mvcc_rollback_prewrote,
-        configs.to_owned(),
-    );
-    c.bench_function_over_inputs(
-        "mvcc_rollback_conflict",
-        mvcc_rollback_conflict,
-        configs.to_owned(),
-    );
-    c.bench_function_over_inputs(
-        "mvcc_rollback_non_prewrote",
-        mvcc_rollback_non_prewrote,
-        configs.to_owned(),
-    );
-    c.bench_function_over_inputs("mvcc_load_lock", mvcc_reader_load_lock, configs.to_owned());
-    c.bench_function_over_inputs(
-        "mvcc_seek_write",
-        mvcc_reader_seek_write,
-        configs.to_owned(),
-    );
+    let mut group = c.benchmark_group("mvcc");
+    for config in configs {
+        group.bench_with_input(format!("prewrite/{:?}", config), config, mvcc_prewrite);
+        group.bench_with_input(format!("commit/{:?}", config), config, mvcc_commit);
+        group.bench_with_input(
+            format!("rollback_prewrote/{:?}", config),
+            config,
+            mvcc_rollback_prewrote,
+        );
+        group.bench_with_input(
+            format!("rollback_conflict/{:?}", config),
+            config,
+            mvcc_rollback_conflict,
+        );
+        group.bench_with_input(
+            format!("rollback_non_prewrote/{:?}", config),
+            config,
+            mvcc_rollback_non_prewrote,
+        );
+        group.bench_with_input(
+            format!("load_lock/{:?}", config),
+            config,
+            mvcc_reader_load_lock,
+        );
+        group.bench_with_input(
+            format!("seek_write/{:?}", config),
+            config,
+            mvcc_reader_seek_write,
+        );
+    }
+    group.finish();
 }

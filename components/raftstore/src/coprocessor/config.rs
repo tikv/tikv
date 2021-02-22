@@ -4,7 +4,7 @@ use super::Result;
 use crate::store::SplitCheckTask;
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
-use engine_rocks::{config as rocks_config, PerfLevel};
+use engine_traits::{config as engine_config, PerfLevel};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::Scheduler;
 
@@ -36,7 +36,7 @@ pub struct Config {
     #[config(skip)]
     pub consistency_check_method: ConsistencyCheckMethod,
 
-    #[serde(with = "rocks_config::perf_level_serde")]
+    #[serde(with = "engine_config::perf_level_serde")]
     #[config(skip)]
     pub perf_level: PerfLevel,
 }

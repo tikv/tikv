@@ -11,5 +11,6 @@ pub mod check_txn_status;
 pub mod cleanup;
 pub mod commit;
 pub mod gc;
+pub(crate) mod get_old_value;
 pub mod prewrite;
 pub mod tests;

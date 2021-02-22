@@ -26,9 +26,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
+use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
@@ -786,7 +787,6 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
-            commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
             commands::ResolveLockReadPhase::new(temp_map.clone(), None, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
             commands::MvccByStartTs::new(25.into(), Context::default()).into(),

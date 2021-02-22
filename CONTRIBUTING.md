@@ -186,3 +186,38 @@ The body of the commit message should describe why the change was made and at a 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
 Use option `git commit -s` to sign off your commits.
+
+
+### Testing AWS
+
+Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
+
+```
+git clone https://github.com/localstack/localstack.git
+cd localstack
+docker-compose up
+```
+
+For example, to test KMS, create a key:
+
+```
+pip install awscli-local
+awslocal kms create-key`
+```
+
+Then add then use the returned ID in key-id:
+
+```
+[security.encryption.master-key]
+type = "kms"
+region = "us-west-2"
+endpoint = "http://localhost:4566"
+key-id = "KMS key id"
+```
+
+When you run TiKV, make sure to set the localstck credentials
+
+```
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+```

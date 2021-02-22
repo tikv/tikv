@@ -4,10 +4,10 @@ use std::convert::TryFrom;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use collections::HashMap;
 use tidb_query_datatype::Collation;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::box_try;
-use tikv_util::collections::HashMap;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
@@ -287,7 +287,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                     group,
                                     &mut self.states,
                                     &mut self.states_offset_each_logical_row,
-                                    |val| Ok(val.map(|x| x.to_owned_value()))
+                                    |val| Ok(val.map(|x| x.into_owned_value()))
                                 )?;
                             } else {
                                 panic!();
@@ -309,7 +309,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                                 group,
                                                 &mut self.states,
                                                 &mut self.states_offset_each_logical_row,
-                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.to_owned_value()))?)
+                                                |val| Ok(SortKey::map_option_owned(val.map(|x| x.into_owned_value()))?)
                                             )?;
                                         }
                                     }

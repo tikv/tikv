@@ -29,7 +29,9 @@ use crate::expr::{EvalContext, Flag, SqlMode};
 const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
-const COMPLETE_COMPONENTS_LEN: usize = 7;
+const MAX_COMPONENTS_LEN: usize = 9;
+pub const MIN_YEAR: u32 = 1901;
+pub const MAX_YEAR: u32 = 2155;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -315,21 +317,32 @@ mod parser {
 
     /// Match at least one space and return the rest of the slice.
     /// ```ignore
-    ///  space1(b"    12:32") == Some(b"12:32")
+    ///  space1(b"    12:32") == Some((b"    ", b"12:32"))
     ///  space1(b":32") == None
     /// ```
-    fn space1(input: &[u8]) -> Option<&[u8]> {
-        let end = input
-            .iter()
-            .position(|&c| !c.is_ascii_whitespace())
-            .unwrap_or_else(|| input.len());
+    fn space1(input: &[u8]) -> Option<(&[u8], &[u8])> {
+        let end = input.iter().position(|&c| !c.is_ascii_whitespace())?;
 
-        (end < input.len()).as_option()?;
-        Some(&input[end..])
+        Some((&input[end..], &input[..end]))
+    }
+
+    /// Match at least one ascii punctuation and return the rest of the slice.
+    /// ```ignore
+    ///  punct1(b"..10") == Some((b"..", b"10"))
+    ///  punct1(b"10:32") == None
+    /// ```
+    fn punct1(input: &[u8]) -> Option<(&[u8], &[u8])> {
+        let end = input.iter().position(|&c| !c.is_ascii_punctuation())?;
+
+        Some((&input[end..], &input[..end]))
     }
 
     /// We assume that the `input` is trimmed and is not empty.
-    fn split_components(input: &str) -> Option<Vec<&[u8]>> {
+    /// ```ignore
+    ///  split_components_with_tz(b"2020-12-24T15:37:50+0800")?.1 == Some(480*60)
+    /// ```
+    /// the second value if not None indicates the offset in seconds of the timezone parsed
+    fn split_components_with_tz(input: &str) -> Option<(Vec<&[u8]>, Option<i32>)> {
         let mut buffer = input.as_bytes();
 
         debug_assert!(
@@ -338,7 +351,8 @@ mod parser {
                 && !buffer.last().unwrap().is_ascii_whitespace()
         );
 
-        let mut components = Vec::with_capacity(COMPLETE_COMPONENTS_LEN);
+        let mut components = Vec::with_capacity(MAX_COMPONENTS_LEN);
+        let mut separators = Vec::with_capacity(MAX_COMPONENTS_LEN - 1);
 
         while !buffer.is_empty() {
             let (mut rest, digits): (&[u8], &[u8]) = digit1(buffer)?;
@@ -349,16 +363,31 @@ mod parser {
                 // If a whitespace is acquired, we expect we have already collected ymd.
                 if rest[0].is_ascii_whitespace() {
                     (components.len() == 3).as_option()?;
-                    rest = space1(rest)?;
+                    let result = space1(rest)?;
+                    rest = result.0;
+                    separators.push(result.1);
                 }
                 // If a 'T' is acquired, we expect we have already collected ymd.
                 else if rest[0] == b'T' {
                     (components.len() == 3).as_option()?;
+                    separators.push(&rest[..1]);
                     rest = &rest[1..];
                 }
-                // If a punctuation is acquired, move forward the pointer.
-                else if rest[0].is_ascii_punctuation() {
+                // If a 'Z' is acquired, we expect that we are parsing timezone now.
+                // the time should be in ISO8601 format, e.g. 2020-10-10T19:27:10Z, so there should
+                // be 6 part ahead or 7 if considering fsp.
+                else if rest[0] == b'Z' {
+                    (components.len() == 6 || components.len() == 7).as_option()?;
+                    separators.push(&rest[..1]);
                     rest = &rest[1..];
+                }
+                // If a punctuation is acquired, move forward the pointer. Note that we should
+                // consume multiple punctuations if existing because MySQL allows to parse time
+                // like 2020--12..16T18::58^^45.
+                else if rest[0].is_ascii_punctuation() {
+                    let result = punct1(rest)?;
+                    separators.push(result.1);
+                    rest = result.0;
                 } else {
                     return None;
                 }
@@ -367,11 +396,100 @@ mod parser {
             buffer = rest;
         }
 
+        let mut tz_offset = 0i32;
+        let mut tz_sign: &[u8] = b"";
+        let mut tz_hour: &[u8] = b"";
+        let mut tz_minute: &[u8] = b"";
+        let mut has_tz = false;
+        // the following statement handles timezone
+        match components.len() {
+            9 => {
+                // 2020-12-23 15:59:23.233333+08:00
+                (separators.len() == 8).as_option()?;
+                match separators[6..] {
+                    [b"+", b":"] | [b"-", b":"] => {
+                        has_tz = true;
+                        tz_sign = separators[6];
+                        tz_minute = components.pop()?;
+                        tz_hour = components.pop()?;
+                    }
+                    _ => return None,
+                };
+            }
+            8 => {
+                // 2020-12-23 15:59:23.2333-08
+                // 2020-12-23 15:59:23.2333-0800
+                // 2020-12-23 15:59:23+08:00
+                (separators.len() == 7).as_option()?;
+                match separators[5..] {
+                    [b".", b"-"] | [b".", b"+"] => {
+                        has_tz = true;
+                        tz_sign = separators[6];
+                        tz_hour = components.pop()?;
+                    }
+                    [b"+", b":"] | [b"-", b":"] => {
+                        has_tz = true;
+                        tz_sign = separators[5];
+                        tz_minute = components.pop()?;
+                        tz_hour = components.pop()?;
+                    }
+                    _ => return None,
+                }
+            }
+            7 => {
+                // 2020-12-23 15:59:23.23333Z
+                // 2020-12-23 15:59:23+0800
+                // 2020-12-23 15:59:23-08
+                match separators.len() {
+                    7 => {
+                        (separators.last()? == b"Z").as_option()?;
+                        has_tz = true;
+                    }
+                    6 => {
+                        tz_sign = separators[5];
+                        if tz_sign == b"+" || tz_sign == b"-" {
+                            has_tz = true;
+                            tz_hour = components.pop()?;
+                        }
+                    }
+                    _ => return None, // this branch can never be reached
+                }
+            }
+            6 => {
+                // 2020-12-23 15:59:23Z
+                if separators.len() == 6 && separators.last()? == b"Z" {
+                    has_tz = true;
+                }
+            }
+            _ => {}
+        }
+        if has_tz {
+            if tz_hour.len() == 4 {
+                let tmp = tz_hour.split_at(2);
+                tz_hour = tmp.0;
+                tz_minute = tmp.1;
+            }
+            ((tz_hour.len() == 2 || tz_hour.is_empty())
+                && (tz_minute.len() == 2 || tz_minute.is_empty()))
+            .as_option()?;
+            let delta_hour = bytes_to_u32(tz_hour)? as i32;
+            let delta_minute = bytes_to_u32(tz_minute)? as i32;
+            (!(delta_hour > 14
+                || delta_minute > 59
+                || (delta_hour == 14 && delta_minute != 0)
+                || (tz_sign == b"-" && delta_hour == 0 && delta_minute == 0)))
+                .as_option()?;
+            tz_offset = (delta_hour * 60 + delta_minute) * 60;
+            if tz_sign == b"-" {
+                tz_offset = -tz_offset;
+            }
+        }
+        // the following statement checks fsp
         ((components.len() != 7 && components.len() != 2)
             || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.')
             .as_option()?;
 
-        Some(components)
+        Some((components, if has_tz { Some(tz_offset) } else { None }))
     }
 
     /// If a two-digit year encountered, add an offset to it.
@@ -380,7 +498,7 @@ mod parser {
     fn adjust_year(year: u32) -> u32 {
         if year <= 69 {
             2000 + year
-        } else if year >= 70 && year <= 99 {
+        } else if (70..=99).contains(&year) {
             1900 + year
         } else {
             year
@@ -447,8 +565,13 @@ mod parser {
         let trimmed = input.trim();
         (!trimmed.is_empty()).as_option()?;
 
-        let components = split_components(trimmed)?;
-        match components.len() {
+        // to support ISO8601 and MySQL's time zone support, we further parse the following formats
+        // 2020-12-17T11:55:55Z
+        // 2020-12-17T11:55:55+0800
+        // 2020-12-17T11:55:55-08
+        // 2020-12-17T11:55:55+02:00
+        let (components, tz) = split_components_with_tz(trimmed)?;
+        let time_without_tz = match components.len() {
             1 | 2 => {
                 let mut whole = parse_whole(components[0])?;
 
@@ -476,7 +599,7 @@ mod parser {
             3..=7 => {
                 let whole = std::cmp::min(components.len(), 6);
                 let mut parts: Vec<_> = components[..whole].iter().try_fold(
-                    Vec::with_capacity(COMPLETE_COMPONENTS_LEN),
+                    Vec::with_capacity(MAX_COMPONENTS_LEN),
                     |mut acc, part| -> Option<_> {
                         acc.push(bytes_to_u32(part)?);
                         Some(acc)
@@ -502,6 +625,28 @@ mod parser {
                 Time::from_slice(ctx, &parts, time_type, fsp)
             }
             _ => None,
+        };
+        match (tz, time_without_tz) {
+            (Some(tz_offset), Some(t)) => {
+                let tz_parsed = Tz::from_offset(tz_offset as i64)?;
+                let mut ts = chrono_datetime(
+                    &tz_parsed,
+                    t.year(),
+                    t.month(),
+                    t.day(),
+                    t.hour(),
+                    t.minute(),
+                    t.second(),
+                    t.micro(),
+                )
+                .ok()?;
+                ts = ts.with_timezone(&ctx.cfg.tz);
+                Some(
+                    Time::try_from_chrono_datetime(ctx, ts.naive_local(), time_type, fsp as i8)
+                        .ok()?,
+                )
+            }
+            _ => time_without_tz,
         }
     }
 
@@ -513,7 +658,7 @@ mod parser {
         round: bool,
     ) -> Option<Time> {
         let decimal_as_string = input.to_string();
-        let components = split_components(decimal_as_string.as_str())?;
+        let (components, _) = split_components_with_tz(decimal_as_string.as_str())?;
         match components.len() {
             1 | 2 => {
                 let result: i64 = components[0].convert(ctx).ok()?;
@@ -827,7 +972,7 @@ impl TimeArgs {
         let ts = datetime.unwrap().timestamp();
 
         // Out of range
-        if ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP {
+        if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&ts) {
             return handle_invalid_date(ctx, self);
         }
 
@@ -873,7 +1018,7 @@ impl Time {
         let hms = (input % 1_000_000) as u32;
 
         let year = ymd / 10_000;
-        let md = ymd % 10_000 as u32;
+        let md = ymd % 10_000_u32;
         let month = md / 100;
         let day = md % 100;
 
@@ -1064,6 +1209,16 @@ impl Time {
     }
 
     #[inline]
+    pub fn maximize_fsp(&mut self) {
+        self.set_fsp(super::MAX_FSP as u8);
+    }
+
+    #[inline]
+    pub fn minimize_fsp(&mut self) {
+        self.set_fsp(super::MIN_FSP as u8);
+    }
+
+    #[inline]
     pub fn get_time_type(self) -> TimeType {
         let ft = self.get_fsp_tt();
 
@@ -1185,6 +1340,28 @@ impl Time {
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
+    }
+
+    pub fn from_year(
+        ctx: &mut EvalContext,
+        year: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Result<Self> {
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month: 0,
+                day: 0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                micro: 0,
+                fsp,
+                time_type,
+            },
+        )
     }
 
     pub fn round_frac(mut self, ctx: &mut EvalContext, fsp: i8) -> Result<Self> {
@@ -1773,10 +1950,7 @@ impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }
@@ -2059,6 +2233,11 @@ mod tests {
                 false,
             ),
             ("0000-00-00 00:00:00", "00:00:00", 0, false),
+            ("2020-12-23 15:59:10", "2020--12+-23 15:^59:-10", 0, false),
+            ("2020-12-23 15:59:23", "2020-12-23 15:59:23Z", 0, false),
+            ("2020-12-23 07:59:23", "2020-12-23 15:59:23+0800", 0, false),
+            ("2020-12-23 23:59:23", "2020-12-23 15:59:23-08", 0, false),
+            ("2020-12-23 07:59:23", "2020-12-23 15:59:23+08:00", 0, false),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -2152,6 +2331,94 @@ mod tests {
                 expected,
                 Time::parse_timestamp(&mut ctx, actual, fsp, round)?.to_string()
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_time_with_tz() -> Result<()> {
+        let ctx_with_tz = |tz: &str| {
+            let mut cfg = EvalConfig::default();
+            let raw = tz.as_bytes();
+            // brutally turn timezone in format +08:00 into offset in minute
+            let offset = if raw[0] == b'-' { -1 } else { 1 }
+                * ((raw[1] - b'0') as i64 * 10 + (raw[2] - b'0') as i64)
+                * 60
+                + ((raw[4] - b'0') as i64 * 10 + (raw[5] - b'0') as i64);
+            cfg.set_time_zone_by_offset(offset * 60).unwrap();
+            let warnings = cfg.new_eval_warnings();
+            EvalContext {
+                cfg: Arc::new(cfg),
+                warnings,
+            }
+        };
+        struct Case {
+            tz: &'static str,
+            t: &'static str,
+            r: Option<&'static str>,
+            tp: TimeType,
+        }
+        let cases = vec![
+            Case {
+                tz: "+00:00",
+                t: "2020-10-10T10:10:10Z",
+                r: Some("2020-10-10 10:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+00:00",
+                t: "2020-10-10T10:10:10+",
+                r: None,
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+00:00",
+                t: "2020-10-10T10:10:10+14:01",
+                r: None,
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+00:00",
+                t: "2020-10-10T10:10:10-00:00",
+                r: None,
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "-08:00",
+                t: "2020-10-10T10:10:10-08",
+                r: Some("2020-10-10 10:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+08:00",
+                t: "2020-10-10T10:10:10+08:00",
+                r: Some("2020-10-10 10:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+08:00",
+                t: "2020-10-10T10:10:10+08:00",
+                r: Some("2020-10-10 10:10:10.000000"),
+                tp: TimeType::Timestamp,
+            },
+        ];
+        let mut result: Vec<Option<String>> = vec![];
+        for Case { tz, t, r: _, tp } in &cases {
+            let mut ctx = ctx_with_tz(tz);
+            let parsed = Time::parse(&mut ctx, t, *tp, 6, true);
+            match parsed {
+                Ok(p) => result.push(Some(p.to_string())),
+                Err(_) => result.push(None),
+            }
+        }
+        for (a, b) in result.into_iter().zip(cases) {
+            match (a, b.r) {
+                (Some(a), Some(b)) => assert_eq!(a.as_str(), b),
+                (None, None) => {}
+                _ => {
+                    return Err(Error::invalid_time_format(b.t));
+                }
+            }
         }
         Ok(())
     }
@@ -2440,7 +2707,7 @@ mod tests {
         let cases = vec!["11:30:45.123456", "-35:30:46"];
         for case in cases {
             let mut ctx = EvalContext::default();
-            let duration = Duration::parse(&mut ctx, case.as_bytes(), MAX_FSP)?;
+            let duration = Duration::parse(&mut ctx, case, MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
@@ -2553,7 +2820,7 @@ mod tests {
         for (lhs, rhs, expected) in normal_cases.clone() {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2561,7 +2828,7 @@ mod tests {
         for (expected, rhs, lhs) in normal_cases {
             let mut ctx = EvalContext::default();
             let lhs = Time::parse_datetime(&mut ctx, lhs, 6, false)?;
-            let rhs = Duration::parse(&mut ctx, rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut ctx, rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2578,14 +2845,14 @@ mod tests {
 
         for (lhs, rhs, expected) in dsts.clone() {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
 
         for (expected, rhs, lhs) in dsts {
             let lhs = Time::parse_timestamp(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_sub(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2602,7 +2869,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases {
             let lhs = Time::parse_datetime(&mut ctx, lhs, 0, false)?;
-            let rhs = Duration::parse(&mut EvalContext::default(), rhs.as_bytes(), 6)?;
+            let rhs = Duration::parse(&mut EvalContext::default(), rhs, 6)?;
             let actual = lhs.checked_add(&mut ctx, rhs).unwrap();
             assert_eq!(expected, actual.to_string());
         }
@@ -2610,11 +2877,11 @@ mod tests {
         // Failed cases
         let mut ctx = EvalContext::default();
         let lhs = Time::parse_datetime(&mut ctx, "9999-12-31 23:59:59", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_add(&mut ctx, rhs), None);
 
         let lhs = Time::parse_datetime(&mut ctx, "0000-01-01 00:00:01", 6, false)?;
-        let rhs = Duration::parse(&mut ctx, b"01:00:00", 6)?;
+        let rhs = Duration::parse(&mut ctx, "01:00:00", 6)?;
         assert_eq!(lhs.checked_sub(&mut ctx, rhs), None);
 
         Ok(())
@@ -2735,6 +3002,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)]
     fn test_convert_to_f64() {
         let cases = vec![
             ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),

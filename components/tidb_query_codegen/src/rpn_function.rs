@@ -170,7 +170,7 @@
 //!             let (text, _) = arg.extract(row_index);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
-//!         Ok(Evaluable::into_vector_value(result))
+//!         Ok(Evaluable::cast_chunk_into_vector_value(result))
 //!     }
 //! }
 //! ```
@@ -184,7 +184,6 @@
 //!     // Your RPN function logic
 //! }
 //! ```
-
 use heck::CamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
@@ -413,7 +412,7 @@ impl parse::Parse for RpnFnAttr {
     }
 }
 
-/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`.
+/// Parses an evaluable type like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`.
 struct RpnFnRefEvaluableTypeWithOption(RpnFnRefEvaluableType);
 
 impl parse::Parse for RpnFnRefEvaluableTypeWithOption {
@@ -481,7 +480,7 @@ impl RpnFnRefEvaluableType {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
             RpnFnRefEvaluableType::Type(x) => {
-                if is_json(x) || is_bytes(x) {
+                if is_json(x) || is_bytes(x) || is_enum(x) || is_set(x) {
                     quote! {
                         #x <#lifetime>
                     }
@@ -838,6 +837,22 @@ fn is_bytes(ty: &TypePath) -> bool {
     }
 }
 
+/// Checks if parameter type is Enum
+fn is_enum(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "EnumRef" || *x == "Enum",
+        None => false,
+    }
+}
+
+/// Checks if parameter type is Set
+fn is_set(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "SetRef" || *x == "Set",
+        None => false,
+    }
+}
+
 /// Get corresponding VARGS buffer
 /// Json or JsonRef will be stored in `VARG_PARAM_BUF_JSON_REF`
 /// Bytes or BytesRef will be stored in `VARG_PARAM_BUF_BYTES_REF`
@@ -866,6 +881,10 @@ fn get_vectoried_type(ty: &TypePath) -> TokenStream {
                 quote! { JsonRef }
             } else if *x == "BytesRef" {
                 quote! { BytesRef }
+            } else if *x == "EnumRef" {
+                quote! { EnumRef }
+            } else if *x == "SetRef" {
+                quote! { SetRef }
             } else {
                 quote! { &#ty }
             }
@@ -1013,6 +1032,14 @@ impl VargsRpnFn {
             quote! {
                 let arg: Option<BytesRef> = unsafe { std::mem::transmute::<Option<BytesRef>, Option<BytesRef<'static>>>(arg) };
             }
+        } else if is_enum(arg_type) {
+            quote! {
+                let arg: Option<EnumRef> = unsafe { std::mem::transmute::<Option<EnumRef>, Option<EnumRef<'static>>>(arg) };
+            }
+        } else if is_set(arg_type) {
+            quote! {
+                let arg: Option<SetRef> = unsafe { std::mem::transmute::<Option<SetRef>, Option<SetRef<'static>>>(arg) };
+            }
         } else {
             quote! { let arg: usize = unsafe { std::mem::transmute::<Option<&#arg_type>, usize>(arg) }; }
         };
@@ -1101,7 +1128,7 @@ impl VargsRpnFn {
                         for row_index in 0..output_rows {
                             #arg_loop
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_chunk_into_vector_value(result))
                     })
                 }
 
@@ -1244,7 +1271,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
-                        Ok(#vec_type::into_vector_value(result))
+                        Ok(#vec_type::cast_chunk_into_vector_value(result))
                     })
                 }
 
@@ -1287,11 +1314,11 @@ impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
         let param = parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>` or `Option<BytesRef>`"))
+            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`"))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,
-                "Expect parameter type to be like `&T`, `JsonRef` or `BytesRef`",
+                "Expect parameter type to be like `&T`, `JsonRef`, `EnumRef`, `SetRef` or `BytesRef`",
             ))
         } else {
             Ok(param)
@@ -1542,7 +1569,7 @@ impl NormalRpnFn {
                 for i in 0..output_rows {
                     result.push(None);
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_chunk_into_vector_value(result));
             }
 
             if !fastpath {
@@ -1551,7 +1578,7 @@ impl NormalRpnFn {
                     #nonnull_unwrap
                     #chunked_push_3
                 }
-                return Ok(#vec_type::into_vector_value(result));
+                return Ok(#vec_type::cast_chunk_into_vector_value(result));
             }
 
             for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
@@ -1585,7 +1612,7 @@ impl NormalRpnFn {
                     let arg = &self;
                     let mut result = <#vec_type as EvaluableRet>::ChunkedType::with_capacity(output_rows);
                     #final_loop
-                    Ok(#vec_type::into_vector_value(result))
+                    Ok(#vec_type::cast_chunk_into_vector_value(result))
                 }
             }
 
@@ -1691,6 +1718,35 @@ impl NormalRpnFn {
 mod tests_normal {
     use super::*;
 
+    use proc_macro2::TokenTree;
+
+    /// Compare TokenStream with all white chars trimmed.
+    fn assert_token_stream_equal(l: TokenStream, r: TokenStream) {
+        let result = l
+            .clone()
+            .into_iter()
+            .eq_by(r.clone().into_iter(), |x, y| match x {
+                TokenTree::Ident(x) => matches!(y, TokenTree::Ident(y) if x == y),
+                TokenTree::Literal(x) => {
+                    matches!(y, TokenTree::Literal(y) if x.to_string() == y.to_string())
+                }
+                TokenTree::Punct(x) => {
+                    matches!(y, TokenTree::Punct(y) if x.to_string() == y.to_string())
+                }
+                TokenTree::Group(x) => {
+                    if let TokenTree::Group(y) = y {
+                        assert_token_stream_equal(x.stream(), y.stream());
+
+                        true
+                    } else {
+                        false
+                    }
+                }
+            });
+
+        assert!(result, "expect: {:#?}, actual: {:#?}", &l, &r);
+    }
+
     fn no_generic_fn() -> NormalRpnFn {
         let item_fn = parse_str(
             r#"
@@ -1770,7 +1826,7 @@ mod tests_normal {
                         let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -1936,7 +1992,7 @@ mod tests_normal {
                         let (arg0, arg) = arg.extract(row_index);
                         result.push(foo::<A, B>(arg0)?);
                     }
-                    Ok(B::into_vector_value(result))
+                    Ok(B::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -2088,7 +2144,7 @@ mod tests_normal {
                         let (arg2, arg) = arg.extract(row_index);
                         result.push(foo(ctx, arg0, arg1, arg2)?);
                     }
-                    Ok(Decimal::into_vector_value(result))
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
                 }
             }
         };
@@ -2096,6 +2152,112 @@ mod tests_normal {
             expected.to_string(),
             gen.generate_real_fn_trait_impl().to_string()
         );
+    }
+
+    fn enum_fn() -> NormalRpnFn {
+        let item_fn = parse_str(
+            r#"
+            #[inline]
+            fn foo(arg0: EnumRef) -> Result<Option<Decimal>> {
+                Ok(None)
+            }
+        "#,
+        )
+        .unwrap();
+        NormalRpnFn::new(
+            RpnFnAttr {
+                is_varg: false,
+                is_raw_varg: false,
+                max_args: None,
+                min_args: None,
+                extra_validator: None,
+                metadata_mapper: None,
+                metadata_type: None,
+                captures: Vec::new(),
+                nullable: false,
+                writer: false,
+            },
+            item_fn,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_enum_fn_generate_real_fn_trait_impl() {
+        let gen = enum_fn();
+        let expected: TokenStream = quote! {
+            impl<'arg_, Arg0_: crate::function::RpnFnArg<Type = Option<EnumRef<'arg_>>>> Foo_Fn
+                for crate::function::Arg<Arg0_, crate::function::Null>
+            {
+                default fn eval(
+                    self,
+                    ctx: &mut tidb_query_datatype::expr::EvalContext,
+                    output_rows: usize,
+                    args: &[crate::RpnStackNode<'_>],
+                    extra: &mut crate::RpnFnCallExtra<'_>,
+                    metadata: &(dyn std::any::Any + Send),
+                ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
+                    let arg = &self;
+                    let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
+                    use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
+                    let (vecs, fastpath, all_null) = {
+                        let mut vecs: Vec<&BitVec> = vec![];
+                        let mut fastpath = true;
+                        let mut all_null = false;
+                        let ((arg0, scalar_val), arg) = arg.get_bit_vec();
+                        if let Some(x) = arg0 {
+                            vecs.push(x);
+                            if !scalar_val {
+                                fastpath = false;
+                            }
+                        } else {
+                            if !scalar_val {
+                                all_null = true;
+                            }
+                        };
+                        if all_null {
+                            (vec![], false, true)
+                        } else if !fastpath {
+                            (vec![], false, false)
+                        } else {
+                            (vecs, true, false)
+                        }
+                    };
+                    if all_null {
+                        let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
+                        for i in 0..output_rows {
+                            result.push(None);
+                        }
+                        return Ok(Decimal::cast_chunk_into_vector_value(result));
+                    }
+                    if !fastpath {
+                        for row_index in 0..output_rows {
+                            let (arg0, arg) = arg.extract(row_index);
+                            if arg0.is_none() {
+                                result.push(None);
+                                continue;
+                            }
+                            let arg0 = arg0.unwrap();
+                            result.push(foo(arg0)?);
+                        }
+                        return Ok(Decimal::cast_chunk_into_vector_value(result));
+                    }
+                    for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
+                        if !val {
+                            result.push(None);
+                            continue;
+                        }
+                        let (arg0, arg) = arg.extract(row_index);
+                        let arg0 = arg0.unwrap();
+                        result.push(foo(arg0)?);
+                    }
+
+                    Ok(Decimal::cast_chunk_into_vector_value(result))
+                }
+            }
+        };
+
+        assert_token_stream_equal(expected, gen.generate_real_fn_trait_impl());
     }
 
     #[test]
@@ -2124,6 +2286,20 @@ mod tests_normal {
             assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
         }
         {
+            let input = quote! { EnumRef };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { EnumRef };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
+            let input = quote! { SetRef };
+            let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+            let type_path = x.get_type_path();
+            let expected = quote! { SetRef };
+            assert_eq!(expected.to_string(), quote! { #type_path }.to_string());
+        }
+        {
             let input = quote! { C::T };
             let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
             let type_path = x.get_type_path();
@@ -2140,24 +2316,55 @@ mod tests_normal {
     }
 
     #[test]
-    fn test_is_json_or_bytes() {
+    fn test_is_json() {
+        let input = quote! { JsonRef };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_json(&type_path));
+
+        let input = quote! { &Int };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_json(&type_path));
+    }
+
+    #[test]
+    fn test_is_bytes() {
         let input = quote! { BytesRef };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(is_bytes(&type_path));
-        assert!(!is_json(&type_path));
 
         let input = quote! { &Int };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
         assert!(!is_bytes(&type_path));
-        assert!(!is_json(&type_path));
+    }
 
-        let input = quote! { JsonRef };
+    #[test]
+    fn test_is_enum() {
+        let input = quote! { EnumRef };
         let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
         let type_path = x.get_type_path();
-        assert!(!is_bytes(&type_path));
-        assert!(is_json(&type_path));
+        assert!(is_enum(&type_path));
+
+        let input = quote! { &Int };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_enum(&type_path));
+    }
+
+    #[test]
+    fn test_is_set() {
+        let input = quote! { SetRef };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(is_set(&type_path));
+
+        let input = quote! { &Int };
+        let x = parse2::<RpnFnRefEvaluableType>(input).unwrap();
+        let type_path = x.get_type_path();
+        assert!(!is_set(&type_path));
     }
 
     #[test]

@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, GetRequest, LockInfo};
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::router::RaftStoreBlackHole;
+use std::sync::{atomic::AtomicU64, Arc};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
@@ -12,7 +14,6 @@ use tikv::storage::{
     txn::commands, Engine, PerfStatisticsDelta, PrewriteResult, Result, Statistics, Storage,
     TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
-use tikv_util::collections::HashMap;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -88,7 +89,9 @@ impl<E: Engine> SyncTestStorage<E> {
         &mut self,
         cfg: AutoGcConfig<S, R>,
     ) {
-        self.gc_worker.start_auto_gc(cfg).unwrap();
+        self.gc_worker
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
+            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
@@ -246,13 +249,13 @@ impl<E: Engine> SyncTestStorage<E> {
         ctx: Context,
         max_ts: impl Into<TimeStamp>,
         start_key: Option<Key>,
+        end_key: Option<Key>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self.store.sched_txn_command(
-            commands::ScanLock::new(max_ts.into(), start_key, limit, ctx),
-            cb,
-        ))
-        .unwrap()
+        block_on(
+            self.store
+                .scan_lock(ctx, max_ts.into(), start_key, end_key, limit),
+        )
     }
 
     pub fn resolve_lock(

@@ -3,11 +3,10 @@
 #[macro_use]
 extern crate tikv_util;
 
-use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::sync::Arc;
 
-use encryption::{Backend, Error, KmsBackend, KmsConfig, Result};
+use encryption::{AwsKms, Backend, Error, KmsBackend, KmsConfig, Result};
+use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
@@ -64,26 +63,15 @@ struct KmsCommand {
     region: Option<String>,
 }
 
-fn create_kms_backend(
-    cmd: &KmsCommand,
-    credential_file: Option<&String>,
-) -> Result<Arc<dyn Backend>> {
+fn create_kms_backend(cmd: &KmsCommand, credential_file: Option<&String>) -> Result<KmsBackend> {
     let mut config = KmsConfig::default();
 
     if let Some(credential_file) = credential_file {
         let ini = Ini::load_from_file(credential_file)
             .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
-        let props = ini
+        let _props = ini
             .section(Some("default"))
             .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
-        config.access_key = props
-            .get("aws_access_key_id")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
-        config.secret_access_key = props
-            .get("aws_secret_access_key")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
     }
     if let Some(ref region) = cmd.region {
         config.region = region.to_string();
@@ -92,7 +80,7 @@ fn create_kms_backend(
         config.endpoint = endpoint.to_string();
     }
     config.key_id = cmd.key_id.to_owned();
-    Ok(Arc::new(KmsBackend::new(config)?))
+    KmsBackend::new(Box::new(AwsKms::new(config)?))
 }
 
 #[allow(irrefutable_let_patterns)]
@@ -105,7 +93,7 @@ fn process() -> Result<()> {
 
     let credential_file = opt.credential_file.as_ref();
     let backend = if let Command::Kms(ref cmd) = opt.command {
-        create_kms_backend(cmd, credential_file)?
+        Box::new(create_kms_backend(cmd, credential_file)?) as Box<dyn Backend>
     } else {
         unreachable!()
     };

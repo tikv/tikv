@@ -8,10 +8,13 @@ pub struct CollatorBinary;
 
 impl Collator for CollatorBinary {
     type Charset = CharsetBinary;
+    type Weight = u8;
+
+    const IS_CASE_INSENSITIVE: bool = false;
 
     #[inline]
-    fn validate(_bstr: &[u8]) -> Result<()> {
-        Ok(())
+    fn char_weight(ch: u8) -> Self::Weight {
+        ch
     }
 
     #[inline]

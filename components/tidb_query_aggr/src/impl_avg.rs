@@ -1,16 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::AggrFunction;
+use tidb_query_common::Result;
 use tidb_query_datatype::builder::FieldTypeBuilder;
+use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::expr::EvalContext;
 use tidb_query_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
+use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use super::*;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_expr::RpnExpression;
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -64,6 +64,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnAvg::<Decimal>::new()),
             EvalType::Real => Box::new(AggrFnAvg::<Real>::new()),
+            EvalType::Enum => Box::new(AggrFnAvgForEnum::new()),
+            EvalType::Set => Box::new(AggrFnAvgForSet::new()),
             _ => unreachable!(),
         })
     }
@@ -125,7 +127,7 @@ where
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add_assign(ctx, &value.to_owned_value())?;
+                self.sum.add_assign(ctx, &value.into_owned_value())?;
                 self.count += 1;
                 Ok(())
             }
@@ -156,16 +158,169 @@ where
     }
 }
 
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateAvgForEnum::new())]
+pub struct AggrFnAvgForEnum
+where
+    VectorValue: VectorValueExt<Enum>,
+{
+    _phantom: std::marker::PhantomData<Enum>,
+}
+
+impl AggrFnAvgForEnum
+where
+    VectorValue: VectorValueExt<Enum>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggrFnStateAvgForEnum
+where
+    VectorValue: VectorValueExt<Enum>,
+{
+    sum: Decimal,
+    count: usize,
+}
+
+impl AggrFnStateAvgForEnum
+where
+    VectorValue: VectorValueExt<Enum>,
+{
+    pub fn new() -> Self {
+        Self {
+            sum: Decimal::zero(),
+            count: 0,
+        }
+    }
+
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &Decimal::from(value.value()))?;
+                self.count += 1;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl super::ConcreteAggrFunctionState for AggrFnStateAvgForEnum
+where
+    VectorValue: VectorValueExt<Enum>,
+{
+    type ParameterType = EnumRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        // Note: The result of `AVG()` is returned as `(count, sum)`.
+        assert_eq!(target.len(), 2);
+        target[0].push_int(Some(self.count as Int));
+        target[1].push(if self.count == 0 {
+            None
+        } else {
+            Some(self.sum)
+        });
+        Ok(())
+    }
+}
+
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateAvgForSet::new())]
+pub struct AggrFnAvgForSet
+where
+    VectorValue: VectorValueExt<Set>,
+{
+    _phantom: std::marker::PhantomData<Set>,
+}
+
+impl AggrFnAvgForSet
+where
+    VectorValue: VectorValueExt<Set>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggrFnStateAvgForSet
+where
+    VectorValue: VectorValueExt<Set>,
+{
+    sum: Decimal,
+    count: usize,
+}
+
+impl AggrFnStateAvgForSet
+where
+    VectorValue: VectorValueExt<Set>,
+{
+    pub fn new() -> Self {
+        Self {
+            sum: Decimal::zero(),
+            count: 0,
+        }
+    }
+
+    #[inline]
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+        match value {
+            None => Ok(()),
+            Some(value) => {
+                self.sum.add_assign(ctx, &Decimal::from(value.value()))?;
+                self.count += 1;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl super::ConcreteAggrFunctionState for AggrFnStateAvgForSet
+where
+    VectorValue: VectorValueExt<Set>,
+{
+    type ParameterType = SetRef<'static>;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        // Note: The result of `AVG()` is returned as `(count, sum)`.
+        assert_eq!(target.len(), 2);
+        target[0].push_int(Some(self.count as Int));
+        target[1].push(if self.count == 0 {
+            None
+        } else {
+            Some(self.sum)
+        });
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::AggrFunction;
-    use super::*;
+    use std::sync::Arc;
 
+    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use tidb_query_datatype::FieldTypeAccessor;
+    use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
     use crate::parser::AggrDefinitionParser;
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+
+    use super::super::AggrFunction;
+    use super::*;
 
     #[test]
     fn test_update() {
@@ -208,6 +363,80 @@ mod tests {
             result[1].to_real_vec(),
             &[None, None, Real::new(15.0).ok(), Real::new(10.5).ok()]
         );
+    }
+
+    #[test]
+    fn test_update_enum() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnAvgForEnum::new();
+        let mut state = function.create_state();
+
+        // AVG will returns <Int, Decimal>
+        let mut result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+        ];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].to_decimal_vec(), &[None]);
+
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        result[0].clear();
+        result[1].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
+
+        update!(state, &mut ctx, Option::<EnumRef>::None).unwrap();
+        result[0].clear();
+        result[1].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
+    }
+
+    #[test]
+    fn test_update_set() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnAvgForSet::new();
+        let mut state = function.create_state();
+
+        // AVG will returns <Int, Decimal>
+        let mut result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+        ];
+
+        let mut buf = BufferVec::new();
+        buf.push("我好强啊");
+        buf.push("我太强啦");
+        let buf = Arc::new(buf);
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(0)]);
+        assert_eq!(result[1].to_decimal_vec(), &[None]);
+
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b01))).unwrap();
+        update!(state, &mut ctx, Some(SetRef::new(&buf, 0b10))).unwrap();
+        result[0].clear();
+        result[1].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
+
+        update!(state, &mut ctx, Option::<SetRef>::None).unwrap();
+        result[0].clear();
+        result[1].clear();
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].to_int_vec(), &[Some(2)]);
+        assert_eq!(result[1].to_decimal_vec(), &[Some(Decimal::from(3))]);
     }
 
     /// AVG(IntColumn) should produce (Int, Decimal).

@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use quick_error::quick_error;
 use std::error;
 use std::result;
 
@@ -32,7 +33,7 @@ quick_error! {
             display("unknown error {:?}", err)
         }
         RegionNotFound(key: Vec<u8>) {
-            display("region is not found for key {}", hex::encode_upper(key))
+            display("region is not found for key {}", &log_wrappers::Value::key(key))
         }
         StoreTombstone(msg: String) {
             display("store is tombstone {:?}", msg)

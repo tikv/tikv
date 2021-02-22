@@ -5,27 +5,39 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
 protobuf-codec = [
   "kvproto/protobuf-codec",
   "raftstore/protobuf-codec",
+  "pd_client/protobuf-codec",
   "test_raftstore/protobuf-codec",
   "tikv/protobuf-codec",
+  "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
   "kvproto/prost-codec",
   "raftstore/prost-codec",
+  "pd_client/prost-codec",
   "test_raftstore/prost-codec",
   "tikv/prost-codec",
+  "tikv_util/prost-codec",
   "txn_types/prost-codec",
+]
+test-engines-rocksdb = [
+  "test_raftstore/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "test_raftstore/test-engines-panic",
 ]
 
 [dependencies]
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-raftstore = { path = "../raftstore" }
-pd_client = { path = "../pd_client" }
-test_raftstore = { path = "../test_raftstore" }
+raftstore = { path = "../raftstore", default-features = false }
+pd_client = { path = "../pd_client", default-features = false }
+test_raftstore = { path = "../test_raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util" }
-txn_types = { path = "../txn_types" }
+tikv_util = { path = "../tikv_util", default-features = false }
+collections = { path = "../collections" }
+txn_types = { path = "../txn_types", default-features = false }
