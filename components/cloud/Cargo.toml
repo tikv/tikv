@@ -15,6 +15,7 @@ prost-codec = [
 
 [dependencies]
 async-trait = "0.1"
+derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 failure = "0.1"
 futures-io = "0.3"

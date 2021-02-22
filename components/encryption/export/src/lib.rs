@@ -2,6 +2,7 @@
 extern crate slog_global;
 
 use async_trait::async_trait;
+use derive_more::Deref;
 use std::fmt::Debug;
 use std::path::Path;
 use tikv_util::stream::RetryError;
@@ -71,15 +72,8 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
 }
 
 // CloudKMS adapts the KmsProvider definition from the cloud crate to that of the encryption crate
-#[derive(Debug)]
+#[derive(Debug, Deref)]
 struct CloudKms(Box<dyn CloudKmsProvider>);
-
-impl std::ops::Deref for CloudKms {
-    type Target = Box<dyn CloudKmsProvider>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[async_trait]
 impl KmsProvider for CloudKms {

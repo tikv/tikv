@@ -597,6 +597,7 @@ name = "cloud"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "derive_more",
  "error_code",
  "failure",
  "futures-io",
@@ -1170,6 +1171,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crossbeam",
+ "derive_more",
  "engine_traits",
  "error_code",
  "fail",
@@ -1203,6 +1205,7 @@ dependencies = [
  "async-trait",
  "aws",
  "cloud",
+ "derive_more",
  "encryption",
  "file_system",
  "kvproto",

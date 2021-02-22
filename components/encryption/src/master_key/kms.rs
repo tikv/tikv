@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use derive_more::Deref;
 use kvproto::encryptionpb::EncryptedContent;
 use tokio::runtime::{Builder, Runtime};
 
@@ -21,7 +22,7 @@ pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
 
 // EncryptedKey is a newtype used to mark data as an encrypted key
 // It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Deref)]
 pub struct EncryptedKey(Vec<u8>);
 
 impl EncryptedKey {
@@ -30,13 +31,6 @@ impl EncryptedKey {
             error!("Encrypted content is empty");
         }
         Ok(Self(key))
-    }
-}
-
-impl std::ops::Deref for EncryptedKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

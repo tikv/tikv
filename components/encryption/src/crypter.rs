@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
@@ -199,6 +200,7 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
 
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
+#[derive(Deref)]
 pub struct PlainKey(Vec<u8>);
 
 impl PlainKey {
@@ -211,13 +213,6 @@ impl PlainKey {
             ));
         }
         Ok(Self(key))
-    }
-}
-
-impl std::ops::Deref for PlainKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

@@ -27,6 +27,7 @@ bytes = "0.5"
 crossbeam = "0.7"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
+derive_more = "0.99.3"
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"

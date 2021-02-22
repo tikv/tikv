@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::{Error, KmsError, Result};
+use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
 
 #[derive(Debug, Clone)]
@@ -29,7 +30,7 @@ impl Config {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone, Deref)]
 pub struct KeyId(String);
 
 // KeyID is a newtype to mark a String as an ID of a key
@@ -46,16 +47,9 @@ impl KeyId {
     }
 }
 
-impl std::ops::Deref for KeyId {
-    type Target = String;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 // EncryptedKey is a newtype used to mark data as an encrypted key
 // It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Deref)]
 pub struct EncryptedKey(Vec<u8>);
 
 impl EncryptedKey {
@@ -70,28 +64,15 @@ impl EncryptedKey {
     }
 }
 
-impl std::ops::Deref for EncryptedKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
+#[derive(Deref)]
 pub struct PlainKey(Vec<u8>);
 
 impl PlainKey {
     pub fn new(key: Vec<u8>) -> Result<Self> {
         // TODO: crypter.rs in encryption performs additional validation
         Ok(Self(key))
-    }
-}
-
-impl std::ops::Deref for PlainKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
