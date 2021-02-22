@@ -251,17 +251,17 @@ fn test_kv_get_memory_lock_backoff() {
 
 #[test]
 fn test_kv_batch_get_memory_lock_backoff() {
-    // test_memory_lock_backoff_succeed(|client, ctx| {
-    //     let mut req = BatchGetRequest::default();
-    //     req.set_context(ctx);
-    //     req.set_keys(vec![b"k1".to_vec(), b"k2".to_vec()].into());
-    //     req.set_version(u64::MAX);
-    //     let resp = client.kv_batch_get(&req).unwrap();
-    //     assert_eq!(resp.get_pairs()[0].get_key(), b"k1");
-    //     assert_eq!(resp.get_pairs()[0].get_value(), b"v");
-    //     assert_eq!(resp.get_pairs()[1].get_key(), b"k2");
-    //     assert_eq!(resp.get_pairs()[1].get_value(), b"v");
-    // });
+    test_memory_lock_backoff_succeed(|client, ctx| {
+        let mut req = BatchGetRequest::default();
+        req.set_context(ctx);
+        req.set_keys(vec![b"k1".to_vec(), b"k2".to_vec()].into());
+        req.set_version(u64::MAX);
+        let resp = client.kv_batch_get(&req).unwrap();
+        assert_eq!(resp.get_pairs()[0].get_key(), b"k1");
+        assert_eq!(resp.get_pairs()[0].get_value(), b"v");
+        assert_eq!(resp.get_pairs()[1].get_key(), b"k2");
+        assert_eq!(resp.get_pairs()[1].get_value(), b"v");
+    });
 
     test_memory_lock_backoff_succeed_partial(|client, ctx| {
         let mut req = BatchGetRequest::default();
@@ -298,5 +298,30 @@ fn test_kv_scan_memory_lock_backoff() {
         req.set_limit(2);
         let resp = client.kv_scan(&req).unwrap();
         assert!(resp.has_error());
+    });
+}
+
+#[test]
+fn test_kv_scan_lock_memory_lock_backoff() {
+    test_memory_lock_backoff_succeed(|client, ctx| {
+        let mut req = ScanLockRequest::default();
+        req.set_context(ctx);
+        req.set_start_key(b"k1".to_vec());
+        req.set_end_key(b"z".to_vec());
+        req.set_max_version(u64::MAX);
+        req.set_limit(2);
+        let resp = client.kv_scan_lock(&req).unwrap();
+        assert!(resp.get_locks().is_empty());
+    });
+
+    test_memory_lock_backoff_succeed_partial(|client, ctx| {
+        let mut req = ScanLockRequest::default();
+        req.set_context(ctx);
+        req.set_start_key(b"k1".to_vec());
+        req.set_end_key(b"z".to_vec());
+        req.set_max_version(u64::MAX);
+        req.set_limit(2);
+        let resp = client.kv_scan_lock(&req).unwrap();
+        assert!(resp.get_error().has_locked());
     });
 }
