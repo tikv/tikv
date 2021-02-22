@@ -13,8 +13,6 @@ use rand::Rng;
 use collections::HashMap;
 use tikv_util::config::Tracker;
 
-use txn_types::Key;
-
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
@@ -178,7 +176,7 @@ impl Recorder {
         self.times >= self.detect_num
     }
 
-    fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
+    fn collect(&mut self, config: &SplitConfig) -> Option<Vec<u8>> {
         let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
         let key_ranges = self.key_ranges.clone();
         let mut samples = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
@@ -227,7 +225,7 @@ impl Recorder {
         split_balance_score: f64,
         split_contained_score: f64,
         sample_threshold: i32,
-    ) -> Vec<u8> {
+    ) -> Option<Vec<u8>> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in samples.iter().enumerate() {
@@ -251,9 +249,9 @@ impl Recorder {
             }
         }
         if best_index >= 0 {
-            return samples[best_index as usize].key.clone();
+            return Some(samples[best_index as usize].key.clone());
         }
-        return vec![];
+        None
     }
 }
 
@@ -373,11 +371,10 @@ impl AutoSplitController {
 
             recorder.record(key_ranges);
             if recorder.is_ready() {
-                let key = recorder.collect(&self.cfg);
-                if !key.is_empty() {
+                if let Some(key) = recorder.collect(&self.cfg) {
                     let split_info = SplitInfo {
                         region_id,
-                        split_key: Key::from_raw(&key).into_encoded(),
+                        split_key: key.clone(),
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
@@ -418,6 +415,7 @@ impl AutoSplitController {
 mod tests {
     use super::*;
     use crate::store::util::build_key_range;
+    use txn_types::Key;
 
     enum Position {
         Left,
@@ -492,27 +490,44 @@ mod tests {
 
     #[test]
     fn test_hub() {
+        check_split(
+            vec![
+                build_key_range(b"a", b"b", false),
+                build_key_range(b"b", b"c", false),
+            ],
+            b"b",
+        );
+
+        // let key_a = Key::from_raw(b"0080").append_ts(2.into());
+        // let key_b = Key::from_raw(b"0160").append_ts(2.into());
+        // let key_c = Key::from_raw(b"0240").append_ts(2.into());
+        // check_split(
+        //     vec![
+        //         build_key_range(&key_a.to_raw().unwrap(), &key_b.to_raw().unwrap(), false),
+        //         build_key_range(&key_b.to_raw().unwrap(), &key_c.to_raw().unwrap(), false),
+        //     ],
+        //     &key_b.to_raw().unwrap(),
+        // );
+    }
+
+    fn check_split(key_ranges: Vec<KeyRange>, split_key: &[u8]) {
         let mut hub = AutoSplitController::new(SplitConfigManager::default());
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
         hub.cfg.key_threshold = 0;
         hub.cfg.size_threshold = 0;
 
-        for i in 0..100 {
+        for i in 0..10 {
             let mut qps_stats = ReadStats::default();
-            for _ in 0..100 {
-                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
-                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"b", b"c", false));
+            for _j in 0..100 {
+                for key_range in &key_ranges {
+                    qps_stats.add_qps(1, &Peer::default(), key_range.clone());
+                }
             }
             let (_, split_infos) = hub.flush(vec![qps_stats]);
             if (i + 1) % hub.cfg.detect_times == 0 {
                 assert_eq!(split_infos.len(), 1);
-                assert_eq!(
-                    Key::from_encoded(split_infos[0].split_key.clone())
-                        .into_raw()
-                        .unwrap(),
-                    b"b"
-                );
+                assert_eq!(split_infos[0].split_key.clone(), split_key);
             }
         }
     }
@@ -609,7 +624,7 @@ mod tests {
                     }
                 }
                 qps_stats.add_qps(
-                    0,
+                    1,
                     &Peer::default(),
                     build_key_range(&start_key, &key, false),
                 );
@@ -621,7 +636,7 @@ mod tests {
     fn qps_add(b: &mut test::Bencher) {
         let mut qps_stats = default_qps_stats();
         b.iter(|| {
-            qps_stats.add_qps(0, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
         });
     }
 }

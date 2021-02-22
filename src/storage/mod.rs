@@ -265,9 +265,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(key) = key.to_raw() {
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
-                }
+                tls_collect_qps(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key.as_encoded(),
+                    key.as_encoded(),
+                    false,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -347,10 +351,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             self.read_pool.spawn_handle(
                 async move {
                     for get in &requests {
-                        let key = get.key.to_owned();
                         let region_id = get.get_context().get_region_id();
                         let peer = get.get_context().get_peer();
-                        tls_collect_qps(region_id, peer, &key, &key, false);
+                        tls_collect_qps(region_id, peer, &get.key, &get.key, false);
                     }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -477,9 +480,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 let mut key_ranges = vec![];
                 for key in &keys {
-                    if let Ok(key) = key.to_raw() {
-                        key_ranges.push(build_key_range(&key, &key, false));
-                    }
+                    key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
@@ -575,21 +576,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key.to_raw() {
-                    let mut key = vec![];
-                    if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_raw() {
-                            key = end_key;
-                        }
-                    }
-                    tls_collect_qps(
-                        ctx.get_region_id(),
-                        ctx.get_peer(),
-                        &start_key,
-                        &key,
-                        reverse_scan,
-                    );
+                let mut key = &vec![];
+                if let Some(end_key) = &end_key {
+                    key = end_key.as_encoded();
                 }
+                tls_collect_qps(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    start_key.as_encoded(),
+                    key,
+                    reverse_scan,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -706,18 +703,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key
-                    .as_ref()
-                    .map(|k| k.to_raw())
-                    .unwrap_or_else(|| Ok(vec![]))
-                {
-                    let mut key = vec![];
+                if let Some(start_key) = &start_key {
+                    let mut key = &vec![];
                     if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_raw() {
-                            key = end_key;
-                        }
+                        key = end_key.as_encoded();
                     }
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key, false);
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        start_key.as_encoded(),
+                        key,
+                        false,
+                    );
                 }
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
