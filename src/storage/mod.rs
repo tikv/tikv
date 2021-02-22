@@ -1038,7 +1038,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 ttl + UnixSecs::now().into_inner()
             };
             m.with_ttl(expire_ts);
+        } else if ttl != 0 {
+            return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
+
         self.engine.async_write(
             &ctx,
             WriteData::from_modifies(vec![m]),
@@ -1065,6 +1068,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             callback
         );
 
+        if !self.enable_ttl && ttl != 0 {
+            return Err(Error::from(ErrorInner::TTLNotEnabled));
+        }
         let expire_ts = if ttl == 0 {
             0
         } else {
