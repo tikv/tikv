@@ -644,7 +644,18 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
     latest_epoch.set_version(latest_version);
 
     let get_new = new_request(new.get_id(), latest_epoch, vec![new_get_cmd(b"k1")], false);
-    for get in &[get_old, get_new] {
+    let cases = if right_derive {
+        vec![
+            (get_old, vec![right.clone(), left.clone()]),
+            (get_new, vec![right.clone()]),
+        ]
+    } else {
+        vec![
+            (get_old, vec![left.clone(), right.clone()]),
+            (get_new, vec![left.clone()]),
+        ]
+    };
+    for (get, exp) in cases {
         let resp = cluster
             .call_command_on_leader(get.clone(), Duration::from_secs(5))
             .unwrap();
@@ -660,7 +671,7 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
                     .get_error()
                     .get_epoch_not_match()
                     .get_current_regions(),
-                &[right.clone(), left.clone()]
+                &*exp
             );
         } else {
             assert_eq!(
@@ -668,7 +679,7 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
                     .get_error()
                     .get_epoch_not_match()
                     .get_current_regions(),
-                &[left.clone(), right.clone()]
+                &*exp
             );
         }
     }
