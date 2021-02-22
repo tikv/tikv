@@ -403,12 +403,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bytes"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
-
-[[package]]
 name = "bzip2-sys"
 version = "0.1.8+1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -485,7 +479,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
- "prost 0.6.1",
+ "prost",
  "protobuf",
  "raft",
  "raftstore",
@@ -1664,7 +1658,7 @@ dependencies = [
  "libc 0.2.80",
  "log",
  "parking_lot 0.11.0",
- "prost 0.6.1",
+ "prost",
  "protobuf",
 ]
 
@@ -1675,7 +1669,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad76ae5de2e2d85fe8f45e072f7909e22fa9ffaf0d53b280825783720dab051c"
 dependencies = [
  "derive-new",
- "prost 0.6.1",
+ "prost",
  "prost-build",
  "prost-types",
  "protobuf",
@@ -2024,8 +2018,8 @@ dependencies = [
  "futures 0.3.7",
  "grpcio",
  "lazy_static",
- "prost 0.6.1",
- "prost-derive 0.6.1",
+ "prost",
+ "prost-derive",
  "protobuf",
  "protobuf-build",
  "raft-proto",
@@ -3051,9 +3045,9 @@ dependencies = [
  "log",
  "nix 0.17.0",
  "parking_lot 0.11.0",
- "prost 0.6.1",
+ "prost",
  "prost-build",
- "prost-derive 0.6.1",
+ "prost-derive",
  "symbolic-demangle",
  "tempfile",
  "thiserror",
@@ -3208,17 +3202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce49aefe0a6144a45de32927c77bd2859a5f7677b55f220ae5b744e87389c212"
 dependencies = [
  "bytes 0.5.3",
- "prost-derive 0.6.1",
-]
-
-[[package]]
-name = "prost"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e6984d2f1a23009bd270b8bb56d0926810a3d483f59c987d77969e9d8e840b2"
-dependencies = [
- "bytes 1.0.1",
- "prost-derive 0.7.0",
+ "prost-derive",
 ]
 
 [[package]]
@@ -3233,7 +3217,7 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prost 0.6.1",
+ "prost",
  "prost-types",
  "tempfile",
  "which",
@@ -3253,26 +3237,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-derive"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "169a15f3008ecb5160cba7d37bcd690a7601b6d30cfb87a117d45e59d52af5d4"
-dependencies = [
- "anyhow",
- "itertools 0.9.0",
- "proc-macro2 1.0.24",
- "quote 1.0.3",
- "syn 1.0.48",
-]
-
-[[package]]
 name = "prost-types"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1834f67c0697c001304b75be76f67add9c89742eda3a085ad8ee0bb38c3417aa"
 dependencies = [
  "bytes 0.5.3",
- "prost 0.6.1",
+ "prost",
 ]
 
 [[package]]
@@ -3381,7 +3352,7 @@ version = "0.6.0-alpha"
 source = "git+https://github.com/tikv/raft-rs?branch=master#c7c230f63c59d408176e9288966da00c579ef4ba"
 dependencies = [
  "lazy_static",
- "prost 0.7.0",
+ "prost",
  "protobuf",
  "protobuf-build",
 ]
@@ -3440,7 +3411,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "prost 0.6.1",
+ "prost",
  "protobuf",
  "quick-error",
  "raft",
@@ -3790,7 +3761,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "pd_client",
- "prost 0.6.1",
+ "prost",
  "protobuf",
  "raft",
  "raftstore",
@@ -5179,7 +5150,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "prost 0.6.1",
+ "prost",
  "protobuf",
  "quick-error",
  "raft",
@@ -5392,8 +5363,8 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#bd0cb2b314a4a05b2dc0fda32b744e0ecf847cd8"
 dependencies = [
  "lazy_static",
- "prost 0.6.1",
- "prost-derive 0.6.1",
+ "prost",
+ "prost-derive",
  "protobuf",
  "protobuf-build",
 ]
