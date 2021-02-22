@@ -126,7 +126,7 @@ where
     raft_entry_max_size: f64,
     batch_req_size: u32,
     request: Option<RaftCmdRequest>,
-    callbacks: Vec<(Callback<E::Snapshot>, usize)>,
+    callbacks: Vec<(Callback<E::Snapshot>, usize, Instant)>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -320,9 +320,9 @@ where
     fn add(&mut self, cmd: RaftCommand<E::Snapshot>, req_size: u32) {
         let req_num = cmd.request.get_requests().len();
         let RaftCommand {
+            send_time,
             mut request,
             callback,
-            ..
         } = cmd;
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
@@ -332,7 +332,7 @@ where
         } else {
             self.request = Some(request);
         };
-        self.callbacks.push((callback, req_num));
+        self.callbacks.push((callback, req_num, send_time));
         self.batch_req_size += req_size;
     }
 
@@ -354,7 +354,12 @@ where
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (cb, _) = self.callbacks.pop().unwrap();
+                let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
+                STORE_BATCH_WAIT_DURATION_HISTOGRAM.observe(duration_to_sec(send_time.elapsed()));
+                // Update the ts
+                if let Callback::Write { cb, .. } = &mut cb {
+                    cb.1 = Instant::now();
+                }
                 return Some(RaftCommand::new(req, cb));
             }
             metric.batch += self.callbacks.len() - 1;
@@ -397,11 +402,14 @@ where
                     }
                 }))
             };
+            for (_, _, send_time) in &cbs {
+                STORE_BATCH_WAIT_DURATION_HISTOGRAM.observe(duration_to_sec(send_time.elapsed()));
+            }
             let cb = Callback::write_ext(
                 Box::new(move |resp| {
                     let mut last_index = 0;
                     let has_error = resp.response.get_header().has_error();
-                    for (cb, req_num) in cbs {
+                    for (cb, req_num, _) in cbs {
                         let next_index = last_index + req_num;
                         let mut cmd_resp = RaftCmdResponse::default();
                         cmd_resp.set_header(resp.response.get_header().clone());
