@@ -498,16 +498,16 @@ mod tests {
             b"b",
         );
 
-        // let key_a = Key::from_raw(b"0080").append_ts(2.into());
-        // let key_b = Key::from_raw(b"0160").append_ts(2.into());
-        // let key_c = Key::from_raw(b"0240").append_ts(2.into());
-        // check_split(
-        //     vec![
-        //         build_key_range(&key_a.to_raw().unwrap(), &key_b.to_raw().unwrap(), false),
-        //         build_key_range(&key_b.to_raw().unwrap(), &key_c.to_raw().unwrap(), false),
-        //     ],
-        //     &key_b.to_raw().unwrap(),
-        // );
+        let key_a = Key::from_raw(b"0080").append_ts(2.into());
+        let key_b = Key::from_raw(b"0160").append_ts(2.into());
+        let key_c = Key::from_raw(b"0240").append_ts(2.into());
+        check_split(
+            vec![
+                build_key_range(key_a.as_encoded(), key_b.as_encoded(), false),
+                build_key_range(key_b.as_encoded(), key_c.as_encoded(), false),
+            ],
+            key_b.as_encoded(),
+        );
     }
 
     fn check_split(key_ranges: Vec<KeyRange>, split_key: &[u8]) {
