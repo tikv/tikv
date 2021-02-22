@@ -1359,6 +1359,7 @@ where
         destroy_regions: Vec<metapb::Region>,
         region_notifier: Arc<AtomicU64>,
         async_writer_id: usize,
+        proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
@@ -1417,6 +1418,11 @@ where
 
         if ready.must_sync() {
             current.update_ready(region_id, ready.number(), region_notifier);
+        }
+
+        for ts in &proposal_times {
+            STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+            current.proposal_times.push(*ts);
         }
 
         if locked_writer.should_notify() {

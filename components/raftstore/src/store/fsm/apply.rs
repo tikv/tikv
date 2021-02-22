@@ -319,7 +319,7 @@ where
             host.post_apply(&region, &mut cmd);
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response.clone()) {
-                    APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
             cmds.push(cmd);
@@ -331,8 +331,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_QUEUE_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_TO_WRITE_QUEUE_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }
@@ -342,8 +342,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_TO_WRITE_QUEUE_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }
@@ -353,8 +353,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_WRITE_END_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_WRITE_END_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }
@@ -364,8 +364,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_IN_CALLBACK_QUEUE_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_IN_CALLBACK_QUEUE_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }
@@ -375,8 +375,8 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_BEFORE_CALLBACK_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()) as f64);
+                    APPLY_BEFORE_CALLBACK_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }

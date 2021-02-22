@@ -91,6 +91,22 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
+    fn find_scheduled_ts(&self, index: u64) -> Option<(u64, Instant)> {
+        let (front, back) = self.queue.as_slices();
+        let map = |p: &Proposal<_>| (p.index);
+        let idx = front
+            .binary_search_by_key(&index, map)
+            .or_else(|_| back.binary_search_by_key(&index, map));
+        if let Ok(i) = idx {
+            self.queue[i]
+                .cb
+                .get_scheduled_ts()
+                .map(|ts| (self.queue[i].term, ts))
+        } else {
+            None
+        }
+    }
+
     fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
         let (front, back) = self.queue.as_slices();
         let map = |p: &Proposal<_>| (p.term, p.index);
@@ -121,7 +137,7 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn push(&mut self, p: Proposal<S>) {
-        if let Some(f) = self.queue.front() {
+        if let Some(f) = self.queue.back() {
             // The term must be increasing among all log entries and the index
             // must be increasing inside a given term
             assert!((p.term, p.index) > (f.term, f.index));
@@ -1086,8 +1102,42 @@ where
             return Ok(());
         }
 
+        let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
+        self.report_know_commit_duration(pre_commit_index);
         Ok(())
+    }
+
+    fn report_know_persist_duration(&self, pre_persist_index: u64) {
+        for index in pre_persist_index..=self.raft_group.raft.raft_log.persisted {
+            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
+                if self
+                    .get_store()
+                    .term(index)
+                    .map(|t| t == term)
+                    .unwrap_or(false)
+                {
+                    STORE_KNOW_PERSIST_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                }
+            }
+        }
+    }
+
+    fn report_know_commit_duration(&self, pre_commit_index: u64) {
+        for index in pre_commit_index..=self.raft_group.raft.raft_log.committed {
+            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
+                if self
+                    .get_store()
+                    .term(index)
+                    .map(|t| t == term)
+                    .unwrap_or(false)
+                {
+                    STORE_KNOW_COMMIT_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                }
+            }
+        }
     }
 
     /// Checks and updates `peer_heartbeats` for the peer.
@@ -1718,12 +1768,22 @@ where
             self.async_writer_id = Some(id);
             id
         };
+        let mut proposal_times = vec![];
+        for entry in ready.entries() {
+            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
+            {
+                if entry.term == term {
+                    proposal_times.push(scheduled_ts);
+                }
+            }
+        }
         let invoke_ctx = match self.mut_store().handle_raft_ready(
             ctx,
             &mut ready,
             destroy_regions,
             notifier,
             async_writer_id,
+            proposal_times,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -1812,7 +1872,13 @@ where
                     lease_to_be_updated = false;
                 }
             }
-
+            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
+            {
+                if term == entry.get_term() {
+                    STORE_SCHEDULE_COMMIT_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                }
+            }
             fail_point!(
                 "leader_commit_prepare_merge",
                 {
@@ -1966,7 +2032,11 @@ where
             );
         }
 
+        let pre_persist_index = self.raft_group.raft.raft_log.persisted;
+        let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.on_persist_ready(persisted_number);
+        self.report_know_persist_duration(pre_persist_index);
+        self.report_know_commit_duration(pre_commit_index);
 
         if self.snapshot_ready_status.0 != 0 && self.unpersisted_numbers.is_empty() {
             // Since the snapshot must belong to the last ready, if `unpersisted_numbers`

@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use std::{collections::VecDeque, time::Instant};
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
@@ -17,7 +17,7 @@ use crate::{observe_perf_context_type, report_perf_context, Result};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -143,7 +143,8 @@ where
     pub kv_wb: WK,
     pub raft_wb: WR,
     pub unsynced_readies: HashMap<u64, UnsyncedReady>,
-    pub begin: Option<Instant>,
+    pub begin: Option<UtilInstant>,
+    pub proposal_times: Vec<Instant>,
     _phantom: PhantomData<EK>,
 }
 
@@ -159,13 +160,14 @@ where
             raft_wb,
             unsynced_readies: HashMap::default(),
             begin: None,
+            proposal_times: vec![],
             _phantom: PhantomData,
         }
     }
 
     pub fn on_taken_for_write(&mut self) {
         if self.is_empty() {
-            self.begin = Some(Instant::now_coarse());
+            self.begin = Some(UtilInstant::now_coarse());
         }
     }
 
@@ -190,6 +192,24 @@ where
         self.kv_wb.clear();
         self.unsynced_readies.clear();
         self.begin = None;
+    }
+
+    fn before_write_to_db(&self) {
+        for ts in &self.proposal_times {
+            STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+        }
+    }
+
+    fn after_write_to_kv_db(&self) {
+        for ts in &self.proposal_times {
+            STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+        }
+    }
+
+    fn after_write_to_db(&self) {
+        for ts in &self.proposal_times {
+            STORE_WRITE_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+        }
     }
 }
 
@@ -386,7 +406,7 @@ where
 
     fn run(&mut self) {
         loop {
-            let loop_begin = Instant::now_coarse();
+            let loop_begin = UtilInstant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
                 while !w.stop && !w.has_task() {
@@ -417,10 +437,12 @@ where
     }
 
     fn sync_write(&mut self, task: &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>) {
+        task.before_write_to_db();
+
         self.perf_context_statistics.start();
         fail_point!("raft_before_save");
         if !task.kv_wb.is_empty() {
-            let now = Instant::now_coarse();
+            let now = UtilInstant::now_coarse();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.kv_engine
@@ -434,10 +456,11 @@ where
 
             STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
+        task.after_write_to_kv_db();
         fail_point!("raft_between_save");
         if !task.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            let now = Instant::now_coarse();
+            let now = UtilInstant::now_coarse();
             self.raft_engine
                 .consume_and_shrink(&mut task.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
@@ -450,8 +473,9 @@ where
             self.perf_context_statistics,
             STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
         );
+        task.after_write_to_db();
 
-        let callback_begin = Instant::now_coarse();
+        let callback_begin = UtilInstant::now_coarse();
         for (_, r) in &task.unsynced_readies {
             r.flush(&self.router);
         }
