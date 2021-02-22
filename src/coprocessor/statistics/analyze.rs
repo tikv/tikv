@@ -333,7 +333,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             top_n_size: if let Some(ref idx_req) = common_handle_req {
                 idx_req.get_top_n_size() as usize
             } else {
-                0 as usize
+                0_usize
             },
             common_handle_col_ids: req.take_primary_column_ids(),
             columns_info,
