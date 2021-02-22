@@ -143,7 +143,7 @@ appearance, race, religion, or sexual identity and orientation.
 
 ### Slack
 
-Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LWVlMWMzMDkyNWE5ZjY1ODAzMWUwZGVhNGNhYTc3MzJhYWE0Y2FjYjliYzY1OWJlYTc4OWVjZWM1NDkwN2QxNDE) - Sign up and join channels on TiKV topics that interest you.
+Join the TiKV community on [Slack](https://slack.tidb.io/invite?team=tikv-wg&channel=general) - Sign up and join channels on TiKV topics that interest you.
 
 ### WeChat
 
