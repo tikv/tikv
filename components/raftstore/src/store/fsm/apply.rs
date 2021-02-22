@@ -342,7 +342,7 @@ where
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_QUEUE_DURATION_HISTOGRAM
+                    APPLY_TO_WRITE_DURATION_HISTOGRAM
                         .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };

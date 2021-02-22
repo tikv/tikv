@@ -354,8 +354,12 @@ where
         if let Some(req) = self.request.take() {
             self.batch_req_size = 0;
             if self.callbacks.len() == 1 {
-                let (cb, _, send_time) = self.callbacks.pop().unwrap();
+                let (mut cb, _, send_time) = self.callbacks.pop().unwrap();
                 STORE_BATCH_WAIT_DURATION_HISTOGRAM.observe(duration_to_sec(send_time.elapsed()));
+                // Update the ts
+                if let Callback::Write { cb, .. } = &mut cb {
+                    cb.1 = Instant::now();
+                }
                 return Some(RaftCommand::new(req, cb));
             }
             metric.batch += self.callbacks.len() - 1;
