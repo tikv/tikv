@@ -1278,7 +1278,7 @@ mod tests {
         let mut executor = BatchTableScanExecutor::new(
             store,
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
+            columns_info,
             vec![key_range],
             primary_column_ids,
             false,
