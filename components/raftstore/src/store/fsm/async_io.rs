@@ -192,6 +192,7 @@ where
         self.kv_wb.clear();
         self.unsynced_readies.clear();
         self.begin = None;
+        self.proposal_times.clear();
     }
 
     fn before_write_to_db(&self) {
