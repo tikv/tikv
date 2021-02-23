@@ -542,7 +542,7 @@ impl WriteCompactionFilter {
 
         fn do_flush(db: &DB, wb: &RocksWriteBatch, wopts: &WriteOptions) -> Result<(), String> {
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
-                return Err("Ingested fail point".to_owned());
+                Err("Ingested fail point".to_owned())
             });
             db.write_opt(wb.as_inner(), wopts)
         }
