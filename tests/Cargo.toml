@@ -177,4 +177,5 @@ concurrency_manager = { path = "../components/concurrency_manager", default-feat
 file_system = { path = "../components/file_system" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-criterion-papi = "0.1"
+criterion-perf-events = "0.1"
+perfcnt = "0.6"
