@@ -2017,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/sticnarf/kvproto.git?branch=apple-silicon#d3267d5426cb161a7537eb1d890d815011a89b4d"
+source = "git+https://github.com/pingcap/kvproto.git#a6ad6b9407ef153b157ae1f85871098a3c31d65a"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2094,7 +2094,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/sticnarf/rust-rocksdb.git?branch=apple-silicon#2ed1ad5ad5633f28a2db4afb9847c50daee7ed0a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "cc",
  "cmake",
@@ -2103,7 +2103,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/sticnarf/rust-rocksdb.git?branch=apple-silicon#2ed1ad5ad5633f28a2db4afb9847c50daee7ed0a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2123,7 +2123,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/sticnarf/rust-rocksdb.git?branch=apple-silicon#2ed1ad5ad5633f28a2db4afb9847c50daee7ed0a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3888,7 +3888,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/sticnarf/rust-rocksdb.git?branch=apple-silicon#2ed1ad5ad5633f28a2db4afb9847c50daee7ed0a"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "libc 0.2.85",
  "librocksdb_sys",
