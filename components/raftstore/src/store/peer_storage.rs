@@ -1682,7 +1682,7 @@ mod tests {
             engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
                 .unwrap();
         let engines = Engines::new(kv_db, raft_db);
-        bootstrap_store(&engines, 1, 1, false).unwrap();
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
@@ -2515,7 +2515,7 @@ mod tests {
             engine_test::raft::new_engine(raft_path.to_str().unwrap(), None, CF_DEFAULT, None)
                 .unwrap();
         let engines = Engines::new(kv_db, raft_db);
-        bootstrap_store(&engines, 1, 1, false).unwrap();
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
