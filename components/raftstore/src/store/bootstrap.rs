@@ -142,8 +142,8 @@ mod tests {
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);
 
-        assert!(bootstrap_store(&engines, 1, 1, false).is_ok());
-        assert!(bootstrap_store(&engines, 1, 1, false).is_err());
+        assert!(bootstrap_store(&engines, 1, 1).is_ok());
+        assert!(bootstrap_store(&engines, 1, 1).is_err());
 
         assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine

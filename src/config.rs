@@ -2668,7 +2668,7 @@ impl TiKvConfig {
             return Err("can't disable ttl on a ttl instance".to_owned());
         } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
             return Err("can't enable ttl on a non-ttl instance".to_owned());
-        } 
+        }
 
         Ok(())
     }

@@ -781,7 +781,6 @@ fn test_double_run_node() {
             split_check_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
-            false,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
