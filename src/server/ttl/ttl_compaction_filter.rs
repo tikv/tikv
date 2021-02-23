@@ -2,9 +2,10 @@
 
 use std::ffi::CString;
 
+use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
 use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterFactory,
-    DBCompactionFilter,
+    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
+    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
 use engine_rocks::{RocksTTLProperties, RocksUserCollectedPropertiesNoRc};
 use engine_traits::util::get_expire_ts;
@@ -65,24 +66,37 @@ struct TTLCompactionFilter {
 }
 
 impl CompactionFilter for TTLCompactionFilter {
-    fn filter(
+    fn featured_filter(
         &mut self,
         _level: usize,
         key: &[u8],
+        _sequence: u64,
         value: &[u8],
-        _new_value: &mut Vec<u8>,
-        _value_changed: &mut bool,
-    ) -> bool {
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+        if value_type != CompactionFilterValueType::Value {
+            return CompactionFilterDecision::Keep;
+        }
         // only consider data keys
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
-            return false;
+            return CompactionFilterDecision::Keep;
         }
 
-        let expire_ts = get_expire_ts(&value).unwrap();
+        let expire_ts = get_expire_ts(&value).unwrap_or_else(|_| {
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["ts_error"])
+                .inc();
+            error!("unexpected ttl key:{:?}, value:{:?}", key, value);
+            0
+        });
         if expire_ts == 0 {
-            return false;
+            return CompactionFilterDecision::Keep;
         }
-        expire_ts <= self.ts
+        if expire_ts <= self.ts {
+            CompactionFilterDecision::Remove
+        } else {
+            CompactionFilterDecision::Keep
+        }
     }
 }
 
