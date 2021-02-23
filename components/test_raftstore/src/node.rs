@@ -270,7 +270,6 @@ impl Simulator for NodeCluster {
             split_scheduler,
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
-            cfg.storage.enable_ttl,
         )?;
         assert!(engines
             .kv

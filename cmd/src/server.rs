@@ -691,7 +691,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             split_check_scheduler,
             auto_split_controller,
             self.concurrency_manager.clone(),
-            self.config.storage.enable_ttl,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
