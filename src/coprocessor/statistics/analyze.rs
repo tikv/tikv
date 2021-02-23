@@ -119,7 +119,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         // cur_val recording the current value's data and its counts when iterating index's rows.
         // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
         // top-n information.
-        let mut cur_val: (u32, Vec<u8>) = (0, Vec::from(""));
+        let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
         let top_n_size = req.get_top_n_size() as usize;
         let stats_version = if req.has_version() {
             req.get_version()
@@ -227,7 +227,6 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 res
             }
 
-            // TODO: Support sample index.
             AnalyzeType::TypeColumn => {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
@@ -343,7 +342,8 @@ impl<S: Snapshot> SampleBuilder<S> {
 
     // `collect_columns_stats` returns the sample collectors which contain total count,
     // null count, distinct values count and count-min sketch. And it also returns the statistic
-    // builder for PK which contains the histogram.
+    // builder for PK which contains the histogram. When PK is common handle, it returns index stats
+    // for PK.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(
         &mut self,
@@ -399,7 +399,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 // cur_val recording the current value's data and its counts when iterating index's rows.
                 // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
                 // top-n information.
-                let mut cur_val: (u32, Vec<u8>) = (0, Vec::from(""));
+                let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
                 let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
