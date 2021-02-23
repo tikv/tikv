@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::collections::HashSet;
 use std::slice::Iter;
 use std::time::{Duration, SystemTime};
 
@@ -183,9 +184,15 @@ impl Recorder {
     fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
         let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
         let key_ranges = self.key_ranges.clone();
-        let mut samples = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
+        let mut samples: Vec<Sample> = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
             .iter()
-            .map(|key_range| Sample::new(&key_range.start_key))
+            .fold(HashSet::new(), |mut set, key_range| {
+                set.insert(&key_range.start_key);
+                set.insert(&key_range.end_key);
+                set
+            })
+            .into_iter()
+            .map(|key| Sample::new(key))
             .collect();
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
