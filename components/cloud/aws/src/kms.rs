@@ -14,6 +14,7 @@ use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
 const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
+pub const AWS_VENDOR_NAME: &str = "aws";
 
 pub struct AwsKms {
     client: KmsClient,
