@@ -63,6 +63,7 @@ impl State {
 
 #[derive(Debug)]
 pub struct KmsBackend {
+    timeout_duration: Duration,
     state: Mutex<Option<State>>,
     kms_provider: Box<dyn KmsProvider>,
     // This mutex allows the decrypt_content API to be reference based
@@ -82,6 +83,7 @@ impl KmsBackend {
         );
 
         Ok(KmsBackend {
+            timeout_duration: Duration::from_secs(10),
             state: Mutex::new(None),
             runtime,
             kms_provider,
@@ -92,9 +94,8 @@ impl KmsBackend {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
             let mut runtime = self.runtime.lock().unwrap();
-            let timeout_duration = Duration::from_secs(10);
             let data_key = runtime.block_on(retry(|| {
-                with_timeout(timeout_duration, self.kms_provider.generate_data_key())
+                with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
             }))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
                 plaintext: PlainKey::new(data_key.plaintext.clone())?,
@@ -154,11 +155,10 @@ impl KmsBackend {
                 }
             }
             {
-                let timeout_duration = Duration::from_secs(10);
                 let mut runtime = self.runtime.lock().unwrap();
                 let plaintext = runtime.block_on(retry(|| {
                     with_timeout(
-                        timeout_duration,
+                        self.timeout_duration,
                         self.kms_provider.decrypt_data_key(&ciphertext_key),
                     )
                 }))?;
