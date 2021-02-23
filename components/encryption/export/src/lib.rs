@@ -6,7 +6,7 @@ use derive_more::Deref;
 use std::fmt::Debug;
 use std::path::Path;
 use tikv_util::impl_format_delegate_newtype;
-use tikv_util::stream::{RetryError};
+use tikv_util::stream::RetryError;
 
 #[cfg(feature = "aws")]
 use aws::AwsKms;
