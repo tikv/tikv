@@ -1751,6 +1751,7 @@ where
             for vec_msg in ready.take_messages() {
                 self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
             }
+            ctx.trans.flush();
         }
 
         self.apply_reads(ctx, &ready);
