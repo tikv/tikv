@@ -46,7 +46,6 @@ pub fn bootstrap_store<ER>(
     engines: &Engines<impl KvEngine, ER>,
     cluster_id: u64,
     store_id: u64,
-    enable_ttl: bool,
 ) -> Result<()>
 where
     ER: RaftEngine,
@@ -61,9 +60,6 @@ where
     ident.set_store_id(store_id);
 
     engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
-    if enable_ttl {
-        engines.kv.put(keys::TTL_SUPPORT_MARKER_KEY, &[])?;
-    }
     engines.sync_kv()?;
     Ok(())
 }
