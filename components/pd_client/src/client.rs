@@ -1,9 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::u64;
 
 use futures::sync::mpsc;
 use futures::sync::oneshot;
@@ -407,6 +409,8 @@ impl PdClient for RpcClient {
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
             let mut inner = client.wl();
             if let Either::Right(ref sender) = inner.hb_sender {
+                let last = inner.pending_heartbeat.fetch_add(1, Ordering::Relaxed);
+                PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 + 1);
                 return Box::new(future::result(
                     sender
                         .unbounded_send(req)
@@ -420,13 +424,27 @@ impl PdClient for RpcClient {
             let (tx, rx) = mpsc::unbounded();
             tx.unbounded_send(req)
                 .unwrap_or_else(|e| panic!("send request to unbounded channel failed {:?}", e));
+            let pending_heartbeat = Arc::new(AtomicU64::new(1));
             inner.hb_sender = Either::Right(tx);
-            Box::new(
+            inner.pending_heartbeat = pending_heartbeat.clone();
+            let mut last_report = u64::MAX;
+            inner.client_stub.spawn(
                 sender
                     .sink_map_err(Error::Grpc)
-                    .send_all(rx.then(|r| match r {
-                        Ok(r) => Ok((r, WriteFlags::default())),
-                        Err(()) => Err(Error::Other(box_err!("failed to recv heartbeat"))),
+                    .send_all(rx.then(move |r| {
+                        let last = pending_heartbeat.fetch_sub(1, Ordering::Relaxed);
+                        // Otherwise it should be updated by sender.
+                        if last + 10 < last_report || last == 1 {
+                            PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+                            last_report = last;
+                        }
+                        if last > last_report {
+                            last_report = last - 1;
+                        }
+                        match r {
+                            Ok(r) => Ok((r, WriteFlags::default().buffer_hint(last > 1))),
+                            Err(()) => Err(Error::Other(box_err!("failed to recv heartbeat"))),
+                        }
                     }))
                     .then(|result| match result {
                         Ok((mut sender, _)) => {
@@ -436,10 +454,11 @@ impl PdClient for RpcClient {
                         }
                         Err(e) => {
                             error!(?e; "failed to send heartbeat");
-                            Err(e)
+                            Ok(())
                         }
                     }),
-            ) as PdFuture<_>
+            );
+            Box::new(future::result(Ok(())))
         };
 
         self.leader_client

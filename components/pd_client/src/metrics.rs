@@ -15,6 +15,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref PD_PENDING_HEARTBEAT_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_pd_pending_heartbeat_total",
+        "Total number of pending region heartbeat"
+    )
+    .unwrap();
     pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_pd_validate_peer_total",
         "Total number of pd worker validate peer task.",
