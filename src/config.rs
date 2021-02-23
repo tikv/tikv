@@ -3718,7 +3718,10 @@ mod tests {
             }
         );
         assert_eq!(
-            get_background_job_limits_impl(16 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                16, /*cpu_num*/
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 10,
                 max_background_flushes: 4,
