@@ -54,7 +54,7 @@ pub use self::{
         PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
         TestEngineBuilder,
     },
-    raw::RawStore,
+    raw::{RawStore, TTLSnapshot},
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{ProcessResult, Scanner, Store, TxnStore},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
@@ -82,7 +82,7 @@ use std::{
     iter,
     sync::{atomic, Arc},
 };
-use tikv_util::time::{Instant, ThreadReadId, UnixSecs};
+use tikv_util::time::{Instant, ThreadReadId};
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -1035,7 +1035,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             let expire_ts = if ttl == 0 {
                 0
             } else {
-                ttl + UnixSecs::now().into_inner()
+                ttl + TTLSnapshot::<E::Snap>::current_ts()
             };
             m.with_ttl(expire_ts);
         } else if ttl != 0 {
@@ -1074,7 +1074,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let expire_ts = if ttl == 0 {
             0
         } else {
-            ttl + UnixSecs::now().into_inner()
+            ttl + TTLSnapshot::<E::Snap>::current_ts()
         };
 
         let modifies = pairs
@@ -1730,7 +1730,7 @@ mod tests {
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
-    use crate::storage::raw::TEST_CURRENT_TS;
+    use crate::storage::raw::TTLSnapshot;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
         config::BlockCacheConfig,
@@ -4129,12 +4129,10 @@ mod tests {
             let res =
                 block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
                     .unwrap();
-            if ttl != 0 && ttl <= TEST_CURRENT_TS {
-                assert_eq!(res, None);
+            if ttl != 0 && ttl <= TTLSnapshot::<<RocksEngine as Engine>::Snap>::current_ts() {
+                assert_eq!(res, Some(ttl));
             } else if ttl == 0 {
                 assert_eq!(res, Some(0));
-            } else {
-                assert_eq!(res, Some(ttl - TEST_CURRENT_TS));
             }
         }
     }

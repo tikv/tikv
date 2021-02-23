@@ -41,13 +41,13 @@ impl<S: Snapshot> TTLSnapshot<S> {
 
     #[cfg(not(test))]
     #[inline]
-    fn current_ts() -> u64 {
+    pub fn current_ts() -> u64 {
         UnixSecs::now().into_inner()
     }
 
     #[cfg(test)]
     #[inline]
-    fn current_ts() -> u64 {
+    pub fn current_ts() -> u64 {
         TEST_CURRENT_TS
     }
 
@@ -68,10 +68,14 @@ impl<S: Snapshot> TTLSnapshot<S> {
         if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
             stats.data.flow_stats.read_bytes += v.len();
             let expire_ts = get_expire_ts(v)?;
-            if expire_ts != 0 && expire_ts <= self.current_ts {
-                return Ok(None);
+            if expire_ts == 0 {
+                return Ok(Some(0));
             }
-            return Ok(Some(expire_ts - self.current_ts));
+            return if expire_ts <= self.current_ts {
+                Ok(None)
+            } else {
+                Ok(Some(expire_ts - self.current_ts))
+            };
         }
         Ok(None)
     }
@@ -278,7 +282,7 @@ mod tests {
             ttl_snapshot
                 .get_key_ttl_cf(CF_DEFAULT, &Key::from_encoded_slice(b"key1"), &mut stats)
                 .unwrap(),
-            Some(10)
+            Some(5)
         );
         assert_eq!(
             ttl_snapshot
