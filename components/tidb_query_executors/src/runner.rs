@@ -127,6 +127,9 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypeExchangeReceiver => {
                     other_err!("ExchangeReceiver executor not implemented");
                 }
+                ExecType::TypeProjection => {
+                    other_err!("Projection executor not implemented");
+                }
             }
         }
 
