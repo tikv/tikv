@@ -152,24 +152,15 @@ impl CompactionFilterInitializer for RocksEngine {
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
-        if gc_context.is_none() {
-            *gc_context = Some(GcContext {
-                db: self.as_inner().clone(),
-                safe_point,
-                cfg_tracker,
-                feature_gate,
-                orphan_versions_handler,
-                #[cfg(any(test, feature = "failpoints"))]
-                callbacks_on_drop: vec![],
-            });
-        } else {
-            let ctx = gc_context.as_mut().unwrap();
-            ctx.db = self.as_inner().clone();
-            ctx.safe_point = safe_point;
-            ctx.cfg_tracker = cfg_tracker;
-            ctx.feature_gate = feature_gate;
-            ctx.orphan_versions_handler = orphan_versions_handler;
-        }
+        *gc_context = Some(GcContext {
+            db: self.as_inner().clone(),
+            safe_point,
+            cfg_tracker,
+            feature_gate,
+            orphan_versions_handler,
+            #[cfg(any(test, feature = "failpoints"))]
+            callbacks_on_drop: vec![],
+        });
     }
 }
 
@@ -831,28 +822,47 @@ pub mod test_utils {
         }
 
         fn prepare_gc(&self, raw_engine: &RocksEngine) {
-            let mut gc_cfg = GcConfig::default();
-            if let Some(ratio_threshold) = self.ratio_threshold {
-                gc_cfg.ratio_threshold = ratio_threshold;
-            }
-            gc_cfg.enable_compaction_filter = true;
-            let feature_gate = FeatureGate::default();
-            feature_gate.set_version("5.0.0").unwrap();
-            raw_engine.init_compaction_filter(
-                Arc::new(AtomicU64::new(self.safe_point)),
-                GcWorkerConfigManager(Arc::new(VersionTrack::new(gc_cfg))),
-                feature_gate,
-                self.orphan_versions_handler
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(|_: RocksWriteBatch| {})),
-            );
+            let db = raw_engine.as_inner().clone();
+            let safe_point = Arc::new(AtomicU64::new(self.safe_point));
+            let cfg_tracker = {
+                let mut cfg = GcConfig::default();
+                if let Some(ratio_threshold) = self.ratio_threshold {
+                    cfg.ratio_threshold = ratio_threshold;
+                }
+                cfg.enable_compaction_filter = true;
+                GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)))
+            };
+            let feature_gate = {
+                let feature_gate = FeatureGate::default();
+                feature_gate.set_version("5.0.0").unwrap();
+                feature_gate
+            };
 
-            let mut gc_context = GC_CONTEXT.lock().unwrap();
-            let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
-            callbacks.clear();
-            for callback in &self.callbacks_on_drop {
-                callbacks.push(callback.clone());
+            let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
+            if gc_context_opt.is_none() {
+                *gc_context_opt = Some(GcContext {
+                    db,
+                    safe_point,
+                    cfg_tracker,
+                    feature_gate,
+                    orphan_versions_handler: self
+                        .orphan_versions_handler
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(|_: RocksWriteBatch| {})),
+                    callbacks_on_drop: self.callbacks_on_drop.clone(),
+                });
+                return;
             }
+
+            let gc_context = gc_context_opt.as_mut().unwrap();
+            gc_context.db = db;
+            gc_context.safe_point = safe_point;
+            gc_context.cfg_tracker = cfg_tracker;
+            gc_context.feature_gate = feature_gate;
+            if let Some(orphan_versions_handler) = self.orphan_versions_handler.clone() {
+                gc_context.orphan_versions_handler = orphan_versions_handler;
+            }
+            gc_context.callbacks_on_drop = self.callbacks_on_drop.clone();
         }
         fn post_gc(&mut self) {
             self.callbacks_on_drop.clear();
