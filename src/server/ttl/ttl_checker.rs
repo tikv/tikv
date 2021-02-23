@@ -112,7 +112,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             match rx.recv() {
                 Ok(None) => {}
                 Ok(Some((start_key, end_key))) => {
-                    Self::check_ttl_for_range(&self.engine, &start_key, &end_key);
+                    let start = keys::data_key(&start_key);
+                    let end = keys::data_end_key(&end_key);
+                    Self::check_ttl_for_range(&self.engine, &start, &end);
                     if !end_key.is_empty() {
                         key = end_key;
                         continue;
