@@ -37,7 +37,7 @@ impl std::fmt::Debug for AwsKms {
 }
 
 impl AwsKms {
-    fn new_creds_dispatcher<Creds, Dispatcher>(
+    fn new_with_creds_dispatcher<Creds, Dispatcher>(
         config: Config,
         dispatcher: Dispatcher,
         credentials_provider: Creds,
@@ -64,7 +64,7 @@ impl AwsKms {
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
         let credentials_provider = util::CredentialsProvider::new()?;
-        Self::new_creds_dispatcher(config, dispatcher, credentials_provider)
+        Self::new_with_creds_dispatcher(config, dispatcher, credentials_provider)
     }
 
     pub fn new(config: Config) -> Result<AwsKms> {
@@ -204,9 +204,12 @@ mod tests {
             });
         let credentials_provider =
             StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
-        let aws_kms =
-            AwsKms::new_creds_dispatcher(config.clone(), dispatcher, credentials_provider.clone())
-                .unwrap();
+        let aws_kms = AwsKms::new_with_creds_dispatcher(
+            config.clone(),
+            dispatcher,
+            credentials_provider.clone(),
+        )
+        .unwrap();
         let data_key = aws_kms.generate_data_key().await.unwrap();
         assert_eq!(
             data_key.encrypted,
@@ -220,7 +223,7 @@ mod tests {
             encryption_algorithm: None,
         });
         let aws_kms =
-            AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+            AwsKms::new_with_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
         assert_eq!(plaintext, key_contents);
     }
@@ -252,7 +255,7 @@ mod tests {
         let credentials_provider =
             StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
         let aws_kms =
-            AwsKms::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+            AwsKms::new_with_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
         let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();
         let fut = aws_kms.decrypt_data_key(&enc_key);
         match fut.await {
