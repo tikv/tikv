@@ -205,7 +205,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             .inc();
 
         // wait a while
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(2));
     }
 }
 
