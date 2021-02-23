@@ -3,7 +3,6 @@
 mod test_backup;
 mod test_bootstrap;
 mod test_cmd_epoch_checker;
-mod test_compaction_filter;
 mod test_conf_change;
 mod test_coprocessor;
 mod test_early_apply;

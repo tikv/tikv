@@ -168,6 +168,7 @@ impl CompactionFilterInitializer for RocksEngine {
             ctx.safe_point = safe_point;
             ctx.cfg_tracker = cfg_tracker;
             ctx.feature_gate = feature_gate;
+            ctx.orphan_versions_handler = orphan_versions_handler;
         }
     }
 }
