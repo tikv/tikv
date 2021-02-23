@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
 use super::{Bytes, BytesRef};
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
+use bit_vec::BitVec;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecBytes {
@@ -44,8 +44,7 @@ impl ChunkedVecBytes {
     }
     #[inline]
     pub fn get(&self, idx: usize) -> Option<BytesRef> {
-        assert!(idx < self.len());
-        if self.bitmap.get(idx) {
+        if self.bitmap.get(idx).unwrap() {
             Some(&self.data[self.var_offset[idx]..self.var_offset[idx + 1]])
         } else {
             None

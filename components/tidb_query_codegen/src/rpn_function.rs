@@ -1534,7 +1534,7 @@ impl NormalRpnFn {
         };
 
         let nonnullable_loop = quote! {
-            use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
+            use tidb_query_datatype::codec::data_type::BitVec;
 
             let (vecs, fastpath, all_null) = {
                 let mut vecs: Vec<&BitVec> = vec![];
@@ -1581,7 +1581,13 @@ impl NormalRpnFn {
                 return Ok(#vec_type::cast_chunk_into_vector_value(result));
             }
 
-            for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
+            let merged_bitmap = vecs
+                .iter()
+                .fold(BitVec::from_elem(output_rows, true), |mut acc, x| {
+                    acc.and(x);
+                    acc
+                });
+            for (row_index, val) in merged_bitmap.iter().enumerate()  {
                 if !val {
                     result.push(None);
                     continue;
@@ -2199,7 +2205,7 @@ mod tests_normal {
                 ) -> tidb_query_common::Result<tidb_query_datatype::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = <Decimal as EvaluableRet>::ChunkedType::with_capacity(output_rows);
-                    use tidb_query_datatype::codec::data_type::{BitAndIterator, BitVec};
+                    use tidb_query_datatype::codec::data_type::BitVec;
                     let (vecs, fastpath, all_null) = {
                         let mut vecs: Vec<&BitVec> = vec![];
                         let mut fastpath = true;
@@ -2242,7 +2248,14 @@ mod tests_normal {
                         }
                         return Ok(Decimal::cast_chunk_into_vector_value(result));
                     }
-                    for (row_index, val) in BitAndIterator::new(vecs.as_slice(), output_rows).enumerate() {
+
+                    let merged_bitmap = vecs
+                        .iter()
+                        .fold(BitVec::from_elem(output_rows, true), |mut acc, x| {
+                            acc.and(x);
+                            acc
+                        });
+                    for (row_index, val) in merged_bitmap.iter().enumerate()  {
                         if !val {
                             result.push(None);
                             continue;

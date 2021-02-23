@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
+use bit_vec::BitVec;
 
 /// A vector storing `Option<T>` with a compact layout.
 ///
@@ -24,8 +24,7 @@ pub struct ChunkedVecSized<T: Sized> {
 impl<T: Sized + Clone> ChunkedVecSized<T> {
     #[inline]
     fn get(&self, idx: usize) -> Option<&T> {
-        assert!(idx < self.data.len());
-        if self.bitmap.get(idx) {
+        if self.bitmap.get(idx).unwrap() {
             Some(&self.data[idx])
         } else {
             None

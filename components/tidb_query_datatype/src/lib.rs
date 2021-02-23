@@ -22,6 +22,8 @@ extern crate bitflags;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+extern crate bit_vec;
+
 pub mod builder;
 pub mod def;
 pub mod error;

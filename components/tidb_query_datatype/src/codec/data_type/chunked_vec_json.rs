@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
 use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
 use super::{Json, JsonRef, JsonType};
 use crate::impl_chunked_vec_common;
+use bit_vec::BitVec;
 use std::convert::TryFrom;
 
 /// A vector storing `Option<Json>` with a compact layout.
@@ -24,8 +24,7 @@ pub struct ChunkedVecJson {
 impl ChunkedVecJson {
     #[inline]
     pub fn get(&self, idx: usize) -> Option<JsonRef> {
-        assert!(idx < self.len());
-        if self.bitmap.get(idx) {
+        if self.bitmap.get(idx).unwrap() {
             let json_type = JsonType::try_from(self.data[self.var_offset[idx]]).unwrap();
             let sliced_data = &self.data[self.var_offset[idx] + 1..self.var_offset[idx + 1]];
             Some(JsonRef::new(json_type, sliced_data))
