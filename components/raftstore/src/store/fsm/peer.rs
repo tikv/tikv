@@ -1051,7 +1051,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             self.register_raft_base_tick();
             // We need pd heartbeat tick to collect down peers and pending peers.
-            self.register_pd_heartbeat_tick();
+            // self.register_pd_heartbeat_tick();
             return;
         }
 
@@ -3418,9 +3418,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self) {
-        if !self.ctx.cfg.hibernate_regions {
+        /*if !self.ctx.cfg.hibernate_regions {
             self.register_pd_heartbeat_tick();
-        }
+        }*/
         self.fsm.peer.check_peers();
 
         if !self.fsm.peer.is_leader() {
@@ -3444,6 +3444,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
+        self.register_pd_heartbeat_tick();
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
                 self.fsm.peer.ping();
