@@ -40,12 +40,12 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut interval = runner.poll_interval;
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
                     interval = runner.run();
                     info!(
-                        "ttl checker finishes a round, wait {:?} to start next round",
-                        interval
+                        "ttl checker finishes a round, wait {}s to start next round",
+                        interval.as_secs()
                     );
+                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -129,6 +129,9 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 }
             }
 
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["finish"])
+                .inc();
             // checks a round
             let round_time = Instant::now() - round_start_time;
             if self.poll_interval > round_time {
@@ -158,6 +161,11 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 return;
             }
         };
+        if res.is_empty() {
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["empty"])
+                .inc();
+        }
         for (file_name, prop) in res {
             if prop.max_expire_ts <= current_ts {
                 files.push(file_name);

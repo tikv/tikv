@@ -48,7 +48,7 @@ impl TTLPropertiesExt for RocksEngine {
         for (file_name, v) in collection.iter() {
             let prop = match RocksTTLProperties::decode(&v.user_collected_properties()) {
                 Ok(v) => v,
-                Err(e) => panic!("decode ttl properties err {:?}", e),
+                Err(_) => continue,
             };
             res.push((file_name.to_string(), prop));
         }
@@ -72,7 +72,10 @@ impl TablePropertiesCollector for TTLPropertiesCollector {
             return;
         }
 
-        let expire_ts = get_expire_ts(&value).unwrap();
+        let expire_ts = get_expire_ts(&value).unwrap_or_else(|_| {
+            error!("unexpected ttl key:{:?}, value:{:?}", key, value);
+            0
+        });
         if expire_ts == 0 {
             return;
         }
