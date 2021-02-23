@@ -1109,7 +1109,7 @@ where
     }
 
     fn report_know_persist_duration(&self, pre_persist_index: u64) {
-        for index in pre_persist_index..=self.raft_group.raft.raft_log.persisted {
+        for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
                     .get_store()
@@ -1125,7 +1125,7 @@ where
     }
 
     fn report_know_commit_duration(&self, pre_commit_index: u64) {
-        for index in pre_commit_index..=self.raft_group.raft.raft_log.committed {
+        for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
                     .get_store()
