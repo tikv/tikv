@@ -110,6 +110,18 @@ lazy_static! {
 }
 
 pub trait CompactionFilterInitializer {
+    /// `orphan_versions_handler` is a fallback position to delete orphan versions on default CF.
+    /// Generally versions on write CF are filtered in `WriteCompactionFilter` directly and
+    /// associated versions on default CF are deleted with `RocksEngine::delete` API before the
+    /// compaction result gets installed. However, it's possible that `RocksEngine::delete` fails
+    /// because of write stall, so it's necessary to give a fallback position for those orphan
+    /// versions instead of drop them directly.
+    ///
+    /// NOTE: `orphan_versions_handler` can only handles a `RocksWriteBatch` asynchronously
+    /// because at the time the instance has already been stalled. So it's possible that the TiKV
+    /// instance fails after a compaction result is installed but its orphan versions are not
+    /// deleted. Those orphan versions will never get cleaned until `DefaultCompactionFilter` is
+    /// introduced.
     fn init_compaction_filter(
         &self,
         safe_point: Arc<AtomicU64>,
@@ -120,18 +132,6 @@ pub trait CompactionFilterInitializer {
 }
 
 impl<T> CompactionFilterInitializer for T {
-    /// `_orphan_versions_handler` is a fallback position to delete orphan versions on default CF.
-    /// Generally versions on write CF are filtered in `WriteCompactionFilter` directly and
-    /// associated versions on default CF are deleted with `RocksEngine::delete` API before the
-    /// compaction result gets installed. However, it's possible that `RocksEngine::delete` fails
-    /// because of write stall, so it's necessary to give a fallback position for those orphan
-    /// versions instead of drop them directly.
-    ///
-    /// NOTE: `_orphan_versions_handler` can only handles a `RocksWriteBatch` asynchronously
-    /// because at the time the instance has already been stalled. So it's possible that the TiKV
-    /// instance fails after a compaction result is installed but its orphan versions are not
-    /// deleted. Those orphan versions will never get cleaned until `DefaultCompactionFilter` is
-    /// introduced.
     default fn init_compaction_filter(
         &self,
         _safe_point: Arc<AtomicU64>,
