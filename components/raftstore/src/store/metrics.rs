@@ -314,6 +314,12 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref APPLY_TO_WRITE_STATE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_to_write_state_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref APPLY_TO_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_to_write_duration_seconds",
@@ -325,6 +331,12 @@ lazy_static! {
             "tikv_raftstore_apply_write_end_duration_seconds",
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref APPLY_PROPOSAL_CNT_PER_WRITE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_proposal_cnt_per_write",
+            "TODO",
+            exponential_buckets(0.5, 2.0, 20).unwrap()
         ).unwrap();
     pub static ref APPLY_IN_CALLBACK_QUEUE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(

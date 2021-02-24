@@ -25,7 +25,7 @@ impl Default for Config {
             reschedule_duration: ReadableDuration::secs(5),
             pool_size: 2,
             io_pool_size: 1,
-            io_max_wait_us: 500,
+            io_max_wait_us: 200,
             io_queue_size: 64,
             io_queue_init_bytes: 256 * 1024,
             io_queue_bytes_step: 1.414213562373095,

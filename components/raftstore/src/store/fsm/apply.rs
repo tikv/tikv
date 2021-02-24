@@ -338,6 +338,17 @@ where
         }
     }
 
+    pub fn on_write_state(&self) {
+        for (cb, _cmd) in &self.cbs {
+            if let Some(cb) = cb {
+                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
+                    APPLY_TO_WRITE_STATE_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                }
+            };
+        }
+    }
+
     pub fn on_write(&self) {
         for (cb, _cmd) in &self.cbs {
             if let Some(cb) = cb {
@@ -358,6 +369,18 @@ where
                 }
             };
         }
+    }
+
+    pub fn proposal_len(&self) -> usize {
+        let mut sum: usize = 0;
+        for (cb, _cmd) in &self.cbs {
+            if let Some(cb) = cb {
+                if let Some(_) = cb.get_scheduled_ts() {
+                    sum += 1;
+                }
+            }
+        }
+        sum
     }
 
     pub fn on_to_callback_queue(&self) {

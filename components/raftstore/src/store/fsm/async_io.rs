@@ -18,6 +18,7 @@ use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use std::time::Duration;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -348,6 +349,15 @@ where
         true
     }
 
+    fn has_writable_task(&self) -> bool {
+        let first_task = self.wbs.front().unwrap();
+        if first_task.is_empty() {
+            return false;
+        }
+        self.task_suggest_bytes_cache == 0
+            || first_task.raft_wb.persist_size() >= self.task_suggest_bytes_cache
+    }
+
     fn flush_metrics(&mut self) {
         self.metrics.flush();
     }
@@ -367,6 +377,7 @@ where
     router: RaftRouter<EK, ER>,
     pub writer: AsyncWriter<EK, ER>,
     perf_context_statistics: PerfContextStatistics,
+    io_max_wait_us: i64,
 }
 
 impl<EK, ER> AsyncWriteWorker<EK, ER>
@@ -402,6 +413,7 @@ where
             router,
             writer,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
+            io_max_wait_us: config.apply_batch_system.io_max_wait_us as i64,
         }
     }
 
@@ -410,11 +422,22 @@ where
             let loop_begin = UtilInstant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                while !w.stop && !w.has_task() {
-                    w = self.writer.1.wait(w).unwrap();
+                if self.io_max_wait_us == 0 {
+                    while !w.stop && !w.has_task() {
+                        w = self.writer.1.wait(w).unwrap();
+                    }
+                } else {
+                    let mut delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                    while !w.stop && !w.has_writable_task() && delta_us > 0 {
+                        w = self.writer.1.wait_timeout(w, Duration::from_millis(delta_us as u64)).unwrap().0;
+                        delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                    }
                 }
                 if w.stop {
                     return;
+                }
+                if !w.has_task() {
+                    continue;
                 }
                 w.detach_task()
             };
