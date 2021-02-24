@@ -1221,9 +1221,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let store = RawStore::new(snapshot, enable_ttl);
-                let cf = Self::rawkv_cf(&cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                 {
+                    let store = RawStore::new(snapshot, enable_ttl);
                     let begin_instant = Instant::now_coarse();
 
                     let start_key = Key::from_encoded(start_key);
@@ -1239,6 +1239,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                     } else {
                         store.forward_raw_scan(
                             cf,
@@ -1248,6 +1249,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                     }
                     .map_err(Error::from)
                     .map(|results| {
@@ -1310,9 +1312,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 };
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-                let store = RawStore::new(snapshot, enable_ttl);
-                let cf = Self::rawkv_cf(&cf)?;
+                    let cf = Self::rawkv_cf(&cf)?;
                 {
+                    let store = RawStore::new(snapshot, enable_ttl);
                     let begin_instant = Instant::now();
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse_scan) {
@@ -1341,6 +1343,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 &mut statistics,
                                 key_only,
                             )
+                            .await
                         } else {
                             store.forward_raw_scan(
                                 &cf,
@@ -1350,6 +1353,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 &mut statistics,
                                 key_only,
                             )
+                            .await
                         }
                         .map(|results| {
                             results
@@ -3696,7 +3700,7 @@ mod tests {
         .map(|(k, v)| Some((k, v)));
         expect_multi_values(
             results.clone().collect(),
-            block_on(storage.raw_scan(
+            block_on(async { storage.raw_scan(
                 Context::default(),
                 "".to_string(),
                 b"c1".to_vec(),
@@ -3704,12 +3708,12 @@ mod tests {
                 20,
                 false,
                 false,
-            ))
+            ).await })
             .unwrap(),
         );
         expect_multi_values(
             results.rev().collect(),
-            block_on(storage.raw_scan(
+            block_on(async {storage.raw_scan(
                 Context::default(),
                 "".to_string(),
                 b"d3".to_vec(),
@@ -3717,7 +3721,7 @@ mod tests {
                 20,
                 false,
                 true,
-            ))
+            ).await })
             .unwrap(),
         );
     }

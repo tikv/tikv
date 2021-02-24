@@ -8,17 +8,25 @@ use crate::storage::Statistics;
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, KvPair};
 
+use std::time::Duration;
+use std::sync::Arc;
+use tikv_util::time::Instant;
+use yatp::task::future::reschedule;
+
+const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
+const MAX_BATCH_SIZE: usize = 1024;
+
 pub enum RawStore<S: Snapshot> {
-    Vanilla(RawStoreInner<S>),
-    TTL(RawStoreInner<TTLSnapshot<S>>),
+    Vanilla(Arc<RawStoreInner<S>>),
+    TTL(Arc<RawStoreInner<TTLSnapshot<S>>>),
 }
 
 impl<S: Snapshot> RawStore<S> {
     pub fn new(snapshot: S, enable_ttl: bool) -> Self {
         if enable_ttl {
-            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
+            RawStore::TTL(Arc::new(RawStoreInner::new(TTLSnapshot::from(snapshot))))
         } else {
-            RawStore::Vanilla(RawStoreInner::new(snapshot))
+            RawStore::Vanilla(Arc::new(RawStoreInner::new(snapshot)))
         }
     }
 
@@ -46,7 +54,7 @@ impl<S: Snapshot> RawStore<S> {
         }
     }
 
-    pub fn forward_raw_scan(
+    pub async fn forward_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,
@@ -64,15 +72,15 @@ impl<S: Snapshot> RawStore<S> {
                 if key_only {
                     option.set_key_only(key_only);
                 }
-                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only).await
             }
             RawStore::TTL(inner) => {
-                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only).await
             }
         }
     }
 
-    pub fn reverse_raw_scan(
+    pub async fn reverse_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,
@@ -90,10 +98,10 @@ impl<S: Snapshot> RawStore<S> {
                 if key_only {
                     option.set_key_only(key_only);
                 }
-                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only).await
             }
             RawStore::TTL(inner) => {
-                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only).await
             }
         }
     }
@@ -129,7 +137,7 @@ impl<S: Snapshot> RawStoreInner<S> {
     ///
     /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
-    pub fn forward_raw_scan(
+    pub async fn forward_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,
@@ -144,7 +152,17 @@ impl<S: Snapshot> RawStoreInner<S> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -163,7 +181,7 @@ impl<S: Snapshot> RawStoreInner<S> {
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    pub fn reverse_raw_scan(
+    pub async fn reverse_raw_scan(
         &self,
         cf: CfName,
         start_key: &Key,
@@ -178,7 +196,17 @@ impl<S: Snapshot> RawStoreInner<S> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
