@@ -8,12 +8,26 @@ panic() {
     exit 1
 }
 
+SKIP_CHECK_DIRTY=""
+assert_not_dirty() {
+  if [[ -z "$SKIP_CHECK_DIRTY" ]]; then
+    git --no-pager diff --exit-code HEAD || panic "\n\e[35m$@\e[0m"
+  fi
+}
+
 # Move to project root
 cd "$(dirname "$0")/.."
 
-if [[ -z "$SKIP_FORMAT_CHECK" ]]; then
+assert_not_dirty "Working directory is dirty, please commit!!"
+
+if [[ -z "$SKIP_FORMAT" ]]; then
     make format
-    git diff-index --quiet HEAD -- || (git --no-pager diff; panic "\e[35mplease 'make format' before creating a pr!!!\e[0m")
+    assert_not_dirty "please 'make format' before creating a pr!!!"
+fi
+
+if [[ -z "$SKIP_ERROR_CODE" ]]; then
+    make error-code
+    assert_not_dirty "please 'make format' before creating a pr!!!"
 fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
@@ -23,20 +37,18 @@ if [[ "$TRAVIS" = "true" ]]; then
 fi
 export RUSTFLAGS=-Dwarnings
 
-make clippy || panic "\e[35mplease fix the 'make clippy' errors!!!\e[0m"
+make clippy || panic "please fix the 'make clippy' errors!!!"
 
 set +e
 export LOG_FILE=tests.log
-if [[ -z "$SKIP_TESTS" ]]; then
-    make test 2>&1 | tee tests.out
-else
+if ! [[ -z "$SKIP_TESTS" ]]; then
     EXTRA_CARGO_ARGS="--no-run" make test
     exit $?
 fi
+make test 2>&1 | tee tests.out
 status=$?
-if [[ -z "$SKIP_CHECK_DIRTY_TESTS" ]]; then
-    git diff-index --quiet HEAD -- || echo "\e[35mplease run 'make test' before creating a pr!!!\e[0m"
-fi
+assert_not_dirty "please run 'make test' before creating a pr!!!"
+
 for case in `cat tests.out | python -c "import sys
 import re
 p = re.compile(\"thread '([^']+)' panicked at\")
@@ -49,16 +61,16 @@ for l in sys.stdin:
 print ('\n'.join(cases))
 "`; do
     echo find fail cases: $case
-    grep $case $LOG_FILE | cut -d ' ' -f 2-
+    grep $case "$LOG_FILE" | cut -d ' ' -f 2-
     # there is a thread panic, which should not happen.
     status=1
     echo
 done
 
-rm $LOG_FILE || true
+test -f  "$LOG_FILE" && rm "$LOG_FILE"
 # don't remove the tests.out, coverage counts on it.
 if [[ "$TRAVIS" != "true" ]]; then
-    rm tests.out || true
+    test -f tests.out && rm tests.out
 fi
 
 exit $status
