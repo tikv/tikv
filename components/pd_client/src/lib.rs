@@ -1,5 +1,4 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
 
 mod client;
 mod feature_gate;

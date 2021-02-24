@@ -266,7 +266,7 @@ impl BackupRange {
                         files.append(&mut split_files);
                     }
                     Err(e) => {
-                        error!(?e; "backup save file failed");
+                        error_unknown!(?e; "backup save file failed");
                         return Err(e);
                     }
                 }
@@ -275,7 +275,7 @@ impl BackupRange {
                         writer = w;
                     }
                     Err(e) => {
-                        error!(?e; "backup writer failed");
+                        error_unknown!(?e; "backup writer failed");
                         return Err(e);
                     }
                 }
@@ -283,7 +283,7 @@ impl BackupRange {
 
             // Build sst files.
             if let Err(e) = writer.write(entries, true) {
-                error!(?e; "backup build sst failed");
+                error_unknown!(?e; "backup build sst failed");
                 return Err(e);
             }
         }
@@ -305,7 +305,7 @@ impl BackupRange {
                     files.append(&mut split_files);
                 }
                 Err(e) => {
-                    error!(?e; "backup save file failed");
+                    error_unknown!(?e; "backup save file failed");
                     return Err(e);
                 }
             }
@@ -367,7 +367,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!(?e; "backup raw kv build sst failed");
+                error_unknown!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -397,7 +397,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error!(?e; "backup writer failed");
+                error_unknown!(?e; "backup writer failed");
                 return Err(e);
             }
         };
@@ -409,7 +409,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!(?e; "backup save file failed");
+                error_unknown!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -673,11 +673,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let backend = match create_storage(&request.backend) {
                 Ok(backend) => backend,
                 Err(err) => {
-                    error!(?err; "backup create storage failed");
+                    error_unknown!(?err; "backup create storage failed");
                     let mut response = BackupResponse::default();
                     response.set_error(crate::Error::Io(err).into());
                     if let Err(err) = tx.unbounded_send(response) {
-                        error!(?err; "backup failed to send response");
+                        error_unknown!(?err; "backup failed to send response");
                     }
                     return;
                 }
@@ -764,7 +764,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     let mut response = BackupResponse::default();
                     match res {
                         Err(e) => {
-                            error!(?e; "backup region failed";
+                            error_unknown!(?e; "backup region failed";
                                 "region" => ?brange.region,
                                 "start_key" => &log_wrappers::Value::key(&start_key),
                                 "end_key" => &log_wrappers::Value::key(&end_key),
@@ -793,7 +793,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     response.set_end_key(end_key);
 
                     if let Err(e) = tx.unbounded_send(response) {
-                        error!(?e; "backup failed to send response");
+                        error_unknown!(?e; "backup failed to send response");
                         return;
                     }
                 }

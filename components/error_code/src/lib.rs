@@ -57,12 +57,6 @@ pub trait ErrorCodeExt {
     fn error_code(&self) -> ErrorCode;
 }
 
-impl<T> ErrorCodeExt for T {
-    default fn error_code(&self) -> ErrorCode {
-        UNKNOWN
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

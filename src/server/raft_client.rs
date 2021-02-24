@@ -653,7 +653,7 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
-        error!(?e; "failed to backoff");
+        error_unknown!(?e; "failed to backoff");
     }
     *last_wake_time = Instant::now();
 }
@@ -691,7 +691,7 @@ async fn start<S, R>(
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message();
-                error!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
+                error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();

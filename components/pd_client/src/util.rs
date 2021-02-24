@@ -281,7 +281,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?err; "request failed, retry");
+                error!(?*err; "request failed, retry");
                 false
             }
         }
