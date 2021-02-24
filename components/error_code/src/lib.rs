@@ -28,6 +28,7 @@ pub const UNKNOWN: ErrorCode = ErrorCode {
     workaround: "",
 };
 
+pub mod cloud;
 pub mod codec;
 pub mod coprocessor;
 pub mod encryption;

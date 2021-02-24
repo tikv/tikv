@@ -13,6 +13,7 @@ use configuration::Configuration;
 use engine_rocks::raw::DB;
 use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
 use external_storage::*;
+use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -27,6 +28,7 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
@@ -64,11 +66,7 @@ pub struct Task {
     pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Task);
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -663,6 +661,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
+            let _with_io_type = WithIOType::new(IOType::Export);
             defer!({
                 tikv_alloc::remove_thread_memory_accessor();
             });
@@ -943,7 +942,9 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::{fs, thread};
 
+    use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
+    use file_system::{IOOp, WithIORateLimit};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -955,11 +956,11 @@ pub mod tests {
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
+    use tikv_util::config::ReadableSize;
     use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
-    use tikv_util::config::ReadableSize;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -1230,6 +1231,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
+        let (_guard, stats) = WithIORateLimit::new(0);
         let (tmp, endpoint) = new_endpoint();
         let engine = endpoint.engine.clone();
 
@@ -1257,10 +1259,20 @@ pub mod tests {
                 backup_tss.push((alloc_ts(), len));
             }
         }
+        // flush to disk so that read requests can be traced by TiKV limiter.
+        engine
+            .get_rocksdb()
+            .flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+            .unwrap();
+        engine
+            .get_rocksdb()
+            .flush_cf(engine_traits::CF_WRITE, true /*sync*/)
+            .unwrap();
 
         // TODO: check key number for each snapshot.
         let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
         for (ts, len) in backup_tss {
+            stats.reset();
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
@@ -1295,6 +1307,8 @@ pub mod tests {
             );
             let (none, _rx) = block_on(rx.into_future());
             assert!(none.is_none(), "{:?}", none);
+            assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
+            assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
         }
     }
 

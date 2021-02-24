@@ -3062,9 +3062,6 @@ where
         self.delegate
             .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
-        if self.delegate.yield_state.is_some() {
-            return;
-        }
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -3220,6 +3217,7 @@ where
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != applied_index;
+        #[cfg(feature = "failpoint")]
         (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
         if need_sync {
             if apply_ctx.timer.is_none() {
@@ -3925,10 +3923,10 @@ mod tests {
         E: KvEngine,
     {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(res) => res,
-                e => panic!("unexpected res {:?}", e),
-            },
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(res),
+                ..
+            }) => res,
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -3984,12 +3982,14 @@ mod tests {
         };
         system.spawn("test-basic".to_owned(), builder);
 
-        let mut reg = Registration::default();
-        reg.id = 1;
+        let mut reg = Registration {
+            id: 1,
+            term: 4,
+            applied_index_term: 5,
+            ..Default::default()
+        };
         reg.region.set_id(2);
         reg.apply_state.set_applied_index(3);
-        reg.term = 4;
-        reg.applied_index_term = 5;
         router.schedule_task(2, Msg::Registration(reg.clone()));
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
@@ -4054,10 +4054,10 @@ mod tests {
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Apply(res) => res,
-                e => panic!("unexpected apply result: {:?}", e),
-            },
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(res),
+                ..
+            }) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
         let apply_state_key = keys::apply_state_key(2);
@@ -4087,12 +4087,12 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes { res, .. }) => match res {
-                TaskRes::Destroy {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Destroy {
                     region_id, peer_id, ..
-                } => (region_id, peer_id),
-                e => panic!("expected destroy result, but got {:?}", e),
-            },
+                },
+                ..
+            }) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(peer_id, 1);
@@ -4326,8 +4326,10 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -4645,8 +4647,10 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.mut_peers().push(new_peer(2, 3));
         reg.region.set_end_key(b"k5".to_vec());
@@ -4892,9 +4896,11 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let peer_id = 3;
-        let mut reg = Registration::default();
-        reg.id = peer_id;
-        reg.term = 1;
+        let mut reg = Registration {
+            id: peer_id,
+            term: 1,
+            ..Default::default()
+        };
         reg.region.set_id(1);
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);

@@ -891,6 +891,92 @@ fn test_old_value_basic() {
 }
 
 #[test]
+fn test_old_value_multi_changefeeds() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx_1 = block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    req.set_extra_op(ExtraOp::Noop);
+    let (mut req_tx_2, event_feed_wrap_2, receive_event_2) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx_2 = block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
+
+    sleep_ms(1000);
+    // Insert value
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    let ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), ts1);
+    let ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts1, ts2);
+    // Update value
+    let mut m2 = Mutation::default();
+    m2.set_op(Op::Put);
+    m2.key = k1.clone();
+    m2.value = vec![b'3'; 5120];
+    let ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m2], k1.clone(), ts3);
+    let ts4 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1], ts3, ts4);
+    let mut event_count = 0;
+    loop {
+        let events = receive_event_1(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Prewrite {
+                            if row.get_start_ts() == ts3.into_inner() {
+                                assert_eq!(row.get_old_value(), b"v1");
+                                event_count += 1;
+                            } else {
+                                assert_eq!(row.get_old_value(), b"");
+                                event_count += 1;
+                            }
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        if event_count >= 2 {
+            break;
+        }
+    }
+
+    event_count = 0;
+    loop {
+        let events = receive_event_2(false).events.to_vec();
+        for event in events.into_iter() {
+            match event.event.unwrap() {
+                Event_oneof_event::Entries(mut es) => {
+                    for row in es.take_entries().to_vec() {
+                        if row.get_type() == EventLogType::Prewrite {
+                            assert_eq!(row.get_old_value(), b"");
+                            event_count += 1;
+                        }
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+        if event_count >= 2 {
+            break;
+        }
+    }
+
+    event_feed_wrap_1.replace(None);
+    event_feed_wrap_2.replace(None);
+    suite.stop();
+}
+
+#[test]
 fn test_cdc_resolve_ts_checking_concurrency_manager() {
     let mut suite: crate::TestSuite = TestSuite::new(1);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
@@ -939,7 +1025,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             check_fn(resolved_ts.ts)
         }
-    };
+    }
 
     check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
     assert!(cm.max_ts() >= 100.into());
@@ -1200,9 +1286,11 @@ fn test_cdc_scan_ignore_gc_fence() {
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts1, commit_ts1);
 
     let start_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let mut mutation = Mutation::default();
-    mutation.key = key.to_vec();
-    mutation.value = v2.to_vec();
+    let mutation = Mutation {
+        key: key.to_vec(),
+        value: v2.to_vec(),
+        ..Default::default()
+    };
     suite.must_kv_prewrite(1, vec![mutation], key.to_vec(), start_ts2);
 
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -1497,5 +1585,108 @@ fn test_term_change() {
         }
     }
     event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_no_write_corresponding_to_lock() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Txn1 commit_ts = 15
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1.clone()], k1.clone(), 10.into());
+    suite.must_kv_commit(1, vec![k1.clone()], 10.into(), 15.into());
+
+    // Txn2 start_ts = 15
+    m1.value = b"v2".to_vec();
+    suite.must_kv_prewrite(1, vec![m1.clone()], k1.clone(), 15.into());
+    // unprotected rollback, no write is written
+    suite.must_kv_rollback(1, vec![k1.clone()], 15.into());
+
+    // Write a new txn
+    m1.value = b"v3".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 20.into());
+    suite.must_kv_commit(1, vec![k1], 20.into(), 25.into());
+
+    let mut advance_cnt = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            advance_cnt += 1;
+            if resolved_ts.ts >= 25 {
+                break;
+            }
+            if advance_cnt > 50 {
+                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+            }
+        }
+    }
+
+    suite.stop();
+}
+
+#[test]
+fn test_cdc_write_rollback_when_no_lock() {
+    let mut suite = TestSuite::new(1);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let _req_tx = block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Txn1 commit_ts = 15
+    let mut m1 = Mutation::default();
+    let k1 = b"k1".to_vec();
+    m1.set_op(Op::Put);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
+
+    // Wait until resolved_ts advanced to 10
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts == 10 {
+                break;
+            }
+        }
+    }
+
+    // Do a rollback on the same key, but the start_ts is different.
+    suite.must_kv_rollback(1, vec![k1.clone()], 5.into());
+
+    // resolved_ts shouldn't be advanced beyond 10
+    for _ in 0..10 {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts > 10 {
+                panic!("resolved_ts shouldn't be advanced beyond 10");
+            }
+        }
+    }
+
+    suite.must_kv_commit(1, vec![k1], 10.into(), 15.into());
+
+    let mut advance_cnt = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            advance_cnt += 1;
+            if resolved_ts.ts > 15 {
+                break;
+            }
+            if advance_cnt > 10 {
+                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+            }
+        }
+    }
+
     suite.stop();
 }

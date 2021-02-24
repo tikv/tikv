@@ -446,8 +446,10 @@ mod tests {
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
-        queue.handled_cnt = 125;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 125,
+            ..Default::default()
+        };
         for _ in 0..100 {
             let id = Uuid::new_v4();
             queue.reads.push_back(ReadIndexRequest::with_command(
@@ -503,8 +505,10 @@ mod tests {
 
     #[test]
     fn test_become_leader_then_become_follower() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         // Push a pending comand when the peer is follower.
         let id = Uuid::new_v4();
@@ -545,8 +549,10 @@ mod tests {
 
     #[test]
     fn test_retake_leadership() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         // Push a pending read comand when the peer is leader.
         let id = Uuid::new_v4();
@@ -584,8 +590,10 @@ mod tests {
 
     #[test]
     fn test_advance_replica_reads_out_of_order() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
-        queue.handled_cnt = 100;
+        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+            handled_cnt: 100,
+            ..Default::default()
+        };
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
         for id in &ids {

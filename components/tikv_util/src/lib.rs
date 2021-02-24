@@ -46,6 +46,7 @@ pub mod logger;
 pub mod lru;
 pub mod metrics;
 pub mod mpsc;
+pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;
@@ -195,7 +196,7 @@ pub fn escape(data: &[u8]) -> String {
             b'"' => escaped.extend_from_slice(b"\\\""),
             b'\\' => escaped.extend_from_slice(br"\\"),
             _ => {
-                if c >= 0x20 && c < 0x7f {
+                if (0x20..0x7f).contains(&c) {
                     // c is printable
                     escaped.push(c);
                 } else {

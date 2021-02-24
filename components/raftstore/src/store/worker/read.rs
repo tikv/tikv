@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,8 +24,8 @@ use crate::store::{
 };
 use crate::Result;
 
-use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
 
@@ -143,7 +143,6 @@ pub struct ReadDelegate {
     last_valid_ts: Timespec,
 
     tag: String,
-    invalid: Arc<AtomicBool>,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
 
@@ -154,11 +153,8 @@ pub struct ReadDelegate {
 
 impl Drop for ReadDelegate {
     fn drop(&mut self) {
-        // `mark_invalid` if the source `ReadDelegate` is dropped
-        if self.track_ver.source {
-            self.mark_invalid();
-            self.track_ver.inc();
-        }
+        // call `inc` to notify the source `ReadDelegate` is dropped
+        self.track_ver.inc();
     }
 }
 
@@ -218,15 +214,10 @@ impl ReadDelegate {
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
-            invalid: Arc::new(AtomicBool::new(false)),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
             track_ver: TrackVer::new(),
         }
-    }
-
-    fn mark_invalid(&self) {
-        self.invalid.store(true, Ordering::Release);
     }
 
     fn fresh_valid_ts(&mut self) {
@@ -351,7 +342,7 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
-    delegates: HashMap<u64, Arc<ReadDelegate>>,
+    delegates: LruCache<u64, Arc<ReadDelegate>>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
@@ -400,7 +391,7 @@ where
             cache_read_id,
             store_id: Cell::new(None),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
         }
     }
 
@@ -449,11 +440,18 @@ where
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
+                let (meta_len, meta_reader) = {
+                    let meta = self.store_meta.lock().unwrap();
+                    (
+                        meta.readers.len(),
+                        meta.readers.get(&region_id).cloned().map(Arc::new),
+                    )
+                };
+
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
-
-                let meta = self.store_meta.lock().unwrap();
-                match meta.readers.get(&region_id).cloned().map(Arc::new) {
+                self.delegates.resize(meta_len);
+                match meta_reader {
                     Some(reader) => {
                         self.delegates.insert(region_id, Arc::clone(&reader));
                         Some(reader)
@@ -491,13 +489,6 @@ where
                 return Ok(None);
             }
         };
-
-        // FIXME: if the `ReadDelegate` is marked invalid but no incoming request
-        // to it, it will not be removed and consuming memory
-        if delegate.invalid.load(Ordering::Acquire) {
-            self.delegates.remove(&region_id);
-            return Ok(None);
-        }
 
         fail_point!("localreader_on_find_delegate");
 
@@ -627,7 +618,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id.clone(),
             metrics: Default::default(),
-            delegates: HashMap::default(),
+            delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
         }
@@ -956,7 +947,6 @@ mod tests {
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
-                invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),
@@ -1135,20 +1125,17 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
 
-        let (reader_clone1, reader_clone2) = {
-            let reader = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
-            (reader.clone(), reader)
-        };
-        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
+        let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
+        assert!(reader.get_delegate(1).is_some());
 
         // dropping the non-source `reader` will not make other readers invalid
-        drop(reader_clone2);
-        assert!(!reader_clone1.invalid.load(Ordering::Relaxed));
+        drop(reader_clone);
+        assert!(reader.get_delegate(1).is_some());
 
         // drop the source `reader`
         store_meta.lock().unwrap().readers.remove(&1).unwrap();
-        // `reader_clone` shoulde be marked as invalid
-        assert!(reader_clone1.invalid.load(Ordering::Relaxed));
+        // the invalid delegate should be removed
+        assert!(reader.get_delegate(1).is_none());
     }
 
     #[test]
@@ -1168,7 +1155,6 @@ mod tests {
                 applied_index_term: 1,
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
-                invalid: Arc::new(AtomicBool::new(false)),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 max_ts_sync_status: Arc::new(AtomicU64::new(0)),
                 track_ver: TrackVer::new(),

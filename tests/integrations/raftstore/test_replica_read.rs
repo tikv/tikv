@@ -337,16 +337,7 @@ fn test_split_isolation() {
     for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
-    let timer = Instant::now();
-    loop {
-        if cluster.truncated_state(1, 1).get_index() > idx {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-        if timer.elapsed() > Duration::from_secs(3) {
-            panic!("log is not compact after 3 seconds");
-        }
-    }
+    cluster.wait_log_truncated(1, 1, idx + 1);
     // Wait till leader peer goes to sleep again.
     thread::sleep(
         cluster.cfg.raft_store.raft_base_tick_interval.0

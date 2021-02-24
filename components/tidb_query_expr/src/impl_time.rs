@@ -44,6 +44,20 @@ pub fn date_format(
     Ok(Some(t.unwrap().into_bytes()))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn date(ctx: &mut EvalContext, t: &DateTime) -> Result<Option<DateTime>> {
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+
+    let mut res = *t;
+    res.set_time_type(TimeType::Date)?;
+    Ok(Some(res))
+}
+
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 pub fn week_with_mode(
@@ -298,6 +312,33 @@ pub fn add_datetime_and_duration(
 
 #[rpn_fn(capture=[ctx])]
 #[inline]
+pub fn add_datetime_and_string(
+    ctx: &mut EvalContext,
+    arg0: &DateTime,
+    arg1: BytesRef,
+) -> Result<Option<DateTime>> {
+    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
+    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
+        Ok(arg) => arg,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match arg0.checked_add(ctx, arg1) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} + {})", arg0, arg1),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture=[ctx])]
+#[inline]
 pub fn sub_duration_and_duration(
     ctx: &mut EvalContext,
     duration1: &Duration,
@@ -338,6 +379,33 @@ pub fn sub_datetime_and_duration(
     if res.set_time_type(TimeType::DateTime).is_err() {
         return Ok(None);
     }
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn sub_datetime_and_string(
+    ctx: &mut EvalContext,
+    datetime: &DateTime,
+    duration_str: BytesRef,
+) -> Result<Option<DateTime>> {
+    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
+    let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
+        Ok(duration) => duration,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match datetime.checked_sub(ctx, duration) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} - {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
     Ok(Some(res))
 }
 
@@ -851,6 +919,27 @@ mod tests {
     }
 
     #[test]
+    fn test_date() {
+        let cases = vec![
+            ("2011-11-11", Some("2011-11-11")),
+            ("2011-11-11 10:10:10", Some("2011-11-11")),
+            ("0000-00-00 00:00:00", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (date, expect) in cases {
+            let date = Some(DateTime::parse_datetime(&mut ctx, date, MAX_FSP, true).unwrap());
+            let expect =
+                expect.map(|expect| Time::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(date)
+                .evaluate(ScalarFuncSig::Date)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", date);
+        }
+    }
+
+    #[test]
     fn test_week_with_mode() {
         let cases = vec![
             ("2008-02-20 00:00:00", Some(1), Some(8i64)),
@@ -1313,6 +1402,51 @@ mod tests {
     }
 
     #[test]
+    fn test_add_datetime_and_string() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+            // normal cases
+            (
+                Some("2018-01-01"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01 11:30:45.123456"),
+            ),
+            (
+                Some("2018-02-28 23:00:00"),
+                Some("01:30:30.123456"),
+                Some("2018-03-01 00:30:30.123456"),
+            ),
+            (
+                Some("2016-02-28 23:00:00"),
+                Some("01:30:30"),
+                Some("2016-02-29 00:30:30"),
+            ),
+            (
+                Some("2018-12-31 23:00:00"),
+                Some("01:30:30"),
+                Some("2019-01-01 00:30:30"),
+            ),
+        ];
+        for (arg0, arg1, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 = arg1.map(|str| str.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::AddDatetimeAndString)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
     fn test_sub_datetime_and_duration() {
         let mut ctx = EvalContext::default();
         let cases = vec![
@@ -1378,6 +1512,51 @@ mod tests {
                     .unwrap();
                 assert_eq!(output, arg1);
             }
+        }
+    }
+
+    #[test]
+    fn test_sub_datetime_and_string() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+            // normal cases
+            (
+                Some("2018-01-01 11:30:45.123456"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01"),
+            ),
+            (
+                Some("2018-03-01 00:30:30.123456"),
+                Some("01:30:30.123456"),
+                Some("2018-02-28 23:00:00"),
+            ),
+            (
+                Some("2016-02-29 00:30:30"),
+                Some("01:30:30"),
+                Some("2016-02-28 23:00:00"),
+            ),
+            (
+                Some("2019-01-01 00:30:30"),
+                Some("01:30:30"),
+                Some("2018-12-31 23:00:00"),
+            ),
+        ];
+        for (arg0, arg1, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 = arg1.map(|str| str.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::SubDatetimeAndString)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 
@@ -1811,7 +1990,7 @@ mod tests {
     #[test]
     fn test_make_time() {
         let cases = vec![
-            (12 as i64, 15 as i64, 30_f64, "12:15:30"),
+            (12_i64, 15_i64, 30_f64, "12:15:30"),
             (25, 15, 30.0, "25:15:30"),
             (-25, 15, 30_f64, "-25:15:30"),
             (12, 15, 30.1, "12:15:30.1"),
@@ -1852,7 +2031,7 @@ mod tests {
             }
         }
         let none_case = vec![
-            (12 as i64, -15 as i64, 30_f64),
+            (12_i64, -15_i64, 30_f64),
             (12, 15, -30.0),
             (12, 15, 60.0),
             (12, 60, 0.0),
