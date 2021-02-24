@@ -4,7 +4,7 @@ use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
@@ -44,6 +44,35 @@ const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
+
+#[derive(Clone)]
+struct DistGcComponents {
+    scheduler: FutureScheduler<GcTask>,
+    safe_point: Arc<AtomicU64>,
+}
+
+lazy_static! {
+    static ref DIST_GC_COMPONENTS: RwLock<Option<DistGcComponents>> = RwLock::new(None);
+}
+
+pub fn gc_a_key(user_key: Vec<u8>) -> bool {
+    if let Some(components) = DIST_GC_COMPONENTS.read().unwrap().clone() {
+        let start_key = user_key;
+        let end_key = Key::from_encoded_slice(&start_key)
+            .append_ts(0.into())
+            .into_encoded();
+        let safe_point = components.safe_point.load(Ordering::Relaxed);
+        let task = GcTask::Gc {
+            region_id: 0,
+            start_key,
+            end_key,
+            safe_point: safe_point.into(),
+            callback: Box::new(|_| ()),
+        };
+        return components.scheduler.schedule(task).is_ok();
+    }
+    false
+}
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
@@ -667,13 +696,19 @@ where
         assert!(handle.is_none());
         let new_handle = GcManager::new(
             cfg,
-            safe_point,
+            safe_point.clone(),
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
+
+        let mut components = DIST_GC_COMPONENTS.write().unwrap();
+        *components = Some(DistGcComponents {
+            scheduler: self.scheduler(),
+            safe_point,
+        });
         Ok(())
     }
 

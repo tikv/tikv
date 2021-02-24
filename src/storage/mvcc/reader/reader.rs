@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::server::gc_worker::gc_a_key;
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use engine_traits::{IterOptions, MvccProperties};
@@ -310,6 +311,7 @@ impl<S: Snapshot> MvccReader<S> {
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
         let mut seek_ts = TimeStamp::max();
         let mut gc_fence = TimeStamp::from(0);
+        let mut versions = 0;
         while let Some((commit_ts, write)) = self.seek_write(key, seek_ts)? {
             if write.start_ts == start_ts {
                 return Ok(TxnCommitRecord::SingleRecord { commit_ts, write });
@@ -329,6 +331,10 @@ impl<S: Snapshot> MvccReader<S> {
                 break;
             }
             seek_ts = commit_ts.prev();
+            versions += 1;
+        }
+        if versions > GC_MAX_ROW_VERSIONS_THRESHOLD {
+            gc_a_key(key.as_encoded().to_vec());
         }
         Ok(TxnCommitRecord::None {
             overlapped_write: None,
@@ -513,8 +519,10 @@ pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccPr
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    // It's unnecessary to consider `max_row_versions` because it's already handled in
+    // `MvccReader::get_txn_commit_record`, which is the only place that too many versions
+    // for one key can hurt performance.
+    false
 }
 
 #[cfg(test)]
