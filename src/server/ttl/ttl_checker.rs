@@ -46,7 +46,7 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                         interval.as_secs()
                     );
                     // make sure the data point of metrics is pulled
-                    thread::sleep(Duration::from_secs(40)); 
+                    thread::sleep(Duration::from_secs(40));
                     TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
