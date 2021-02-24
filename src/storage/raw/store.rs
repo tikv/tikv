@@ -9,7 +9,6 @@ use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, KvPair};
 
 use std::time::Duration;
-use std::sync::Arc;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
@@ -17,16 +16,16 @@ const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
 pub enum RawStore<S: Snapshot> {
-    Vanilla(Arc<RawStoreInner<S>>),
-    TTL(Arc<RawStoreInner<TTLSnapshot<S>>>),
+    Vanilla(RawStoreInner<S>),
+    TTL(RawStoreInner<TTLSnapshot<S>>),
 }
 
-impl<S: Snapshot> RawStore<S> {
+impl<'a, S: Snapshot> RawStore<S> {
     pub fn new(snapshot: S, enable_ttl: bool) -> Self {
         if enable_ttl {
-            RawStore::TTL(Arc::new(RawStoreInner::new(TTLSnapshot::from(snapshot))))
+            RawStore::TTL(RawStoreInner::new(TTLSnapshot::from(snapshot)))
         } else {
-            RawStore::Vanilla(Arc::new(RawStoreInner::new(snapshot)))
+            RawStore::Vanilla(RawStoreInner::new(snapshot))
         }
     }
 
@@ -45,8 +44,8 @@ impl<S: Snapshot> RawStore<S> {
     pub fn raw_get_key_ttl(
         &self,
         cf: CfName,
-        key: &Key,
-        stats: &mut Statistics,
+        key: &'a Key,
+        stats: &'a mut Statistics,
     ) -> Result<Option<u64>> {
         match self {
             RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
@@ -55,12 +54,12 @@ impl<S: Snapshot> RawStore<S> {
     }
 
     pub async fn forward_raw_scan(
-        &self,
+        &'a self,
         cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
+        start_key: &'a Key,
+        end_key: Option<&'a Key>,
         limit: usize,
-        statistics: &mut Statistics,
+        statistics: &'a mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOptions::default();
@@ -72,21 +71,25 @@ impl<S: Snapshot> RawStore<S> {
                 if key_only {
                     option.set_key_only(key_only);
                 }
-                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only).await
+                inner
+                    .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                    .await
             }
             RawStore::TTL(inner) => {
-                inner.forward_raw_scan(cf, start_key, limit, statistics, option, key_only).await
+                inner
+                    .forward_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                    .await
             }
         }
     }
 
     pub async fn reverse_raw_scan(
-        &self,
+        &'a self,
         cf: CfName,
-        start_key: &Key,
-        end_key: Option<&Key>,
+        start_key: &'a Key,
+        end_key: Option<&'a Key>,
         limit: usize,
-        statistics: &mut Statistics,
+        statistics: &'a mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOptions::default();
@@ -98,10 +101,14 @@ impl<S: Snapshot> RawStore<S> {
                 if key_only {
                     option.set_key_only(key_only);
                 }
-                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only).await
+                inner
+                    .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                    .await
             }
             RawStore::TTL(inner) => {
-                inner.reverse_raw_scan(cf, start_key, limit, statistics, option, key_only).await
+                inner
+                    .reverse_raw_scan(cf, start_key, limit, statistics, option, key_only)
+                    .await
             }
         }
     }
@@ -111,7 +118,7 @@ pub struct RawStoreInner<S: Snapshot> {
     snapshot: S,
 }
 
-impl<S: Snapshot> RawStoreInner<S> {
+impl<'a, S: Snapshot> RawStoreInner<S> {
     pub fn new(snapshot: S) -> Self {
         RawStoreInner { snapshot }
     }
@@ -138,11 +145,11 @@ impl<S: Snapshot> RawStoreInner<S> {
     /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
     pub async fn forward_raw_scan(
-        &self,
+        &'a self,
         cf: CfName,
-        start_key: &Key,
+        start_key: &'a Key,
         limit: usize,
-        statistics: &mut Statistics,
+        statistics: &'a mut Statistics,
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
@@ -182,11 +189,11 @@ impl<S: Snapshot> RawStoreInner<S> {
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
     pub async fn reverse_raw_scan(
-        &self,
+        &'a self,
         cf: CfName,
-        start_key: &Key,
+        start_key: &'a Key,
         limit: usize,
-        statistics: &mut Statistics,
+        statistics: &'a mut Statistics,
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
