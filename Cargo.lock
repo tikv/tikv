@@ -225,7 +225,8 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
+ "failure",
  "file_system",
  "futures 0.3.7",
  "futures-util",
@@ -606,8 +607,6 @@ dependencies = [
  "openssl",
  "protobuf",
  "rusoto_core",
- "slog",
- "slog-global",
  "thiserror",
  "tikv_util",
  "url",
@@ -1363,35 +1362,71 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "bytes 0.5.3",
+ "ffi-support",
+ "file_system",
  "futures 0.3.7",
  "futures-executor",
  "futures-io",
  "futures-util",
  "grpcio",
- "http",
- "hyper",
- "hyper-tls",
  "kvproto",
  "lazy_static",
+ "libloading",
  "matches",
  "prometheus",
+ "protobuf",
  "rand 0.7.3",
  "rusoto_core",
- "rusoto_credential",
- "rusoto_mock",
- "rusoto_s3",
- "rusoto_util",
  "rust-ini",
  "slog",
  "slog-global",
  "structopt",
- "tame-gcs",
  "tame-oauth",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-util 0.3.1",
+ "url",
+]
+
+[[package]]
+name = "external_storage_export"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "aws",
+ "cloud",
+ "encryption",
+ "external_storage",
+ "ffi-support",
+ "file_system",
+ "futures 0.3.7",
+ "futures-executor",
+ "futures-io",
+ "futures-util",
+ "gcp",
+ "grpcio",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.86",
+ "libloading",
+ "matches",
+ "nix 0.11.1",
+ "once_cell",
+ "protobuf",
+ "rust-ini",
+ "signal",
+ "slog",
+ "slog-global",
+ "slog-term",
+ "structopt",
+ "tempfile",
+ "tikv_util",
+ "tokio",
+ "tokio-util 0.3.1",
  "url",
 ]
 
@@ -1407,10 +1442,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "failure"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d32e9bd16cc02eae7db7ef620b392808b89f6a5e16bb3497d159c6b92a0f4f86"
+dependencies = [
+ "backtrace",
+ "failure_derive",
+]
+
+[[package]]
+name = "failure_derive"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4da3c766cd7a0db8242e326e9e4e081edd567072893ed320008189715366a4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+]
+
+[[package]]
 name = "farmhash"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
+
+[[package]]
+name = "ffi-support"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
+dependencies = [
+ "lazy_static",
+ "log",
+]
 
 [[package]]
 name = "file_system"
@@ -1433,18 +1500,6 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
-]
-
-[[package]]
-name = "filetime"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d34cfa13a63ae058bfa601fe9e313bbdb3746427c1459185464ce0fcf62e1e8"
-dependencies = [
- "cfg-if 1.0.0",
- "libc 0.2.86",
- "redox_syscall 0.2.5",
- "winapi 0.3.8",
 ]
 
 [[package]]
@@ -1501,25 +1556,6 @@ name = "fs_extra"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f2a4a2034423744d2cc7ca2068453168dcdb82c438419e639a26bd87839c674"
-
-[[package]]
-name = "fsevent"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ab7d1bd1bd33cc98b0889831b72da23c0aa4df9cec7e0702f46ecea04b35db6"
-dependencies = [
- "bitflags",
- "fsevent-sys",
-]
-
-[[package]]
-name = "fsevent-sys"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f41b048a94555da0f42f1d632e2e19510084fb8e303b0daa2816e733fb3644a0"
-dependencies = [
- "libc 0.2.86",
-]
 
 [[package]]
 name = "fuchsia-cprng"
@@ -1707,6 +1743,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcp"
+version = "0.0.1"
+dependencies = [
+ "cloud",
+ "futures-util",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "kvproto",
+ "matches",
+ "slog",
+ "slog-global",
+ "tame-gcs",
+ "tame-oauth",
+ "tikv_util",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1831,7 +1887,7 @@ dependencies = [
  "log",
  "slab",
  "tokio",
- "tokio-util",
+ "tokio-util 0.2.0",
 ]
 
 [[package]]
@@ -2020,26 +2076,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inotify"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4816c66d2c8ae673df83366c18341538f234a26d65a9ecea5c348b453ac1d02f"
-dependencies = [
- "bitflags",
- "inotify-sys",
- "libc 0.2.86",
-]
-
-[[package]]
-name = "inotify-sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
-dependencies = [
- "libc 0.2.86",
-]
-
-[[package]]
 name = "instant"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2160,7 +2196,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#5a0d6e96603c0f9ee7fa09ae6a0750125ab757b5"
+source = "git+https://github.com/gregwebs/kvproto.git?rev=6212d77cfd9f1ea1ddc2139be0cda23895d84956#6212d77cfd9f1ea1ddc2139be0cda23895d84956"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2477,18 +2513,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mio-extras"
-version = "2.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52403fe290012ce777c4626790c8951324a2b9e3316b3143779c72b029742f19"
-dependencies = [
- "lazycell",
- "log",
- "mio",
- "slab",
-]
-
-[[package]]
 name = "mio-named-pipes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2676,24 +2700,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "notify"
-version = "4.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80ae4a7688d1fab81c5bf19c64fc8db920be8d519ce6336ed4e7efe024724dbd"
-dependencies = [
- "bitflags",
- "filetime",
- "fsevent",
- "fsevent-sys",
- "inotify",
- "libc 0.2.86",
- "mio",
- "mio-extras",
- "walkdir",
- "winapi 0.3.8",
-]
-
-[[package]]
 name = "ntapi"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2798,9 +2804,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.3.1"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
+checksum = "af8b08b04175473088b46763e51ee54da5f9a164bc162f615b91bc179dbf15a3"
 
 [[package]]
 name = "oorandom"
@@ -2899,7 +2905,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "cloudabi 0.0.3",
  "libc 0.2.86",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "smallvec",
  "winapi 0.3.8",
 ]
@@ -2914,7 +2920,7 @@ dependencies = [
  "cloudabi 0.1.0",
  "instant",
  "libc 0.2.86",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "smallvec",
  "winapi 0.3.8",
 ]
@@ -3711,22 +3717,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
-name = "redox_syscall"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94341e4e44e24f6b591b59e47a8a027df12e008d73fd5672dbea9cc22f4507d9"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
 name = "redox_users"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09b23093265f8d200fa7b4c2c76297f47e681c655f6f1285a8780d6a022f7431"
 dependencies = [
  "getrandom",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "rust-argon2",
 ]
 
@@ -4001,16 +3998,6 @@ dependencies = [
  "serde_urlencoded",
  "tempfile",
  "xml-rs",
-]
-
-[[package]]
-name = "rusoto_util"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_sts",
 ]
 
 [[package]]
@@ -4451,7 +4438,7 @@ checksum = "2c29947abdee2a218277abeca306f25789c938e500ea5a9d4b12a5a504466902"
 dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.86",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "winapi 0.3.8",
 ]
 
@@ -4470,7 +4457,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.7",
  "futures-util",
@@ -4676,6 +4663,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b834f2d66f734cb897113e34aaff2f1ab4719ca946f9a7358dba8f8064148701"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "unicode-xid",
+]
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4769,7 +4768,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc 0.2.86",
  "rand 0.7.3",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.8",
 ]
@@ -4793,7 +4792,7 @@ dependencies = [
  "concurrency_manager",
  "crc64fast",
  "engine_traits",
- "external_storage",
+ "external_storage_export",
  "file_system",
  "futures 0.3.7",
  "futures-executor",
@@ -4943,7 +4942,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "error_code",
- "external_storage",
+ "external_storage_export",
  "fail",
  "file_system",
  "futures 0.3.7",
@@ -5210,6 +5209,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
+ "example_plugin",
  "fail",
  "file_system",
  "fs2",
@@ -5237,7 +5237,6 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nom 5.1.0",
- "notify",
  "num_cpus",
  "openssl",
  "panic_hook",
@@ -5499,7 +5498,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db8dcfca086c1143c9270ac42a2bbd8a7ee477b78ac8e45b19abfb0cbede4b6f"
 dependencies = [
  "libc 0.2.86",
- "redox_syscall 0.1.56",
+ "redox_syscall",
  "winapi 0.3.8",
 ]
 
@@ -5656,6 +5655,21 @@ checksum = "571da51182ec208780505a32528fc5512a8fe1443ab960b3f2f3ef093cd16930"
 dependencies = [
  "bytes 0.5.3",
  "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite 0.1.4",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be8242891f2b6cbef26a2d7e8605133c2c554cd35b3e4948ea892d6d68436499"
+dependencies = [
+ "bytes 0.5.3",
+ "futures-core",
+ "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite 0.1.4",

@@ -24,8 +24,14 @@ failpoints = [
   "raftstore/failpoints",
   "engine_rocks/failpoints"
 ]
-cloud-aws = [ "encryption_export/cloud-aws" ]
-cloud-gcp = [ "encryption_export/cloud-gcp" ]
+cloud-aws = [
+  "encryption_export/cloud-aws",
+  "sst_importer/cloud-aws",
+]
+cloud-gcp = [
+  "encryption_export/cloud-gcp",
+  "sst_importer/cloud-gcp",
+]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
@@ -220,6 +226,9 @@ test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
 
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { rev = "d045aaf92f5caa90fdcc2745055869d0177f470c", git = "https://github.com/gregwebs/kvproto.git", default-features = false }
+
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
 raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
@@ -267,8 +276,10 @@ members = [
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
+  "components/external_storage/export",
   "components/cloud",
   "components/cloud/aws",
+  "components/cloud/gcp",
   "components/backup",
   "components/keys",
   "components/sst_importer",
@@ -279,6 +290,7 @@ members = [
   "components/raftstore",
   "components/into_other",
   "components/encryption",
+  "components/encryption/export",
   "components/error_code",
   "components/concurrency_manager",
   "components/server",
