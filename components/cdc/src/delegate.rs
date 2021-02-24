@@ -142,6 +142,7 @@ impl Downstream {
             return;
         }
 
+        let start = Instant::now_coarse();
         let backoff = Backoff::new();
         let sink = self.sink.as_ref().unwrap();
         while sink.get_pending_count() >= 1024 {
@@ -149,6 +150,9 @@ impl Downstream {
             backoff.snooze();
         }
         sink.send(CdcEvent::Event(event));
+
+        CDC_SCAN_BLOCK_DURATION_HISTOGRAM
+            .observe(start.elapsed().as_secs_f64());
     }
 
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {

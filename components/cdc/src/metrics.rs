@@ -61,4 +61,10 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_SCAN_BLOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_scan_block_duration",
+        "Bucketed histogram of cdc scan block duration",
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
