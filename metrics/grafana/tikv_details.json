@@ -5578,7 +5578,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TTL Check Progress",
+          "title": "TTL check progress",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5663,10 +5663,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_ttl_checker_actions{instance=~\"$instance\"}[1m])) by (instance, type)",
+              "expr": "sum(rate(tikv_ttl_checker_actions{instance=~\"$instance\"}[30s])) by (type)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-{{type}}",
+              "legendFormat": "{{type}}",
               "refId": "E"
             }
           ],
@@ -5674,7 +5674,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TTL Checker Actions",
+          "title": "TTL checker actions",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5792,7 +5792,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "GC tasks duration",
+          "title": "TTL checker compact duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
