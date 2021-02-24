@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use crossbeam::utils::Backoff;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{
@@ -131,6 +132,23 @@ impl Downstream {
                 }
             }
         }
+    }
+
+    pub fn sink_event_low_prio(&self, mut event: Event) {
+        event.set_request_id(self.req_id);
+        if self.sink.is_none() {
+            info!("drop event, no sink";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+            return;
+        }
+
+        let backoff = Backoff::new();
+        let sink = self.sink.as_ref().unwrap();
+        while sink.get_pending_count() >= 1024 {
+            info!("cdc incremental scan data blocked");
+            backoff.snooze();
+        }
+        sink.send(CdcEvent::Event(event));
     }
 
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
@@ -549,7 +567,7 @@ impl Delegate {
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 };
-                downstream.sink_event(event);
+                downstream.sink_event_low_prio(event);
             }
         }
     }

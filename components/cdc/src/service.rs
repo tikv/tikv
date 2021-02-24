@@ -31,6 +31,7 @@ const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
 // Assume the average size of event is 1KB.
 // 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / CDC_EVENT_MAX_BATCH_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
 const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
+const CDC_SINK_MAX_QUEUE_SIZE: usize = 1024;
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -279,7 +280,6 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        // TODO: make it a bounded channel.
         let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
         let peer = ctx.peer();
         let conn = Conn::new(tx, peer);

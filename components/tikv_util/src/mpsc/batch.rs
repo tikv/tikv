@@ -20,6 +20,8 @@ struct State {
     // How many messages are sent without notify.
     pending: AtomicUsize,
     notifier_registered: AtomicBool,
+    // How many messages are in the queue
+    pending_count: AtomicUsize,
 }
 
 impl State {
@@ -32,6 +34,7 @@ impl State {
             notify_size,
             pending: AtomicUsize::new(0),
             notifier_registered: AtomicBool::new(false),
+            pending_count: AtomicUsize::new(0),
         }
     }
 
@@ -143,6 +146,7 @@ impl<T> Sender<T> {
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.as_ref().unwrap().send(t)?;
         self.state.try_notify_post_send();
+        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -150,6 +154,7 @@ impl<T> Sender<T> {
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.as_ref().unwrap().send(t)?;
         self.state.notify();
+        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -157,6 +162,7 @@ impl<T> Sender<T> {
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.sender.as_ref().unwrap().try_send(t)?;
         self.state.try_notify_post_send();
+        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -171,17 +177,28 @@ impl<T> Sender<T> {
         }
         None
     }
+
+    /// returns a hint at the number of elements that have been sent but not yet received.
+    #[inline]
+    pub fn get_pending_count(&self) -> usize {
+        // TODO could Ordering::SeqCst impact performance?
+        self.state.pending_count.load(Ordering::SeqCst)
+    }
 }
 
 impl<T> Receiver<T> {
     #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
-        self.receiver.recv()
+        let ret = self.receiver.recv();
+        self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
+        ret
     }
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.receiver.try_recv()
+        let ret = self.receiver.try_recv()?;
+        self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
+        Ok(ret)
     }
 
     #[inline]
@@ -465,6 +482,24 @@ mod tests {
         // again to advance the progress.
         drop(tx);
         assert!(task.future.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_sender_pending_count() {
+        let (tx, mut rx) = unbounded::<i32>(10);
+        assert_eq!(tx.get_pending_count(), 0);
+        tx.send(1).unwrap();
+        assert_eq!(tx.get_pending_count(), 1);
+        tx.send(2).unwrap();
+        tx.send(3).unwrap();
+        assert_eq!(tx.get_pending_count(), 3);
+
+        assert_eq!(rx.recv().unwrap(), 1);
+        assert_eq!(tx.get_pending_count(), 2);
+        assert_eq!(rx.recv().unwrap(), 2);
+        assert_eq!(tx.get_pending_count(), 1);
+        assert_eq!(rx.recv().unwrap(), 3);
+        assert_eq!(tx.get_pending_count(), 0);
     }
 
     #[derive(Clone)]
