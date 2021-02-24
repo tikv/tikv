@@ -2831,7 +2831,7 @@ mod tests {
             (String::from("99999999"), 999999.99, 8, 2, false, true),
             (String::from("1234abc"), 0.9f64, 1, 1, true, true),
             (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
-            (String::from(""), 0, 1, 0, false, false),
+            (String::from(""), 0f64, 1, 0, false, false),
         ];
 
         for (input, expected, flen, decimal, truncated, overflow) in cs {
