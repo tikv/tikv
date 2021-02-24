@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -427,13 +427,8 @@ where
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
-            if observe_cmd.enabled.load(Ordering::Acquire) {
-                self.host.prepare_for_apply(observe_cmd.id, region_id);
-            } else {
-                info!("region is no longer observerd";
-                    "region_id" => region_id);
-                delegate.observe_cmd.take();
-            }
+            // TODO: skip this step when we do not need to observe cmds.
+            self.host.prepare_for_apply(observe_cmd.id, region_id);
         }
     }
 
@@ -2836,8 +2831,8 @@ impl ObserveID {
 }
 
 struct ObserveCmd {
+    // TODO: Add flags to disable observing.
     id: ObserveID,
-    enabled: Arc<AtomicBool>,
 }
 
 impl Debug for ObserveCmd {
@@ -2847,16 +2842,9 @@ impl Debug for ObserveCmd {
 }
 
 #[derive(Debug)]
-pub enum ChangeCmd {
-    RegisterObserver {
-        observe_id: ObserveID,
-        region_id: u64,
-        enabled: Arc<AtomicBool>,
-    },
-    Snapshot {
-        observe_id: ObserveID,
-        region_id: u64,
-    },
+pub struct ChangeCmd {
+    pub observe_id: ObserveID,
+    pub region_id: u64,
 }
 
 pub enum Msg<EK>
@@ -2922,13 +2910,9 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd::RegisterObserver { region_id, .. },
+                cmd: ChangeCmd { region_id, .. },
                 ..
-            } => write!(f, "[region {}] registers cmd observer", region_id),
-            Msg::Change {
-                cmd: ChangeCmd::Snapshot { region_id, .. },
-                ..
-            } => write!(f, "[region {}] cmd snapshot", region_id),
+            } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3266,17 +3250,10 @@ where
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let (observe_id, region_id, enabled) = match cmd {
-            ChangeCmd::RegisterObserver {
-                observe_id,
-                region_id,
-                enabled,
-            } => (observe_id, region_id, Some(enabled)),
-            ChangeCmd::Snapshot {
-                observe_id,
-                region_id,
-            } => (observe_id, region_id, None),
-        };
+        let ChangeCmd {
+            observe_id,
+            region_id,
+        } = cmd;
         if let Some(observe_cmd) = self.delegate.observe_cmd.as_mut() {
             if observe_cmd.id > observe_id {
                 notify_stale_req(self.delegate.term, cb);
@@ -3316,24 +3293,8 @@ where
                 return;
             }
         };
-        if let Some(enabled) = enabled {
-            assert!(
-                !self
-                    .delegate
-                    .observe_cmd
-                    .as_ref()
-                    .map_or(false, |o| o.enabled.load(Ordering::SeqCst)),
-                "{} observer already exists {:?} {:?}",
-                self.delegate.tag,
-                self.delegate.observe_cmd,
-                observe_id
-            );
-            // TODO(cdc): take observe_cmd when enabled is false.
-            self.delegate.observe_cmd = Some(ObserveCmd {
-                id: observe_id,
-                enabled,
-            });
-        }
+
+        self.delegate.observe_cmd = Some(ObserveCmd { id: observe_id });
 
         cb.invoke_read(resp);
     }
@@ -3676,12 +3637,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd::RegisterObserver { region_id, .. },
-                    cb,
-                    ..
-                }
-                | Msg::Change {
-                    cmd: ChangeCmd::Snapshot { region_id, .. },
+                    cmd: ChangeCmd { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -4694,10 +4650,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeCmd {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
@@ -4764,10 +4719,9 @@ mod tests {
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeCmd {
                     observe_id,
                     region_id: 2,
-                    enabled,
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(resp
@@ -4941,10 +4895,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeCmd {
                     observe_id,
                     region_id: 1,
-                    enabled: enabled.clone(),
                 },
                 cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
@@ -5100,10 +5053,9 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd::RegisterObserver {
+                cmd: ChangeCmd {
                     observe_id,
                     region_id: 1,
-                    enabled: Arc::new(AtomicBool::new(true)),
                 },
                 cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(

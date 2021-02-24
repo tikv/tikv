@@ -472,7 +472,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
             return;
         }
-        let change_cmd = if is_new_delegate {
+        if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
             let old_id = self.observer.subscribe_region(region_id, delegate.id);
@@ -483,17 +483,10 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 old_id,
                 delegate.id
             );
-
-            ChangeCmd::RegisterObserver {
-                observe_id: delegate.id,
-                region_id,
-                enabled: delegate.enabled(),
-            }
-        } else {
-            ChangeCmd::Snapshot {
-                observe_id: delegate.id,
-                region_id,
-            }
+        };
+        let change_cmd = ChangeCmd {
+            region_id,
+            observe_id: delegate.id,
         };
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
