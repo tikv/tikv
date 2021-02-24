@@ -28,6 +28,7 @@ use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
@@ -65,11 +66,7 @@ pub struct Task {
     pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Task);
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
