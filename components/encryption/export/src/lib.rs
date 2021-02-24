@@ -1,8 +1,10 @@
+#![feature(min_specialization)]
 #[macro_use]
 extern crate slog_global;
 
 use async_trait::async_trait;
 use derive_more::Deref;
+use error_code::{self, ErrorCode, ErrorCodeExt};
 use std::fmt::Debug;
 use std::path::Path;
 use tikv_util::impl_format_delegate_newtype;
@@ -120,5 +122,11 @@ impl std::convert::From<CloudConvertError> for Error {
 impl RetryError for CloudConvertError {
     fn is_retryable(&self) -> bool {
         self.0.is_retryable()
+    }
+}
+
+impl ErrorCodeExt for CloudConvertError {
+    fn error_code(&self) -> ErrorCode {
+        self.0.error_code()
     }
 }

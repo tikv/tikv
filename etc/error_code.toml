@@ -23,14 +23,24 @@ error = '''
 KV:Cloud:Timeout
 '''
 
-["KV:Cloud:Invalid input"]
+["KV:Cloud:InvalidInput"]
 error = '''
-KV:Cloud:Invalid input
+KV:Cloud:InvalidInput
 '''
 
-["KV:Cloud:API internal"]
+["KV:Cloud:ApiInternal"]
 error = '''
-KV:Cloud:API internal
+KV:Cloud:ApiInternal
+'''
+
+["KV:Cloud:ApiNotFound"]
+error = '''
+KV:Cloud:ApiNotFound
+'''
+
+["KV:Cloud:ApiAuthentication"]
+error = '''
+KV:Cloud:ApiAuthentication
 '''
 
 ["KV:Cloud:WrongMasterKey"]

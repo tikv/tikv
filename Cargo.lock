@@ -1207,6 +1207,7 @@ dependencies = [
  "cloud",
  "derive_more",
  "encryption",
+ "error_code",
  "file_system",
  "kvproto",
  "openssl",

@@ -24,6 +24,10 @@ pub enum Error {
     ApiTimeout(Box<dyn error::Error + Sync + Send>),
     #[fail(display = "API internal error: {}", _0)]
     ApiInternal(Box<dyn error::Error + Sync + Send>),
+    #[fail(display = "API not found: {}", _0)]
+    ApiNotFound(Box<dyn error::Error + Sync + Send>),
+    #[fail(display = "API auth: {}", _0)]
+    ApiAuthentication(Box<dyn error::Error + Sync + Send>),
     #[fail(display = "Key error: {}", _0)]
     KmsError(KmsError),
 }
@@ -85,6 +89,8 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => error_code::cloud::UNKNOWN,
             Error::ApiTimeout(_) => error_code::cloud::TIMEOUT,
             Error::ApiInternal(_) => error_code::cloud::API_INTERNAL,
+            Error::ApiNotFound(_) => error_code::cloud::API_NOT_FOUND,
+            Error::ApiAuthentication(_) => error_code::cloud::API_AUTHENTICATION,
             Error::KmsError(e) => e.error_code(),
         }
     }
@@ -100,6 +106,8 @@ impl RetryError for Error {
             Error::Other(_) => true,
             Error::ApiTimeout(_) => true,
             Error::ApiInternal(_) => true,
+            Error::ApiNotFound(_) => false,
+            Error::ApiAuthentication(_) => false,
             Error::KmsError(e) => e.is_retryable(),
         }
     }

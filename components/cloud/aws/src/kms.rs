@@ -125,6 +125,7 @@ impl KmsProvider for AwsKms {
 fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> Error {
     if let RusotoError::Service(e) = &err {
         match &e {
+            GenerateDataKeyError::NotFound(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsage(_) => {
                 Error::KmsError(KmsError::Other(err.into()))
             }
@@ -140,7 +141,9 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
 fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
     if let RusotoError::Service(e) = &err {
         match &e {
-            DecryptError::IncorrectKey(_) => Error::KmsError(KmsError::WrongMasterKey(err.into())),
+            DecryptError::IncorrectKey(_) | DecryptError::NotFound(_) => {
+                Error::KmsError(KmsError::WrongMasterKey(err.into()))
+            }
             DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
             _ => Error::KmsError(KmsError::Other(err.into())),
@@ -150,13 +153,12 @@ fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
     }
 }
 
-fn classify_error<E: std::error::Error + Send + Sync + 'static>(e: RusotoError<E>) -> Error {
-    if let RusotoError::HttpDispatch(_) = &e {
-        Error::ApiTimeout(e.into())
-    } else if e.is_retryable() {
-        Error::ApiInternal(e.into())
-    } else {
-        Error::Other(e.into())
+fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError<E>) -> Error {
+    match &err {
+        RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
+        RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
+        e if e.is_retryable() => Error::ApiInternal(err.into()),
+        _ => Error::Other(err.into()),
     }
 }
 
