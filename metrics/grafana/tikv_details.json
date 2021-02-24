@@ -5663,7 +5663,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_ttl_checker_actions{instance=~\"$instance\"}[30s])) by (instance, type)",
+              "expr": "sum(rate(tikv_ttl_checker_actions{instance=~\"$instance\"}[1m])) by (instance, type)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{instance}}-{{type}}",

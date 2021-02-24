@@ -45,6 +45,8 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                         "ttl checker finishes a round, wait {}s to start next round",
                         interval.as_secs()
                     );
+                    // make sure the data point of metrics is pulled
+                    thread::sleep(Duration::from_secs(40)); 
                     TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
                 }
                 tikv_alloc::remove_thread_memory_accessor();
@@ -228,26 +230,26 @@ mod tests {
         let engine = builder.build_with_cfg(&cfg).unwrap();
 
         let kvdb = engine.get_rocksdb();
-        let key1 = b"key1";
+        let key1 = b"zkey1";
         let mut value1 = vec![0; 10];
         append_expire_ts(&mut value1, 10);
         kvdb.put_cf(CF_DEFAULT, key1, &value1).unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key2 = b"key2";
+        let key2 = b"zkey2";
         let mut value2 = vec![0; 10];
         append_expire_ts(&mut value2, TEST_CURRENT_TS + 20);
         kvdb.put_cf(CF_DEFAULT, key2, &value2).unwrap();
-        let key3 = b"key3";
+        let key3 = b"zkey3";
         let mut value3 = vec![0; 10];
         append_expire_ts(&mut value3, 20);
         kvdb.put_cf(CF_DEFAULT, key3, &value3).unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key4 = b"key4";
+        let key4 = b"zkey4";
         let mut value4 = vec![0; 10];
         append_expire_ts(&mut value4, 0);
         kvdb.put_cf(CF_DEFAULT, key4, &value4).unwrap();
         kvdb.flush_cf(CF_DEFAULT, true).unwrap();
-        let key5 = b"key5";
+        let key5 = b"zkey5";
         let mut value5 = vec![0; 10];
         append_expire_ts(&mut value5, 10);
         kvdb.put_cf(CF_DEFAULT, key5, &value5).unwrap();
@@ -259,14 +261,14 @@ mod tests {
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"key1", b"key25");
+        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey1", b"zkey25");
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"key2", b"key6");
+        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey2", b"zkey6");
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
