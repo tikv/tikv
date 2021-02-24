@@ -3790,6 +3790,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
@@ -3810,6 +3811,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
