@@ -519,7 +519,7 @@ fn cast_string_as_signed_real(
         None => Ok(None),
         Some(val) => {
             let r: f64;
-            if val.len() == 0 {
+            if val.is_empty() {
                 r = 0.0;
             } else {
                 r = val.convert(ctx)?;
