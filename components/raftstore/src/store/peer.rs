@@ -2720,6 +2720,11 @@ where
             .map(|r| r.renew_lease_time + max_lease > future_ts)
             .unwrap_or(false)
         {
+            debug!(
+                "there are pending reads, skip renew leader lease in advance";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             return;
         }
         // There are pending writes will renew lease
@@ -2730,12 +2735,24 @@ where
             .flatten()
             .unwrap_or(false)
         {
+            debug!(
+                "there are pending writes, skip renew leader lease in advance";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             return;
         }
+
+        poll_ctx.raft_metrics.propose.read_index += 1;
 
         let id = Uuid::new_v4();
         let dropped = self.propose_read_index(ReadIndexContext::fields_to_bytes(id, None, None));
         if !dropped {
+            debug!(
+                "try renew leader lease in advance";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             let read_proposal = ReadIndexRequest::noop(id, monotonic_raw_now());
             self.pending_reads.push_back(read_proposal, true);
         }
