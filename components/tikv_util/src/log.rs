@@ -33,6 +33,10 @@ macro_rules! error {
     };
 }
 
+// error_unknown is used the same as the above error macro
+// However, it will always use an error code of UNKNOWN
+// This is for errors that do not implement ErrorCodeExt
+// It is recommended to implement ErrorCodeExt instead of using this macro
 #[macro_export]
 macro_rules! error_unknown {
     (?$e:expr; $l:literal) => {
