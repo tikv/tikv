@@ -611,7 +611,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::storage::Callback;
     use kvproto::metapb;
@@ -638,8 +638,8 @@ mod tests {
         mem::replace(callback, Box::new(|_| {}))
     }
 
-    struct MockSafePointProvider {
-        rx: Receiver<TimeStamp>,
+    pub struct MockSafePointProvider {
+        pub rx: Receiver<TimeStamp>,
     }
 
     impl GcSafePointProvider for MockSafePointProvider {
@@ -650,8 +650,8 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct MockRegionInfoProvider {
+    #[derive(Clone, Default)]
+    pub struct MockRegionInfoProvider {
         // start_key -> (region_id, end_key)
         regions: BTreeMap<Vec<u8>, RegionInfo>,
     }

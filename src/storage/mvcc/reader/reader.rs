@@ -334,7 +334,7 @@ impl<S: Snapshot> MvccReader<S> {
             versions += 1;
         }
         if versions > GC_MAX_ROW_VERSIONS_THRESHOLD {
-            gc_a_key(key.as_encoded().to_vec());
+            gc_a_key(key.as_encoded().to_vec(), None);
         }
         Ok(TxnCommitRecord::None {
             overlapped_write: None,
