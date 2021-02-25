@@ -63,6 +63,9 @@ endif
 ifeq ($(shell uname -p),aarch64)
 ROCKSDB_SYS_SSE=0
 endif
+ifeq ($(shell uname -p),arm)
+ROCKSDB_SYS_SSE=0
+endif
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
