@@ -1286,12 +1286,13 @@ mod tests {
         gc_worker.start().unwrap();
 
         let auto_gc_cfg = {
-            let (_tx, rx) = channel();
+            let (tx, rx) = channel();
+            tx.send(200.into()).unwrap(); // Use `200` as the safe point.
             let sp = MockSafePointProvider { rx };
             let regions = MockRegionInfoProvider::default();
             AutoGcConfig::new(sp, regions, 1)
         };
-        let safe_point = Arc::new(AtomicU64::new(200));
+        let safe_point = Arc::new(AtomicU64::new(0));
         gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
 
         must_prewrite_put(&prefixed_engine, b"key", b"value", b"key", 100);
