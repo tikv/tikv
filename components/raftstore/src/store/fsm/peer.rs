@@ -16,6 +16,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, WriteBatchExt};
 use error_code::ErrorCodeExt;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
+use kvproto::kvrpcpb::ReadState;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
@@ -1233,10 +1234,15 @@ where
                 self.fsm.peer.region().get_region_epoch(),
             )
         {
-            self.fsm
-                .peer
-                .read_progress
-                .forward_safe_ts(msg.get_applied_index(), msg.get_safe_ts());
+            let extra_ctx = msg.take_extra_ctx();
+            if !extra_ctx.is_empty() {
+                let mut rs = ReadState::default();
+                rs.merge_from_bytes(&extra_ctx)?;
+                self.fsm
+                    .peer
+                    .read_progress
+                    .forward_safe_ts(rs.get_applied_index(), rs.get_safe_ts());
+            }
         }
 
         if is_snapshot {

@@ -10,7 +10,7 @@ use std::{cmp, mem, u64, usize};
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, ReadState};
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -3412,8 +3412,11 @@ where
             && msg.get_msg_type() == MessageType::MsgHeartbeat
             && self.has_applied_to_current_term()
         {
-            send_msg.set_applied_index(self.read_progress.applied_index());
-            send_msg.set_safe_ts(self.read_progress.safe_ts());
+            let mut rs = ReadState::default();
+            rs.set_applied_index(self.read_progress.applied_index());
+            rs.set_safe_ts(self.read_progress.safe_ts());
+            let data = rs.write_to_bytes().unwrap();
+            send_msg.set_extra_ctx(data.into());
         }
 
         send_msg.set_message(msg);
