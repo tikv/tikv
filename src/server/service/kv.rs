@@ -971,6 +971,18 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         unimplemented!()
     }
 
+    fn raw_get_key_ttl(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        _: kvproto::kvrpcpb::RawGetKeyTtlRequest,
+        sink: grpcio::UnarySink<kvproto::kvrpcpb::RawGetKeyTtlResponse>,
+    ) {
+        ctx.spawn(
+            sink.fail(RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None))
+                .unwrap_or_else(|_| ()),
+        );
+    }
+
     fn check_leader(
         &mut self,
         ctx: RpcContext<'_>,

@@ -315,15 +315,15 @@ checksum = "42d3c07869b846ba3306739375e9ed2f8055a8759fcf7f72ab7bf3bc4df38b9b"
 
 [[package]]
 name = "bindgen"
-version = "0.51.1"
+version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebd71393f1ec0509b553aa012b9b58e81dadbdff7130bd3b8cba576e69b32f75"
+checksum = "fd4865004a46a0aafb2a0a5eb19d3c9fc46ee5f063a6cfc605c69ac9ecf5263d"
 dependencies = [
  "bitflags",
  "cexpr",
- "cfg-if 0.1.10",
  "clang-sys",
  "lazy_static",
+ "lazycell",
  "peeking_take_while",
  "proc-macro2 1.0.24",
  "quote 1.0.3",
@@ -378,9 +378,9 @@ checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
 name = "boringssl-src"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c212e3cd725f096e4de48d4ded0909cb62cb92c1a3420ff0e95edb46390a7736"
+checksum = "0511b9f0b739706e05b7279ece5dfc1932a42839cf005cb0f00420a3fea27c96"
 dependencies = [
  "cmake",
 ]
@@ -427,6 +427,12 @@ checksum = "10004c15deb332055f7a4a208190aed362cf9a7c2f6ab70a305fba50e1105f38"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "bytes"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b700ce4376041dcd0a327fd0097c41095743c4c8af8887265942faf1100bd040"
 
 [[package]]
 name = "bzip2-sys"
@@ -505,7 +511,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "prometheus",
- "prost",
+ "prost 0.6.1",
  "protobuf",
  "raft",
  "raftstore",
@@ -525,11 +531,11 @@ dependencies = [
 
 [[package]]
 name = "cexpr"
-version = "0.3.5"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7fa24eb00d5ffab90eaeaf1092ac85c04c64aaf358ea6f84505b8116d24c6af"
+checksum = "f4aedb84272dbe89af497cf81375129abda4fc0a9e7c5d317498c15cc30c0d27"
 dependencies = [
- "nom 4.2.3",
+ "nom 5.1.0",
 ]
 
 [[package]]
@@ -568,9 +574,9 @@ dependencies = [
 
 [[package]]
 name = "clang-sys"
-version = "0.28.1"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81de550971c976f176130da4b2978d3b524eaa0fd9ac31f3ceb5ae1231fb4853"
+checksum = "f54d78e30b388d4815220c8dd03fea5656b6c6d32adb59e89061552a102f8da1"
 dependencies = [
  "glob",
  "libc 0.2.80",
@@ -1709,28 +1715,28 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dfdbacbc27f875402f878928c7e9dc22ee26d01a56a9faf655f7090e7e25109"
+checksum = "f97e021739b917535217829934dc479bd3c4798d85adb5fc4890a985eb04c6e9"
 dependencies = [
- "bytes 0.5.3",
+ "bytes 1.0.1",
  "futures 0.3.7",
  "grpcio-sys",
  "libc 0.2.80",
  "log",
  "parking_lot 0.11.0",
- "prost",
+ "prost 0.7.0",
  "protobuf",
 ]
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.6.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad76ae5de2e2d85fe8f45e072f7909e22fa9ffaf0d53b280825783720dab051c"
+checksum = "bdd655c0ccaa367f60da59836ebe593b1fefe2117179cd2555efdbb81ad82651"
 dependencies = [
  "derive-new",
- "prost",
+ "prost 0.7.0",
  "prost-build",
  "prost-types",
  "protobuf",
@@ -1739,9 +1745,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01cf1bf66e791876cfb406952895d87912eab70e858a5474c3608e5297509eba"
+checksum = "91a3435fb3d2b1367fff27e8f7bdbad1856459bf1f0fc9bd66527dce569e1523"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -1858,10 +1864,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd179ae861f0c2e53da70d892f5f3029f9594be0c41dc5269cd371691b1dc2f9"
 
 [[package]]
-name = "hyper"
-version = "0.13.5"
+name = "httpdate"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96816e1d921eca64d208a85aab4f7798455a8e34229ee5a88c935bdee1b78b14"
+checksum = "494b4d60369511e7dea41cf646832512a94e542f68bb9c49e54518e0f468eb47"
+
+[[package]]
+name = "hyper"
+version = "0.13.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a6f157065790a3ed2f88679250419b5cdd96e714a0d65f7797fd337186e96bb"
 dependencies = [
  "bytes 0.5.3",
  "futures-channel",
@@ -1871,13 +1883,13 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
- "log",
- "net2",
- "pin-project 0.4.8",
- "time 0.1.42",
+ "pin-project 1.0.1",
+ "socket2",
  "tokio",
  "tower-service",
+ "tracing",
  "want",
 ]
 
@@ -2074,13 +2086,13 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4fb47d0584f214a47ac623e8cc571f1afcd51688"
+source = "git+https://github.com/pingcap/kvproto.git#3cd2fc5fad226caeffed72297e3e13a571f5592e"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
  "lazy_static",
- "prost",
- "prost-derive",
+ "prost 0.7.0",
+ "prost-derive 0.7.0",
  "protobuf",
  "protobuf-build",
  "raft-proto",
@@ -2091,6 +2103,12 @@ name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
+name = "lazycell"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
@@ -2134,18 +2152,18 @@ dependencies = [
 
 [[package]]
 name = "libloading"
-version = "0.5.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b111a074963af1d37a139918ac6d49ad1d0d5e47f72fd55388619691a7d753"
+checksum = "6f84d96438c15fcd6c3f244c8fce01d1e2b9c6b5623e9c711dc9286d8fc92d6a"
 dependencies = [
- "cc",
+ "cfg-if 1.0.0",
  "winapi 0.3.8",
 ]
 
 [[package]]
 name = "librocksdb_cloud_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "cc",
  "cmake",
@@ -2154,7 +2172,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2174,7 +2192,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3095,20 +3113,20 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.3.20"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "937e4766a8d473f9dd3eb318c654dec77d6715a87ab50081d6e5cfceea73c105"
+checksum = "a066eee7dbaf89a91078ceb15f56642c8d934eb2a639e7f098dd3f365651f55a"
 dependencies = [
  "backtrace",
  "inferno",
  "lazy_static",
  "libc 0.2.80",
  "log",
- "nix 0.17.0",
+ "nix 0.19.0",
  "parking_lot 0.11.0",
- "prost",
+ "prost 0.7.0",
  "prost-build",
- "prost-derive",
+ "prost-derive 0.7.0",
  "symbolic-demangle",
  "tempfile",
  "thiserror",
@@ -3263,22 +3281,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce49aefe0a6144a45de32927c77bd2859a5f7677b55f220ae5b744e87389c212"
 dependencies = [
  "bytes 0.5.3",
- "prost-derive",
+ "prost-derive 0.6.1",
+]
+
+[[package]]
+name = "prost"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e6984d2f1a23009bd270b8bb56d0926810a3d483f59c987d77969e9d8e840b2"
+dependencies = [
+ "bytes 1.0.1",
+ "prost-derive 0.7.0",
 ]
 
 [[package]]
 name = "prost-build"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b10678c913ecbd69350e8535c3aef91a8676c0773fc1d7b95cdd196d7f2f26"
+checksum = "32d3ebd75ac2679c2af3a92246639f9fcc8a442ee420719cc4fe195b98dd5fa3"
 dependencies = [
- "bytes 0.5.3",
+ "bytes 1.0.1",
  "heck",
- "itertools 0.8.2",
+ "itertools 0.9.0",
  "log",
  "multimap",
  "petgraph",
- "prost",
+ "prost 0.7.0",
  "prost-types",
  "tempfile",
  "which",
@@ -3298,13 +3326,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-types"
-version = "0.6.1"
+name = "prost-derive"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1834f67c0697c001304b75be76f67add9c89742eda3a085ad8ee0bb38c3417aa"
+checksum = "169a15f3008ecb5160cba7d37bcd690a7601b6d30cfb87a117d45e59d52af5d4"
 dependencies = [
- "bytes 0.5.3",
- "prost",
+ "anyhow",
+ "itertools 0.9.0",
+ "proc-macro2 1.0.24",
+ "quote 1.0.3",
+ "syn 1.0.48",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b518d7cdd93dab1d1122cf07fa9a60771836c668dde9d9e2a139f957f0d9f1bb"
+dependencies = [
+ "bytes 1.0.1",
+ "prost 0.7.0",
 ]
 
 [[package]]
@@ -3318,9 +3359,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-build"
-version = "0.11.4"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e5b18b4c7a003fb5b05aa3a7b6286495d02bc93af8765623a053fd09edfb164"
+checksum = "539f2589cd0892cfc07ae25f6e0d2b43440f66b10839e881698f113be28353b2"
 dependencies = [
  "bitflags",
  "grpcio-compiler",
@@ -3378,7 +3419,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs#c7c230f63c59d408176e9288966da00c579ef4ba"
+source = "git+https://github.com/tikv/raft-rs#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
 dependencies = [
  "fxhash",
  "getset",
@@ -3410,10 +3451,10 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/tikv/raft-rs?branch=master#c7c230f63c59d408176e9288966da00c579ef4ba"
+source = "git+https://github.com/tikv/raft-rs?branch=master#91a60ce417d55d4ca4d96b29963e3e3fa7f7d8d7"
 dependencies = [
  "lazy_static",
- "prost",
+ "prost 0.7.0",
  "protobuf",
  "protobuf-build",
 ]
@@ -3472,7 +3513,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "prost",
+ "prost 0.6.1",
  "protobuf",
  "quick-error",
  "raft",
@@ -3822,7 +3863,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "pd_client",
- "prost",
+ "prost 0.6.1",
  "protobuf",
  "raft",
  "raftstore",
@@ -3872,7 +3913,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc904a5242539c8bf10699e6c82cfdfd47d26958"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bc4d5bf5e3327bb5097b3355507dcbde3bf01c24"
 dependencies = [
  "libc 0.2.80",
  "librocksdb_sys",
@@ -5211,7 +5252,7 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
- "prost",
+ "prost 0.6.1",
  "protobuf",
  "quick-error",
  "raft",
@@ -5422,11 +5463,11 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#bd0cb2b314a4a05b2dc0fda32b744e0ecf847cd8"
+source = "git+https://github.com/pingcap/tipb.git#71c2fd0fdbaafdd7c5a40863962b9065138d5f60"
 dependencies = [
  "lazy_static",
- "prost",
- "prost-derive",
+ "prost 0.7.0",
+ "prost-derive 0.7.0",
  "protobuf",
  "protobuf-build",
 ]
@@ -5545,6 +5586,27 @@ name = "tower-service"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
+
+[[package]]
+name = "tracing"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01ebdc2bb4498ab1ab5f5b73c5803825e60199229ccba0698170e3be0e7f959f"
+dependencies = [
+ "cfg-if 1.0.0",
+ "log",
+ "pin-project-lite 0.2.0",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-core"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f50de3927f93d202783f4513cda820ab47ef17f624b03c096e86ef00c67e6b5f"
+dependencies = [
+ "lazy_static",
+]
 
 [[package]]
 name = "try-lock"
@@ -5851,11 +5913,12 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "3.1.0"
+version = "4.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5475d47078209a02e60614f7ba5e645ef3ed60f771920ac1906d7c1cc65024c8"
+checksum = "87c14ef7e1b8b8ecfc75d5eca37949410046e66f15d185c01d70824f1f8111ef"
 dependencies = [
  "libc 0.2.80",
+ "thiserror",
 ]
 
 [[package]]
