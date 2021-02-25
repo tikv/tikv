@@ -67,4 +67,10 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_SINK_QUEUE_SIZE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_cdc_sink_queue_size",
+        "Bucketed histogram of cdc sink queue size",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }

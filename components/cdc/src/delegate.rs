@@ -132,6 +132,9 @@ impl Downstream {
                 }
             }
         }
+        let count = sink.get_pending_count();
+        info!("cdc incremental scan queue size {}", count);
+        CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
     }
 
     pub fn sink_event_low_prio(&self, mut event: Event) {
@@ -150,8 +153,9 @@ impl Downstream {
             backoff.snooze();
         }
         sink.send(CdcEvent::Event(event));
-
-        debug!("cdc incremental scan queue size {}", sink.get_pending_count());
+        let count = sink.get_pending_count();
+        info!("cdc incremental scan queue size {}", count);
+        CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
         CDC_SCAN_BLOCK_DURATION_HISTOGRAM
             .observe(start.elapsed().as_secs_f64());
     }
