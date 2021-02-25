@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_sender_pending_count() {
-        let (tx, mut rx) = unbounded::<i32>(10);
+        let (tx, rx) = unbounded::<i32>(10);
         assert_eq!(tx.get_pending_count(), 0);
         tx.send(1).unwrap();
         assert_eq!(tx.get_pending_count(), 1);

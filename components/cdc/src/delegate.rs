@@ -1,14 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::mem;
+use std::{mem, thread};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
-use crossbeam::utils::Backoff;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{
@@ -43,6 +42,7 @@ use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
+use std::time::Duration;
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
@@ -133,7 +133,7 @@ impl Downstream {
             }
         }
         let count = sink.get_pending_count();
-        info!("cdc incremental scan queue size {}", count);
+        info!("cdc sink event"; "queue_size" => count);
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
     }
 
@@ -146,15 +146,23 @@ impl Downstream {
         }
 
         let start = Instant::now_coarse();
-        let backoff = Backoff::new();
         let sink = self.sink.as_ref().unwrap();
+        let mut attempts = 0;
         while sink.get_pending_count() >= 1024 {
-            info!("cdc incremental scan data blocked");
-            backoff.snooze();
+            info!("cdc incremental scan data blocked"; "attempts" => attempts);
+            let sleep_ms = match attempts {
+                0..=12 => 2u64.pow(attempts as u32),
+                _ => 4096,
+            };
+            thread::sleep(Duration::from_millis(sleep_ms));
+            attempts += 1;
         }
-        sink.send(CdcEvent::Event(event));
+        sink.send(CdcEvent::Event(event)).unwrap_or_else(|e: crossbeam::SendError<_>| {
+            warn!("send event failed";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+        });
         let count = sink.get_pending_count();
-        info!("cdc incremental scan queue size {}", count);
+        info!("cdc incremental scan"; "queue_size" => count);
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
         CDC_SCAN_BLOCK_DURATION_HISTOGRAM
             .observe(start.elapsed().as_secs_f64());
