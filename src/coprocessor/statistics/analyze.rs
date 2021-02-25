@@ -84,17 +84,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let (col_res, idx_res) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let resp: tipb::AnalyzeMixedResp;
-            match idx_res {
-                Some(res) => {
-                    resp = AnalyzeMixedResult::new(col_res, res).into_proto();
-                }
-                None => {
-                    return Err(Error::Other(
-                        "Mixed analyze type should have index response.".into(),
-                    ));
-                }
-            }
+            let resp = AnalyzeMixedResult::new(col_res, idx_res.ok_or_else(|| Error::Other(
+                "Mixed analyze type should have index response.".into(),
+            ))?).into_proto();
             box_try!(resp.write_to_bytes())
         };
         Ok(res_data)
@@ -320,20 +312,13 @@ impl<S: Snapshot> SampleBuilder<S> {
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
-            stats_version: if let Some(ref idx_req) = common_handle_req {
-                if idx_req.has_version() {
-                    idx_req.get_version()
-                } else {
-                    ANALYZE_VERSION_V1
+            stats_version: common_handle_req.as_ref().map_or_else(|| ANALYZE_VERSION_V1, |req| {
+                match req.has_version() {
+                    true => req.get_version(),
+                    _ => ANALYZE_VERSION_V1
                 }
-            } else {
-                ANALYZE_VERSION_V1
-            },
-            top_n_size: if let Some(ref idx_req) = common_handle_req {
-                idx_req.get_top_n_size() as usize
-            } else {
-                0_usize
-            },
+            }),
+            top_n_size: common_handle_req.as_ref().map_or_else(|| 0_usize, |req| {req.get_top_n_size() as usize}),
             common_handle_col_ids: req.take_primary_column_ids(),
             columns_info,
             analyze_common_handle: common_handle_req != None,
