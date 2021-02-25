@@ -4,10 +4,11 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 
-use engine_traits::{CfName, KvEngine};
-use kvproto::metapb::Region;
+use engine_traits::{CfName, KvEngine, RaftEngine};
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{ComputeHashRequest, RaftCmdRequest};
+use kvproto::raft_serverpb::RaftApplyState;
 use raft::eraftpb;
 
 use super::*;
@@ -157,6 +158,11 @@ impl_box_observer_g!(
     ConsistencyCheckObserver,
     WrappedConsistencyCheckObserver
 );
+impl_box_observer!(
+    BoxPeerPropertyAction,
+    PeerPropertyAction,
+    WrappedPeerPropertyAction
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
@@ -173,6 +179,7 @@ where
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
+    peer_properties_actions: Vec<Entry<BoxPeerPropertyAction>>,
     // TODO: add endpoint
 }
 
@@ -188,6 +195,7 @@ impl<E: KvEngine> Default for Registry<E> {
             region_change_observers: Default::default(),
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
+            peer_properties_actions: Default::default(),
         }
     }
 }
@@ -248,6 +256,10 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
         push!(priority, rio, self.read_index_observers);
+    }
+
+    pub fn register_peer_properties_action(&mut self, priority: u32, rio: BoxPeerPropertyAction) {
+        push!(priority, rio, self.peer_properties_actions);
     }
 }
 
@@ -563,6 +575,108 @@ impl<E: KvEngine> CoprocessorHost<E> {
         for entry in &self.registry.cmd_observers {
             entry.observer.inner().stop();
         }
+    }
+}
+
+// Funtions used with `PeerProperties`
+impl<E: KvEngine> CoprocessorHost<E> {
+    pub fn init_peer_properties(&self, tag: &str, apply_state: &RaftApplyState) -> PeerProperties {
+        let mut peer_properties = PeerProperties::new();
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            let pp: Box<dyn Any + Send + Sync> = act.init_property(tag, apply_state);
+            peer_properties.register(act.id(), pp);
+        }
+        peer_properties
+    }
+
+    pub fn property_to_bytes<T: PeerPropertyAction>(
+        &self,
+        peer_properties: &PeerProperties,
+    ) -> crate::Result<Vec<u8>> {
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            if TypeId::of::<T>() == act.id() {
+                if let Some(p) = peer_properties.get_by_id(act.id()) {
+                    return act.property_to_bytes(p);
+                }
+            }
+        }
+        return Err(box_err!("No peer property found"));
+    }
+
+    pub fn property_from_bytes<T: PeerPropertyAction>(
+        &self,
+        peer_properties: &PeerProperties,
+        data: Vec<u8>,
+    ) -> crate::Result<()> {
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            if TypeId::of::<T>() == act.id() {
+                if let Some(p) = peer_properties.get_by_id(act.id()) {
+                    return act.property_from_bytes(p, data);
+                }
+            }
+        }
+        return Err(box_err!("No peer property found"));
+    }
+
+    pub fn pre_read<T: PeerPropertyAction>(
+        &self,
+        peer_properties: &PeerProperties,
+        req: &RaftCmdRequest,
+        epoch: &RegionEpoch,
+    ) -> crate::Result<()> {
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            if TypeId::of::<T>() == act.id() {
+                if let Some(p) = peer_properties.get_by_id(act.id()) {
+                    return act.pre_read(p, req, epoch);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn on_applied_update<T: PeerPropertyAction>(
+        &self,
+        peer_properties: &PeerProperties,
+        applied_index: u64,
+    ) -> crate::Result<()> {
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            if TypeId::of::<T>() == act.id() {
+                if let Some(p) = peer_properties.get_by_id(act.id()) {
+                    act.on_applied_update(p, applied_index);
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn on_commit_merge<T: PeerPropertyAction>(
+        &self,
+        source_properties: &PeerProperties,
+        target_properties: &PeerProperties,
+        applied_index: u64,
+    ) -> crate::Result<()> {
+        for action in &self.registry.peer_properties_actions {
+            let act = action.observer.inner();
+            if TypeId::of::<T>() == act.id() {
+                match (
+                    source_properties.get_by_id(act.id()),
+                    target_properties.get_by_id(act.id()),
+                ) {
+                    (Some(source_p), Some(target_p)) => {
+                        act.on_commit_merge(source_p, target_p, applied_index);
+                        return Ok(());
+                    }
+                    _ => return Err(box_err!("No peer property found")),
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -438,7 +438,12 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
-                LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone()),
+                LocalReader::new(
+                    engines.kv.clone(),
+                    store_meta.clone(),
+                    self.router.clone(),
+                    self.coprocessor_host.as_ref().unwrap().clone(),
+                ),
             ),
             engines.kv.clone(),
         );

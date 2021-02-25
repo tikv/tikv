@@ -35,9 +35,9 @@ use time::Timespec;
 use txn_types::TimeStamp;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{CoprocessorHost, PeerProperties, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
-use crate::store::fsm::store::{PollContext, RegionReadProgress};
+use crate::store::fsm::store::{PollContext, RegionReadProgress, RegionSafeTSTracker};
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
@@ -69,7 +69,6 @@ use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
-const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -504,7 +503,7 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
-    pub read_progress: RegionReadProgress,
+    pub peer_properties: Arc<PeerProperties>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -519,6 +518,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        coprocessor_host: &CoprocessorHost<EK>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -545,8 +545,8 @@ where
             ..Default::default()
         };
 
-        let read_progress =
-            RegionReadProgress::new(peer.get_id(), applied_index, REGION_READ_PROGRESS_CAP);
+        let peer_properties =
+            Arc::new(coprocessor_host.init_peer_properties(tag.as_str(), ps.apply_state()));
 
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
@@ -601,7 +601,7 @@ where
             cmd_epoch_checker: Default::default(),
             last_unpersisted_number: 0,
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
-            read_progress,
+            peer_properties,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1036,12 +1036,13 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, ctx: &mut PollContext<EK, ER, T>, msgs: I)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
+            let metrics = &mut ctx.raft_metrics.message;
             let msg_type = msg.get_msg_type();
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
@@ -1082,7 +1083,7 @@ where
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum => {}
             }
-            self.send_raft_message(msg, trans);
+            self.send_raft_message(msg, ctx);
         }
     }
 
@@ -1717,7 +1718,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(ctx, vec_msg);
             }
         }
 
@@ -1926,7 +1927,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(ctx, vec_msg);
             }
         }
 
@@ -2097,7 +2098,8 @@ where
         }
         self.pending_reads.gc();
 
-        self.read_progress.update_applied(applied_index);
+        ctx.coprocessor_host
+            .on_applied_update::<RegionSafeTSTracker>(&self.peer_properties, applied_index);
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -3154,27 +3156,12 @@ where
             }
         }
         if req.get_header().get_read_ts() > 0 {
-            let read_ts = req.get_header().get_read_ts();
-            let safe_ts = self.read_progress.safe_ts();
-            debug!(
-                "handle stale read reqeust";
-                "tag" => &self.tag,
-                "read_ts" => read_ts,
-                "safe_ts" => safe_ts
-            );
-            if safe_ts < read_ts {
-                debug!(
-                    "read rejected by safe timestamp";
-                    "tag" => &self.tag,
-                    "read ts" => read_ts,
-                    "safe ts" => safe_ts,
-                );
-                let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-                    region.get_id(),
-                    self.peer_id(),
-                    region.get_region_epoch().clone(),
-                    safe_ts,
-                ));
+            if let Err(e) = ctx.coprocessor_host.pre_read::<RegionSafeTSTracker>(
+                &self.peer_properties,
+                &req,
+                region.get_region_epoch(),
+            ) {
+                let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
                 return ReadResponse {
                     response,
@@ -3401,7 +3388,11 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(
+        &mut self,
+        msg: eraftpb::Message,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
         let mut send_msg = self.prepare_raft_message();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
@@ -3449,13 +3440,28 @@ where
             && msg.get_msg_type() == MessageType::MsgHeartbeat
             && self.has_applied_to_current_term()
         {
-            send_msg.set_applied_index(self.read_progress.applied_index());
-            send_msg.set_safe_ts(self.read_progress.safe_ts());
+            match ctx
+                .coprocessor_host
+                .property_to_bytes::<RegionSafeTSTracker>(&self.peer_properties)
+            {
+                Ok(extra_ctx) => send_msg.set_extra_ctx(extra_ctx),
+                Err(e) => {
+                    warn!(
+                        "failed to get extra context";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "target_peer_id" => to_peer_id,
+                        "target_store_id" => to_store_id,
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                }
+            }
         }
 
         send_msg.set_message(msg);
 
-        if let Err(e) = trans.send(send_msg) {
+        if let Err(e) = ctx.trans.send(send_msg) {
             warn!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,

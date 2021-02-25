@@ -1,11 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::vec::IntoIter;
 
 use engine_traits::CfName;
-use kvproto::metapb::Region;
+use kvproto::metapb::{Peer, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request};
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage};
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -63,6 +66,62 @@ impl<'a> ObserverContext<'a> {
     pub fn region(&self) -> &Region {
         self.region
     }
+}
+
+#[derive(Debug)]
+pub struct PeerProperties {
+    properties: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl PeerProperties {
+    pub fn new() -> PeerProperties {
+        PeerProperties {
+            properties: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, id: TypeId, property: Box<dyn Any + Send + Sync>) {
+        if self.properties.contains_key(&id) {
+            return;
+        }
+        self.properties.insert(id, property);
+    }
+
+    pub fn get_by_id(&self, id: TypeId) -> Option<&Box<dyn Any + Send + Sync>> {
+        self.properties.get(&id)
+    }
+
+    pub fn get<T: PeerPropertyAction>(&self) -> Option<&Box<dyn Any + Send + Sync>> {
+        self.get_by_id(TypeId::of::<T>())
+    }
+}
+
+pub trait PeerPropertyAction: Coprocessor + 'static {
+    fn id(&self) -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn init_property(&self, tag: &str, apply_state: &RaftApplyState) -> Box<dyn Any + Send + Sync>;
+
+    fn pre_read(
+        &self,
+        _: &Box<dyn Any + Send + Sync>,
+        _: &RaftCmdRequest,
+        _: &RegionEpoch,
+    ) -> crate::Result<()>;
+
+    fn on_applied_update(&self, _: &Box<dyn Any + Send + Sync>, _: u64);
+
+    fn on_commit_merge(
+        &self,
+        _: &Box<dyn Any + Send + Sync>,
+        _: &Box<dyn Any + Send + Sync>,
+        _: u64,
+    );
+
+    fn property_to_bytes(&self, _: &Box<dyn Any + Send + Sync>) -> crate::Result<Vec<u8>>;
+
+    fn property_from_bytes(&self, _: &Box<dyn Any + Send + Sync>, _: Vec<u8>) -> crate::Result<()>;
 }
 
 pub trait AdminObserver: Coprocessor {

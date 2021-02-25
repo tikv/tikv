@@ -14,6 +14,7 @@ use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::store::{RegionReadProgress, RegionSafeTSTracker};
 use raftstore::store::fsm::{ChangeCmd, ChangeObserve, ObserveID, ObserveRange, StoreMeta};
 use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::util::{self, RemoteLease};
@@ -229,13 +230,17 @@ where
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
             let store_meta = self.store_meta.lock().unwrap();
-            if let Some(reader) = store_meta.readers.get(&region_id) {
+            if let Some(peer_properties) = store_meta.peer_properties.get(&region_id) {
+                let pp = peer_properties
+                    .get::<RegionSafeTSTracker>()
+                    .expect("no peer property found");
+                let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
                 info!(
                     "register observe region";
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), reader.safe_ts.clone())
+                ObserveRegion::new(region.clone(), rrp.get_safe_ts())
             } else {
                 warn!(
                     "try register unexit region";

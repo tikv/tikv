@@ -36,8 +36,9 @@ use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration, Either};
 
-use crate::coprocessor::RegionChangeEvent;
+use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::cmd_resp::{bind_term, new_error};
+use crate::store::fsm::store::RegionSafeTSTracker;
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
@@ -168,6 +169,7 @@ where
         sched: Scheduler<RegionTask<EK::Snapshot>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        coprocessor_host: &CoprocessorHost<EK>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -189,7 +191,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    sched,
+                    engines,
+                    region,
+                    meta_peer,
+                    coprocessor_host,
+                )?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -216,6 +226,7 @@ where
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
+        coprocessor_host: &CoprocessorHost<EK>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -231,7 +242,15 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    sched,
+                    engines,
+                    &region,
+                    peer,
+                    coprocessor_host,
+                )?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
@@ -1233,10 +1252,15 @@ where
                 self.fsm.peer.region().get_region_epoch(),
             )
         {
-            self.fsm
-                .peer
-                .read_progress
-                .forward_safe_ts(msg.get_applied_index(), msg.get_safe_ts());
+            let extra_ctx = msg.take_extra_ctx();
+            if !extra_ctx.is_empty() {
+                self.ctx
+                    .coprocessor_host
+                    .property_from_bytes::<RegionSafeTSTracker>(
+                        &self.fsm.peer.peer_properties,
+                        extra_ctx,
+                    )?;
+            }
         }
 
         if is_snapshot {
@@ -2306,6 +2330,7 @@ where
                 self.ctx.region_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                &self.ctx.coprocessor_host,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -2343,8 +2368,8 @@ where
             meta.regions.insert(new_region_id, new_region.clone());
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
-            meta.region_read_progress
-                .insert(new_region_id, new_peer.peer.read_progress.clone());
+            meta.peer_properties
+                .insert(new_region_id, new_peer.peer.peer_properties.clone());
             let not_exist = meta
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
@@ -2771,19 +2796,18 @@ where
 
     fn reset_read_progress_when_commit_merge(
         &self,
-        applied_index: u64,
-        source_region_id: u64,
         meta: &StoreMeta,
+        source_region_id: u64,
+        applied_index: u64,
     ) {
-        let source_safe_ts = meta
-            .region_read_progress
-            .get(&source_region_id)
-            .map(|rp| rp.safe_ts())
-            .unwrap_or(0);
-        self.fsm
-            .peer
-            .read_progress
-            .merge_safe_ts(source_safe_ts, applied_index);
+        let source_properties = meta.peer_properties.get(&source_region_id).unwrap();
+        self.ctx
+            .coprocessor_host
+            .on_commit_merge::<RegionSafeTSTracker>(
+                source_properties,
+                &self.fsm.peer.peer_properties,
+                applied_index,
+            );
     }
 
     fn on_ready_commit_merge(
@@ -2814,7 +2838,7 @@ where
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         meta.readers.remove(&source.get_id());
 
-        self.reset_read_progress_when_commit_merge(index, source.get_id(), &meta);
+        self.reset_read_progress_when_commit_merge(&meta, source.get_id(), index);
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after

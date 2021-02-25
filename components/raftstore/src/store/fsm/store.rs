@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
@@ -18,12 +19,13 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
 use kvproto::import_sstpb::SstMeta;
-use kvproto::kvrpcpb::KeyRange;
-use kvproto::kvrpcpb::LeaderInfo;
+use kvproto::kvrpcpb::{KeyRange, LeaderInfo, ReadState};
 use kvproto::metapb::{self, Peer, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
-use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
+use kvproto::raft_serverpb::{
+    ExtraMessageType, PeerState, RaftApplyState, RaftMessage, RegionLocalState,
+};
 use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::StateRole;
@@ -43,7 +45,10 @@ use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::coprocessor::split_observer::SplitObserver;
-use crate::coprocessor::{BoxAdminObserver, CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{
+    dispatcher::BoxPeerPropertyAction, BoxAdminObserver, Coprocessor, CoprocessorHost,
+    PeerProperties, PeerPropertyAction, RegionChangeEvent,
+};
 use crate::store::config::Config;
 use crate::store::fsm::metrics::*;
 use crate::store::fsm::peer::{
@@ -71,6 +76,7 @@ use crate::store::{
     util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
     SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
+use crate::Error;
 use crate::Result;
 use concurrency_manager::ConcurrencyManager;
 use tikv_util::future::poll_future_notify;
@@ -81,6 +87,7 @@ const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
+const REGION_READ_PROGRESS_CAP: usize = 128;
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -120,6 +127,8 @@ pub struct StoreMeta {
     pub destroyed_region_for_snap: HashMap<u64, bool>,
 
     pub region_read_progress: HashMap<u64, RegionReadProgress>,
+
+    pub peer_properties: HashMap<u64, Arc<PeerProperties>>,
 }
 
 impl StoreMeta {
@@ -137,6 +146,7 @@ impl StoreMeta {
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: HashMap::default(),
+            peer_properties: HashMap::default(),
         }
     }
 
@@ -942,6 +952,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
+                &self.coprocessor_host,
             ));
             peer.peer.init_replication_mode(&mut *replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -951,8 +962,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
             meta.regions.insert(region_id, region.clone());
-            meta.region_read_progress
-                .insert(region_id, peer.peer.read_progress.clone());
+            meta.peer_properties
+                .insert(region_id, peer.peer.peer_properties.clone());
             // No need to check duplicated here, because we use region id as the key
             // in DB.
             region_peers.push((tx, peer));
@@ -981,13 +992,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
+                &self.coprocessor_host,
             )?;
             peer.peer.init_replication_mode(&mut *replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
-            meta.region_read_progress
-                .insert(region.get_id(), peer.peer.read_progress.clone());
+            meta.peer_properties
+                .insert(region.get_id(), peer.peer.peer_properties.clone());
             meta.regions.insert(region.get_id(), region);
             region_peers.push((tx, peer));
         }
@@ -1171,6 +1183,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         coprocessor_host
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
+
+        coprocessor_host
+            .registry
+            .register_peer_properties_action(1, BoxPeerPropertyAction::new(RegionSafeTSTracker));
 
         let workers = Workers {
             pd_worker,
@@ -1760,6 +1776,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
+            &self.ctx.coprocessor_host,
         )?;
 
         // WARNING: The checking code must be above this line.
@@ -1775,8 +1792,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // snapshot is applied.
         meta.regions
             .insert(region_id, peer.get_peer().region().to_owned());
-        meta.region_read_progress
-            .insert(region_id, peer.peer.read_progress.clone());
+        meta.peer_properties
+            .insert(region_id, peer.peer.peer_properties.clone());
 
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);
@@ -2449,7 +2466,7 @@ fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
 
 #[derive(Clone)]
 pub struct RegionReadProgress {
-    pub peer_id: u64,
+    tag: String,
     applied_index: Arc<AtomicU64>,
     last_merge_index: Arc<AtomicU64>,
     safe_ts: Arc<AtomicU64>,
@@ -2459,9 +2476,9 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(peer_id: u64, applied_index: u64, cap: usize) -> RegionReadProgress {
+    pub fn new(tag: String, applied_index: u64, cap: usize) -> RegionReadProgress {
         RegionReadProgress {
-            peer_id,
+            tag,
             applied_index: Arc::new(AtomicU64::from(applied_index)),
             // It is okey to inti `last_merge_index` with `applied_index`
             last_merge_index: Arc::new(AtomicU64::from(applied_index)),
@@ -2500,7 +2517,7 @@ impl RegionReadProgress {
         }
         self.applied_index.fetch_max(applied, Ordering::Relaxed);
         if ts_to_update > self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed) {
-            debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts_to_update);
+            debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts_to_update);
         }
     }
 
@@ -2511,7 +2528,7 @@ impl RegionReadProgress {
         if last_merge_index > apply_index {
             debug!(
                 "ignore item less than `last_merge_index`";
-                "peer id" => self.peer_id,
+                "tag" => &self.tag,
                 "item" => ?(apply_index, ts),
                 "last_merge_index" => last_merge_index,
             );
@@ -2531,7 +2548,7 @@ impl RegionReadProgress {
             self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
             if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
-                debug!("safe ts updated"; "peer id" => self.peer_id, "safe ts" => ts);
+                debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
             }
         }
     }
@@ -2547,7 +2564,7 @@ impl RegionReadProgress {
         if source_safe_ts < self.safe_ts.fetch_min(source_safe_ts, Ordering::Relaxed) {
             debug!(
                 "safe ts decrease due to merge";
-                "peer id" => self.peer_id,
+                "tag" => &self.tag,
                 "safe ts" => source_safe_ts
             );
         }
@@ -2558,6 +2575,85 @@ impl RegionReadProgress {
             queue.pop_front();
         }
         queue.push_back(item);
+    }
+}
+
+#[derive(Clone)]
+pub struct RegionSafeTSTracker;
+
+impl Coprocessor for RegionSafeTSTracker {}
+
+impl PeerPropertyAction for RegionSafeTSTracker {
+    fn init_property(&self, tag: &str, apply_state: &RaftApplyState) -> Box<dyn Any + Send + Sync> {
+        Box::new(RegionReadProgress::new(
+            tag.to_owned(),
+            apply_state.get_applied_index(),
+            REGION_READ_PROGRESS_CAP,
+        ))
+    }
+
+    fn pre_read(
+        &self,
+        any: &Box<dyn Any + Send + Sync>,
+        req: &RaftCmdRequest,
+        epoch: &RegionEpoch,
+    ) -> Result<()> {
+        let read_ts = req.get_header().get_read_ts();
+        if read_ts == 0 {
+            return Ok(());
+        }
+        let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
+        let safe_ts = rrp.safe_ts();
+        if read_ts > safe_ts {
+            info!(
+                "reject stale read by safe ts";
+                "tag" => &rrp.tag,
+                "safe ts" => safe_ts,
+                "read ts" => read_ts
+            );
+            return Err(Error::DataIsNotReady(
+                req.get_header().get_region_id(),
+                req.get_header().get_peer().get_id(),
+                epoch.clone(),
+                safe_ts,
+            ));
+        }
+        Ok(())
+    }
+
+    fn on_applied_update(&self, any: &Box<dyn Any + Send + Sync>, applied_index: u64) {
+        let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
+        rrp.update_applied(applied_index);
+    }
+
+    fn on_commit_merge(
+        &self,
+        source_any: &Box<dyn Any + Send + Sync>,
+        target_any: &Box<dyn Any + Send + Sync>,
+        applied_index: u64,
+    ) {
+        let source_rrp = source_any.downcast_ref::<RegionReadProgress>().unwrap();
+        let target_rrp = target_any.downcast_ref::<RegionReadProgress>().unwrap();
+        let source_safe_ts = source_rrp.safe_ts();
+        target_rrp.merge_safe_ts(source_safe_ts, applied_index);
+    }
+
+    fn property_to_bytes(&self, any: &Box<dyn Any + Send + Sync>) -> Result<Vec<u8>> {
+        let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
+        let (applied_index, safe_ts) = (rrp.applied_index(), rrp.safe_ts());
+        let mut read_state = ReadState::default();
+        read_state.set_applied_index(applied_index);
+        read_state.set_safe_ts(safe_ts);
+        let data = read_state.write_to_bytes()?;
+        Ok(data)
+    }
+
+    fn property_from_bytes(&self, any: &Box<dyn Any + Send + Sync>, data: Vec<u8>) -> Result<()> {
+        let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
+        let mut read_state = ReadState::default();
+        read_state.merge_from_bytes(&data)?;
+        rrp.forward_safe_ts(read_state.get_applied_index(), read_state.get_safe_ts());
+        Ok(())
     }
 }
 

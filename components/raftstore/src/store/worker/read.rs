@@ -16,7 +16,9 @@ use kvproto::raft_cmdpb::{
 };
 use time::Timespec;
 
+use crate::coprocessor::{CoprocessorHost, PeerProperties};
 use crate::errors::RAFTSTORE_IS_BUSY;
+use crate::store::fsm::store::RegionSafeTSTracker;
 use crate::store::util::{self, LeaseState, RemoteLease};
 use crate::store::{
     cmd_resp, Callback, Peer, ProposalRouter, RaftCommand, ReadResponse, RegionSnapshot,
@@ -145,8 +147,7 @@ pub struct ReadDelegate {
     tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
-    pub safe_ts: Arc<AtomicU64>,
-
+    peer_properties: Arc<PeerProperties>,
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
     track_ver: TrackVer,
@@ -217,7 +218,7 @@ impl ReadDelegate {
             tag: format!("[region {}] {}", region_id, peer_id),
             txn_extra_op: peer.txn_extra_op.clone(),
             max_ts_sync_status: peer.max_ts_sync_status.clone(),
-            safe_ts: Arc::clone(&peer.read_progress.get_safe_ts()),
+            peer_properties: peer.peer_properties.clone(),
             track_ver: TrackVer::new(),
         }
     }
@@ -322,6 +323,7 @@ where
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
+    coprocessor_host: CoprocessorHost<E>,
 }
 
 impl<C, E> ReadExecutor<E> for LocalReader<C, E>
@@ -356,7 +358,12 @@ where
     C: ProposalRouter<E::Snapshot>,
     E: KvEngine,
 {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+    pub fn new(
+        kv_engine: E,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        router: C,
+        coprocessor_host: CoprocessorHost<E>,
+    ) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -367,6 +374,7 @@ where
             store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
+            coprocessor_host,
         }
     }
 
@@ -535,18 +543,13 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        let read_ts = req.get_header().get_read_ts();
-                        let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
-                        assert!(read_ts > 0);
-                        if safe_ts < read_ts {
-                            info!("reject stale read by safe ts"; "tag" => &delegate.tag, "safe ts" => safe_ts, "read ts" => read_ts);
+                        if let Err(e) = self.coprocessor_host.pre_read::<RegionSafeTSTracker>(
+                            &delegate.peer_properties,
+                            &req,
+                            delegate.region.get_region_epoch(),
+                        ) {
                             self.metrics.rejected_by_safe_timestamp += 1;
-                            let mut response = cmd_resp::new_error(Error::DataIsNotReady(
-                                delegate.region.get_id(),
-                                delegate.peer_id,
-                                delegate.region.get_region_epoch().clone(),
-                                safe_ts,
-                            ));
+                            let mut response = cmd_resp::new_error(e);
                             cmd_resp::bind_term(&mut response, delegate.term);
                             cb.invoke_read(ReadResponse {
                                 response,
@@ -618,6 +621,7 @@ where
             delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
         }
     }
 }
