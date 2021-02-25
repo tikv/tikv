@@ -151,6 +151,7 @@ impl Downstream {
         }
         sink.send(CdcEvent::Event(event));
 
+        debug!("cdc incremental scan queue size {}", sink.get_pending_count());
         CDC_SCAN_BLOCK_DURATION_HISTOGRAM
             .observe(start.elapsed().as_secs_f64());
     }
