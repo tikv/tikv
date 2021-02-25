@@ -812,6 +812,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_encryption_enable_disable() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // encryption not enabled.
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let mut args = def_data_key_args(&tmp_dir);
@@ -859,7 +860,7 @@ mod tests {
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
     fn test_key_manager_rotate_master_key() {
-        let mut _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
 
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
