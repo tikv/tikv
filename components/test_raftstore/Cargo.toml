@@ -5,10 +5,12 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
+cloud-aws = [ "encryption_export/cloud-aws" ]
+cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
   "concurrency_manager/protobuf-codec",
-  "encryption/protobuf-codec",
+  "encryption_export/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_traits/protobuf-codec",
   "grpcio/protobuf-codec",
@@ -25,7 +27,7 @@ protobuf-codec = [
 ]
 prost-codec = [
   "concurrency_manager/prost-codec",
-  "encryption/prost-codec",
+  "encryption_export/prost-codec",
   "engine_rocks/prost-codec",
   "engine_traits/prost-codec",
   "grpcio/prost-codec",
@@ -72,7 +74,7 @@ tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tokio-timer = "0.2"
 txn_types = { path = "../txn_types", default-features = false }
-encryption = { path = "../encryption", default-features = false }
+encryption_export = { path = "../encryption/export", default-features = false }
 tokio = { version = "0.2", features = ["rt-threaded"]}
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 fail = "0.4"
