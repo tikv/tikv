@@ -223,9 +223,6 @@ where
     stop: bool,
     wbs: VecDeque<AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>>,
     metrics: AsyncWriterStoreMetrics,
-    //queue_size: usize,
-    //queue_init_bytes: usize,
-    //queue_bytes_step: f64,
     size_limits: Vec<usize>,
     current_idx: usize,
     adaptive_idx: usize,
@@ -266,9 +263,6 @@ where
             stop: false,
             wbs,
             metrics: AsyncWriterStoreMetrics::default(),
-            //queue_size,
-            //queue_init_bytes,
-            //queue_bytes_step,
             size_limits,
             current_idx: 0,
             adaptive_idx: 0,
@@ -342,18 +336,14 @@ where
     }
 
     fn has_task(&self) -> bool {
-        let first_task = self.wbs.front().unwrap();
-        if first_task.is_empty() {
-            return false;
-        }
-        true
+        !self.wbs.front().unwrap().is_empty()
     }
 
     fn has_writable_task(&self) -> bool {
-        let first_task = self.wbs.front().unwrap();
-        if first_task.is_empty() {
-            return false;
+        if self.current_idx > 0 {
+            return true;
         }
+        let first_task = self.wbs.front().unwrap();
         self.task_suggest_bytes_cache == 0
             || first_task.raft_wb.persist_size() >= self.task_suggest_bytes_cache
     }
@@ -422,12 +412,12 @@ where
             let loop_begin = UtilInstant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
+                let mut delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                 if self.io_max_wait_us == 0 {
                     while !w.stop && !w.has_task() {
                         w = self.writer.1.wait(w).unwrap();
                     }
                 } else {
-                    let mut delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                     while !w.stop && !w.has_writable_task() && delta_us > 0 {
                         w = self.writer.1.wait_timeout(w, Duration::from_millis(delta_us as u64)).unwrap().0;
                         delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
@@ -439,7 +429,13 @@ where
                 if !w.has_task() {
                     continue;
                 }
-                w.detach_task()
+                let task = w.detach_task();
+                if self.io_max_wait_us == 0 || delta_us < 0 {
+                    STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.raft_wb.persist_size() as f64);
+                } else {
+                    STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM.observe((self.io_max_wait_us - delta_us) as f64);
+                }
+                task
             };
 
             // TODO: metric change name?

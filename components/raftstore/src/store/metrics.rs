@@ -180,6 +180,30 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_size_trigger_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_time_trigger_wb_bytes",
+            "TODO",
+            exponential_buckets(0.5, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref APPLY_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_write_size_trigger_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref APPLY_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_write_time_trigger_wb_bytes",
+            "TODO",
+            exponential_buckets(0.5, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_duration_secs",
