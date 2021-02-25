@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;

@@ -20,12 +20,13 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use file_system::{
     set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
@@ -398,11 +399,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager = DataKeyManager::from_config(
+        self.encryption_key_manager = data_key_manager_from_config(
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-        .expect("Encryption failed to initialize")
+        .map_err(|e| {
+            panic!(
+                "Encryption failed to initialize: {}. code: {}",
+                e,
+                e.error_code()
+            )
+        })
+        .unwrap()
         .map(Arc::new);
     }
 
