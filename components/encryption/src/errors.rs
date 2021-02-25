@@ -3,14 +3,21 @@
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
+use std::fmt::{Debug, Display};
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
+use tikv_util::stream::RetryError;
+
+pub trait RetryCodedError: Debug + Display + ErrorCodeExt + RetryError + Send + Sync {}
 
 /// The error type for encryption.
 #[derive(Debug, Fail)]
 pub enum Error {
     #[fail(display = "Other error {}", _0)]
     Other(Box<dyn error::Error + Sync + Send>),
+    // Currently only in use by cloud KMS
+    #[fail(display = "Cloud KMS error {}", _0)]
+    RetryCodedError(Box<dyn RetryCodedError>),
     #[fail(display = "RocksDB error {}", _0)]
     Rocks(String),
     #[fail(display = "IO error {}", _0)]
@@ -67,6 +74,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
+            Error::RetryCodedError(err) => (*err).error_code(),
             Error::Rocks(_) => error_code::encryption::ROCKS,
             Error::Io(_) => error_code::encryption::IO,
             Error::Crypter(_) => error_code::encryption::CRYPTER,
@@ -75,6 +83,24 @@ impl ErrorCodeExt for Error {
             Error::WrongMasterKey(_) => error_code::encryption::WRONG_MASTER_KEY,
             Error::BothMasterKeyFail(_, _) => error_code::encryption::BOTH_MASTER_KEY_FAIL,
             Error::Other(_) => error_code::UNKNOWN,
+        }
+    }
+}
+
+impl RetryError for Error {
+    fn is_retryable(&self) -> bool {
+        // This should be refined.
+        // However, only Error::Tls should be encountered
+        match self {
+            Error::RetryCodedError(err) => err.is_retryable(),
+            Error::Rocks(_) => true,
+            Error::Io(_) => true,
+            Error::Crypter(_) => true,
+            Error::Proto(_) => true,
+            Error::UnknownEncryption => true,
+            Error::WrongMasterKey(_) => false,
+            Error::BothMasterKeyFail(_, _) => false,
+            Error::Other(_) => true,
         }
     }
 }
