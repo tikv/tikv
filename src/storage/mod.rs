@@ -76,6 +76,7 @@ use futures::prelude::*;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
+use std::time::Duration;
 use std::{
     borrow::Cow,
     iter,
@@ -84,9 +85,12 @@ use std::{
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
+use yatp::task::future::reschedule;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
+const MAX_BATCH_SIZE: usize = 1024;
 
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
@@ -1120,7 +1124,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
-    fn forward_raw_scan(
+    async fn forward_raw_scan(
         snapshot: &E::Snap,
         cf: &str,
         start_key: &Key,
@@ -1142,7 +1146,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1161,7 +1175,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    fn reverse_raw_scan(
+    async fn reverse_raw_scan(
         snapshot: &E::Snap,
         cf: &str,
         start_key: &Key,
@@ -1183,7 +1197,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1265,6 +1289,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                         .map_err(Error::from)
                     } else {
                         Self::forward_raw_scan(
@@ -1276,6 +1301,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                         .map_err(Error::from)
                     };
 
@@ -1396,7 +1422,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
+                            )
+                            .await?
                         } else {
                             Self::forward_raw_scan(
                                 &snapshot,
@@ -1406,7 +1433,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
+                            )
+                            .await?
                         };
                         result.extend(pairs.into_iter());
                     }
@@ -3640,6 +3668,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
@@ -3660,6 +3689,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
