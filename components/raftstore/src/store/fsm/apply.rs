@@ -417,7 +417,7 @@ where
             delete_ssts: vec![],
             store_id,
             pending_create_peers,
-            priority: priority,
+            priority,
         }
     }
 
@@ -966,6 +966,7 @@ where
                 }
             }
             if has_high_latency_operation(&cmd) && apply_ctx.priority != Priority::Low {
+                apply_ctx.commit(self);
                 self.priority = Priority::Low;
                 return ApplyResult::Yield;
             }
