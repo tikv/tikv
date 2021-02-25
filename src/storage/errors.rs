@@ -333,7 +333,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_too_large(commit_ts_too_large);
         }
         _ => {
-            error!(?err; "txn aborts");
+            error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }
