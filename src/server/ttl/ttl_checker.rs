@@ -10,6 +10,8 @@ use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 
+const RETRY_CNT: usize = 10;
+
 pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
     runner: Option<Runner<E, R>>,
 
@@ -144,66 +146,78 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
     }
 
     pub fn check_ttl_for_range(engine: &E, start_key: &[u8], end_key: &[u8]) {
-        let current_ts = UnixSecs::now().into_inner();
-
-        let mut files = Vec::new();
-        let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
-            Ok(v) => v,
-            Err(e) => {
-                error!(
-                    "execute ttl compact files failed";
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "files" => ?files,
-                    "err" => %e,
-                );
+        let mut retry = 0;
+        loop {
+            let current_ts = UnixSecs::now().into_inner();
+            let mut files = Vec::new();
+            let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "get range ttl properties failed";
+                        "range_start" => log_wrappers::Value::key(&start_key),
+                        "range_end" => log_wrappers::Value::key(&end_key),
+                        "files" => ?files,
+                        "err" => %e,
+                    );
+                    TTL_CHECKER_ACTIONS_COUNTER_VEC
+                        .with_label_values(&["error"])
+                        .inc();
+                    return;
+                }
+            };
+            if res.is_empty() {
                 TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["error"])
+                    .with_label_values(&["empty"])
                     .inc();
                 return;
             }
-        };
-        if res.is_empty() {
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["empty"])
-                .inc();
-        }
-        for (file_name, prop) in res {
-            if prop.max_expire_ts <= current_ts {
-                files.push(file_name);
+            for (file_name, prop) in res {
+                if prop.max_expire_ts <= current_ts {
+                    files.push(file_name);
+                }
             }
-        }
-        if files.is_empty() {
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["skip"])
-                .inc();
-            return;
-        }
+            if files.is_empty() {
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["skip"])
+                    .inc();
+                return;
+            }
 
-        let timer = Instant::now();
-        let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
-        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, &files, None) {
-            error!(
-                "execute ttl compact files failed";
-                "range_start" => log_wrappers::Value::key(&start_key),
-                "range_end" => log_wrappers::Value::key(&end_key),
+            let timer = Instant::now();
+            let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
+            if let Err(e) = engine.compact_files_cf(CF_DEFAULT, &files, None) {
+                retry += 1;
+                if retry > RETRY_CNT {
+                    error!(
+                        "execute ttl compact files failed";
+                        "range_start" => log_wrappers::Value::key(&start_key),
+                        "range_end" => log_wrappers::Value::key(&end_key),
+                        "files" => ?files,
+                        "err" => %e,
+                    );
+                    TTL_CHECKER_ACTIONS_COUNTER_VEC
+                        .with_label_values(&["error"])
+                        .inc();
+                    return;
+                }
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["retry"])
+                    .inc();
+                thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+            compact_range_timer.observe_duration();
+            info!(
+                "compact files finished";
                 "files" => ?files,
-                "err" => %e,
+                "time_takes" => ?timer.elapsed(),
             );
             TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["error"])
+                .with_label_values(&["compact"])
                 .inc();
-            return;
+            break;
         }
-        compact_range_timer.observe_duration();
-        info!(
-            "compact files finished";
-            "files" => ?files,
-            "time_takes" => ?timer.elapsed(),
-        );
-        TTL_CHECKER_ACTIONS_COUNTER_VEC
-            .with_label_values(&["compact"])
-            .inc();
 
         // wait a while
         thread::sleep(Duration::from_secs(2));
