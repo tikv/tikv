@@ -118,10 +118,6 @@ impl From<RequestError> for io::Error {
 }
 
 impl RetryError for RequestError {
-    fn placeholder() -> Self {
-        Self::OAuth(tame_oauth::Error::InvalidKeyFormat)
-    }
-
     fn is_retryable(&self) -> bool {
         match self {
             // FIXME: Inspect the error source?
