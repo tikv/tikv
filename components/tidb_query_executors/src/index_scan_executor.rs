@@ -17,7 +17,7 @@ use tidb_query_common::storage::{IntervalRange, Storage};
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tidb_query_datatype::codec::row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder};
-use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN};
+use tidb_query_datatype::codec::table::{check_index_key, MAX_OLD_ENCODED_VALUE_LEN, INDEX_VALUE_VERSION_FLAG};
 use tidb_query_datatype::codec::{datum, datum::DatumDecoder, table, Datum};
 use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
@@ -114,6 +114,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             columns_id_for_common_handle,
             decode_handle_strategy,
             pid_column_cnt,
+            index_version: -1,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -187,6 +188,8 @@ struct IndexScanExecutorImpl {
 
     /// Number of partition ID columns, now it can only be 0 or 1.
     pid_column_cnt: usize,
+
+    index_version: i64,
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -286,6 +289,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     ) -> Result<()> {
         check_index_key(key)?;
         key = &key[table::PREFIX_LEN + table::ID_LEN..];
+        if self.index_version == -1 {
+            self.index_version = Self::get_index_version(value)?
+        }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
             self.process_kv_general(key, value, columns)
         } else {
@@ -494,6 +500,22 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
+    // get_index_version is the same as getIndexVersion() in the TiDB repo.
+    fn get_index_version(value: &[u8]) -> Result<i64> {
+        if value.len() <= MAX_OLD_ENCODED_VALUE_LEN {
+            return Ok(0);
+        }
+        let tail_len = value[0] as usize;
+        if tail_len > value.len() {
+            return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
+        }
+        if (tail_len == 0 || tail_len == 1) && value[1] == INDEX_VALUE_VERSION_FLAG {
+            return Ok(value[2] as i64)
+        }
+
+        Ok(0)
+    }
+
     // Process new layout index values in an extensible way,
     // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     fn process_kv_general(
@@ -523,7 +545,13 @@ impl IndexScanExecutorImpl {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
         }
 
-        let (remaining, tail) = index_value[1..].split_at(index_value.len() - 1 - tail_len);
+
+        let (remaining, tail) = if self.index_version == 1 {
+            // Skip the version segment.
+            index_value[3..].split_at(index_value.len() - 1 - tail_len)
+        } else {
+            index_value[1..].split_at(index_value.len() - 1 - tail_len)
+        };
 
         let (common_handle_bytes, remaining) = Self::split_common_handle(remaining)?;
         let (decode_handle_op, remaining) = {
@@ -572,11 +600,11 @@ impl IndexScanExecutorImpl {
             }
         };
 
-        let (restore_data, is_v5, remaining) = Self::split_restore_data(remaining)?;
+        let (restore_data, remaining) = Self::split_restore_data(remaining)?;
         let restore_data = {
             if restore_data.is_empty() {
                 RestoreData::NotExists
-            } else if is_v5 {
+            } else if self.index_version == 1 {
                 RestoreData::V5(restore_data)
             } else {
                 RestoreData::V4(restore_data)
@@ -665,9 +693,8 @@ impl IndexScanExecutorImpl {
         }
 
         let restore_data_bytes = match restore_data {
-            RestoreData::NotExists => return Ok(()),
-            RestoreData::V4(value) => value,
             RestoreData::V5(value) => value,
+            _ => return Ok(()),
         };
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
@@ -745,22 +772,17 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn split_restore_data(value: &[u8]) -> Result<(&[u8], bool, &[u8])> {
+    fn split_restore_data(value: &[u8]) -> Result<(&[u8], &[u8])> {
         Ok(
             if value
                 .get(0)
-                .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_V5_FLAG)
-            {
-                (&value[1..], true, &value[value.len()..])
-            } else if value
-                .get(0)
                 .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
-                (value, false, &value[value.len()..])
+                (value, &value[value.len()..])
             } else if value.is_empty() {
-                (value, false, value)
+                (value, value)
             } else {
-                (&value[..0], false, value)
+                (&value[..0], value)
             },
         )
     }
@@ -1776,6 +1798,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -1824,6 +1847,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -1872,6 +1896,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -1930,6 +1955,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2005,6 +2031,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2053,6 +2080,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2104,6 +2132,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2162,6 +2191,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2280,6 +2310,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2394,6 +2425,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2508,6 +2540,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2622,6 +2655,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2736,6 +2770,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2863,6 +2898,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
