@@ -508,7 +508,7 @@ impl IndexScanExecutorImpl {
             return Ok(0);
         }
         let tail_len = value[0] as usize;
-        if tail_len > value.len() {
+        if tail_len >= value.len() {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
         }
         if (tail_len == 0 || tail_len == 1) && value[1] == INDEX_VALUE_VERSION_FLAG {
@@ -543,7 +543,7 @@ impl IndexScanExecutorImpl {
         index_value: &'a [u8],
     ) -> Result<(DecodeHandleOp<'a>, DecodePartitionIdOp<'a>, RestoreData<'a>)> {
         let tail_len = index_value[0] as usize;
-        if tail_len > index_value.len() {
+        if tail_len >= index_value.len() {
             return Err(other_err!("`tail_len`: {} is corrupted", tail_len));
         }
 
