@@ -35,6 +35,7 @@ use time::Timespec;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::store::cmd_resp::bind_term;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
@@ -1974,12 +1975,25 @@ where
     }
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+    fn post_pending_read_index_on_replica<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
         while let Some(mut read) = self.pending_reads.pop_front() {
-            // addition_request indicates an ongoing lock checking. We must wait until lock checking finished.
-            if read.addition_request.is_some() {
-                self.pending_reads.push_front(read);
-                break;
+            // The response of this read index request is lost, but we need it for
+            // the memory lock checking result. Re-propose the request.
+            if let Some(read_index) = read.addition_request.take() {
+                assert_eq!(read.cmds.len(), 1);
+                let (mut req, cb, _) = read.cmds.pop().unwrap();
+                assert_eq!(req.requests.len(), 1);
+                req.requests[0].set_read_index(*read_index);
+                info!(
+                    "re-propose read index request because the response is lost";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                self.propose(ctx, cb, req);
+                continue;
             }
 
             assert!(read.read_index.is_some());
@@ -1999,7 +2013,7 @@ where
         }
     }
 
-    fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
+    fn apply_reads<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
@@ -2043,7 +2057,7 @@ where
         }
     }
 
-    pub fn post_apply<T>(
+    pub fn post_apply<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         apply_state: RaftApplyState,
@@ -2191,11 +2205,14 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
     ) -> bool {
         if self.pending_remove {
             return false;
         }
+
+        let mut err_resp = RaftCmdResponse::default();
+        let term = self.term();
+        bind_term(&mut err_resp, term);
 
         ctx.raft_metrics.propose.all += 1;
 
