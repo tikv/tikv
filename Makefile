@@ -31,7 +31,7 @@
 #
 # - `release` - create a release profile, optimized build
 
-SHELL := /bin/bash
+SHELL := bash
 ENABLE_FEATURES ?=
 
 # Pick an allocator
@@ -95,6 +95,11 @@ ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
 ENABLE_FEATURES += test-engines-rocksdb
 else
 # Caller is responsible for setting up test engine features
+endif
+
+ifneq ($(NO_CLOUD),1)
+ENABLE_FEATURES += cloud-aws
+ENABLE_FEATURES += cloud-gcp
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -316,7 +321,7 @@ ctl:
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 # Actually use make to track dependencies! This saves half a second.
-error_code_files := $(shell find components/error_code/ -type f )
+error_code_files := $(shell find $(PROJECT_DIR)/components/error_code/ -type f )
 etc/error_code.toml: $(error_code_files)
 	cargo run --manifest-path components/error_code/Cargo.toml --features protobuf-codec
 
