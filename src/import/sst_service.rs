@@ -126,7 +126,7 @@ where
         };
         match res {
             Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-            Err(ref e) => error!(%e; "switch mode failed"; "mode" => ?req.get_mode(),),
+            Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
         }
 
         let task = async move {
@@ -389,7 +389,7 @@ where
                     "end" => end.map(log_wrappers::Value::key),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
-                Err(ref e) => error!(%e;
+                Err(ref e) => error!(%*e;
                     "compact files in range failed";
                     "start" => start.map(log_wrappers::Value::key),
                     "end" => end.map(log_wrappers::Value::key),
