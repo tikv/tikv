@@ -6,7 +6,6 @@ use std::thread;
 use std::time::Duration;
 
 use collections::HashMap;
-use engine_rocks::RocksWriteBatch;
 use engine_traits::Peekable;
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
@@ -315,7 +314,7 @@ fn test_error_in_compaction_filter() {
 
     let mut gc_runner = TestGCRunner::default();
     gc_runner.safe_point = 200;
-    gc_runner.orphan_versions_handler = Some(Arc::new(move |wb: RocksWriteBatch| {
+    gc_runner.orphan_versions_handler = Some(Arc::new(move |wb, _| {
         assert_eq!(wb.as_inner().count(), 2);
     }));
     gc_runner.gc(&raw_engine);

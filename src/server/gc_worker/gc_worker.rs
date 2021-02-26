@@ -10,7 +10,8 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    DeleteStrategy, MiscExt, Mutable, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -33,7 +34,10 @@ use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
+use super::{
+    Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+    GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+};
 use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -85,7 +89,7 @@ pub enum GcTask {
     /// `DB::delete` in write CF's compaction filter. However if the compaction filter finds
     /// the DB is stalled, it will send the task to GC worker to ensure the compaction can be
     /// continued.
-    OrphanVersions(RocksWriteBatch),
+    OrphanVersions { wb: RocksWriteBatch, id: usize },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
@@ -96,7 +100,7 @@ impl GcTask {
             GcTask::Gc { .. } => GcCommandKind::gc,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
             GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
-            GcTask::OrphanVersions(..) => GcCommandKind::orphan_versions,
+            GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => GcCommandKind::validate_config,
         }
@@ -128,7 +132,7 @@ impl Display for GcTask {
                 .debug_struct("PhysicalScanLock")
                 .field("max_ts", max_ts)
                 .finish(),
-            GcTask::OrphanVersions(..) => write!(f, "OrphanVersions"),
+            GcTask::OrphanVersions { .. } => write!(f, "OrphanVersions"),
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
         }
@@ -509,13 +513,18 @@ where
                     limit,
                 );
             }
-            GcTask::OrphanVersions(wb) => {
-                info!("handling GcTask::OrphanVersions"; "size" => wb.as_inner().count());
+            GcTask::OrphanVersions { wb, id } => {
+                info!("handling GcTask::OrphanVersions"; "id" => id);
                 let mut wopts = WriteOptions::default();
                 wopts.set_sync(true);
                 if let Err(e) = wb.write_opt(&wopts) {
-                    error!("write GcTask::OrphanVersions fail"; "err" => ?e);
+                    error!("write GcTask::OrphanVersions fail"; "id" => id, "err" => ?e);
+                    return;
                 }
+                info!("write GcTask::OrphanVersions success"; "id" => id);
+                GC_COMPACTION_FILTER_ORPHAN_VERSIONS
+                    .with_label_values(&["cleaned"])
+                    .inc_by(wb.count() as i64);
             }
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(f) => {
@@ -681,9 +690,9 @@ where
             safe_point.clone(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
-            Arc::new(move |wb: RocksWriteBatch| {
-                if let Err(e) = scheduler.schedule(GcTask::OrphanVersions(wb)) {
-                    error!("schedule GcTask::OrphanVersions fail"; "err" => ?e);
+            Arc::new(move |wb: RocksWriteBatch, id: usize| {
+                if let Err(e) = scheduler.schedule(GcTask::OrphanVersions { wb, id }) {
+                    error!("schedule GcTask::OrphanVersions fail"; "id" => id, "err" => ?e);
                 }
             }),
         );

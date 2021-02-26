@@ -5,7 +5,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::ffi::CString;
 use std::mem;
 use std::result::Result;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,10 +42,13 @@ struct GcContext {
     safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
-    orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+    orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
+
+// Give all orphan versions an ID to log them.
+static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
     static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
@@ -69,10 +72,6 @@ lazy_static! {
         "Compaction filter meets failure"
     )
     .unwrap();
-    static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounter = register_int_counter!(
-        "tikv_gc_compaction_orphan_versions",
-        "Compaction filter orphan versions for default CF"
-    ).unwrap();
     // A counter for skip performing GC in compactions.
     static ref GC_COMPACTION_FILTER_SKIP: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filter_skip",
@@ -107,6 +106,12 @@ lazy_static! {
         "Compaction of mvcc rollbacks"
     )
     .unwrap();
+
+    pub static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounterVec = register_int_counter_vec!(
+        "tikv_gc_compaction_orphan_versions",
+        "Compaction filter orphan versions for default CF",
+        &["tag"]
+    ).unwrap();
 }
 
 pub trait CompactionFilterInitializer {
@@ -121,13 +126,13 @@ pub trait CompactionFilterInitializer {
     /// because at the time the instance has already been stalled. So it's possible that the TiKV
     /// instance fails after a compaction result is installed but its orphan versions are not
     /// deleted. Those orphan versions will never get cleaned until `DefaultCompactionFilter` is
-    /// introduced.
+    /// introduced. The tracking issue: https://github.com/tikv/tikv/issues/9719.
     fn init_compaction_filter(
         &self,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
     );
 }
 
@@ -137,7 +142,7 @@ impl<T> CompactionFilterInitializer for T {
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
-        _orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+        _orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
     ) {
     }
 }
@@ -148,7 +153,7 @@ impl CompactionFilterInitializer for RocksEngine {
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -202,7 +207,11 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db.get_property_int("rocksdb.is-write-stalled").unwrap() != 0 {
+        if db
+            .get_property_int("rocksdb.is-write-stalled")
+            .unwrap_or_default()
+            != 0
+        {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
@@ -244,7 +253,7 @@ struct WriteCompactionFilter {
 
     // It's only used to handle default CF but not write CF.
     write_batch: RocksWriteBatch,
-    orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+    orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
 
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
@@ -286,7 +295,7 @@ impl WriteCompactionFilter {
         db: Arc<DB>,
         safe_point: u64,
         context: &CompactionFilterContext,
-        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch) + Send + Sync>,
+        orphan_versions_handler: Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>,
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -558,10 +567,14 @@ impl WriteCompactionFilter {
             let mut wopts = WriteOptions::default();
             wopts.set_no_slowdown(true);
             if let Err(e) = do_flush(db, &self.write_batch, &wopts) {
-                warn!("compaction filter persist write batch fail"; "err" => ?e);
                 let wb = mem::replace(&mut self.write_batch, RocksWriteBatch::new(db.clone()));
                 self.orphan_versions += wb.count();
-                (self.orphan_versions_handler)(wb);
+                let id = ORPHAN_VERSIONS_ID.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    "compaction filter cleans orphan versions fail";
+                    "err" => ?e, "id" => id,
+                );
+                (self.orphan_versions_handler)(wb, id);
                 return Err(e);
             }
             self.write_batch.clear();
@@ -582,6 +595,34 @@ impl WriteCompactionFilter {
         }
         self.total_deleted += self.deleted;
         self.deleted = 0;
+    }
+
+    fn flush_metrics(&self) {
+        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
+        GC_COMPACTION_DELETED.inc_by(self.total_deleted as i64);
+        GC_COMPACTION_FILTER_SEEK.inc_by(self.seek_times as i64);
+        GC_COMPACTION_FILTER_NEXT.inc_by(self.next_times as i64);
+        GC_COMPACTION_MVCC_DELETE_SKIP_OLDER.inc_by(self.mvcc_delete_skip_older as i64);
+        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
+        GC_COMPACTION_FILTER_ORPHAN_VERSIONS
+            .with_label_values(&["generated"])
+            .inc_by(self.orphan_versions as i64);
+        if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
+            stats.versions.update(|x| x + self.total_versions);
+            stats.filtered.update(|x| x + self.total_filtered);
+            stats.deleted.update(|x| x + self.total_deleted);
+            if stats.need_report() {
+                return Some(stats.prepare_report());
+            }
+            None
+        }) {
+            if filtered > 0 || deleted > 0 {
+                info!(
+                    "Compaction filter reports"; "total" => versions,
+                    "filtered" => filtered, "deleted" => deleted,
+                );
+            }
+        }
     }
 }
 
@@ -625,33 +666,13 @@ impl Drop for WriteCompactionFilter {
     // becomes installed into the DB instance.
     fn drop(&mut self) {
         self.handle_delete_mark();
-        let _ = self.flush_pending_writes_if_need(true);
+        if let Err(e) = self.flush_pending_writes_if_need(true) {
+            error!("compaction filter flush writes fail"; "err" => ?e);
+        }
         self.engine.sync_wal().unwrap();
 
         self.switch_key_metrics();
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as i64);
-        GC_COMPACTION_DELETED.inc_by(self.total_deleted as i64);
-        GC_COMPACTION_FILTER_SEEK.inc_by(self.seek_times as i64);
-        GC_COMPACTION_FILTER_NEXT.inc_by(self.next_times as i64);
-        GC_COMPACTION_MVCC_DELETE_SKIP_OLDER.inc_by(self.mvcc_delete_skip_older as i64);
-        GC_COMPACTION_MVCC_ROLLBACK.inc_by(self.mvcc_rollback_and_locks as i64);
-        GC_COMPACTION_FILTER_ORPHAN_VERSIONS.inc_by(self.orphan_versions as i64);
-        if let Some((versions, filtered, deleted)) = STATS.with(|stats| {
-            stats.versions.update(|x| x + self.total_versions);
-            stats.filtered.update(|x| x + self.total_filtered);
-            stats.deleted.update(|x| x + self.total_deleted);
-            if stats.need_report() {
-                return Some(stats.prepare_report());
-            }
-            None
-        }) {
-            if filtered > 0 || deleted > 0 {
-                info!(
-                    "Compaction filter reports"; "total" => versions,
-                    "filtered" => filtered, "deleted" => deleted,
-                );
-            }
-        }
+        self.flush_metrics();
 
         #[cfg(any(test, feature = "failpoints"))]
         for callback in &self.callbacks_on_drop {
@@ -825,7 +846,7 @@ pub mod test_utils {
         pub start: Option<&'a [u8]>,
         pub end: Option<&'a [u8]>,
         pub target_level: Option<usize>,
-        pub orphan_versions_handler: Option<Arc<dyn Fn(RocksWriteBatch) + Send + Sync>>,
+        pub orphan_versions_handler: Option<Arc<dyn Fn(RocksWriteBatch, usize) + Send + Sync>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
@@ -862,7 +883,7 @@ pub mod test_utils {
                     orphan_versions_handler: self
                         .orphan_versions_handler
                         .clone()
-                        .unwrap_or_else(|| Arc::new(|_: RocksWriteBatch| {})),
+                        .unwrap_or_else(|| Arc::new(|_, _| {})),
                     callbacks_on_drop: self.callbacks_on_drop.clone(),
                 });
                 return;

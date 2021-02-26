@@ -9,7 +9,9 @@ mod gc_worker;
 // TODO: Use separated error type for GCWorker instead.
 pub use crate::storage::{Callback, Error, ErrorInner, Result};
 pub use compaction_filter::WriteCompactionFilterFactory;
-use compaction_filter::{is_compaction_filter_allowed, CompactionFilterInitializer};
+use compaction_filter::{
+    is_compaction_filter_allowed, CompactionFilterInitializer, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+};
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 pub use gc_manager::AutoGcConfig;
 pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
