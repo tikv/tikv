@@ -780,8 +780,6 @@ impl IndexScanExecutorImpl {
                 .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
-            } else if value.is_empty() {
-                (value, value)
             } else {
                 (&value[..0], value)
             },
