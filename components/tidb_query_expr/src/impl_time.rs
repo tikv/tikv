@@ -711,13 +711,13 @@ pub fn duration_duration_time_diff(
         Some(res) => res,
         // `check_sub` returns `None` if the sub operation overflow/underflow i64 bound or mysql_time_value bound.
         // and we need to treat these two case separately.
-        // if `arg1 - arg2` is in [`MAX_NANOS`, `i64::MAX`], return max value of mysql `TIME` type.
-        // if `arg1 - arg2` is in [`i64::MIN`, `-MAX_NANOS`], return min value of mysql `TIME` type.
+        // if `arg1 - arg2` is in (`MAX_NANOS`, `i64::MAX`], return max value of mysql `TIME` type.
+        // if `arg1 - arg2` is in [`i64::MIN`, `-MAX_NANOS`), return min value of mysql `TIME` type.
         // if `arg1 - arg2` is overflow or underflow i64, return `None`.
-        None if !arg1.is_neg() && i64::MAX - arg1.to_nanos() > -arg2.to_nanos() => {
+        None if !arg1.is_neg() &&  arg1.to_nanos() - i64::MAX <= arg2.to_nanos() => {
             Duration::from_nanos(MAX_NANOS, arg1.fsp().max(arg2.fsp()) as i8)?
         }
-        None if arg1.is_neg() && i64::MIN - arg1.to_nanos() < -arg2.to_nanos() => {
+        None if arg1.is_neg() &&  arg1.to_nanos() - i64::MIN >= arg2.to_nanos() => {
             Duration::from_nanos(-MAX_NANOS, arg1.fsp().max(arg2.fsp()) as i8)?
         }
         _ => {
