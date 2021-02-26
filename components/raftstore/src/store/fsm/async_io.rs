@@ -240,6 +240,9 @@ where
     }
 
     fn before_write_to_db(&mut self) {
+        for ts in &self.proposal_times {
+            STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+        }
         let chunks = std::mem::take(&mut self.chunks);
         for ck in chunks {
             self.raft_wb.append(ck.region_id, ck.entries).unwrap();
@@ -253,7 +256,7 @@ where
         }
         self.size = 0;
         for ts in &self.proposal_times {
-            STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+            STORE_FILL_WB_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
         }
     }
 

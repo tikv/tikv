@@ -1873,13 +1873,7 @@ where
                     lease_to_be_updated = false;
                 }
             }
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
-            {
-                if term == entry.get_term() {
-                    STORE_SCHEDULE_COMMIT_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            }
+
             fail_point!(
                 "leader_commit_prepare_merge",
                 {
