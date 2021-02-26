@@ -326,7 +326,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             top_n_size: common_handle_req
                 .as_ref()
                 .map_or_else(|| 0_usize, |req| req.get_top_n_size() as usize),
-            common_handle_col_ids: common_handle_ids.clone(),
+            common_handle_col_ids: common_handle_ids,
             columns_info,
             analyze_common_handle: common_handle_req != None,
         })
