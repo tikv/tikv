@@ -148,7 +148,7 @@ impl Downstream {
         let start = Instant::now_coarse();
         let sink = self.sink.as_ref().unwrap();
         let mut attempts = 0;
-        while sink.get_pending_count() >= 512 || attempts > 12 {
+        while sink.get_pending_count() >= 512 && attempts < 12 {
             if self.state.load() == DownstreamState::Stopped {
                 warn!("send incremental scan failed, downstream has stopped");
                 return;
