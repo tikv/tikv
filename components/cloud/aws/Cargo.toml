@@ -1,0 +1,47 @@
+[package]
+name = "aws"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+    "kvproto/protobuf-codec",
+    "cloud/protobuf-codec",
+]
+prost-codec = [
+    "kvproto/prost-codec",
+    "cloud/prost-codec",
+]
+
+[dependencies]
+async-trait = "0.1"
+bytes = "0.5"
+cloud = { path = "../", default-features = false }
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
+# This is only a dependency to vendor openssl for rusoto. It's not clear exactly
+# how openssl is built for tikv, but it seems to be controlled by grpcio. This
+# makes `cargo test -p external_storage` link correctly.
+grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+http = "0.2.0"
+hyper = "0.13.3"
+hyper-tls = "0.4.1"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+rusoto_core = "0.45.0"
+rusoto_credential = "0.45.0"
+rusoto_kms = { version = "0.45.0", features = ["serialize_structs"] }
+rusoto_sts = "0.45.0"
+rusoto_s3 = "0.45.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+# better to not use slog-global, but pass in the logger
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_util = { path = "../../tikv_util", default-features = false }
+url = "2.0"
+
+[dev-dependencies]
+matches = "0.1.8"
+futures = "0.3"
+rusoto_mock = "0.45.0"
+tokio = { version = "0.2" }

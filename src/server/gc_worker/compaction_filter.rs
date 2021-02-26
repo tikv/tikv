@@ -230,6 +230,7 @@ struct WriteCompactionFilter {
     // instead of `seek`.
     near_seek_distance: usize,
     write_iter: Option<RocksEngineIterator>,
+    write_iter_initialized: bool,
 
     versions: usize,
     filtered: usize,
@@ -269,6 +270,7 @@ impl WriteCompactionFilter {
             deleting_filtered: None,
             near_seek_distance: NEAR_SEEK_LIMIT,
             write_iter: None,
+            write_iter_initialized: false,
 
             versions: 0,
             filtered: 0,
@@ -444,6 +446,18 @@ impl WriteCompactionFilter {
 
     fn write_iter_seek_to(&mut self, mark: &[u8]) -> Result<bool, String> {
         let write_iter = self.write_iter.as_mut().unwrap();
+
+        if std::mem::replace(&mut self.write_iter_initialized, true) {
+            // The range can be cleared by `DeleteFilesInRange` or some similar RocksDB APIs,
+            // in which case it's unnecessary to call re-seek for the iterator.
+            if !write_iter.valid()? {
+                return Ok(false);
+            }
+            if write_iter.key() >= mark {
+                return Ok(true);
+            }
+        }
+
         if self.near_seek_distance >= NEAR_SEEK_LIMIT {
             self.near_seek_distance = 0;
             let valid = write_iter.seek(SeekKey::Key(mark))?;
@@ -726,6 +740,8 @@ pub mod tests {
         ImportExt, IngestExternalFileOptions, IterOptions, Iterable, MiscExt, Peekable, SstWriter,
         SstWriterBuilder, SyncMutable,
     };
+    use std::sync::mpsc;
+    use std::time::Duration;
     use tikv_util::config::VersionTrack;
 
     /// Do a global GC with the given safe point.
@@ -1208,6 +1224,58 @@ pub mod tests {
         gc_runner.safe_point(130).gc_on_files(&raw_engine, &files);
         // key_112 must be cleared by the compaction.
         must_get_none(&engine, b"zkey", 120)
+    }
+
+    #[test]
+    fn test_delete_files_in_range() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+        let mut gc_runner = TestGCRunner {
+            ratio_threshold: Some(0.9),
+            ..Default::default()
+        };
+
+        // So the construction of SST files will be:
+        // L6: |key1_101, key2_108, key2_106, key2_104, key2_102, key3_101|
+        must_prewrite_put(&engine, b"zkey1", b"zvalue1", b"zkey1", 101);
+        must_commit(&engine, b"zkey1", 101, 102);
+        must_prewrite_put(&engine, b"zkey3", b"zvalue1", b"zkey3", 101);
+        must_commit(&engine, b"zkey3", 101, 102);
+        must_prewrite_put(&engine, b"zkey2", b"zvalue1", b"zkey2", 101);
+        must_commit(&engine, b"zkey2", 101, 102);
+        must_prewrite_put(&engine, b"zkey2", b"zvalue2", b"zkey2", 103);
+        must_commit(&engine, b"zkey2", 103, 104);
+        must_prewrite_put(&engine, b"zkey2", b"zvalue3", b"zkey2", 105);
+        must_commit(&engine, b"zkey2", 105, 106);
+        must_prewrite_delete(&engine, b"zkey2", b"zkey2", 107);
+        must_commit(&engine, b"zkey2", 107, 108);
+        gc_runner.target_level = Some(6);
+        gc_runner.safe_point(50).gc(&raw_engine);
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
+
+        let cf = get_cf_handle(raw_engine.as_inner(), CF_WRITE).unwrap();
+        raw_engine
+            .as_inner()
+            .delete_files_in_range_cf(cf, b"zkey2", b"zkey3", false)
+            .unwrap();
+        assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
+
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        gc_runner
+            .callbacks_on_drop
+            .push(Arc::new(move |filter: &WriteCompactionFilter| {
+                tx.send(()).unwrap();
+                // With the first `seek` the compaction filter can find that the range
+                // is deleted, so no more `seek` or `next` is necessary.
+                assert_eq!(filter.seek_times, 1);
+                assert_eq!(filter.next_times, 0);
+            }));
+        gc_runner.safe_point(200).gc(&raw_engine);
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_ok());
     }
 
     // Test a key can be GCed correctly if its MVCC versions cover multiple SST files.

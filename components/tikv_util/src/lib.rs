@@ -2,7 +2,6 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
-#![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(str_split_once)]
 
@@ -46,6 +45,7 @@ pub mod logger;
 pub mod lru;
 pub mod metrics;
 pub mod mpsc;
+pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;

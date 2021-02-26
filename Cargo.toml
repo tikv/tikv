@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -24,11 +24,13 @@ failpoints = [
   "raftstore/failpoints",
   "engine_rocks/failpoints"
 ]
+cloud-aws = [ "encryption_export/cloud-aws" ]
+cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
   "concurrency_manager/protobuf-codec",
-  "encryption/protobuf-codec",
+  "encryption_export/protobuf-codec",
   "engine_panic/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_test/protobuf-codec",
@@ -58,7 +60,7 @@ prost-codec = [
   "batch-system/prost-codec",
   "codec/prost-codec",
   "concurrency_manager/prost-codec",
-  "encryption/prost-codec",
+  "encryption_export/prost-codec",
   "engine_panic/prost-codec",
   "engine_rocks/prost-codec",
   "engine_test/prost-codec",
@@ -117,7 +119,7 @@ crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
 derive_more = "0.99.3"
-encryption = { path = "components/encryption", default-features = false }
+encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
 engine_test = { path = "components/engine_test", default-features = false }
@@ -253,6 +255,8 @@ members = [
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
+  "components/cloud",
+  "components/cloud/aws",
   "components/backup",
   "components/keys",
   "components/sst_importer",

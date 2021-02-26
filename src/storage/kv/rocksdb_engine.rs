@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::raw::ColumnFamilyOptions;
+use engine_rocks::file_system::get_env as get_inspected_env;
+use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -102,8 +103,14 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let worker = Worker::new("engine-rocksdb");
+        let mut db_opts = DBOptions::new();
+        let env = get_inspected_env(None).unwrap();
+        db_opts.set_env(env);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
-            &path, None, cfs, cfs_opts,
+            &path,
+            Some(db_opts),
+            cfs,
+            cfs_opts,
         )?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
