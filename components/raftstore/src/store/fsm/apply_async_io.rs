@@ -415,15 +415,22 @@ where
             let loop_begin = Instant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                let mut delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                let mut delta_us =
+                    self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                 if self.io_max_wait_us == 0 {
                     while !w.stop && !w.has_task() {
                         w = self.writer.1.wait(w).unwrap();
                     }
                 } else {
                     while !w.stop && !w.has_writable_task() && delta_us > 0 {
-                        w = self.writer.1.wait_timeout(w, Duration::from_millis(delta_us as u64)).unwrap().0;
-                        delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                        w = self
+                            .writer
+                            .1
+                            .wait_timeout(w, Duration::from_millis(delta_us as u64))
+                            .unwrap()
+                            .0;
+                        delta_us = self.io_max_wait_us
+                            - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                     }
                 }
                 if w.stop {
@@ -436,7 +443,8 @@ where
                 if self.io_max_wait_us == 0 || delta_us < 0 {
                     APPLY_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.kv_wb.data_size() as f64);
                 } else {
-                    APPLY_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM.observe((self.io_max_wait_us - delta_us) as f64);
+                    APPLY_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM
+                        .observe((self.io_max_wait_us - delta_us) as f64);
                 }
                 task
             };

@@ -16,9 +16,12 @@ use crate::{observe_perf_context_type, report_perf_context, Result};
 
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
+use kvproto::raft_serverpb::RaftLocalState;
+use raft::eraftpb::Entry;
+
+use std::time::Duration;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
-use std::time::Duration;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -91,20 +94,15 @@ impl SampleWindow {
 #[derive(Default)]
 pub struct UnsyncedReady {
     pub number: u64,
-    pub region_id: u64,
     pub notifier: Arc<AtomicU64>,
 }
 
 impl UnsyncedReady {
-    fn new(number: u64, region_id: u64, notifier: Arc<AtomicU64>) -> Self {
-        Self {
-            number,
-            region_id,
-            notifier,
-        }
+    fn new(number: u64, notifier: Arc<AtomicU64>) -> Self {
+        Self { number, notifier }
     }
 
-    fn flush<EK, ER>(&self, router: &RaftRouter<EK, ER>)
+    fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>)
     where
         EK: KvEngine,
         ER: RaftEngine,
@@ -121,16 +119,34 @@ impl UnsyncedReady {
                     .notifier
                     .compare_and_swap(pre_number, self.number, Ordering::AcqRel)
             {
-                if let Err(e) = router.force_send(self.region_id, PeerMsg::Noop) {
+                if let Err(e) = router.force_send(region_id, PeerMsg::Noop) {
                     error!(
                         "failed to send noop to trigger persisted ready";
-                        "region_id" => self.region_id,
+                        "region_id" => region_id,
                         "ready_number" => self.number,
                         "error" => ?e,
                     );
                 }
                 break;
             }
+        }
+    }
+}
+
+pub struct AsyncWriteChunk {
+    region_id: u64,
+    pub entries: Vec<Entry>,
+    pub cut_logs: Option<(u64, u64)>,
+    pub size: usize,
+}
+
+impl AsyncWriteChunk {
+    pub fn new(region_id: u64) -> Self {
+        Self {
+            region_id,
+            entries: vec![],
+            cut_logs: None,
+            size: 0,
         }
     }
 }
@@ -143,9 +159,12 @@ where
 {
     pub kv_wb: WK,
     pub raft_wb: WR,
+    pub chunks: Vec<AsyncWriteChunk>,
     pub unsynced_readies: HashMap<u64, UnsyncedReady>,
+    pub raft_states: HashMap<u64, RaftLocalState>,
     pub begin: Option<UtilInstant>,
     pub proposal_times: Vec<Instant>,
+    pub size: usize,
     _phantom: PhantomData<EK>,
 }
 
@@ -159,9 +178,12 @@ where
         Self {
             kv_wb,
             raft_wb,
+            chunks: vec![],
             unsynced_readies: HashMap::default(),
+            raft_states: HashMap::default(),
             begin: None,
             proposal_times: vec![],
+            size: 0,
             _phantom: PhantomData,
         }
     }
@@ -172,31 +194,64 @@ where
         }
     }
 
+    pub fn update_chunk(&mut self, chunk: AsyncWriteChunk) {
+        self.size += chunk.size;
+        self.chunks.push(chunk);
+    }
+
+    pub fn update_raft_state(&mut self, region_id: u64, raft_state: RaftLocalState) {
+        if !self.raft_states.contains_key(&region_id) {
+            self.size += 4 * 8;
+        }
+        self.raft_states.insert(region_id, raft_state);
+    }
+
     pub fn update_ready(
         &mut self,
         region_id: u64,
         ready_number: u64,
         region_notifier: Arc<AtomicU64>,
     ) {
-        self.unsynced_readies.insert(
-            region_id,
-            UnsyncedReady::new(ready_number, region_id, region_notifier),
-        );
+        self.unsynced_readies
+            .insert(region_id, UnsyncedReady::new(ready_number, region_notifier));
     }
 
     pub fn is_empty(&self) -> bool {
-        self.raft_wb.is_empty() && self.unsynced_readies.is_empty() && self.kv_wb.is_empty()
+        self.raft_wb.is_empty()
+            && self.chunks.is_empty()
+            && self.unsynced_readies.is_empty()
+            && self.raft_states.is_empty()
+            && self.kv_wb.is_empty()
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         // raft_wb doesn't have clear interface but it should be consumed by raft engine before
         self.kv_wb.clear();
+        self.chunks.clear();
         self.unsynced_readies.clear();
+        self.raft_states.clear();
         self.begin = None;
         self.proposal_times.clear();
+        self.size = 0;
     }
 
-    fn before_write_to_db(&self) {
+    fn get_raft_size(&self) -> usize {
+        self.size + self.raft_wb.persist_size()
+    }
+
+    fn before_write_to_db(&mut self) {
+        let chunks = std::mem::take(&mut self.chunks);
+        for ck in chunks {
+            self.raft_wb.append(ck.region_id, ck.entries).unwrap();
+            if let Some((from, to)) = ck.cut_logs {
+                self.raft_wb.cut_logs(ck.region_id, from, to);
+            }
+        }
+        let raft_states = std::mem::take(&mut self.raft_states);
+        for (region_id, state) in raft_states {
+            self.raft_wb.put_raft_state(region_id, &state).unwrap();
+        }
+        self.size = 0;
         for ts in &self.proposal_times {
             STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
         }
@@ -276,7 +331,7 @@ where
     pub fn prepare_current_for_write(
         &mut self,
     ) -> &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
-        let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
+        let current_size = self.wbs[self.current_idx].get_raft_size();
         if current_size
             >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
         {
@@ -412,15 +467,22 @@ where
             let loop_begin = UtilInstant::now_coarse();
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                let mut delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                let mut delta_us =
+                    self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                 if self.io_max_wait_us == 0 {
                     while !w.stop && !w.has_task() {
                         w = self.writer.1.wait(w).unwrap();
                     }
                 } else {
                     while !w.stop && !w.has_writable_task() && delta_us > 0 {
-                        w = self.writer.1.wait_timeout(w, Duration::from_millis(delta_us as u64)).unwrap().0;
-                        delta_us = self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                        w = self
+                            .writer
+                            .1
+                            .wait_timeout(w, Duration::from_millis(delta_us as u64))
+                            .unwrap()
+                            .0;
+                        delta_us = self.io_max_wait_us
+                            - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
                     }
                 }
                 if w.stop {
@@ -431,9 +493,11 @@ where
                 }
                 let task = w.detach_task();
                 if self.io_max_wait_us == 0 || delta_us < 0 {
-                    STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.raft_wb.persist_size() as f64);
+                    STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM
+                        .observe(task.raft_wb.persist_size() as f64);
                 } else {
-                    STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM.observe((self.io_max_wait_us - delta_us) as f64);
+                    STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM
+                        .observe((self.io_max_wait_us - delta_us) as f64);
                 }
                 task
             };
@@ -496,8 +560,8 @@ where
         task.after_write_to_db();
 
         let callback_begin = UtilInstant::now_coarse();
-        for (_, r) in &task.unsynced_readies {
-            r.flush(&self.router);
+        for (region_id, r) in &task.unsynced_readies {
+            r.flush(*region_id, &self.router);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
             .observe(duration_to_sec(callback_begin.elapsed()) as f64);

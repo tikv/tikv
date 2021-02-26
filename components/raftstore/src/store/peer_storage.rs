@@ -33,7 +33,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::fsm::async_io::AsyncWriter;
+use crate::store::fsm::async_io::{AsyncWriteChunk, AsyncWriter};
 use std::sync::atomic::AtomicU64;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -1003,8 +1003,11 @@ where
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: Vec<Entry>,
-        raft_wb: &mut ER::LogBatch,
-    ) -> Result<u64> {
+        chunk: &mut AsyncWriteChunk,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
         let region_id = self.get_region_id();
         debug!(
             "append entries";
@@ -1013,9 +1016,6 @@ where
             "count" => entries.len(),
         );
         let prev_last_index = invoke_ctx.raft_state.get_last_index();
-        if entries.is_empty() {
-            return Ok(prev_last_index);
-        }
 
         invoke_ctx.has_new_entries = true;
 
@@ -1031,15 +1031,15 @@ where
             cache.append(&self.tag, &entries);
         }
 
-        raft_wb.append(region_id, entries)?;
+        chunk.size = entries.iter().map(|e| e.compute_size() as usize).sum();
+
+        chunk.entries = entries;
+        chunk.cut_logs = Some((last_index + 1, prev_last_index));
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
-        raft_wb.cut_logs(region_id, last_index + 1, prev_last_index);
 
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
-
-        Ok(last_index)
     }
 
     pub fn compact_to(&mut self, idx: u64) {
@@ -1365,6 +1365,22 @@ where
         let mut ctx = InvokeContext::new(self);
         let mut snapshot_index = 0;
 
+        let chunk = if !ready.entries().is_empty() {
+            let mut ck = AsyncWriteChunk::new(region_id);
+            self.append(&mut ctx, ready.take_entries(), &mut ck);
+            Some(ck)
+        } else {
+            None
+        };
+
+        // Last index is 0 means the peer is created from raft message
+        // and has not applied snapshot yet, so skip persistent hard state.
+        if ctx.raft_state.get_last_index() > 0 {
+            if let Some(hs) = ready.hs() {
+                ctx.raft_state.set_hard_state(hs.clone());
+            }
+        }
+
         let (async_writer, io_lock_metrics) = ready_ctx.async_writer(async_writer_id);
         let wait_lock = UtilInstant::now_coarse();
         let mut locked_writer = async_writer.0.lock().unwrap();
@@ -1376,7 +1392,7 @@ where
 
         let current = locked_writer.prepare_current_for_write();
 
-        if !ready.snapshot().is_empty() {
+        /*if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
@@ -1388,33 +1404,27 @@ where
             fail_point!("raft_after_apply_snap");
             ctx.destroyed_regions = destroy_regions;
             snapshot_index = last_index(&ctx.raft_state);
-        };
+        };*/
 
-        if !ready.entries().is_empty() {
-            self.append(&mut ctx, ready.take_entries(), &mut current.raft_wb)?;
-        }
-        // Last index is 0 means the peer is created from raft message
-        // and has not applied snapshot yet, so skip persistent hard state.
-        if ctx.raft_state.get_last_index() > 0 {
-            if let Some(hs) = ready.hs() {
-                ctx.raft_state.set_hard_state(hs.clone());
-            }
+        if let Some(chunk) = chunk {
+            current.update_chunk(chunk);
         }
 
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
-            ctx.save_raft_state_to(&mut current.raft_wb)?;
+            current.update_raft_state(region_id, self.raft_state.clone());
+            //ctx.save_raft_state_to(&mut current.raft_wb)?;
         }
 
         // only when apply snapshot
-        if snapshot_index > 0 {
+        /*if snapshot_index > 0 {
             // in case of restart happen when we just write region state to Applying,
             // but not write raft_local_state to raft rocksdb in time.
             // we write raft state to default rocksdb, with last index set to snap index,
             // in case of recv raft log after snapshot.
             ctx.save_snapshot_raft_state_to(snapshot_index, &mut current.kv_wb)?;
             ctx.save_apply_state_to(&mut current.kv_wb)?;
-        }
+        }*/
 
         if ready.must_sync() {
             current.update_ready(region_id, ready.number(), region_notifier);
