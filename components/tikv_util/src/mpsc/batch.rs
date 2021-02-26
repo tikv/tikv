@@ -51,7 +51,7 @@ impl State {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
         if !t.is_null() {
             self.pending.store(0, Ordering::Release);
-            // Safety: see comment on `recv_task`.
+            // Safety: see comment on `recv_task`.hannel.
             let t = unsafe { Box::from_raw(t) };
             t.wake();
         }

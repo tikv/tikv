@@ -148,12 +148,15 @@ impl Downstream {
         let start = Instant::now_coarse();
         let sink = self.sink.as_ref().unwrap();
         let mut attempts = 0;
-        while sink.get_pending_count() >= 1024 {
-            info!("cdc incremental scan data blocked"; "attempts" => attempts);
-            let sleep_ms = match attempts {
-                0..=12 => 2u64.pow(attempts as u32),
-                _ => 4096,
-            };
+        while sink.get_pending_count() >= 512 || attempts > 12 {
+            if self.state.load() == DownstreamState::Stopped {
+                warn!("send incremental scan failed, downstream has stopped");
+                return;
+            }
+            info!("cdc incremental scan data blocked";
+                "attempts" => attempts,
+                "queue_size" => sink.get_pending_count());
+            let sleep_ms = 2u64.pow(attempts as u32);
             thread::sleep(Duration::from_millis(sleep_ms));
             attempts += 1;
         }
