@@ -299,13 +299,13 @@ impl<S: Snapshot> SampleBuilder<S> {
         if columns_info.is_empty() {
             return Err(box_err!("empty columns_info"));
         }
-
+        let common_handle_ids = req.take_primary_column_ids();
         let table_scanner = BatchTableScanExecutor::new(
             storage,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
-            req.take_primary_column_ids(),
+            common_handle_ids.clone(),
             false,
             false, // Streaming mode is not supported in Analyze request, always false here
         )?;
@@ -326,7 +326,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             top_n_size: common_handle_req
                 .as_ref()
                 .map_or_else(|| 0_usize, |req| req.get_top_n_size() as usize),
-            common_handle_col_ids: req.take_primary_column_ids(),
+            common_handle_col_ids: common_handle_ids.clone(),
             columns_info,
             analyze_common_handle: common_handle_req != None,
         })
