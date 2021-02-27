@@ -11,8 +11,8 @@ txn_types = { path = "../txn_types" }
 fail = "0.4"
 
 [dependencies.crossbeam-skiplist]
-git = "https://github.com/crossbeam-rs/crossbeam.git"
-tag = "crossbeam-0.7.3"
+git = "https://github.com/sticnarf/crossbeam.git"
+branch = "tikv"
 package = "crossbeam-skiplist" 
 
 [dev-dependencies]
