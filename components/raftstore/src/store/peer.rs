@@ -1992,6 +1992,7 @@ where
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
+                RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.propose(ctx, cb, req);
                 continue;
             }
