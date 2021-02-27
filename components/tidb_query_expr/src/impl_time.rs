@@ -384,6 +384,33 @@ pub fn sub_datetime_and_duration(
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn sub_datetime_and_string(
+    ctx: &mut EvalContext,
+    datetime: &DateTime,
+    duration_str: BytesRef,
+) -> Result<Option<DateTime>> {
+    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
+    let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
+        Ok(duration) => duration,
+        Err(_) => return Ok(None),
+    };
+
+    let res = match datetime.checked_sub(ctx, duration) {
+        Some(res) => res,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "DATETIME",
+                    format!("({} - {})", datetime, duration),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+    Ok(Some(res))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
     let time = DateTime::from_days(ctx, *arg as u32)?;
     Ok(Some(time))
@@ -1485,6 +1512,51 @@ mod tests {
                     .unwrap();
                 assert_eq!(output, arg1);
             }
+        }
+    }
+
+    #[test]
+    fn test_sub_datetime_and_string() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            // null cases
+            (None, None, None),
+            (None, Some("11:30:45.123456"), None),
+            (Some("2019-01-01 01:00:00"), None, None),
+            // normal cases
+            (
+                Some("2018-01-01 11:30:45.123456"),
+                Some("11:30:45.123456"),
+                Some("2018-01-01"),
+            ),
+            (
+                Some("2018-03-01 00:30:30.123456"),
+                Some("01:30:30.123456"),
+                Some("2018-02-28 23:00:00"),
+            ),
+            (
+                Some("2016-02-29 00:30:30"),
+                Some("01:30:30"),
+                Some("2016-02-28 23:00:00"),
+            ),
+            (
+                Some("2019-01-01 00:30:30"),
+                Some("01:30:30"),
+                Some("2018-12-31 23:00:00"),
+            ),
+        ];
+        for (arg0, arg1, exp) in cases {
+            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let arg0 =
+                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+            let arg1 = arg1.map(|str| str.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::SubDatetimeAndString)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 

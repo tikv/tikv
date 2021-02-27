@@ -20,12 +20,13 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use file_system::{
     set_io_rate_limiter, BytesFetcher, IORateLimiter, MetricsManager as IOMetricsManager,
 };
@@ -398,11 +399,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager = DataKeyManager::from_config(
+        self.encryption_key_manager = data_key_manager_from_config(
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-        .expect("Encryption failed to initialize")
+        .map_err(|e| {
+            panic!(
+                "Encryption failed to initialize: {}. code: {}",
+                e,
+                e.error_code()
+            )
+        })
+        .unwrap()
         .map(Arc::new);
     }
 
@@ -428,7 +436,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 let ch = ch.lock().unwrap();
                 let event = StoreMsg::CompactedEvent(compacted_event);
                 if let Err(e) = ch.send_control(event) {
-                    error!(?e; "send compaction finished event to raftstore failed");
+                    error_unknown!(?e; "send compaction finished event to raftstore failed");
                 }
             });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
@@ -845,7 +853,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_io_utility(&mut self) -> BytesFetcher {
         let io_snooper_on = self.config.enable_io_snoop
             && file_system::init_io_snooper()
-                .map_err(|e| error!(%e; "failed to init io snooper"))
+                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
         let (fetcher, limiter) = if io_snooper_on {
             (BytesFetcher::FromIOSnooper(), IORateLimiter::new(0, false))
@@ -899,7 +907,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
-                    error!(%e; "failed to start runtime for status service");
+                    error_unknown!(%e; "failed to start runtime for status service");
                     return;
                 }
             };
@@ -908,7 +916,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
             ) {
-                error!(%e; "failed to bind addr for status service");
+                error_unknown!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }

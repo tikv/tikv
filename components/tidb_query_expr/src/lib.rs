@@ -281,6 +281,21 @@ pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Resu
     }
 }
 
+fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0].get_field_type().is_binary_string_like() {
+        Ok(lower_fn_meta())
+    } else {
+        Ok(lower_utf8_fn_meta())
+    }
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -622,6 +637,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
         ScalarFuncSig::UpperUtf8 => upper_utf8_fn_meta(),
         ScalarFuncSig::Upper => upper_fn_meta(),
+        ScalarFuncSig::Lower => map_lower_sig(value, children)?,
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
@@ -661,6 +677,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
+        ScalarFuncSig::SubDatetimeAndString => sub_datetime_and_string_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
