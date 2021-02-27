@@ -35,8 +35,10 @@ use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
 use tikv::config::*;
+use tikv::storage::point_key_range;
 use tikv_util::config::*;
 use tikv_util::{escape, HandyRwLock};
+use txn_types::Key;
 
 use super::*;
 
@@ -490,6 +492,32 @@ pub fn read_index_on_peer<T: Simulator>(
     );
     request.mut_header().set_peer(peer);
     cluster.read(None, request, timeout)
+}
+
+pub fn async_read_index_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    read_quorum: bool,
+) -> mpsc::Receiver<RaftCmdResponse> {
+    let node_id = peer.get_store_id();
+    let mut cmd = new_read_index_cmd();
+    cmd.mut_read_index().set_start_ts(u64::MAX);
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster.sim.wl().async_read(node_id, None, request, cb);
+    rx
 }
 
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
