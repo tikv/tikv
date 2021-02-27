@@ -518,7 +518,12 @@ fn cast_string_as_signed_real(
     match val {
         None => Ok(None),
         Some(val) => {
-            let r: f64 = val.convert(ctx)?;
+            let r: f64;
+            if val.is_empty() {
+                r = 0.0;
+            } else {
+                r = val.convert(ctx)?;
+            }
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -2826,6 +2831,7 @@ mod tests {
             (String::from("99999999"), 999999.99, 8, 2, false, true),
             (String::from("1234abc"), 0.9f64, 1, 1, true, true),
             (String::from("-1234abc"), -0.9f64, 1, 1, true, true),
+            (String::from(""), 0f64, 1, 0, false, false),
         ];
 
         for (input, expected, flen, decimal, truncated, overflow) in cs {
