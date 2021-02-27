@@ -1634,7 +1634,7 @@ pub fn need_check_locks_in_replica_read(ctx: &Context) -> bool {
     ctx.get_replica_read() && ctx.get_isolation_level() == IsolationLevel::Si
 }
 
-fn point_key_range(key: Key) -> KeyRange {
+pub fn point_key_range(key: Key) -> KeyRange {
     let mut end_key = key.as_encoded().to_vec();
     end_key.push(0);
     let end_key = Key::from_encoded(end_key);
