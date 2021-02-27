@@ -3243,7 +3243,7 @@ mod tests {
             (
                 Some("字节".as_bytes().to_vec()),
                 Some("a多字节".as_bytes().to_vec()),
-                Some(1 + "a多字节".find("字节").unwrap() as i64),
+                Some(5),
             ),
             (
                 Some(b"a".to_vec()),
@@ -3255,7 +3255,7 @@ mod tests {
             (
                 Some("好世".as_bytes().to_vec()),
                 Some("你好世界".as_bytes().to_vec()),
-                Some(1 + "你好世界".find("好世").unwrap() as i64),
+                Some(4),
             ),
             (None, Some(b"".to_vec()), None),
             (None, Some(b"foobar".to_vec()), None),
