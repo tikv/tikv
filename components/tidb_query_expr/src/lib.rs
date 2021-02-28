@@ -649,6 +649,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
         ScalarFuncSig::Strcmp => map_strcmp_sig(ft)?,
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
+        ScalarFuncSig::Quote => quote_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::OctString => oct_string_fn_meta(),
         ScalarFuncSig::FindInSet => map_find_in_set_sig(ft)?,
