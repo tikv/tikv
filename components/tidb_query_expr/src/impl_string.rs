@@ -894,6 +894,7 @@ fn strip_whitespace(input: &[u8]) -> Vec<u8> {
     input_copy
 }
 
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_quote
 #[rpn_fn(nullable)]
 #[inline]
 pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {

@@ -286,6 +286,12 @@ pub fn date_diff(from_time: &DateTime, to_time: &DateTime) -> Result<Option<Int>
     Ok(from_time.date_diff(*to_time))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn null_time_diff() -> Result<Option<Duration>> {
+    Ok(None)
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn add_datetime_and_duration(
@@ -1345,6 +1351,14 @@ mod tests {
                 .unwrap();
             assert_eq!(output, exp);
         }
+    }
+
+    #[test]
+    fn test_null_time_diff() {
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate::<Duration>(ScalarFuncSig::NullTimeDiff)
+            .unwrap();
+        assert_eq!(output, None);
     }
 
     #[test]
