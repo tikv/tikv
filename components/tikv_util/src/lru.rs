@@ -1,14 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::collections::{HashMap, HashMapEntry};
+use crate::time;
 use std::hash::Hash;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
+
+const STALE_SECS: u64 = 24 * 3600; // 1 day
 
 struct Record<K> {
     prev: NonNull<Record<K>>,
     next: NonNull<Record<K>>,
     key: MaybeUninit<K>,
+    update_time: u64,
 }
 
 struct ValueEntry<K, V> {
@@ -20,6 +24,7 @@ struct Trace<K> {
     head: Box<Record<K>>,
     tail: Box<Record<K>>,
     tick: usize,
+    cur_time: u64,
     sample_mask: usize,
 }
 
@@ -41,11 +46,13 @@ impl<K> Trace<K> {
                 prev: NonNull::new_unchecked(1usize as _),
                 next: NonNull::new_unchecked(1usize as _),
                 key: MaybeUninit::uninit(),
+                update_time: 0,
             });
             let mut tail = Box::new(Record {
                 prev: NonNull::new_unchecked(1usize as _),
                 next: NonNull::new_unchecked(1usize as _),
                 key: MaybeUninit::uninit(),
+                update_time: 0,
             });
             suture(&mut head, &mut tail);
 
@@ -54,6 +61,7 @@ impl<K> Trace<K> {
                 tail,
                 sample_mask,
                 tick: 0,
+                cur_time: time::coarse_now_secs(),
             }
         }
     }
@@ -67,7 +75,9 @@ impl<K> Trace<K> {
     }
 
     fn promote(&mut self, mut record: NonNull<Record<K>>) {
+        self.cur_time = time::coarse_now_secs();
         unsafe {
+            record.as_mut().update_time = self.cur_time;
             cut_out(record.as_mut());
             suture(record.as_mut(), &mut self.head.next.as_mut());
             suture(&mut self.head, record.as_mut());
@@ -83,10 +93,12 @@ impl<K> Trace<K> {
     }
 
     fn create(&mut self, key: K) -> NonNull<Record<K>> {
+        self.cur_time = time::coarse_now_secs();
         let record = Box::leak(Box::new(Record {
             prev: unsafe { NonNull::new_unchecked(&mut *self.head) },
             next: self.head.next,
             key: MaybeUninit::new(key),
+            update_time: self.cur_time,
         }))
         .into();
         unsafe {
@@ -97,6 +109,7 @@ impl<K> Trace<K> {
     }
 
     fn reuse_tail(&mut self, key: K) -> (K, NonNull<Record<K>>) {
+        self.cur_time = time::coarse_now_secs();
         unsafe {
             let mut record = self.tail.prev;
             cut_out(record.as_mut());
@@ -105,6 +118,7 @@ impl<K> Trace<K> {
 
             let old_key = record.as_mut().key.as_ptr().read();
             record.as_mut().key = MaybeUninit::new(key);
+            record.as_mut().update_time = self.cur_time;
             (old_key, record)
         }
     }
@@ -128,6 +142,19 @@ impl<K> Trace<K> {
 
             let r = Box::from_raw(record.as_ptr());
             r.key.as_ptr().read()
+        }
+    }
+
+    fn remove_stale_tail(&mut self) -> Option<K> {
+        unsafe {
+            let mut record = self.tail.prev;
+            if record.as_mut().update_time + STALE_SECS >= self.cur_time {
+                return None;
+            }
+            cut_out(record.as_mut());
+
+            let r = Box::from_raw(record.as_ptr());
+            Some(r.key.as_ptr().read())
         }
     }
 }
@@ -172,6 +199,9 @@ where
 {
     #[inline]
     pub fn resize(&mut self, mut new_cap: usize) {
+        while let Some(k) = self.trace.remove_stale_tail() {
+            self.map.remove(&k);
+        }
         if new_cap == 0 {
             new_cap = 1;
         }
@@ -210,10 +240,16 @@ where
         if let Some(o) = old_key {
             self.map.remove(&o);
         }
+        while let Some(k) = self.trace.remove_stale_tail() {
+            self.map.remove(&k);
+        }
     }
 
     #[inline]
     pub fn remove(&mut self, key: &K) {
+        while let Some(k) = self.trace.remove_stale_tail() {
+            self.map.remove(&k);
+        }
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
         }
@@ -223,6 +259,9 @@ where
     pub fn get(&mut self, key: &K) -> Option<&V> {
         match self.map.get(key) {
             Some(v) => {
+                // Technically it should also trigger stale cleanup.
+                // But it's not easy to get around lifetime check without
+                // performance lost.
                 self.trace.maybe_promote(v.record);
                 Some(&v.value)
             }

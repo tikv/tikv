@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::atomic::{self, AtomicU64};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -88,6 +89,12 @@ impl Default for SlowTimer {
 
 const DEFAULT_WAIT_MS: u64 = 100;
 
+static COARSE_NOW_SECS: AtomicU64 = AtomicU64::new(0);
+
+pub fn coarse_now_secs() -> u64 {
+    COARSE_NOW_SECS.load(atomic::Ordering::Relaxed)
+}
+
 pub struct Monitor {
     tx: Sender<bool>,
     handle: Option<JoinHandle<()>>,
@@ -100,6 +107,7 @@ impl Monitor {
         N: Fn() -> SystemTime + Send + 'static,
     {
         let (tx, rx) = mpsc::channel();
+        let anchor = now();
         let h = Builder::new()
             .name(thd_name!("time-monitor"))
             .spawn(move || {
@@ -108,14 +116,21 @@ impl Monitor {
                     thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
                     let after = now();
-                    if let Err(e) = after.duration_since(before) {
-                        error!(
-                            "system time jumped back";
-                            "before" => ?before,
-                            "after" => ?after,
-                            "err" => ?e,
-                        );
-                        on_jumped()
+                    let res = after
+                        .duration_since(before)
+                        .and_then(|_| after.duration_since(anchor));
+                    match res {
+                        Ok(d) => COARSE_NOW_SECS.store(d.as_secs(), atomic::Ordering::Relaxed),
+                        Err(e) => {
+                            error!(
+                                "system time jumped back";
+                                "before" => ?before,
+                                "after" => ?after,
+                                "anchor" => ?anchor,
+                                "err" => ?e,
+                            );
+                            on_jumped()
+                        }
                     }
                 }
             })
