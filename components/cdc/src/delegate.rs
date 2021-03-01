@@ -137,40 +137,6 @@ impl Downstream {
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
     }
 
-    pub fn sink_event_low_prio(&self, mut event: Event) {
-        event.set_request_id(self.req_id);
-        if self.sink.is_none() {
-            info!("drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-            return;
-        }
-
-        let start = Instant::now_coarse();
-        let sink = self.sink.as_ref().unwrap();
-        let mut attempts = 0;
-        while sink.get_pending_count() >= 512 && attempts < 12 {
-            if self.state.load() == DownstreamState::Stopped {
-                warn!("send incremental scan failed, downstream has stopped");
-                return;
-            }
-            info!("cdc incremental scan data blocked";
-                "attempts" => attempts,
-                "queue_size" => sink.get_pending_count());
-            let sleep_ms = 2u64.pow(attempts as u32);
-            thread::sleep(Duration::from_millis(sleep_ms));
-            attempts += 1;
-        }
-        sink.send(CdcEvent::Event(event)).unwrap_or_else(|e: crossbeam::SendError<_>| {
-            warn!("send event failed";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
-        });
-        let count = sink.get_pending_count();
-        info!("cdc incremental scan"; "queue_size" => count);
-        CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
-        CDC_SCAN_BLOCK_DURATION_HISTOGRAM
-            .observe(start.elapsed().as_secs_f64());
-    }
-
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
         self.sink = Some(sink);
     }
@@ -587,7 +553,7 @@ impl Delegate {
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 };
-                downstream.sink_event_low_prio(event);
+                downstream.sink_event(event);
             }
         }
     }

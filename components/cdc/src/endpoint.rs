@@ -1112,6 +1112,82 @@ impl Initializer {
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
+    async fn async_incremental_scan_v2<S: Snapshot + 'static>(&self, snap: S, region: Region) {
+        let downstream_id = self.downstream_id;
+        let conn_id = self.conn_id;
+        let region_id = region.get_id();
+        debug!("async incremental scan v2";
+            "region_id" => region_id,
+            "downstream_id" => ?downstream_id,
+            "observe_id" => ?self.observe_id);
+
+        let mut resolver = if self.build_resolver {
+            Some(Resolver::new(region_id))
+        } else {
+            None
+        };
+
+        fail_point!("cdc_incremental_scan_start");
+
+        let start = Instant::now_coarse();
+        // Time range: (checkpoint_ts, current]
+        let current = TimeStamp::max();
+        let mut scanner = ScannerBuilder::new(snap, current, false)
+            .range(None, None)
+            .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
+            .unwrap();
+        let mut done = false;
+        while !done {
+            if self.downstream_state.load() != DownstreamState::Normal {
+                info!("async incremental scan canceled";
+                    "region_id" => region_id,
+                    "downstream_id" => ?downstream_id,
+                    "observe_id" => ?self.observe_id);
+                return;
+            }
+            let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
+                    // TODO: record in metrics.
+                    let deregister = Deregister::Downstream {
+                        region_id,
+                        downstream_id,
+                        conn_id,
+                        err: Some(e),
+                    };
+                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                        error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                    }
+                    return;
+                }
+            };
+            // If the last element is None, it means scanning is finished.
+            if let Some(None) = entries.last() {
+                done = true;
+            }
+            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+            fail_point!("before_schedule_incremental_scan");
+            let scanned = Task::IncrementalScan {
+                region_id,
+                downstream_id,
+                entries,
+            };
+            if let Err(e) = self.sched.schedule(scanned) {
+                error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                return;
+            }
+        }
+
+        let takes = start.elapsed();
+        if let Some(resolver) = resolver {
+            self.finish_building_resolver(resolver, region, takes);
+        }
+
+        CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
+    }
+
+
     fn scan_batch<S: Snapshot>(
         scanner: &mut DeltaScanner<S>,
         batch_size: usize,
