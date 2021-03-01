@@ -628,22 +628,42 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
         false,
     );
     cluster.must_split(&old, b"k2");
-    let left = pd_client.get_region(b"k1").unwrap();
-    let right = pd_client.get_region(b"k3").unwrap();
+    let r = pd_client.get_region(b"k3").unwrap();
+    let get_middle = new_request(
+        r.get_id(),
+        r.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k3")],
+        false,
+    );
+    cluster.must_split(&r, b"k3");
+    let r = pd_client.get_region(b"k4").unwrap();
+    cluster.must_split(&r, b"k4");
+    let regions: Vec<_> = [b"k0", b"k2", b"k3", b"k4"]
+        .iter()
+        .map(|k| pd_client.get_region(*k).unwrap())
+        .collect();
 
-    let new = if right_derive {
-        right.clone()
-    } else {
-        left.clone()
-    };
-
+    let new = regions[3].clone();
     // Newer epoch also triggers the EpochNotMatch error.
     let mut latest_epoch = new.get_region_epoch().clone();
     let latest_version = latest_epoch.get_version() + 1;
     latest_epoch.set_version(latest_version);
-
     let get_new = new_request(new.get_id(), latest_epoch, vec![new_get_cmd(b"k1")], false);
-    for get in &[get_old, get_new] {
+
+    let mut cases = vec![
+        // All regions should be returned as request uses an oldest epoch.
+        (get_old, regions.clone()),
+        // Only new split regions should be returned.
+        (get_middle, regions[1..].to_vec()),
+        // Epoch is too new that TiKV can't offer any useful hint.
+        (get_new, vec![regions[3].clone()]),
+    ];
+    if right_derive {
+        // TiKV search backward when right derive.
+        cases[0].1.reverse();
+        cases[1].1.reverse();
+    }
+    for (get, exp) in cases {
         let resp = cluster
             .call_command_on_leader(get.clone(), Duration::from_secs(5))
             .unwrap();
@@ -653,23 +673,15 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
             "{:?}",
             get
         );
-        if right_derive {
-            assert_eq!(
-                resp.get_header()
-                    .get_error()
-                    .get_epoch_not_match()
-                    .get_current_regions(),
-                &[right.clone(), left.clone()]
-            );
-        } else {
-            assert_eq!(
-                resp.get_header()
-                    .get_error()
-                    .get_epoch_not_match()
-                    .get_current_regions(),
-                &[left.clone(), right.clone()]
-            );
-        }
+        assert_eq!(
+            resp.get_header()
+                .get_error()
+                .get_epoch_not_match()
+                .get_current_regions(),
+            &*exp,
+            "{:?}",
+            get
+        );
     }
 }
 
