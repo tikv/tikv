@@ -153,7 +153,7 @@ num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
-prost = "0.6"
+prost = "0.7"
 pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.3"
