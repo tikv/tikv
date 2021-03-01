@@ -79,6 +79,7 @@ log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
 prost = "0.6"
+tokio-retry = "0.2"
 
 [dev-dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }

@@ -42,6 +42,7 @@ use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
+use crate::rate_limiter::RateLimiter;
 use std::time::Duration;
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
@@ -82,6 +83,7 @@ pub struct Downstream {
     peer: String,
     region_epoch: RegionEpoch,
     sink: Option<BatchSender<CdcEvent>>,
+    rate_limiter: Option<RateLimiter<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
 }
@@ -104,6 +106,7 @@ impl Downstream {
             conn_id,
             peer,
             region_epoch,
+            rate_limiter: None,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             enable_old_value,
@@ -138,7 +141,12 @@ impl Downstream {
     }
 
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
-        self.sink = Some(sink);
+        self.sink = Some(sink.clone());
+        self.rate_limiter = Some(RateLimiter::new(sink, 512, 102400));
+    }
+
+    pub fn get_rate_limiter(&self) -> Option<RateLimiter<CdcEvent>> {
+        self.rate_limiter.clone()
     }
 
     pub fn get_id(&self) -> DownstreamID {
@@ -461,29 +469,17 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
-        let downstreams = if let Some(pending) = self.pending.as_mut() {
-            &pending.downstreams
-        } else {
-            &self.downstreams
-        };
-        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
-            d
-        } else {
-            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
-            return;
-        };
-
+    pub(crate) fn convert_to_grpc_events(region_id: u64, entries: Vec<Option<TxnEntry>>) -> Option<Vec<Event>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
                 Some(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                }) => {
+                         default,
+                         lock,
+                         old_value,
+                     }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
                     if skip {
@@ -500,10 +496,10 @@ impl Delegate {
                     rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                }) => {
+                         default,
+                         write,
+                         old_value,
+                     }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row, false);
                     if skip {
@@ -542,19 +538,37 @@ impl Delegate {
             }
         }
 
-        for rs in rows {
+        rows.into_iter().map(|rs| {
             if !rs.is_empty() {
                 let event_entries = EventEntries {
                     entries: rs.into(),
                     ..Default::default()
                 };
-                let event = Event {
-                    region_id: self.region_id,
+                Event {
+                    region_id: region_id,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
-                };
-                downstream.sink_event(event);
+                }
             }
+        }).collect()
+    }
+
+    pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
+        let downstreams = if let Some(pending) = self.pending.as_mut() {
+            &pending.downstreams
+        } else {
+            &self.downstreams
+        };
+        let downstream = if let Some(d) = downstreams.iter().find(|d| d.id == downstream_id) {
+            d
+        } else {
+            warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
+            return;
+        };
+
+
+        if let Some(events) = Self::convert_to_grpc_events(self.region_id, entries) {
+            events.into_iter().map(|e| downstream.sink_event(e)).collect();
         }
     }
 

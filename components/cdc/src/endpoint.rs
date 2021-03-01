@@ -45,6 +45,7 @@ use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
+use crate::rate_limiter::RateLimiterError;
 
 pub enum Deregister {
     Downstream {
@@ -506,6 +507,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             sched,
             region_id,
             conn_id,
+            downstream: downstream.clone(),
             downstream_id,
             batch_size,
             downstream_state: downstream_state.clone(),
@@ -1005,6 +1007,7 @@ struct Initializer {
     observe_id: ObserveID,
     downstream_id: DownstreamID,
     downstream_state: Arc<AtomicCell<DownstreamState>>,
+    downstream: Downstream,
     conn_id: ConnID,
     checkpoint_ts: TimeStamp,
     batch_size: usize,
@@ -1168,15 +1171,34 @@ impl Initializer {
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
-            let scanned = Task::IncrementalScan {
-                region_id,
-                downstream_id,
-                entries,
-            };
-            if let Err(e) = self.sched.schedule(scanned) {
-                error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
-                return;
+
+            if let Some(events) = Delegate::convert_to_grpc_events(region_id, entries) {
+                let num_entires = entries.len();
+                for event in events.into_iter() {
+                    if let Some(rate_limiter) = self.downstream.get_rate_limiter() {
+                        match rate_limiter.send_scan_event(event).await {
+                            Ok(_) => debug!("cdc incremental scan sent data"; "num_entires" => num_entires),
+                            Err(e) => {
+                                error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
+                                // TODO: record in metrics.
+                                let deregister = Deregister::Downstream {
+                                    region_id,
+                                    downstream_id,
+                                    conn_id,
+                                    err: Some(e),
+                                };
+                                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                                    error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        warn!("cdc rate limiter not found, report a bug");
+                    }
+                }
             }
+
         }
 
         let takes = start.elapsed();

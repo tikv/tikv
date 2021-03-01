@@ -520,6 +520,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio",
+ "tokio-retry",
  "txn_types",
 ]
 
@@ -5493,6 +5494,17 @@ checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
 dependencies = [
  "openssl",
  "tokio",
+]
+
+[[package]]
+name = "tokio-retry"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c03755b956458582182941061def32b8123a26c98b08fc6ddcf49ae89d18f33"
+dependencies = [
+ "futures 0.1.29",
+ "rand 0.4.6",
+ "tokio-timer",
 ]
 
 [[package]]
