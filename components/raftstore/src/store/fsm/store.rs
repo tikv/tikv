@@ -640,6 +640,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
 
         let hold_lock = TiInstant::now_coarse();
         for (i, msg) in self.poll_ctx.async_write_msgs.iter_mut().enumerate() {
+            if msg.is_empty() {
+                continue;
+            }
             let msg = std::mem::take(msg);
             if let Err(e) = self.poll_ctx.async_write_senders[i].send(msg) {
                 panic!("{} failed to send write msg, err: {:?}", self.tag, e);

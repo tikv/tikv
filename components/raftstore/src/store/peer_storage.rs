@@ -1391,7 +1391,7 @@ where
 
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
-            write_task.raft_state = Some(self.raft_state.clone());
+            write_task.raft_state = Some(ctx.raft_state.clone());
             //ctx.save_raft_state_to(&mut current.raft_wb)?;
         }
 

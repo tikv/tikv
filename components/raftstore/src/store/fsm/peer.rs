@@ -935,6 +935,10 @@ where
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
 
+            if self.ctx.trans.need_flush() {
+                self.ctx.trans.flush();
+            }
+
             self.post_raft_ready_append(r.0, r.1);
         }
     }

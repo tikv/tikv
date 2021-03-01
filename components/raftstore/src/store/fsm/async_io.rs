@@ -498,6 +498,10 @@ where
                 }
             }
 
+            if !self.queue.has_task() {
+                continue;
+            }
+
             let mut task = self.queue.detach_task();
             self.queue.flush_metrics();
 
