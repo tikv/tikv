@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use tikv_util::trace::*;
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
@@ -31,6 +32,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchSimpleAggregationExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

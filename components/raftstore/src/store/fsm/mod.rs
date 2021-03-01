@@ -8,6 +8,7 @@ pub mod apply;
 mod metrics;
 mod peer;
 pub mod store;
+mod tracer;
 
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,

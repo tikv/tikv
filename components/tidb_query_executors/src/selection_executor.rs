@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use tikv_util::trace::*;
 use tipb::Expr;
 use tipb::FieldType;
 use tipb::Selection;
@@ -175,6 +176,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchSelectionExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 

@@ -5,6 +5,7 @@ use std::collections::BinaryHeap;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use tikv_util::trace::*;
 use tipb::{Expr, FieldType, TopN};
 
 use crate::interface::*;
@@ -299,6 +300,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchTopNExecutor::next_batch")]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 

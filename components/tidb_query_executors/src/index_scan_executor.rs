@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::EvalType;
+use tikv_util::trace::*;
 use tipb::ColumnInfo;
 use tipb::FieldType;
 use tipb::IndexScan;
@@ -127,6 +128,7 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
+    #[trace("BatchIndexScanExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

@@ -2255,6 +2255,37 @@ impl Default for CdcConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct TraceConfig {
+    pub jaeger_thrift_compact_agent: String,
+    pub duration_threshold: ReadableDuration,
+    pub max_spans_length: usize,
+}
+
+impl TraceConfig {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if !self.jaeger_thrift_compact_agent.is_empty() {
+            config::check_addr(&self.jaeger_thrift_compact_agent)?;
+            if self.max_spans_length == 0 {
+                return Err("tracing.max_spans_length cannot be 0".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        Self {
+            jaeger_thrift_compact_agent: "".to_owned(),
+            duration_threshold: ReadableDuration::millis(5),
+            max_spans_length: 100,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -2340,6 +2371,9 @@ pub struct TiKvConfig {
 
     #[config(submodule)]
     pub cdc: CdcConfig,
+
+    #[config(submodule)]
+    pub trace: TraceConfig,
 }
 
 impl Default for TiKvConfig {
@@ -2372,6 +2406,7 @@ impl Default for TiKvConfig {
             gc: GcConfig::default(),
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
+            trace: TraceConfig::default(),
         }
     }
 }
@@ -2487,6 +2522,7 @@ impl TiKvConfig {
         self.backup.validate()?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
+        self.trace.validate()?;
         Ok(())
     }
 

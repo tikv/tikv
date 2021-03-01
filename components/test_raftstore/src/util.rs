@@ -377,7 +377,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
 
     let (tx, rx) = mpsc::channel();
     let cb = if is_read {
-        Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+        Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
             // we don't care error actually.
             let _ = tx.send(resp.response);
         }))
@@ -440,7 +440,7 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     request.mut_header().set_replica_read(replica_read);
     let (tx, rx) = mpsc::sync_channel(1);
-    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
     cluster.sim.wl().async_read(node_id, None, request, cb);
     rx
 }
@@ -463,7 +463,7 @@ pub fn batch_read_on_peer<T: Simulator>(
         );
         request.mut_header().set_peer(peer.clone());
         let t = tx.clone();
-        let cb = Callback::Read(Box::new(move |resp| {
+        let cb = Callback::read(Box::new(move |resp| {
             t.send((len, resp)).unwrap();
         }));
         cluster

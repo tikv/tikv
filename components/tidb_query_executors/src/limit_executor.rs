@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_util::trace::*;
 use tipb::FieldType;
 
 use crate::interface::*;
@@ -31,6 +32,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     }
 
     #[inline]
+    #[trace("BatchLimitExecutor::next_batch")]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(scan_rows);
         if result.logical_rows.len() < self.remaining_rows {

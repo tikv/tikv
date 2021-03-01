@@ -501,7 +501,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     raft_cmd.set_status_request(status_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
+    let cb = Callback::read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
         raft_router
@@ -541,7 +541,7 @@ fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
     raft_cmd.set_admin_request(admin_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
+    let cb = Callback::read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
         raft_router

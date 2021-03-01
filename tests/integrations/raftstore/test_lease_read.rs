@@ -509,7 +509,7 @@ fn test_read_index_stale_in_suspect_lease() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx

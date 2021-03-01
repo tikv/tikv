@@ -303,7 +303,7 @@ where
             let m = meta.clone();
             let res = async move {
                 let mut resp = IngestResponse::default();
-                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::Read(cb))) {
+                if let Err(e) = router.send(RaftCommand::new(cmd, Callback::read(cb))) {
                     let e = handle_send_error(region_id, e);
                     resp.set_error(e.into());
                     return Ok(resp);

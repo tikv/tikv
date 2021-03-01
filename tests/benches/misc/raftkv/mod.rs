@@ -47,7 +47,7 @@ impl SyncBenchRouter {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
-            Callback::Read(cb) => {
+            Callback::Read { cb, .. } => {
                 let snapshot = RocksSnapshot::new(Arc::clone(&self.db));
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
@@ -154,7 +154,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                 }
             });
         let cb: Callback<RocksSnapshot> =
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2((CbContext::new(), Ok(res)));
             }));

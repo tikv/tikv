@@ -18,6 +18,7 @@ use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
+use tikv_util::trace::Span;
 use tikv_util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
@@ -572,6 +573,7 @@ fn test_node_merge_reject_request_snapshot() {
                 cb: Box::new(|_: WriteResponse| {}),
                 proposed_cb: Some(Box::new(move || tx.send(()).unwrap())),
                 committed_cb: None,
+                span: Span::empty(),
             },
         )
         .unwrap();
