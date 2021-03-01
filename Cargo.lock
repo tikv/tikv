@@ -5422,7 +5422,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#2870a085203756a63d19d3913672e44c25163cb7"
+source = "git+https://github.com/pingcap/tipb.git#777cefd7ea62b07fe39272adc2ddec47a7c2f732"
 dependencies = [
  "lazy_static",
  "prost",
