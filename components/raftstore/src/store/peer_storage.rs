@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
-use crossbeam::channel::{Sender, SendError};
+use crossbeam::channel::{SendError, Sender};
 
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
@@ -35,7 +35,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::fsm::async_io::{UnsyncedReady, AsyncWriteTask, AsyncWriteMsg};
+use crate::store::fsm::async_io::{AsyncWriteMsg, AsyncWriteTask, UnsyncedReady};
 use std::sync::atomic::AtomicU64;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -297,9 +297,8 @@ impl Drop for EntryCache {
     }
 }
 
-pub trait HandleRaftReadyContext
-{
-    fn async_write_sender(&mut self, id: usize) -> (&Sender<AsyncWriteMsg>, &mut StoreIOLockMetrics);
+pub trait HandleRaftReadyContext {
+    fn async_write_vec(&mut self, id: usize) -> &mut Vec<AsyncWriteMsg>;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -1361,7 +1360,7 @@ where
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
         let mut snapshot_index = 0;
-        
+
         let mut write_task = AsyncWriteTask::new(region_id);
 
         if !ready.entries().is_empty() {
@@ -1416,14 +1415,8 @@ where
         write_task.proposal_times = proposal_times;
 
         if !write_task.is_empty() {
-            let hold_lock = UtilInstant::now_coarse();
-            let (sender, io_lock_metrics) = ready_ctx.async_write_sender(async_writer_id);
-            if let Err(e) = sender.send(AsyncWriteMsg::WriteTask(write_task)) {
-                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
-            }
-            io_lock_metrics
-                .hold_lock_sec
-                .observe(duration_to_sec(hold_lock.elapsed()) as f64);
+            let vec = ready_ctx.async_write_vec(async_writer_id);
+            vec.push(AsyncWriteMsg::WriteTask(write_task));
         }
 
         Ok(ctx)

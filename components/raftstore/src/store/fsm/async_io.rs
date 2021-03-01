@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::{collections::VecDeque, time::Instant};
-use crossbeam::channel::{TryRecvError, Receiver, Sender, unbounded};
 
 use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
@@ -156,7 +156,11 @@ impl AsyncWriteTask {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.cut_logs.is_none() && self.unsynced_ready.is_none() && self.raft_state.is_none() && self.proposal_times.is_empty()
+        self.entries.is_empty()
+            && self.cut_logs.is_none()
+            && self.unsynced_ready.is_none()
+            && self.raft_state.is_none()
+            && self.proposal_times.is_empty()
     }
 }
 
@@ -226,7 +230,10 @@ where
     }
 
     fn is_empty(&self) -> bool {
-        self.raft_wb.is_empty() && self.unsynced_readies.is_empty() && self.raft_states.is_empty() && self.kv_wb.is_empty()
+        self.raft_wb.is_empty()
+            && self.unsynced_readies.is_empty()
+            && self.raft_states.is_empty()
+            && self.kv_wb.is_empty()
     }
 
     fn clear(&mut self) {
@@ -420,7 +427,7 @@ where
     kv_engine: EK,
     raft_engine: ER,
     router: RaftRouter<EK, ER>,
-    receiver: Receiver<AsyncWriteMsg>,
+    receiver: Receiver<Vec<AsyncWriteMsg>>,
     queue: AsyncWriteAdaptiveQueue<EK, ER>,
     perf_context_statistics: PerfContextStatistics,
     io_max_wait_us: i64,
@@ -437,18 +444,18 @@ where
         kv_engine: EK,
         raft_engine: ER,
         router: RaftRouter<EK, ER>,
-        receiver: Receiver<AsyncWriteMsg>,
+        receiver: Receiver<Vec<AsyncWriteMsg>>,
         config: &Config,
     ) -> Self {
         let queue = AsyncWriteAdaptiveQueue::new(
-                &kv_engine,
-                &raft_engine,
-                config.store_batch_system.io_queue_size + 1,
-                config.store_batch_system.io_queue_init_bytes,
-                config.store_batch_system.io_queue_bytes_step,
-                config.store_batch_system.io_queue_adaptive_gain,
-                config.store_batch_system.io_queue_sample_quantile,
-            );
+            &kv_engine,
+            &raft_engine,
+            config.store_batch_system.io_queue_size + 1,
+            config.store_batch_system.io_queue_init_bytes,
+            config.store_batch_system.io_queue_bytes_step,
+            config.store_batch_system.io_queue_adaptive_gain,
+            config.store_batch_system.io_queue_sample_quantile,
+        );
         Self {
             store_id,
             tag,
@@ -466,7 +473,7 @@ where
         let mut msgs = vec![];
         loop {
             let loop_begin = UtilInstant::now_coarse();
-            
+
             if !self.queue.has_task() {
                 let msg = match self.receiver.recv() {
                     Ok(msg) => msg,
@@ -479,12 +486,14 @@ where
             for _ in 0..len {
                 msgs.push(self.receiver.try_recv().unwrap());
             }
-            for msg in msgs.drain(..) {
-                match msg {
-                    AsyncWriteMsg::Shutdown => return,
-                    AsyncWriteMsg::WriteTask(task) => {
-                        let current = self.queue.prepare_current_for_write();
-                        current.add_write_task(task);
+            for msg_vec in msgs.drain(..) {
+                for msg in msg_vec {
+                    match msg {
+                        AsyncWriteMsg::Shutdown => return,
+                        AsyncWriteMsg::WriteTask(task) => {
+                            let current = self.queue.prepare_current_for_write();
+                            current.add_write_task(task);
+                        }
                     }
                 }
             }
@@ -492,14 +501,13 @@ where
             let mut task = self.queue.detach_task();
             self.queue.flush_metrics();
 
-            STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM
-                .observe(task.get_raft_size() as f64);
+            STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.get_raft_size() as f64);
 
             STORE_WRITE_WAIT_DURATION_HISTOGRAM
                 .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);
-            
+
             self.sync_write(&mut task);
-            
+
             self.queue.push_back_done_task(task);
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
@@ -599,7 +607,7 @@ where
 }
 
 pub struct AsyncWriters {
-    writers: Vec<Sender<AsyncWriteMsg>>,
+    writers: Vec<Sender<Vec<AsyncWriteMsg>>>,
     handlers: Vec<JoinHandle<()>>,
 }
 
@@ -611,7 +619,7 @@ impl AsyncWriters {
         }
     }
 
-    pub fn senders(&self) -> &Vec<Sender<AsyncWriteMsg>> {
+    pub fn senders(&self) -> &Vec<Sender<Vec<AsyncWriteMsg>>> {
         &self.writers
     }
 
@@ -647,7 +655,7 @@ impl AsyncWriters {
     pub fn shutdown(&mut self) {
         assert_eq!(self.writers.len(), self.handlers.len());
         for (i, handler) in self.handlers.drain(..).enumerate() {
-            self.writers[i].send(AsyncWriteMsg::Shutdown).unwrap();
+            self.writers[i].send(vec![AsyncWriteMsg::Shutdown]).unwrap();
             handler.join().unwrap();
         }
     }

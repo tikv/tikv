@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::{thread, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-use crossbeam::channel::{TryRecvError, Sender, TrySendError};
+use crossbeam::channel::{Sender, TryRecvError, TrySendError};
 //use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -336,7 +336,8 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub async_write_senders: Vec<Sender<AsyncWriteMsg>>,
+    pub async_write_senders: Vec<Sender<Vec<AsyncWriteMsg>>>,
+    pub async_write_msgs: Vec<Vec<AsyncWriteMsg>>,
     pub io_lock_metrics: StoreIOLockMetrics,
 }
 
@@ -346,8 +347,8 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn async_write_sender(&mut self, id: usize) -> (&Sender<AsyncWriteMsg>, &mut StoreIOLockMetrics) {
-        (&self.async_write_senders[id], &mut self.io_lock_metrics)
+    fn async_write_vec(&mut self, id: usize) -> &mut Vec<AsyncWriteMsg> {
+        &mut self.async_write_msgs[id]
     }
 
     #[inline]
@@ -637,6 +638,18 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
 
+        let hold_lock = TiInstant::now_coarse();
+        for (i, msg) in self.poll_ctx.async_write_msgs.iter_mut().enumerate() {
+            let msg = std::mem::take(msg);
+            if let Err(e) = self.poll_ctx.async_write_senders[i].send(msg) {
+                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+            }
+        }
+        self.poll_ctx
+            .io_lock_metrics
+            .hold_lock_sec
+            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
+
         self.poll_ctx
             .raft_metrics
             .append_log
@@ -830,7 +843,7 @@ where
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    async_write_senders: Vec<Sender<AsyncWriteMsg>>,
+    async_write_senders: Vec<Sender<Vec<AsyncWriteMsg>>>,
     pub apply_async_writers: Vec<ApplyAsyncWriter<EK, W>>,
 }
 
@@ -1020,6 +1033,10 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self) -> RaftPoller<EK, ER, T> {
+        let mut async_write_msgs = vec![];
+        for _ in 0..self.async_write_senders.len() {
+            async_write_msgs.push(vec![]);
+        }
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1053,6 +1070,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             async_write_senders: self.async_write_senders.clone(),
+            async_write_msgs,
             io_lock_metrics: StoreIOLockMetrics::default(),
         };
         ctx.update_ticks_timeout();
