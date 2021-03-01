@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use crossbeam::channel::{Sender, SendError};
+
 use engine_traits::CF_RAFT;
 use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
@@ -33,7 +35,7 @@ use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
-use crate::store::fsm::async_io::{AsyncWriteChunk, AsyncWriter};
+use crate::store::fsm::async_io::{UnsyncedReady, AsyncWriteTask, AsyncWriteMsg};
 use std::sync::atomic::AtomicU64;
 
 // When we create a region peer, we should initialize its log term/index > 0,
@@ -295,12 +297,9 @@ impl Drop for EntryCache {
     }
 }
 
-pub trait HandleRaftReadyContext<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
+pub trait HandleRaftReadyContext
 {
-    fn async_writer(&mut self, id: usize) -> (&AsyncWriter<EK, ER>, &mut StoreIOLockMetrics);
+    fn async_write_sender(&mut self, id: usize) -> (&Sender<AsyncWriteMsg>, &mut StoreIOLockMetrics);
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -1003,7 +1002,7 @@ where
         &mut self,
         invoke_ctx: &mut InvokeContext,
         entries: Vec<Entry>,
-        chunk: &mut AsyncWriteChunk,
+        task: &mut AsyncWriteTask,
     ) {
         if entries.is_empty() {
             return;
@@ -1031,10 +1030,8 @@ where
             cache.append(&self.tag, &entries);
         }
 
-        chunk.size = entries.iter().map(|e| e.compute_size() as usize).sum();
-
-        chunk.entries = entries;
-        chunk.cut_logs = Some((last_index + 1, prev_last_index));
+        task.entries = entries;
+        task.cut_logs = Some((last_index + 1, prev_last_index));
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
 
@@ -1352,7 +1349,7 @@ where
     /// it explicitly to disk. If it's flushed to disk successfully, `post_ready` should be called
     /// to update the memory states properly.
     /// WARNING: If this function returns error, the caller must panic(details in `append` function).
-    pub fn handle_raft_ready<H: HandleRaftReadyContext<EK, ER>>(
+    pub fn handle_raft_ready<H: HandleRaftReadyContext>(
         &mut self,
         ready_ctx: &mut H,
         ready: &mut Ready,
@@ -1364,14 +1361,12 @@ where
         let region_id = self.get_region_id();
         let mut ctx = InvokeContext::new(self);
         let mut snapshot_index = 0;
+        
+        let mut write_task = AsyncWriteTask::new(region_id);
 
-        let chunk = if !ready.entries().is_empty() {
-            let mut ck = AsyncWriteChunk::new(region_id);
-            self.append(&mut ctx, ready.take_entries(), &mut ck);
-            Some(ck)
-        } else {
-            None
-        };
+        if !ready.entries().is_empty() {
+            self.append(&mut ctx, ready.take_entries(), &mut write_task);
+        }
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
@@ -1380,17 +1375,6 @@ where
                 ctx.raft_state.set_hard_state(hs.clone());
             }
         }
-
-        let (async_writer, io_lock_metrics) = ready_ctx.async_writer(async_writer_id);
-        let wait_lock = UtilInstant::now_coarse();
-        let mut locked_writer = async_writer.0.lock().unwrap();
-        let hold_lock = UtilInstant::now_coarse();
-
-        io_lock_metrics
-            .wait_lock_sec
-            .observe(duration_to_sec(wait_lock.elapsed()) as f64);
-
-        let current = locked_writer.prepare_current_for_write();
 
         /*if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
@@ -1406,13 +1390,9 @@ where
             snapshot_index = last_index(&ctx.raft_state);
         };*/
 
-        if let Some(chunk) = chunk {
-            current.update_chunk(chunk);
-        }
-
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
-            current.update_raft_state(region_id, self.raft_state.clone());
+            write_task.raft_state = Some(self.raft_state.clone());
             //ctx.save_raft_state_to(&mut current.raft_wb)?;
         }
 
@@ -1427,20 +1407,24 @@ where
         }*/
 
         if ready.must_sync() {
-            current.update_ready(region_id, ready.number(), region_notifier);
+            write_task.unsynced_ready = Some(UnsyncedReady::new(ready.number(), region_notifier));
         }
 
         for ts in &proposal_times {
             STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
-            current.proposal_times.push(*ts);
         }
+        write_task.proposal_times = proposal_times;
 
-        if locked_writer.should_notify() {
-            async_writer.1.notify_one();
+        if !write_task.is_empty() {
+            let hold_lock = UtilInstant::now_coarse();
+            let (sender, io_lock_metrics) = ready_ctx.async_write_sender(async_writer_id);
+            if let Err(e) = sender.send(AsyncWriteMsg::WriteTask(write_task)) {
+                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+            }
+            io_lock_metrics
+                .hold_lock_sec
+                .observe(duration_to_sec(hold_lock.elapsed()) as f64);
         }
-        io_lock_metrics
-            .hold_lock_sec
-            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
 
         Ok(ctx)
     }

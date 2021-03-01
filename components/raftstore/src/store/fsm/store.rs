@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::{thread, u64};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
-use crossbeam::channel::{TryRecvError, TrySendError};
+use crossbeam::channel::{TryRecvError, Sender, TrySendError};
 //use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{Engines, KvEngine, Mutable, WriteBatch};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -80,7 +80,7 @@ pub const PENDING_MSG_CAP: usize = 100;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 use crate::store::fsm::apply_async_io::{ApplyAsyncWriter, ApplyAsyncWriters};
-use crate::store::fsm::async_io::{AsyncWriter, AsyncWriters};
+use crate::store::fsm::async_io::{AsyncWriteMsg, AsyncWriters};
 
 pub struct StoreInfo<E> {
     pub engine: E,
@@ -336,18 +336,18 @@ where
     pub perf_context_statistics: PerfContextStatistics,
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
-    pub async_writers: Vec<AsyncWriter<EK, ER>>,
+    pub async_write_senders: Vec<Sender<AsyncWriteMsg>>,
     pub io_lock_metrics: StoreIOLockMetrics,
 }
 
-impl<EK, ER, T> HandleRaftReadyContext<EK, ER> for PollContext<EK, ER, T>
+impl<EK, ER, T> HandleRaftReadyContext for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     #[inline]
-    fn async_writer(&mut self, id: usize) -> (&AsyncWriter<EK, ER>, &mut StoreIOLockMetrics) {
-        (&self.async_writers[id], &mut self.io_lock_metrics)
+    fn async_write_sender(&mut self, id: usize) -> (&Sender<AsyncWriteMsg>, &mut StoreIOLockMetrics) {
+        (&self.async_write_senders[id], &mut self.io_lock_metrics)
     }
 
     #[inline]
@@ -830,7 +830,7 @@ where
     pub engines: Engines<EK, ER>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    async_writers: Vec<AsyncWriter<EK, ER>>,
+    async_write_senders: Vec<Sender<AsyncWriteMsg>>,
     pub apply_async_writers: Vec<ApplyAsyncWriter<EK, W>>,
 }
 
@@ -1052,7 +1052,7 @@ where
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
-            async_writers: self.async_writers.clone(),
+            async_write_senders: self.async_write_senders.clone(),
             io_lock_metrics: StoreIOLockMetrics::default(),
         };
         ctx.update_ticks_timeout();
@@ -1096,7 +1096,7 @@ where
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK>>,
-    async_writers: AsyncWriters<EK, ER>,
+    async_writers: AsyncWriters,
     apply_async_writers: ApplyAsyncWriters<EK, W>,
 }
 
@@ -1218,7 +1218,7 @@ where
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
-            async_writers: self.async_writers.writers().clone(),
+            async_write_senders: self.async_writers.senders().clone(),
             apply_async_writers: self.apply_async_writers.writers().clone(),
         };
         let region_peers = builder.init()?;

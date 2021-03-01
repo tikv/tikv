@@ -1764,8 +1764,8 @@ where
         let async_writer_id = if let Some(id) = self.async_writer_id {
             id
         } else {
-            assert!(ctx.async_writers.len() > 0);
-            let id = rand::thread_rng().gen_range(0, ctx.async_writers.len());
+            assert!(ctx.async_write_senders.len() > 0);
+            let id = rand::thread_rng().gen_range(0, ctx.async_write_senders.len());
             self.async_writer_id = Some(id);
             id
         };
