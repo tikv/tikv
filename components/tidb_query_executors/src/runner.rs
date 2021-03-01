@@ -167,6 +167,7 @@ pub fn build_executors<S: Storage + 'static>(
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
             let primary_column_ids = descriptor.take_primary_column_ids();
+            let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
             executor = Box::new(
                 BatchTableScanExecutor::new(
@@ -177,6 +178,7 @@ pub fn build_executors<S: Storage + 'static>(
                     primary_column_ids,
                     descriptor.get_desc(),
                     is_scanned_range_aware,
+                    primary_prefix_column_ids,
                 )?
                 .collect_summary(summary_slot_index),
             );
