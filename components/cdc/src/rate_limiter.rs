@@ -1,14 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_util::mpsc::batch::Sender;
-use crate::service::CdcEvent;
 use std::sync::atomic::{AtomicBool, Ordering};
-use kvproto::cdcpb::Event;
 use crossbeam::channel::TrySendError;
 use crate::metrics::*;
-use futures::Future;
 use std::sync::Arc;
-use std::boxed::Box;
 use std::cmp::min;
 
 #[derive(Debug)]

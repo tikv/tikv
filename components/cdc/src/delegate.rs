@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
-use std::{mem, thread};
+use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -43,9 +43,9 @@ use crate::metrics::*;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
 use crate::rate_limiter::RateLimiter;
-use std::time::Duration;
 
-const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024; // 6MB
+const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024;
+// 6MB
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
@@ -257,8 +257,8 @@ impl Delegate {
                 &downstream.region_epoch,
                 region,
                 false, /* check_conf_ver */
-                true,  /* check_ver */
-                true,  /* include_region */
+                true, /* check_ver */
+                true, /* include_region */
             ) {
                 info!("fail to subscribe downstream";
                     "region_id" => region.get_id(),
@@ -469,7 +469,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn convert_to_grpc_events(region_id: u64, entries: Vec<Option<TxnEntry>>) -> Option<Vec<Event>> {
+    pub(crate) fn convert_to_grpc_events(region_id: u64, entries: Vec<Option<TxnEntry>>) -> Vec<Event> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -538,17 +538,15 @@ impl Delegate {
             }
         }
 
-        rows.into_iter().map(|rs| {
-            if !rs.is_empty() {
-                let event_entries = EventEntries {
-                    entries: rs.into(),
-                    ..Default::default()
-                };
-                Event {
-                    region_id: region_id,
-                    event: Some(Event_oneof_event::Entries(event_entries)),
-                    ..Default::default()
-                }
+        rows.into_iter().filter(|rs| !rs.is_empty()).map(|rs| {
+            let event_entries = EventEntries {
+                entries: rs.into(),
+                ..Default::default()
+            };
+            Event {
+                region_id: region_id,
+                event: Some(Event_oneof_event::Entries(event_entries)),
+                ..Default::default()
             }
         }).collect()
     }
@@ -567,9 +565,9 @@ impl Delegate {
         };
 
 
-        if let Some(events) = Self::convert_to_grpc_events(self.region_id, entries) {
-            events.into_iter().map(|e| downstream.sink_event(e)).collect();
-        }
+        Self::convert_to_grpc_events(self.region_id, entries)
+            .into_iter()
+            .for_each(|e| downstream.sink_event(e))
     }
 
     fn sink_data(
@@ -780,13 +778,13 @@ impl Delegate {
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     #[cfg(feature = "prost-codec")]
-    {
-        row.r#type = ty.into();
-    }
+        {
+            row.r#type = ty.into();
+        }
     #[cfg(not(feature = "prost-codec"))]
-    {
-        row.r_type = ty;
-    }
+        {
+            row.r_type = ty;
+        }
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
