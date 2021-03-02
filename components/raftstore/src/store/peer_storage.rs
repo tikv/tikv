@@ -1366,9 +1366,9 @@ where
         let mut snapshot_index = 0;
 
         let (async_writer, io_lock_metrics) = ready_ctx.async_writer(async_writer_id);
-        let wait_lock = UtilInstant::now_coarse();
+        let wait_lock = UtilInstant::now();
         let mut locked_writer = async_writer.0.lock().unwrap();
-        let hold_lock = UtilInstant::now_coarse();
+        let hold_lock = UtilInstant::now();
 
         io_lock_metrics
             .wait_lock_sec

@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tikv_util::mpsc;
-use tikv_util::time::Instant;
+use tikv_util::time::{duration_to_nanos, Instant};
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
@@ -92,7 +92,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         match fsm {
             FsmTypes::Normal(n) => {
                 self.normals.push(n);
-                self.timers.push(Instant::now_coarse());
+                self.timers.push(Instant::now());
             }
             FsmTypes::Control(c) => {
                 assert!(self.control.is_none());
@@ -240,6 +240,7 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
+    batch_wait_ns: i64,
     reschedule_duration: Duration,
 }
 
@@ -283,6 +284,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
+            let begin_ts = Instant::now();
             // If there is some region wait to be deal, we must deal with it even if it has overhead
             // max size of batch. It's helpful to protect regions from becoming hungry
             // if some regions are hot points.
@@ -349,6 +351,13 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     ReschedulePolicy::Schedule => batch.reschedule(&self.router, r),
                 }
             }
+
+            //if run && fsm_cnt < batch.normals.len() {
+                let delta_ns = self.batch_wait_ns - duration_to_nanos(begin_ts.elapsed()) as i64;
+                if delta_ns > 0 {
+                    thread::sleep(Duration::from_nanos(delta_ns as u64));
+                }
+            //}
         }
         batch.clear();
     }
@@ -373,6 +382,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     pool_size: usize,
     max_batch_size: usize,
     workers: Vec<JoinHandle<()>>,
+    batch_wait_ns: i64,
     reschedule_duration: Duration,
 }
 
@@ -398,6 +408,7 @@ where
                 fsm_receiver: self.receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,
+                batch_wait_ns: self.batch_wait_ns,
                 reschedule_duration: self.reschedule_duration,
             };
             let t = thread::Builder::new()
@@ -455,6 +466,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         receiver: rx,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size,
+        batch_wait_ns: (cfg.batch_wait_us * 1000) as i64,
         reschedule_duration: cfg.reschedule_duration.0,
         workers: vec![],
     };

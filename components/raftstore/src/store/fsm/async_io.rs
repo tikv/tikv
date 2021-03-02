@@ -17,7 +17,8 @@ use crate::{observe_perf_context_type, report_perf_context, Result};
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use tikv_util::time::{duration_to_sec, duration_to_micros, Instant as UtilInstant};
+use std::time::Duration;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -120,7 +121,7 @@ impl UnsyncedReady {
                     .notifier
                     .compare_and_swap(pre_number, self.number, Ordering::AcqRel)
             {
-                if let Err(e) = router.force_send(self.region_id, PeerMsg::Noop) {
+                if let Err(e) = router.force_send(self.region_id, PeerMsg::Persisted(Instant::now())) {
                     error!(
                         "failed to send noop to trigger persisted ready";
                         "region_id" => self.region_id,
@@ -167,7 +168,7 @@ where
 
     pub fn on_taken_for_write(&mut self) {
         if self.is_empty() {
-            self.begin = Some(UtilInstant::now_coarse());
+            self.begin = Some(UtilInstant::now());
         }
     }
 
@@ -222,9 +223,6 @@ where
     stop: bool,
     wbs: VecDeque<AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch>>,
     metrics: AsyncWriterStoreMetrics,
-    //queue_size: usize,
-    //queue_init_bytes: usize,
-    //queue_bytes_step: f64,
     size_limits: Vec<usize>,
     current_idx: usize,
     adaptive_idx: usize,
@@ -232,6 +230,7 @@ where
     sample_window: SampleWindow,
     sample_quantile: f64,
     task_suggest_bytes_cache: usize,
+    adaptive_size: bool,
 }
 
 impl<EK, ER> AsyncWriteAdaptiveTasks<EK, ER>
@@ -247,6 +246,7 @@ where
         queue_bytes_step: f64,
         queue_adaptive_gain: usize,
         queue_sample_quantile: f64,
+        adaptive_size: bool,
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
@@ -265,9 +265,6 @@ where
             stop: false,
             wbs,
             metrics: AsyncWriterStoreMetrics::default(),
-            //queue_size,
-            //queue_init_bytes,
-            //queue_bytes_step,
             size_limits,
             current_idx: 0,
             adaptive_idx: 0,
@@ -275,24 +272,36 @@ where
             sample_window: SampleWindow::new(),
             sample_quantile: queue_sample_quantile,
             task_suggest_bytes_cache: 0,
+            adaptive_size,
         }
     }
 
     pub fn prepare_current_for_write(
         &mut self,
     ) -> &mut AsyncWriteTask<EK, EK::WriteBatch, ER::LogBatch> {
-        let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
-        if current_size
-            >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
-        {
-            if self.current_idx + 1 < self.wbs.len() {
-                self.current_idx += 1;
-            } else {
-                // do nothing, adaptive IO size
+        if self.adaptive_size {
+            let current_size = self.wbs[self.current_idx].raft_wb.persist_size();
+            if current_size
+                >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
+            {
+                if self.current_idx + 1 < self.wbs.len() {
+                    self.current_idx += 1;
+                } else {
+                    // do nothing, adaptive IO size
+                }
             }
         }
         self.wbs[self.current_idx].on_taken_for_write();
         &mut self.wbs[self.current_idx]
+    }
+
+    pub fn try_split_task(&mut self) -> bool {
+        if self.has_task() && self.current_idx + 1 < self.wbs.len() {
+            self.current_idx += 1;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn should_notify(&self) -> bool {
@@ -341,11 +350,19 @@ where
     }
 
     fn has_task(&self) -> bool {
+        !self.wbs.front().unwrap().is_empty()
+    }
+
+    fn has_writable_task(&self) -> bool {
+        if self.current_idx > 0 {
+            return true;
+        }
         let first_task = self.wbs.front().unwrap();
         if first_task.is_empty() {
             return false;
         }
-        true
+        self.task_suggest_bytes_cache == 0
+            || first_task.raft_wb.persist_size() >= self.task_suggest_bytes_cache
     }
 
     fn flush_metrics(&mut self) {
@@ -367,6 +384,7 @@ where
     router: RaftRouter<EK, ER>,
     pub writer: AsyncWriter<EK, ER>,
     perf_context_statistics: PerfContextStatistics,
+    io_max_wait_us: i64,
 }
 
 impl<EK, ER> AsyncWriteWorker<EK, ER>
@@ -391,6 +409,7 @@ where
                 config.store_batch_system.io_queue_bytes_step,
                 config.store_batch_system.io_queue_adaptive_gain,
                 config.store_batch_system.io_queue_sample_quantile,
+                config.store_batch_system.io_adaptive_size,
             )),
             Condvar::new(),
         ));
@@ -402,21 +421,41 @@ where
             router,
             writer,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
+            io_max_wait_us: config.store_batch_system.io_max_wait_us as i64,
         }
     }
 
     fn run(&mut self) {
         loop {
-            let loop_begin = UtilInstant::now_coarse();
+            let loop_begin = UtilInstant::now();
+            let mut wake_count = 0;
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                while !w.stop && !w.has_task() {
-                    w = self.writer.1.wait(w).unwrap();
+                let mut delta_us = self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
+                if self.io_max_wait_us == 0 {
+                    while !w.stop && !w.has_task() {
+                        w = self.writer.1.wait(w).unwrap();
+                    }
+                } else {
+                    while !w.stop && !w.has_writable_task() && delta_us > 0 {
+                        w = self.writer.1.wait_timeout(w, Duration::from_micros(delta_us as u64)).unwrap().0;
+                        delta_us = self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
+                        wake_count += 1;
+                    }
                 }
                 if w.stop {
                     return;
                 }
-                w.detach_task()
+                if !w.has_task() {
+                    continue;
+                }
+                let task = w.detach_task();
+                STORE_WRITE_TASK_WAKE_CNT_HISTOGRAM.observe(wake_count as f64);
+                STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.observe(duration_to_sec(loop_begin.elapsed()));
+                if self.io_max_wait_us == 0 || delta_us <= 0 {
+                    STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.raft_wb.persist_size() as f64);
+                }
+                task
             };
 
             // TODO: metric change name?
@@ -443,7 +482,7 @@ where
         self.perf_context_statistics.start();
         fail_point!("raft_before_save");
         if !task.kv_wb.is_empty() {
-            let now = UtilInstant::now_coarse();
+            let now = UtilInstant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.kv_engine
@@ -461,7 +500,7 @@ where
         fail_point!("raft_between_save");
         if !task.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            let now = UtilInstant::now_coarse();
+            let now = UtilInstant::now();
             self.raft_engine
                 .consume_and_shrink(&mut task.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
@@ -476,7 +515,7 @@ where
         );
         task.after_write_to_db();
 
-        let callback_begin = UtilInstant::now_coarse();
+        let callback_begin = UtilInstant::now();
         for (_, r) in &task.unsynced_readies {
             r.flush(&self.router);
         }

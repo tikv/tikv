@@ -537,6 +537,9 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::Persisted(ts) => {
+                    STORE_PERSISTED_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
+                }
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
         }
