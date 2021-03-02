@@ -632,6 +632,7 @@ mod tests {
             GcTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
+            GcTask::GcKeys { .. } => unreachable!(),
             GcTask::PhysicalScanLock { .. } => unreachable!(),
             GcTask::OrphanVersions { .. } => unreachable!(),
             GcTask::Validate(_) => unreachable!(),

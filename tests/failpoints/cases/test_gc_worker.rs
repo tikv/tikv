@@ -14,6 +14,7 @@ use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
 use test_raftstore::*;
+use tikv::server::gc_worker::GcTask;
 use tikv::server::gc_worker::{
     AutoGcConfig, GcSafePointProvider, Result as GcWorkerResult, TestGCRunner,
 };
@@ -312,12 +313,14 @@ fn test_error_in_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::default();
-    gc_runner.safe_point = 200;
-    gc_runner.orphan_versions_handler = Some(Arc::new(move |wb, _| {
-        assert_eq!(wb.as_inner().count(), 2);
-    }));
+    let mut gc_runner = TestGCRunner::new(200);
     gc_runner.gc(&raw_engine);
+
+    match gc_runner.gc_receiver.try_next().unwrap().unwrap().unwrap() {
+        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_inner().count(), 2),
+        GcTask::GcKeys { .. } => {}
+        _ => unreachable!(),
+    }
 
     // Although versions on default CF is not cleaned, write CF is GCed correctly.
     must_get_none(&engine, b"zkey", 102);
@@ -363,8 +366,8 @@ fn test_orphan_versions_from_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::default();
-    gc_runner.safe_point = 100;
+    let mut gc_runner = TestGCRunner::new(100);
+    gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
     gc_runner.gc(&engine.kv);
 
     'IterKeys: for &start_ts in &[10, 20, 30] {
