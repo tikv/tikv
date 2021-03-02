@@ -96,8 +96,6 @@ use raftstore::engine_store_ffi::{
     RaftStoreProxyFFIHelper, ReadIndexClient,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8};
-use std::time::Duration;
-use tikv_util::worker::LazyWorker;
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.

@@ -445,6 +445,7 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, task: EngineStoreApplySnapTask) {
+        let status = task.status.clone();
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
