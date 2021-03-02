@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::server::metrics::*;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
@@ -15,41 +16,55 @@ const RETRY_CNT: usize = 10;
 pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
     runner: Option<Runner<E, R>>,
 
-    sender: Option<Sender<bool>>,
+    sender: Option<Sender<Option<Duration>>>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
     pub fn new(engine: E, region_info_provider: R, poll_interval: Duration) -> Self {
+        let (tx, rx) = unbounded();
         TTLChecker::<E, R> {
             runner: Some(Runner {
                 engine,
                 region_info_provider,
                 poll_interval,
+                receiver: rx,
             }),
-            sender: None,
+            sender: Some(tx),
             handle: None,
         }
     }
 
+    pub fn get_sender(&self) -> Sender<Option<Duration>> {
+        self.sender.as_ref().unwrap().clone()
+    }
+
     pub fn start(&mut self) -> Result<(), io::Error> {
-        let (tx, rx) = mpsc::channel();
-        self.sender = Some(tx);
-        let runner = self.runner.take().unwrap();
+        let mut runner = self.runner.take().unwrap();
         let h = thread::Builder::new()
             .name("ttl-checker".to_owned())
             .spawn(move || {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut interval = runner.poll_interval;
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    interval = runner.run();
-                    info!(
-                        "ttl checker finishes a round, wait {}s to start next round",
-                        interval.as_secs()
-                    );
-                    // make sure the data point of metrics is pulled
-                    thread::sleep(Duration::from_secs(40));
-                    TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
+                loop {
+                    match runner.receiver.recv_timeout(interval) {
+                        Err(crossbeam::RecvTimeoutError::Timeout) => {
+                            interval = runner.run();
+                            info!(
+                                "ttl checker finishes a round, wait {}s to start next round",
+                                interval.as_secs()
+                            );
+                            // make sure the data point of metrics is pulled
+                            thread::sleep(Duration::from_secs(40));
+                            TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
+                        }
+                        Ok(None) => break,
+                        Ok(Some(int)) => {
+                            runner.poll_interval = int;
+                            interval = int;
+                        }
+                        _ => break,
+                    }
                 }
                 tikv_alloc::remove_thread_memory_accessor();
             })?;
@@ -74,6 +89,7 @@ struct Runner<E: KvEngine, R: RegionInfoProvider> {
     engine: E,
     region_info_provider: R,
     poll_interval: Duration,
+    receiver: Receiver<Option<Duration>>,
 }
 
 impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
