@@ -20,6 +20,11 @@ use crate::errors::{Error, Result};
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
 
+pub type BeforeStartCallback = Box<dyn Fn() + Send>;
+pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
+pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>) + Send>;
+pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
+
 pub enum ScanMode {
     LockOnly,
     All,
@@ -32,10 +37,10 @@ pub struct ScanTask {
     pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
-    pub cancelled: Box<dyn Fn() -> bool + Send>,
-    pub send_entries: Box<dyn Fn(Vec<ScanEntry>) + Send>,
-    pub before_start: Option<Box<dyn Fn() + Send>>,
-    pub on_error: Option<Box<dyn Fn(ObserveID, Region, Error) + Send>>,
+    pub is_cancelled: IsCancelledCallback,
+    pub send_entries: OnEntriesCallback,
+    pub before_start: Option<BeforeStartCallback>,
+    pub on_error: Option<OnErrorCallback>,
 }
 
 #[derive(Debug)]
@@ -101,7 +106,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                         .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
                         .unwrap();
                     let mut done = false;
-                    while !done && !(task.cancelled)() {
+                    while !done && !(task.is_cancelled)() {
                         let (es, has_remaining) = match Self::scan_delta(&mut scanner) {
                             Ok(rs) => rs,
                             Err(e) => {
@@ -131,7 +136,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     );
                     let mut done = false;
                     let mut start = None;
-                    while !done && !(task.cancelled)() {
+                    while !done && !(task.is_cancelled)() {
                         let (locks, has_remaining) =
                             match Self::scan_locks(&mut reader, start.as_ref(), task.checkpoint_ts)
                             {
