@@ -353,10 +353,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
 
             //if run && fsm_cnt < batch.normals.len() {
-                let delta_ns = self.batch_wait_ns - duration_to_nanos(begin_ts.elapsed()) as i64;
-                if delta_ns > 0 {
-                    thread::sleep(Duration::from_nanos(delta_ns as u64));
-                }
+            let delta_ns = self.batch_wait_ns - duration_to_nanos(begin_ts.elapsed()) as i64;
+            if delta_ns > 0 {
+                thread::sleep(Duration::from_nanos(delta_ns as u64));
+            }
             //}
         }
         batch.clear();

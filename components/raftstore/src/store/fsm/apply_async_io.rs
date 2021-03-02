@@ -22,7 +22,7 @@ use kvproto::metapb::Region;
 
 use std::sync::mpsc::{channel, Sender};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, duration_to_micros, Instant};
+use tikv_util::time::{duration_to_micros, duration_to_sec, Instant};
 
 use std::time::Duration;
 
@@ -299,25 +299,28 @@ where
         let task_bytes = task.kv_wb.data_size();
         self.metrics.task_real_bytes.observe(task_bytes as f64);
 
-        let limit_bytes =
-            self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
-        self.metrics.task_limit_bytes.observe(limit_bytes as f64);
+        if self.adaptive_size {
+            let limit_bytes =
+                self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
+            self.metrics.task_limit_bytes.observe(limit_bytes as f64);
 
-        self.sample_window.observe(task_bytes as f64);
-        let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
-        self.task_suggest_bytes_cache = task_suggest_bytes as usize;
-        self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
+            self.sample_window.observe(task_bytes as f64);
+            let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
+            self.task_suggest_bytes_cache = task_suggest_bytes as usize;
+            self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
 
-        let current_target_bytes = self.size_limits[self.adaptive_idx + self.current_idx] as f64;
-        if task_suggest_bytes >= current_target_bytes {
-            if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
-                self.adaptive_idx += 1;
+            let current_target_bytes =
+                self.size_limits[self.adaptive_idx + self.current_idx] as f64;
+            if task_suggest_bytes >= current_target_bytes {
+                if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
+                    self.adaptive_idx += 1;
+                }
+            } else if self.adaptive_idx > 0
+                && task_suggest_bytes
+                    < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
+            {
+                self.adaptive_idx -= 1;
             }
-        } else if self.adaptive_idx > 0
-            && task_suggest_bytes
-                < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
-        {
-            self.adaptive_idx -= 1;
         }
 
         if self.current_idx != 0 {
@@ -422,7 +425,8 @@ where
             let mut wake_count = 0;
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
-                let mut delta_us = self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
+                let mut delta_us =
+                    self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
                 if self.io_max_wait_us == 0 {
                     while !w.stop && !w.has_task() {
                         w = self.writer.1.wait(w).unwrap();
@@ -430,8 +434,14 @@ where
                     }
                 } else {
                     while !w.stop && !w.has_writable_task() && delta_us > 0 {
-                        w = self.writer.1.wait_timeout(w, Duration::from_micros(delta_us as u64)).unwrap().0;
-                        delta_us = self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
+                        w = self
+                            .writer
+                            .1
+                            .wait_timeout(w, Duration::from_micros(delta_us as u64))
+                            .unwrap()
+                            .0;
+                        delta_us =
+                            self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
                     }
                 }
                 if w.stop {
@@ -442,7 +452,8 @@ where
                 }
                 let task = w.detach_task();
                 APPLY_WRITE_TASK_WAKE_CNT_HISTOGRAM.observe(wake_count as f64);
-                APPLY_WRITE_TASK_GEN_DURATION_HISTOGRAM.observe(duration_to_sec(loop_begin.elapsed()));
+                APPLY_WRITE_TASK_GEN_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(loop_begin.elapsed()));
                 if self.io_max_wait_us == 0 || delta_us < 0 {
                     APPLY_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.kv_wb.data_size() as f64);
                 }

@@ -45,7 +45,6 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     d.as_secs() * 1_000_000_000 + nanos
 }
 
-
 /// A time in seconds since the start of the Unix epoch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct UnixSecs(u64);
