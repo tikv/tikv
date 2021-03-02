@@ -205,8 +205,10 @@ mod tests {
             raft_engine.sync().unwrap();
         }
         // RaftEngine
-        let mut raft_config = RaftEngineConfig::default();
-        raft_config.dir = raftengine_path.to_str().unwrap().to_owned();
+        let raft_config = RaftEngineConfig {
+            dir: raftengine_path.to_str().unwrap().to_owned(),
+            ..Default::default()
+        };
         let raft_engine = RaftLogEngine::new(raft_config);
         check_and_dump_raft_db(
             raftdb_path.to_str().unwrap(),

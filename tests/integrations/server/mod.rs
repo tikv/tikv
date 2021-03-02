@@ -235,6 +235,7 @@ trait MockKvService {
     unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
     unary_call!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
+    unary_call!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
 }
 
 impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
@@ -350,6 +351,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
     unary_call_dispatch!(check_leader, CheckLeaderRequest, CheckLeaderResponse);
+    unary_call_dispatch!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
 }
 
 fn mock_kv_service<T>(kv: MockKv<T>, ip: &str, port: u16) -> Result<Server>

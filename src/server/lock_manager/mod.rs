@@ -339,9 +339,12 @@ mod tests {
         let mut coprocessor_host = CoprocessorHost::default();
 
         let mut lock_mgr = LockManager::new(false);
-        let mut cfg = Config::default();
-        cfg.wait_for_lock_timeout = ReadableDuration::millis(3000);
-        cfg.wake_up_delay_duration = ReadableDuration::millis(100);
+        let cfg = Config {
+            wait_for_lock_timeout: ReadableDuration::millis(3000),
+            wake_up_delay_duration: ReadableDuration::millis(100),
+            ..Default::default()
+        };
+
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(

@@ -561,8 +561,10 @@ cf_config!(WriteCfConfig);
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         WriteCfConfig {
             block_size: ReadableSize::kb(64),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_WRITE) as u64),
@@ -654,8 +656,10 @@ cf_config!(LockCfConfig);
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(memory_mb_for_cf(false, CF_LOCK) as u64),
@@ -725,8 +729,10 @@ cf_config!(RaftCfConfig);
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
         // Setting blob_run_mode=read_only effectively disable Titan.
-        let mut titan = TitanCfConfig::default();
-        titan.blob_run_mode = BlobRunMode::ReadOnly;
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: ReadableSize::mb(128),
@@ -980,8 +986,10 @@ impl Default for DbConfig {
     fn default() -> DbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(8, 2, 3, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1271,8 +1279,10 @@ impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
         let (max_background_jobs, max_background_flushes, max_sub_compactions, max_background_gc) =
             get_background_job_limit(4, 1, 2, 4);
-        let mut titan_config = TitanDBConfig::default();
-        titan_config.max_background_gc = max_background_gc;
+        let titan_config = TitanDBConfig {
+            max_background_gc,
+            ..Default::default()
+        };
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -2889,7 +2899,7 @@ fn to_toml_encode(change: HashMap<String, String>) -> CfgResult<HashMap<String, 
         } else {
             Err("failed to get field".to_owned().into())
         }
-    };
+    }
     let mut dst = HashMap::new();
     for (name, value) in change {
         let fields: Vec<_> = name.as_str().split('.').collect();
@@ -3589,9 +3599,11 @@ mod tests {
     fn test_compaction_guard() {
         // Test comopaction guard disabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = false;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: false,
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3601,9 +3613,11 @@ mod tests {
         }
         // Test compaction guard enabled but region info provider is missing.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                ..Default::default()
+            };
             let provider: Option<MockRegionInfoProvider> = None;
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(
@@ -3613,11 +3627,13 @@ mod tests {
         }
         // Test compaction guard enabled.
         {
-            let mut config = DefaultCfConfig::default();
-            config.target_file_size_base = ReadableSize::mb(16);
-            config.enable_compaction_guard = true;
-            config.compaction_guard_min_output_file_size = ReadableSize::mb(4);
-            config.compaction_guard_max_output_file_size = ReadableSize::mb(64);
+            let config = DefaultCfConfig {
+                target_file_size_base: ReadableSize::mb(16),
+                enable_compaction_guard: true,
+                compaction_guard_min_output_file_size: ReadableSize::mb(4),
+                compaction_guard_max_output_file_size: ReadableSize::mb(64),
+                ..Default::default()
+            };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
             let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
             assert_eq!(

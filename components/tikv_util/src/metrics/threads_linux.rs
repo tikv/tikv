@@ -298,7 +298,7 @@ lazy_static! {
 
 #[inline]
 fn get_name(command: &str) -> String {
-    if command != "" {
+    if !command.is_empty() {
         return command.to_owned();
     }
     String::from("anony")

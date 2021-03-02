@@ -259,7 +259,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
 }
 
 fn calc_checksum_and_size(
-    path: &PathBuf,
+    path: &Path,
     encryption_key_manager: Option<&Arc<DataKeyManager>>,
 ) -> RaftStoreResult<(u32, u64)> {
     let (checksum, size) = if let Some(mgr) = encryption_key_manager {
@@ -273,7 +273,7 @@ fn calc_checksum_and_size(
     Ok((checksum, size))
 }
 
-fn check_file_size(got_size: u64, expected_size: u64, path: &PathBuf) -> RaftStoreResult<()> {
+fn check_file_size(got_size: u64, expected_size: u64, path: &Path) -> RaftStoreResult<()> {
     if got_size != expected_size {
         return Err(box_err!(
             "invalid size {} for snapshot cf file {}, expected {}",
@@ -288,7 +288,7 @@ fn check_file_size(got_size: u64, expected_size: u64, path: &PathBuf) -> RaftSto
 fn check_file_checksum(
     got_checksum: u32,
     expected_checksum: u32,
-    path: &PathBuf,
+    path: &Path,
 ) -> RaftStoreResult<()> {
     if got_checksum != expected_checksum {
         return Err(box_err!(
@@ -302,7 +302,7 @@ fn check_file_checksum(
 }
 
 fn check_file_size_and_checksum(
-    path: &PathBuf,
+    path: &Path,
     expected_size: u64,
     expected_checksum: u32,
     encryption_key_manager: Option<&Arc<DataKeyManager>>,
@@ -456,12 +456,19 @@ impl Snap {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum CheckPolicy {
+    ErrAllowed,
+    ErrNotAllowed,
+    None,
+}
+
 impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
         is_sending: bool,
-        to_build: bool,
+        check_policy: CheckPolicy,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
@@ -512,10 +519,14 @@ impl Snap {
             mgr: mgr.clone(),
         };
 
+        if check_policy == CheckPolicy::None {
+            return Ok(s);
+        }
+
         // load snapshot meta if meta_file exists
         if file_exists(&s.meta_file.path) {
             if let Err(e) = s.load_snapshot_meta() {
-                if !to_build {
+                if check_policy == CheckPolicy::ErrNotAllowed {
                     return Err(e);
                 }
                 warn!(
@@ -541,7 +552,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, true, true, mgr)?;
+        let mut s = Self::new(dir, key, true, CheckPolicy::ErrAllowed, mgr)?;
         s.init_for_building()?;
         Ok(s)
     }
@@ -551,7 +562,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, true, false, mgr)?;
+        let mut s = Self::new(dir, key, true, CheckPolicy::ErrNotAllowed, mgr)?;
         s.mgr.limiter = Limiter::new(INFINITY);
 
         if !s.exists() {
@@ -574,7 +585,7 @@ impl Snap {
         mgr: &SnapManagerCore,
         snapshot_meta: SnapshotMeta,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, false, false, mgr)?;
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -628,7 +639,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, false, false, mgr)?;
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
         s.mgr.limiter = Limiter::new(INFINITY);
         Ok(s)
     }
@@ -1179,7 +1190,6 @@ impl Drop for Snap {
         // cleanup if data corruption happens and any file goes missing
         if !self.exists() {
             self.delete();
-            return;
         }
     }
 }
@@ -1374,6 +1384,17 @@ impl SnapManager {
         let base = &self.core.base;
         let f = Snap::new_for_building(base, key, &self.core)?;
         Ok(Box::new(f))
+    }
+
+    pub fn get_snapshot_for_gc(
+        &self,
+        key: &SnapKey,
+        is_sending: bool,
+    ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let s = Snap::new(base, key, is_sending, CheckPolicy::None, &self.core)?;
+        Ok(Box::new(s))
     }
 
     pub fn get_snapshot_for_sending(

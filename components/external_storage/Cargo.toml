@@ -18,7 +18,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 # This is only a dependency to vendor openssl for rusoto. It's not clear exactly
 # how openssl is built for tikv, but it seems to be controlled by grpcio. This
 # makes `cargo test -p external_storage` link correctly.
-grpcio = { version = "0.7", default-features = false }
+grpcio = { version = "0.8",  default-features = false }
 http = "0.2.0"
 hyper = "0.13.3"
 hyper-tls = "0.4.1"
@@ -36,6 +36,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tame-gcs = { version = "0.8.0", features = ["async-multipart"] }
 tame-oauth = "0.4.2"
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
 tokio = { version = "0.2.13", features = ["time"] }
 url = "2.0"
 

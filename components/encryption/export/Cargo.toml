@@ -1,0 +1,44 @@
+[package]
+name = "encryption_export"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec", "cloud-aws", "cloud-gcp"]
+protobuf-codec = [
+  "aws/protobuf-codec",
+  "cloud/protobuf-codec",
+  "encryption/protobuf-codec",
+  "error_code/protobuf-codec",
+  "kvproto/protobuf-codec",
+]
+prost-codec = [
+  "aws/prost-codec",
+  "cloud/prost-codec",
+  "encryption/prost-codec",
+  "error_code/prost-codec",
+  "kvproto/prost-codec",
+]
+cloud-aws = ["aws"]
+cloud-gcp = []
+
+[dependencies]
+async-trait = "0.1"
+aws = { path = "../../cloud/aws", optional = true, default-features = false }
+cloud = { path = "../../cloud/", default-features = false }
+derive_more = "0.99.3"
+encryption = { path = "../", default-features = false }
+error_code = { path = "../../error_code", default-features = false }
+file_system = { path = "../../file_system" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+openssl = "0.10"
+protobuf = "2.8"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+# better to not use slog-global, but pass in the logger
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_util = { path = "../../tikv_util", default-features = false }
+
+[dev-dependencies]
+rust-ini = "0.14.0"
+structopt = "0.3"
