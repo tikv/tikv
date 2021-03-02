@@ -1,3 +1,58 @@
+["KV:Cloud:IO"]
+error = '''
+KV:Cloud:IO
+'''
+
+["KV:Cloud:SSL"]
+error = '''
+KV:Cloud:SSL
+'''
+
+["KV:Cloud:Proto"]
+error = '''
+KV:Cloud:Proto
+'''
+
+["KV:Cloud:Unknown"]
+error = '''
+KV:Cloud:Unknown
+'''
+
+["KV:Cloud:Timeout"]
+error = '''
+KV:Cloud:Timeout
+'''
+
+["KV:Cloud:InvalidInput"]
+error = '''
+KV:Cloud:InvalidInput
+'''
+
+["KV:Cloud:ApiInternal"]
+error = '''
+KV:Cloud:ApiInternal
+'''
+
+["KV:Cloud:ApiNotFound"]
+error = '''
+KV:Cloud:ApiNotFound
+'''
+
+["KV:Cloud:ApiAuthentication"]
+error = '''
+KV:Cloud:ApiAuthentication
+'''
+
+["KV:Cloud:WrongMasterKey"]
+error = '''
+KV:Cloud:WrongMasterKey
+'''
+
+["KV:Cloud:BothMasterKeyFail"]
+error = '''
+KV:Cloud:BothMasterKeyFail
+'''
+
 ["KV:Codec:Io"]
 error = '''
 KV:Codec:Io

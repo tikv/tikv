@@ -2,7 +2,7 @@
 
 use std::{fs::File, io::Write, time::Duration};
 
-use encryption::{
+use encryption_export::{
     create_backend, DataKeyManager, DataKeyManagerArgs, EncryptionConfig, FileConfig,
     MasterKeyConfig, Result,
 };
@@ -46,7 +46,7 @@ pub fn new_test_key_manager(
     let previous_master_key = previous_master_key.unwrap_or(default_config);
     DataKeyManager::new(
         create_backend(&master_key)?,
-        &*create_backend(&previous_master_key)?,
+        Box::new(move || create_backend(&previous_master_key)),
         DataKeyManagerArgs {
             method: method.unwrap_or(EncryptionMethod::Aes256Ctr),
             rotation_period: Duration::from_secs(60),

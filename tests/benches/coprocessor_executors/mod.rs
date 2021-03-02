@@ -28,10 +28,15 @@ fn execute<M: criterion::measurement::Measurement + 'static>(c: &mut criterion::
 
 #[cfg(target_os = "linux")]
 fn run_bench(measurement: &str) {
+    use criterion_perf_events::Perf;
+    use perfcnt::linux::HardwareEventType as Hardware;
+    use perfcnt::linux::PerfCounterBuilderLinux as Builder;
+
     match measurement {
         "TOT_INS" => {
+            let perf_event_builder = Builder::from_hardware_event(Hardware::Instructions);
             let mut c = criterion::Criterion::default()
-                .with_measurement(criterion_papi::PapiMeasurement::new("PAPI_TOT_INS"))
+                .with_measurement(Perf::new(perf_event_builder))
                 .configure_from_args();
             execute(&mut c);
         }

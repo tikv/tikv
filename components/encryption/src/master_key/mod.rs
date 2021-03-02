@@ -2,9 +2,7 @@
 
 use kvproto::encryptionpb::EncryptedContent;
 
-use crate::{Error, MasterKeyConfig, Result};
-
-use std::path::Path;
+use crate::{Error, Result};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -25,14 +23,14 @@ use self::mem::MemAesGcmBackend;
 mod file;
 pub use self::file::FileBackend;
 
-mod kms;
-pub use self::kms::{AwsKms, KmsBackend};
-
 mod metadata;
 use self::metadata::*;
 
+mod kms;
+pub use self::kms::{DataKeyPair, EncryptedKey, KmsBackend, KmsProvider};
+
 #[derive(Default, Debug, Clone)]
-pub(crate) struct PlaintextBackend {}
+pub struct PlaintextBackend {}
 
 impl Backend for PlaintextBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
@@ -67,28 +65,6 @@ impl Backend for PlaintextBackend {
         // plain text backend is insecure.
         false
     }
-}
-
-pub fn create_backend(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
-    let result = create_backend_inner(config);
-    if let Err(e) = result {
-        error!("failed to access master key, {}", e);
-        return Err(e);
-    };
-    result
-}
-
-fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
-    Ok(match config {
-        MasterKeyConfig::Plaintext => Box::new(PlaintextBackend {}) as _,
-        MasterKeyConfig::File { config } => {
-            Box::new(FileBackend::new(Path::new(&config.path))?) as _
-        }
-        MasterKeyConfig::Kms { config } => {
-            let kms_provider = AwsKms::new(config.clone())?;
-            Box::new(KmsBackend::new(Box::new(kms_provider))?) as _
-        }
-    })
 }
 
 #[cfg(test)]
