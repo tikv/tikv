@@ -331,6 +331,16 @@ impl Config {
             ));
         }
 
+        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        if lease > election_timeout - tick {
+            return Err(box_err!(
+                "lease {} ms should not be larger than election timeout {} ms - 1 tick({} ms)",
+                lease,
+                election_timeout,
+                tick
+            ));
+        }
+
         if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
             return Err(box_err!(
                 "merge log gap {} should be less than log gc limit {}.",
@@ -717,6 +727,12 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
+        cfg.raft_election_timeout_ticks = 9;
+        cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
     }
 }
