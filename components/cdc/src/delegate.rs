@@ -117,27 +117,17 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
-        if self.sink.is_none() {
-            info!("drop event, no sink";
+        if self.rate_limiter.is_none() {
+            warn!("cdc drop event, no rate_limiter";
                 "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
             return;
         }
-        let sink = self.sink.as_ref().unwrap();
-        if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
-            match e {
-                crossbeam::TrySendError::Disconnected(_) => {
-                    debug!("send event failed, disconnected";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                }
-                crossbeam::TrySendError::Full(_) => {
-                    info!("send event failed, full";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                }
-            }
+
+        let rate_limiter = self.rate_limiter.as_ref().unwrap();
+        if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
+            info!("cdc send event failed";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
         }
-        let count = sink.get_pending_count();
-        info!("cdc sink event"; "queue_size" => count);
-        CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(count as f64);
     }
 
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
@@ -159,6 +149,10 @@ impl Downstream {
 
     pub fn get_conn_id(&self) -> ConnID {
         self.conn_id
+    }
+
+    pub fn get_req_id(&self) -> u64 {
+        self.req_id
     }
 
     pub fn sink_duplicate_error(&self, region_id: u64) {
@@ -469,7 +463,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn convert_to_grpc_events(region_id: u64, entries: Vec<Option<TxnEntry>>) -> Vec<Event> {
+    pub(crate) fn convert_to_grpc_events(region_id: u64, request_id: u64, entries: Vec<Option<TxnEntry>>) -> Vec<Event> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
@@ -544,7 +538,8 @@ impl Delegate {
                 ..Default::default()
             };
             Event {
-                region_id: region_id,
+                region_id,
+                request_id,
                 event: Some(Event_oneof_event::Entries(event_entries)),
                 ..Default::default()
             }
@@ -565,7 +560,7 @@ impl Delegate {
         };
 
 
-        Self::convert_to_grpc_events(self.region_id, entries)
+        Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
             .into_iter()
             .for_each(|e| downstream.sink_event(e))
     }

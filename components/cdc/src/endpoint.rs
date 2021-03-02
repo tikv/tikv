@@ -1172,10 +1172,11 @@ impl Initializer {
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
 
-            let events = Delegate::convert_to_grpc_events(region_id, entries);
+            let downstream = self.downstream.as_ref().unwrap();
+            let events = Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
             let num_entires = events.len();
             for event in events.into_iter() {
-                if let Some(rate_limiter) = self.downstream.as_ref().unwrap().get_rate_limiter() {
+                if let Some(rate_limiter) = downstream.get_rate_limiter() {
                     match rate_limiter.send_scan_event(CdcEvent::Event(event)).await {
                         Ok(_) => debug!("cdc incremental scan sent data"; "num_entires" => num_entires),
                         Err(e) => {
