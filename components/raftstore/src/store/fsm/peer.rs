@@ -3307,7 +3307,10 @@ where
         // doesn't matter whether the peer is a leader or not. If it's not a leader, the proposing
         // command log entry can't be committed.
 
-        if self.fsm.peer.propose(self.ctx, cb, msg) {
+        let mut resp = RaftCmdResponse::default();
+        let term = self.fsm.peer.term();
+        bind_term(&mut resp, term);
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
         }
 
