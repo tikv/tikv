@@ -2,6 +2,9 @@
 
 //! Storage configuration.
 
+use crossbeam::channel::Sender;
+use std::time::Duration;
+
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
@@ -91,13 +94,19 @@ impl Config {
 pub struct StorageConfigManger {
     kvdb: RocksEngine,
     shared_block_cache: bool,
+    ttl_checker_sender: Sender<Option<Duration>>,
 }
 
 impl StorageConfigManger {
-    pub fn new(kvdb: RocksEngine, shared_block_cache: bool) -> StorageConfigManger {
+    pub fn new(
+        kvdb: RocksEngine,
+        shared_block_cache: bool,
+        ttl_checker_sender: Sender<Option<Duration>>,
+    ) -> StorageConfigManger {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
+            ttl_checker_sender,
         }
     }
 }
@@ -123,6 +132,9 @@ impl ConfigManager for StorageConfigManger {
                         .set(size.0 as f64);
                 }
             }
+        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
+            let interval: ReadableDuration = v.into();
+            self.ttl_checker_sender.send(Some(interval.into())).unwrap();
         }
         Ok(())
     }
