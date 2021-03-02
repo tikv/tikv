@@ -208,6 +208,12 @@ impl EntryCache {
             .get_cache_vec_mem_size_change(self.cache.capacity() as i64, old_capacity as i64)
             + entries_mem_size;
     }
+    
+    pub fn term(&self, idx: u64) -> u64 {
+        let cache_low = self.cache.front().unwrap().get_index();
+        let start_idx = idx.checked_sub(cache_low).unwrap() as usize;
+        self.cache[start_idx].get_term()
+    }
 
     pub fn compact_to(&mut self, idx: u64) {
         let cache_first_idx = self.first_index().unwrap_or(u64::MAX);
@@ -790,8 +796,20 @@ where
         if self.truncated_term() == self.last_term || idx == self.last_index() {
             return Ok(self.last_term);
         }
-        let entries = self.entries(idx, idx + 1, raft::NO_LIMIT)?;
-        Ok(entries[0].get_term())
+        let cache_low = self.cache.as_ref().unwrap().first_index().unwrap_or(u64::MAX);
+        if idx >= cache_low {
+            Ok(self.cache.as_ref().unwrap().term(idx))
+        } else {
+            let mut entries = vec![];
+            self.engines.raft.fetch_entries_to(
+                self.get_region_id(),
+                idx,
+                idx + 1,
+                None,
+                &mut entries,
+            )?;
+            Ok(entries[0].get_term())
+        }
     }
 
     #[inline]
