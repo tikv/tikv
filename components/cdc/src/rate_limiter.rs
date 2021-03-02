@@ -82,7 +82,7 @@ impl<E> RateLimiter<E> {
                 self.state.has_blocked.store(true, Ordering::SeqCst);
 
                 info!("cdc send_scan_event backoff"; "queue_size" => queue_size, "attempts" => attempts);
-                let backoff_ms: u64 = 2 << min(attempts, 12);
+                let backoff_ms: u64 = 32 << min(attempts, 10);
                 tokio::time::delay_for(std::time::Duration::from_millis(backoff_ms)).await;
                 attempts += 1;
 
@@ -92,7 +92,7 @@ impl<E> RateLimiter<E> {
         }
 
         sink_clone.try_send(event).map_err(|e| {
-            warn!("cdc send_realtime_event error"; "err" => ?e);
+            warn!("cdc send_scan_event error"; "err" => ?e);
             match e {
                 crossbeam::TrySendError::Disconnected(_) => {
                     state_clone.is_sink_closed.store(true, Ordering::SeqCst);

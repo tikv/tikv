@@ -132,7 +132,7 @@ impl Downstream {
 
     pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
         self.sink = Some(sink.clone());
-        self.rate_limiter = Some(RateLimiter::new(sink, 512, 102400));
+        self.rate_limiter = Some(RateLimiter::new(sink, 64, 102400));
     }
 
     pub fn get_rate_limiter(&self) -> Option<RateLimiter<CdcEvent>> {
