@@ -302,6 +302,11 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref TTL_CHECKER_POLL_INTERVAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_ttl_checker_poll_interval",
+        "Interval of ttl checker poll"
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"

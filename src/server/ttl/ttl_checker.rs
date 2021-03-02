@@ -47,6 +47,7 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                 tikv_alloc::add_thread_memory_accessor();
                 let mut interval = runner.poll_interval;
                 loop {
+                    TTL_CHECKER_POLL_INTERVAL_GAUGE.set(runner.poll_interval.as_millis() as i64);
                     match runner.receiver.recv_timeout(interval) {
                         Err(crossbeam::RecvTimeoutError::Timeout) => {
                             interval = runner.run();
@@ -62,6 +63,10 @@ impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
                         Ok(Some(int)) => {
                             runner.poll_interval = int;
                             interval = int;
+                            info!(
+                                "ttl checker poll interval is changed, wait {}s to start next round",
+                                interval.as_secs()
+                            );
                         }
                         _ => break,
                     }
