@@ -1,10 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::*;
-use super::IOStats;
+use crate::metrics::*;
+use crate::IOBytes;
 use crate::IOType;
 
-use collections::HashMap;
 use std::collections::VecDeque;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -146,52 +145,19 @@ pub fn get_io_type() -> IOType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-unsafe fn get_io_stats() -> Option<HashMap<IOType, IOStats>> {
-    if let Some(ctx) = BPF_CONTEXT.as_mut() {
-        let mut map = HashMap::default();
-        for e in ctx.stats_table.iter() {
-            let io_type = ptr::read(e.key.as_ptr() as *const IOType);
-            let read = std::intrinsics::atomic_load(e.value.as_ptr() as *const u64);
-            let write = std::intrinsics::atomic_load((e.value.as_ptr() as *const u64).add(1));
-            map.insert(io_type, IOStats { read, write });
-        }
-        Some(map)
-    } else {
-        None
-    }
-}
-
-pub struct IOContext {
-    io_stats_map: Option<HashMap<IOType, IOStats>>,
-}
-
-impl IOContext {
-    pub fn new() -> Self {
-        IOContext {
-            io_stats_map: unsafe { get_io_stats() },
-        }
-    }
-
-    pub fn delta_and_refresh(&mut self) -> HashMap<IOType, IOStats> {
-        if self.io_stats_map.is_some() {
-            if let Some(map) = unsafe { get_io_stats() } {
-                for (io_type, stats) in &map {
-                    self.io_stats_map
-                        .as_mut()
-                        .unwrap()
-                        .entry(*io_type)
-                        .and_modify(|e| {
-                            e.read = stats.read - e.read;
-                            e.write = stats.write - e.write;
-                        })
-                        .or_insert(stats.clone());
-                }
-
-                return self.io_stats_map.replace(map).unwrap();
+pub(crate) fn fetch_io_bytes(mut io_type: IOType) -> IOBytes {
+    unsafe {
+        if let Some(ctx) = BPF_CONTEXT.as_mut() {
+            let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
+            let mut io_type_buf =
+                std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+            if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
+                assert!(e.len() == std::mem::size_of::<IOBytes>());
+                return std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
             }
         }
-        HashMap::default()
     }
+    IOBytes::default()
 }
 
 pub fn init_io_snooper() -> Result<(), String> {
@@ -242,16 +208,11 @@ pub fn init_io_snooper() -> Result<(), String> {
             type_table,
         });
     }
-    let _ = IO_CONTEXT.lock().unwrap(); // trigger init of io context
     Ok(())
 }
 
-lazy_static! {
-    static ref IO_CONTEXT: Mutex<IOContext> = Mutex::new(IOContext::new());
-}
-
-macro_rules! flush_io_latency_and_bytes {
-    ($bpf:expr, $delta:ident, $metrics:ident, $type:expr) => {
+macro_rules! flush_io_latency {
+    ($bpf:expr, $metrics:ident) => {
         let mut t = $bpf
             .table(concat!(stringify!($metrics), "_read_latency"))
             .unwrap();
@@ -279,35 +240,32 @@ macro_rules! flush_io_latency_and_bytes {
             let zero: u64 = 0;
             t.set(&mut e.key, &mut zero.to_ne_bytes()).unwrap();
         }
-        if let Some(v) = $delta.get(&$type) {
-            IO_BYTES_VEC.$metrics.read.inc_by(v.read as i64);
-            IO_BYTES_VEC.$metrics.write.inc_by(v.write as i64);
-        }
     };
 }
 
-pub fn flush_io_metrics() {
+pub(crate) fn flush_io_latency_metrics() {
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            let delta = IO_CONTEXT.lock().unwrap().delta_and_refresh();
-            flush_io_latency_and_bytes!(ctx.bpf, delta, other, IOType::Other);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, foreground_read, IOType::ForegroundRead);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, foreground_write, IOType::ForegroundWrite);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, flush, IOType::Flush);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, compaction, IOType::Compaction);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, replication, IOType::Replication);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, load_balance, IOType::LoadBalance);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, import, IOType::Import);
-            flush_io_latency_and_bytes!(ctx.bpf, delta, export, IOType::Export);
+            flush_io_latency!(ctx.bpf, other);
+            flush_io_latency!(ctx.bpf, foreground_read);
+            flush_io_latency!(ctx.bpf, foreground_write);
+            flush_io_latency!(ctx.bpf, flush);
+            flush_io_latency!(ctx.bpf, compaction);
+            flush_io_latency!(ctx.bpf, replication);
+            flush_io_latency!(ctx.bpf, load_balance);
+            flush_io_latency!(ctx.bpf, gc);
+            flush_io_latency!(ctx.bpf, import);
+            flush_io_latency!(ctx.bpf, export);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{fetch_io_bytes, flush_io_latency_metrics};
     use crate::iosnoop::imp::{BPF_CONTEXT, MAX_THREAD_IDX};
-    use crate::iosnoop::metrics::*;
-    use crate::{flush_io_metrics, get_io_type, init_io_snooper, set_io_type, IOContext, IOType};
+    use crate::metrics::*;
+    use crate::{get_io_type, init_io_snooper, set_io_type, IOType};
     use rand::Rng;
     use std::sync::{Arc, Condvar, Mutex};
     use std::{
@@ -345,14 +303,16 @@ mod tests {
             .unwrap();
         let mut w = vec![A512::default(); 2];
         w.as_bytes_mut()[512] = 42;
-        let mut ctx = IOContext::new();
+        let mut compaction_bytes_before = fetch_io_bytes(IOType::Compaction);
         f.write(w.as_bytes()).unwrap();
         f.sync_all().unwrap();
-        let delta = ctx.delta_and_refresh();
-        assert_ne!(delta.get(&IOType::Compaction).unwrap().write, 0);
-        assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
+        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
+        assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
+        assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
+        compaction_bytes_before = compaction_bytes;
         drop(f);
 
+        let other_bytes_before = fetch_io_bytes(IOType::Other);
         std::thread::spawn(move || {
             set_io_type(IOType::Other);
             let mut f = OpenOptions::new()
@@ -367,17 +327,16 @@ mod tests {
         .join()
         .unwrap();
 
-        let delta = ctx.delta_and_refresh();
-        assert_eq!(delta.get(&IOType::Compaction).unwrap().write, 0);
-        assert_eq!(delta.get(&IOType::Compaction).unwrap().read, 0);
-        assert_eq!(delta.get(&IOType::Other).unwrap().write, 0);
-        assert_ne!(delta.get(&IOType::Other).unwrap().read, 0);
+        let compaction_bytes = fetch_io_bytes(IOType::Compaction);
+        let other_bytes = fetch_io_bytes(IOType::Other);
+        assert_eq!((compaction_bytes - compaction_bytes_before).write, 0);
+        assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
+        assert_eq!((other_bytes - other_bytes_before).write, 0);
+        assert_ne!((other_bytes - other_bytes_before).read, 0);
 
-        flush_io_metrics();
+        flush_io_latency_metrics();
         assert_ne!(IO_LATENCY_MICROS_VEC.compaction.write.get_sample_count(), 0);
         assert_ne!(IO_LATENCY_MICROS_VEC.other.read.get_sample_count(), 0);
-        assert_ne!(IO_BYTES_VEC.compaction.write.get(), 0);
-        assert_ne!(IO_BYTES_VEC.other.read.get(), 0);
     }
 
     fn test_thread_idx_allocation() {
@@ -468,12 +427,12 @@ mod tests {
 
     #[bench]
     #[ignore]
-    fn bench_flush_io_metrics(b: &mut Bencher) {
+    fn bench_flush_io_latency_metrics(b: &mut Bencher) {
         init_io_snooper().unwrap();
         set_io_type(IOType::ForegroundWrite);
 
         let tmp = TempDir::new().unwrap();
-        let file_path = tmp.path().join("bench_flush_io_metrics");
+        let file_path = tmp.path().join("bench_flush_io_latency_metrics");
         let mut f = OpenOptions::new()
             .write(true)
             .create(true)
@@ -489,7 +448,7 @@ mod tests {
         f.sync_all().unwrap();
 
         b.iter(|| {
-            flush_io_metrics();
+            flush_io_latency_metrics();
         });
     }
 

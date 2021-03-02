@@ -352,12 +352,19 @@ pub struct Snap {
     mgr: SnapManagerCore,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum CheckPolicy {
+    ErrAllowed,
+    ErrNotAllowed,
+    None,
+}
+
 impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
         is_sending: bool,
-        to_build: bool,
+        check_policy: CheckPolicy,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
@@ -408,10 +415,14 @@ impl Snap {
             mgr: mgr.clone(),
         };
 
+        if check_policy == CheckPolicy::None {
+            return Ok(s);
+        }
+
         // load snapshot meta if meta_file exists
         if file_exists(&s.meta_file.path) {
             if let Err(e) = s.load_snapshot_meta() {
-                if !to_build {
+                if check_policy == CheckPolicy::ErrNotAllowed {
                     return Err(e);
                 }
                 warn!(
@@ -437,7 +448,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, true, true, mgr)?;
+        let mut s = Self::new(dir, key, true, CheckPolicy::ErrAllowed, mgr)?;
         s.init_for_building()?;
         Ok(s)
     }
@@ -447,7 +458,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, true, false, mgr)?;
+        let mut s = Self::new(dir, key, true, CheckPolicy::ErrNotAllowed, mgr)?;
         s.mgr.limiter = Limiter::new(INFINITY);
 
         if !s.exists() {
@@ -470,7 +481,7 @@ impl Snap {
         mgr: &SnapManagerCore,
         snapshot_meta: SnapshotMeta,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, false, false, mgr)?;
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -524,7 +535,7 @@ impl Snap {
         key: &SnapKey,
         mgr: &SnapManagerCore,
     ) -> RaftStoreResult<Self> {
-        let mut s = Self::new(dir, key, false, false, mgr)?;
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
         s.mgr.limiter = Limiter::new(INFINITY);
         Ok(s)
     }
@@ -1269,6 +1280,17 @@ impl SnapManager {
         let base = &self.core.base;
         let f = Snap::new_for_building(base, key, &self.core)?;
         Ok(Box::new(f))
+    }
+
+    pub fn get_snapshot_for_gc(
+        &self,
+        key: &SnapKey,
+        is_sending: bool,
+    ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let s = Snap::new(base, key, is_sending, CheckPolicy::None, &self.core)?;
+        Ok(Box::new(s))
     }
 
     pub fn get_snapshot_for_sending(

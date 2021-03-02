@@ -60,6 +60,7 @@ pub use self::{
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
+use crate::storage::mvcc::MvccReader;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -73,9 +74,12 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, IsolationLevel, KeyRange, RawGetRequest};
+use kvproto::kvrpcpb::{
+    CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
+};
 use raftstore::store::util::build_key_range;
 use rand::prelude::*;
+use std::time::Duration;
 use std::{
     borrow::Cow,
     iter,
@@ -84,9 +88,12 @@ use std::{
 use tikv_util::time::Instant;
 use tikv_util::time::ThreadReadId;
 use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
+use yatp::task::future::reschedule;
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
+const MAX_BATCH_SIZE: usize = 1024;
 
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
 /// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
@@ -262,7 +269,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(key) = key.to_owned().into_raw() {
+                if let Ok(key) = key.to_raw() {
                     tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
                 }
 
@@ -478,7 +485,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 let mut key_ranges = vec![];
                 for key in &keys {
-                    if let Ok(key) = key.to_owned().into_raw() {
+                    if let Ok(key) = key.to_raw() {
                         key_ranges.push(build_key_range(&key, &key, false));
                     }
                 }
@@ -576,10 +583,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key.to_owned().into_raw() {
+                if let Ok(start_key) = start_key.to_raw() {
                     let mut key = vec![];
                     if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_owned().into_raw() {
+                        if let Ok(end_key) = end_key.to_raw() {
                             key = end_key;
                         }
                     }
@@ -679,6 +686,118 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             thread_rng().next_u64(),
         );
 
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+    }
+
+    pub fn scan_lock(
+        &self,
+        mut ctx: Context,
+        max_ts: TimeStamp,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<LockInfo>>> {
+        const CMD: CommandKind = CommandKind::scan_lock;
+        let priority = ctx.get_priority();
+        let priority_tag = get_priority_tag(priority);
+        let concurrency_manager = self.concurrency_manager.clone();
+        // Do not allow replica read for scan_lock.
+        ctx.set_replica_read(false);
+
+        let res = self.read_pool.spawn_handle(
+            async move {
+                if let Ok(start_key) = start_key
+                    .as_ref()
+                    .map(|k| k.to_raw())
+                    .unwrap_or_else(|| Ok(vec![]))
+                {
+                    let mut key = vec![];
+                    if let Some(end_key) = &end_key {
+                        if let Ok(end_key) = end_key.to_raw() {
+                            key = end_key;
+                        }
+                    }
+                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key, false);
+                }
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                let command_duration = tikv_util::time::Instant::now_coarse();
+
+                concurrency_manager.update_max_ts(max_ts);
+                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
+                // a good idea to return an error to the client, making the GC fail. A better
+                // approach is to wait for these locks to be unlocked.
+                concurrency_manager.read_range_check(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |key, lock| {
+                        // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
+                        // can't be ignored in this case.
+                        if lock.ts <= max_ts {
+                            Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(key.to_raw()?),
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )?;
+
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                {
+                    let begin_instant = Instant::now_coarse();
+                    let mut statistics = Statistics::default();
+                    let mut reader = MvccReader::new(
+                        snapshot,
+                        Some(ScanMode::Forward),
+                        !ctx.get_not_fill_cache(),
+                        ctx.get_isolation_level(),
+                    );
+                    let result = reader
+                        .scan_locks(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |lock| lock.ts <= max_ts,
+                            limit,
+                        )
+                        .map_err(txn::Error::from);
+                    statistics.add(reader.get_statistics());
+                    let (kv_pairs, _) = result?;
+                    let mut locks = Vec::with_capacity(kv_pairs.len());
+                    for (key, lock) in kv_pairs {
+                        let lock_info =
+                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
+                        locks.push(lock_info);
+                    }
+
+                    metrics::tls_collect_scan_details(CMD, &statistics);
+                    metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(begin_instant.elapsed_secs());
+                    SCHED_HISTOGRAM_VEC_STATIC
+                        .get(CMD)
+                        .observe(command_duration.elapsed_secs());
+
+                    Ok(locks)
+                }
+            },
+            priority,
+            thread_rng().next_u64(),
+        );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
@@ -1119,7 +1238,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
     /// keys will be returned.
-    fn forward_raw_scan(
+    async fn forward_raw_scan(
         snapshot: &E::Snap,
         cf: &str,
         start_key: &Key,
@@ -1141,7 +1260,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1160,7 +1289,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be returned.
-    fn reverse_raw_scan(
+    async fn reverse_raw_scan(
         snapshot: &E::Snap,
         cf: &str,
         start_key: &Key,
@@ -1182,7 +1311,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
+        let mut row_count = 0;
+        let mut time_slice_start = Instant::now();
         while cursor.valid()? && pairs.len() < limit {
+            row_count += 1;
+            if row_count >= MAX_BATCH_SIZE {
+                if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                    reschedule().await;
+                    time_slice_start = Instant::now();
+                }
+                row_count = 0;
+            }
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1264,6 +1403,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                         .map_err(Error::from)
                     } else {
                         Self::forward_raw_scan(
@@ -1275,6 +1415,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             &mut statistics,
                             key_only,
                         )
+                        .await
                         .map_err(Error::from)
                     };
 
@@ -1395,7 +1536,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
+                            )
+                            .await?
                         } else {
                             Self::forward_raw_scan(
                                 &snapshot,
@@ -1405,7 +1547,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 each_limit,
                                 &mut statistics,
                                 key_only,
-                            )?
+                            )
+                            .await?
                         };
                         result.extend(pairs.into_iter());
                     }
@@ -1734,7 +1877,7 @@ mod tests {
     use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{CommandPri, LockInfo, Op};
+    use kvproto::kvrpcpb::{CommandPri, Op};
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -3646,6 +3789,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
@@ -3666,6 +3810,7 @@ mod tests {
                     &mut Statistics::default(),
                     false,
                 )
+                .await
             })
             .unwrap(),
         );
@@ -4075,7 +4220,7 @@ mod tests {
                     false,
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4131,114 +4276,200 @@ mod tests {
             },
         );
 
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(99.into(), None, 10, Context::default()),
-                expect_value_callback(tx.clone(), 0, vec![]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(100.into(), None, 10, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    100.into(),
-                    Some(Key::from_raw(b"a")),
-                    10,
-                    Context::default(),
-                ),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_x.clone(), lock_y.clone(), lock_z.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    100.into(),
-                    Some(Key::from_raw(b"y")),
-                    10,
-                    Context::default(),
-                ),
-                expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 10, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![
-                        lock_a.clone(),
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                        lock_y.clone(),
-                        lock_z.clone(),
-                    ],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 4, Context::default()),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![lock_a, lock_b.clone(), lock_c.clone(), lock_x.clone()],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    101.into(),
-                    Some(Key::from_raw(b"b")),
-                    4,
-                    Context::default(),
-                ),
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                        lock_y.clone(),
-                    ],
-                ),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(
-                    101.into(),
-                    Some(Key::from_raw(b"b")),
-                    0,
-                    Context::default(),
-                ),
-                expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let cm = storage.concurrency_manager.clone();
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 99.into(), None, None, 10)).unwrap();
+        assert_eq!(res, vec![]);
+        assert_eq!(cm.max_ts(), 99.into());
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 100.into(), None, None, 10)).unwrap();
+        assert_eq!(res, vec![lock_x.clone(), lock_y.clone(), lock_z.clone()]);
+        assert_eq!(cm.max_ts(), 100.into());
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            100.into(),
+            Some(Key::from_raw(b"a")),
+            None,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_x.clone(), lock_y.clone(), lock_z.clone()]);
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            100.into(),
+            Some(Key::from_raw(b"y")),
+            None,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_y.clone(), lock_z.clone()]);
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10)).unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_a.clone(),
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+                lock_z.clone(),
+            ]
+        );
+        assert_eq!(cm.max_ts(), 101.into());
+
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 4)).unwrap();
+        assert_eq!(
+            res,
+            vec![lock_a, lock_b.clone(), lock_c.clone(), lock_x.clone()]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            None,
+            4,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+            ]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            None,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone(),
+                lock_z
+            ]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"c")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b.clone()]);
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            4,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone()
+            ]
+        );
+
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            3,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b.clone(), lock_c.clone(), lock_x.clone()]);
+
+        let mem_lock = |k: &[u8], ts: u64, lock_type| {
+            let key = Key::from_raw(k);
+            let guard = block_on(cm.lock_key(&key));
+            guard.with_lock(|lock| {
+                *lock = Some(txn_types::Lock::new(
+                    lock_type,
+                    k.to_vec(),
+                    ts.into(),
+                    100,
+                    None,
+                    0.into(),
+                    1,
+                    20.into(),
+                ));
+            });
+            guard
+        };
+
+        let guard = mem_lock(b"z", 80, LockType::Put);
+        block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 1)).unwrap_err();
+
+        let guard2 = mem_lock(b"a", 80, LockType::Put);
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            res,
+            vec![
+                lock_b.clone(),
+                lock_c.clone(),
+                lock_x.clone(),
+                lock_y.clone()
+            ]
+        );
+        drop(guard);
+        drop(guard2);
+
+        // LockType::Lock can't be ignored by scan_lock
+        let guard = mem_lock(b"c", 80, LockType::Lock);
+        block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            1,
+        ))
+        .unwrap_err();
+        drop(guard);
+
+        let guard = mem_lock(b"c", 102, LockType::Put);
+        let res = block_on(storage.scan_lock(
+            Context::default(),
+            101.into(),
+            Some(Key::from_raw(b"b")),
+            Some(Key::from_raw(b"z")),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(res, vec![lock_b, lock_c, lock_x, lock_y]);
+        drop(guard);
     }
 
     #[test]
@@ -4345,17 +4576,9 @@ mod tests {
                 rx.recv().unwrap();
 
                 // All locks should be resolved except for a, b and c.
-                storage
-                    .sched_txn_command(
-                        commands::ScanLock::new(ts, None, 0, Context::default()),
-                        expect_value_callback(
-                            tx.clone(),
-                            0,
-                            vec![lock_a.clone(), lock_b.clone(), lock_c.clone()],
-                        ),
-                    )
-                    .unwrap();
-                rx.recv().unwrap();
+                let res =
+                    block_on(storage.scan_lock(Context::default(), ts, None, None, 0)).unwrap();
+                assert_eq!(res, vec![lock_a.clone(), lock_b.clone(), lock_c.clone()]);
 
                 ts = (ts.into_inner() + 10).into();
             }
@@ -4408,13 +4631,9 @@ mod tests {
             lock.set_key(b"a".to_vec());
             lock
         };
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(99.into(), None, 0, Context::default()),
-                expect_value_callback(tx.clone(), 0, vec![lock_a]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let res =
+            block_on(storage.scan_lock(Context::default(), 99.into(), None, None, 0)).unwrap();
+        assert_eq!(res, vec![lock_a]);
 
         // Resolve lock for key 'a'.
         storage
@@ -4456,7 +4675,7 @@ mod tests {
                     resolve_keys,
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4469,13 +4688,9 @@ mod tests {
             lock.set_key(b"a".to_vec());
             lock
         };
-        storage
-            .sched_txn_command(
-                commands::ScanLock::new(101.into(), None, 0, Context::default()),
-                expect_value_callback(tx, 0, vec![lock_a]),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 0)).unwrap();
+        assert_eq!(res, vec![lock_a]);
     }
 
     #[test]

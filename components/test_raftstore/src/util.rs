@@ -24,7 +24,9 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
 
-use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
+use encryption_export::{
+    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+};
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
@@ -565,13 +567,12 @@ pub fn create_test_engine(
 ) {
     let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let key_manager =
-        DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
+        data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
 
     let env = get_encrypted_env(key_manager.clone(), None).unwrap();
-    let env =
-        get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
+    let env = get_inspected_env(Some(env)).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
