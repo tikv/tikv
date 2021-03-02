@@ -137,7 +137,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                             {
                                 Ok(rs) => rs,
                                 Err(e) => {
-                                    warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                    warn!("resolved_ts scan lock failed"; "err" => ?e);
                                     let ScanTask {
                                         on_error,
                                         region,
@@ -199,12 +199,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         start: Option<&Key>,
         _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) = reader.scan_locks(
-            start,
-            None,
-            |l| l.ts >= TimeStamp::zero(),
-            DEFAULT_SCAN_BATCH_SIZE,
-        )?;
+        let (locks, has_remaining) =
+            reader.scan_locks(start, None, |_| true, DEFAULT_SCAN_BATCH_SIZE)?;
         Ok((locks, has_remaining))
     }
 
