@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, ops::Sub};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1109,6 +1109,7 @@ where
     }
 
     fn report_know_persist_duration(&self, pre_persist_index: u64) {
+        let ts = Instant::now();
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
@@ -1119,12 +1120,14 @@ where
                 {
                     STORE_KNOW_PERSIST_DURATION_HISTOGRAM
                         .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    STORE_REPORT_PERSIST_DURATION_HISTOGRAM.observe(duration_to_sec(ts.sub(scheduled_ts)));
                 }
             }
         }
     }
 
     fn report_know_commit_duration(&self, pre_commit_index: u64) {
+        let ts = Instant::now();
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(index) {
                 if self
@@ -1135,6 +1138,7 @@ where
                 {
                     STORE_KNOW_COMMIT_DURATION_HISTOGRAM
                         .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    STORE_REPORT_COMMIT_DURATION_HISTOGRAM.observe(duration_to_sec(ts.sub(scheduled_ts)));
                 }
             }
         }
