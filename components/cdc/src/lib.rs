@@ -8,17 +8,17 @@ extern crate failure;
 extern crate fail;
 #[macro_use]
 extern crate tikv_util;
-extern crate tokio_retry;
 extern crate futures;
 extern crate tokio;
+extern crate tokio_retry;
 
 mod delegate;
 mod endpoint;
 mod errors;
 mod metrics;
 mod observer;
-mod service;
 mod rate_limiter;
+mod service;
 
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task};
 pub use errors::{Error, Result};

@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_util::mpsc::batch::Sender;
-use std::sync::atomic::{AtomicBool, Ordering};
-use crossbeam::channel::TrySendError;
 use crate::metrics::*;
-use std::sync::Arc;
+use crossbeam::channel::TrySendError;
 use std::cmp::min;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tikv_util::mpsc::batch::Sender;
 
 #[derive(Debug)]
 pub enum RateLimiterError<E> {
@@ -28,7 +28,11 @@ struct State {
 }
 
 impl<E> RateLimiter<E> {
-    pub fn new(sink: Sender<E>, block_scan_threshold: usize, close_sink_threshold: usize) -> RateLimiter<E> {
+    pub fn new(
+        sink: Sender<E>,
+        block_scan_threshold: usize,
+        close_sink_threshold: usize,
+    ) -> RateLimiter<E> {
         return RateLimiter {
             sink,
             state: Arc::new(State {
@@ -36,7 +40,7 @@ impl<E> RateLimiter<E> {
                 block_scan_threshold,
                 close_sink_threshold,
                 #[cfg(test)]
-                has_blocked: AtomicBool::new(false)
+                has_blocked: AtomicBool::new(false),
             }),
         };
     }
@@ -121,12 +125,12 @@ impl<E> Clone for RateLimiter<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tikv_util::mpsc::batch::{unbounded, bounded};
+    use tikv_util::mpsc::batch::{bounded, unbounded};
 
     type MockCdcEvent = u64;
 
     #[test]
-    fn test_basic_realtime() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    fn test_basic_realtime() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 1024, 1024);
 
@@ -142,7 +146,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_basic_scan() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    async fn test_basic_scan() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 1024, 1024);
 
@@ -158,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn test_realtime_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    fn test_realtime_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 1024, 1024);
 
@@ -168,21 +172,21 @@ mod tests {
         drop(rx);
         match rate_limiter.send_realtime_event(4) {
             Ok(_) => panic!("expected error"),
-            Err(RateLimiterError::SenderError(e)) => {},
-            _ => panic!("expected SenderError")
+            Err(RateLimiterError::SenderError(e)) => {}
+            _ => panic!("expected SenderError"),
         }
 
         match rate_limiter.send_realtime_event(5) {
             Ok(_) => panic!("expected error"),
             Err(RateLimiterError::SinkClosedError(len)) => assert_eq!(len, 0),
-            _ => panic!("expected SinkClosedError")
+            _ => panic!("expected SinkClosedError"),
         }
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_scan_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    async fn test_scan_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 1024, 1024);
 
@@ -192,21 +196,21 @@ mod tests {
         drop(rx);
         match rate_limiter.send_scan_event(4).await {
             Ok(_) => panic!("expected error"),
-            Err(RateLimiterError::SenderError(e)) => {},
-            _ => panic!("expected SenderError")
+            Err(RateLimiterError::SenderError(e)) => {}
+            _ => panic!("expected SenderError"),
         }
 
         match rate_limiter.send_scan_event(5).await {
             Ok(_) => panic!("expected error"),
             Err(RateLimiterError::SinkClosedError(len)) => assert_eq!(len, 0),
-            _ => panic!("expected SinkClosedError")
+            _ => panic!("expected SinkClosedError"),
         }
 
         Ok(())
     }
 
     #[test]
-    fn test_realtime_congested() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    fn test_realtime_congested() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 1024, 5);
 
@@ -218,20 +222,20 @@ mod tests {
         match rate_limiter.send_realtime_event(6) {
             Ok(_) => panic!("expected error"),
             Err(RateLimiterError::SinkClosedError(len)) => assert_eq!(len, 5),
-            _ => panic!("expected SinkClosedError")
+            _ => panic!("expected SinkClosedError"),
         }
 
         match rate_limiter.send_realtime_event(6) {
             Ok(_) => panic!("expected error"),
             Err(RateLimiterError::SinkClosedError(len)) => assert_eq!(len, 0),
-            _ => panic!("expected SinkClosedError")
+            _ => panic!("expected SinkClosedError"),
         }
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_scan_backoff_normal() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    async fn test_scan_backoff_normal() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 5, 1024);
 
@@ -269,7 +273,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_backoff_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>>  {
+    async fn test_scan_backoff_disconnected() -> Result<(), RateLimiterError<MockCdcEvent>> {
         let (tx, rx) = unbounded::<MockCdcEvent>(1);
         let rate_limiter = RateLimiter::new(tx, 5, 1024);
 
@@ -288,9 +292,12 @@ mod tests {
             match rate_limiter_clone.send_scan_event(6).await {
                 Ok(_) => panic!("expected error"),
                 Err(RateLimiterError::SinkClosedError(len)) => assert_eq!(len, 0),
-                _ => panic!("expected SinkClosedError")
+                _ => panic!("expected SinkClosedError"),
             }
-            assert_eq!(rate_limiter_clone.state.has_blocked.load(Ordering::SeqCst), true);
+            assert_eq!(
+                rate_limiter_clone.state.has_blocked.load(Ordering::SeqCst),
+                true
+            );
             finished_clone.store(true, Ordering::SeqCst);
         });
 

@@ -99,7 +99,7 @@ impl fmt::Debug for Deregister {
 
 type InitCallback = Box<dyn FnOnce() + Send>;
 pub(crate) type OldValueCallback =
-Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
+    Box<dyn FnMut(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Option<Vec<u8>> + Send>;
 
 pub struct OldValueCache {
     pub cache: LruCache<Key, (OldValue, MutationType)>,
@@ -573,7 +573,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     continue;
                 }
                 if let Err(e) =
-                delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_cache)
+                    delegate.on_batch(batch, old_value_cb.clone(), &mut self.old_value_cache)
                 {
                     assert!(delegate.has_failed());
                     // Delegate has error, deregister the corresponding region.
@@ -756,7 +756,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     tikv_clients,
                     min_ts,
                 )
-                    .await
+                .await
             } else {
                 Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
             };
@@ -1022,7 +1022,8 @@ impl Initializer {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
             // self.async_incremental_scan(region_snapshot, region);
-            self.async_incremental_scan_v2(region_snapshot, region).await;
+            self.async_incremental_scan_v2(region_snapshot, region)
+                .await;
         } else {
             assert!(
                 resp.response.get_header().has_error(),
@@ -1174,12 +1175,15 @@ impl Initializer {
             fail_point!("before_schedule_incremental_scan");
 
             let downstream = self.downstream.as_ref().unwrap();
-            let events = Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
+            let events =
+                Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
             let num_entires = events.len();
             for event in events.into_iter() {
                 if let Some(rate_limiter) = downstream.get_rate_limiter() {
                     match rate_limiter.send_scan_event(CdcEvent::Event(event)).await {
-                        Ok(_) => debug!("cdc incremental scan sent data"; "num_entires" => num_entires),
+                        Ok(_) => {
+                            debug!("cdc incremental scan sent data"; "num_entires" => num_entires)
+                        }
                         Err(e) => {
                             error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                             // TODO: record in metrics.
@@ -1187,7 +1191,7 @@ impl Initializer {
                                 region_id,
                                 downstream_id,
                                 conn_id,
-                                err: None,  // TODO: convert rate_limiter error
+                                err: None, // TODO: convert rate_limiter error
                             };
                             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                                 error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
@@ -1208,7 +1212,6 @@ impl Initializer {
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
-
 
     fn scan_batch<S: Snapshot>(
         scanner: &mut DeltaScanner<S>,
@@ -1431,7 +1434,8 @@ mod tests {
             RegionEpoch::default(),
             0,
             ConnID::new(),
-            true);
+            true,
+        );
 
         downstream.get_state().store(DownstreamState::Normal);
 
@@ -1615,22 +1619,32 @@ mod tests {
             }
         };
 
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
         check_result();
         initializer.batch_size = 1000;
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
         check_result();
 
         initializer.batch_size = 10;
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
         check_result();
 
         initializer.batch_size = 11;
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
         check_result();
 
         initializer.build_resolver = false;
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
@@ -1643,7 +1657,9 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        initializer.async_incremental_scan_v2(snap.clone(), region.clone()).await;
+        initializer
+            .async_incremental_scan_v2(snap.clone(), region.clone())
+            .await;
 
         loop {
             let task = rx.recv_timeout(Duration::from_secs(1));
@@ -1665,7 +1681,7 @@ mod tests {
         let _raft_rx = raft_router.add_region(1 /* region id */, 1 /* cap */);
         loop {
             if let Err(RaftStoreError::Transport(_)) =
-            raft_router.send_casual_msg(1, CasualMessage::ClearRegionSize)
+                raft_router.send_casual_msg(1, CasualMessage::ClearRegionSize)
             {
                 break;
             }
@@ -1694,9 +1710,9 @@ mod tests {
 
         for _ in 0..5 {
             if let Ok(Some(Task::Deregister(Deregister::Downstream {
-                                                err: Some(Error::Request(err)),
-                                                ..
-                                            }))) = task_rx.recv_timeout(Duration::from_secs(1))
+                err: Some(Error::Request(err)),
+                ..
+            }))) = task_rx.recv_timeout(Duration::from_secs(1))
             {
                 assert!(!err.has_server_is_busy());
             }

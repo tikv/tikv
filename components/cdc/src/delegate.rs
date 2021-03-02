@@ -40,9 +40,9 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;
+use crate::rate_limiter::RateLimiter;
 use crate::service::{CdcEvent, ConnID};
 use crate::{Error, Result};
-use crate::rate_limiter::RateLimiter;
 
 const EVENT_MAX_SIZE: usize = 6 * 1024 * 1024;
 // 6MB
@@ -251,8 +251,8 @@ impl Delegate {
                 &downstream.region_epoch,
                 region,
                 false, /* check_conf_ver */
-                true, /* check_ver */
-                true, /* include_region */
+                true,  /* check_ver */
+                true,  /* include_region */
             ) {
                 info!("fail to subscribe downstream";
                     "region_id" => region.get_id(),
@@ -463,17 +463,21 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn convert_to_grpc_events(region_id: u64, request_id: u64, entries: Vec<Option<TxnEntry>>) -> Vec<Event> {
+    pub(crate) fn convert_to_grpc_events(
+        region_id: u64,
+        request_id: u64,
+        entries: Vec<Option<TxnEntry>>,
+    ) -> Vec<Event> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
         let mut current_rows_size: usize = 0;
         for entry in entries {
             match entry {
                 Some(TxnEntry::Prewrite {
-                         default,
-                         lock,
-                         old_value,
-                     }) => {
+                    default,
+                    lock,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
                     if skip {
@@ -490,10 +494,10 @@ impl Delegate {
                     rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
-                         default,
-                         write,
-                         old_value,
-                     }) => {
+                    default,
+                    write,
+                    old_value,
+                }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row, false);
                     if skip {
@@ -532,18 +536,21 @@ impl Delegate {
             }
         }
 
-        rows.into_iter().filter(|rs| !rs.is_empty()).map(|rs| {
-            let event_entries = EventEntries {
-                entries: rs.into(),
-                ..Default::default()
-            };
-            Event {
-                region_id,
-                request_id,
-                event: Some(Event_oneof_event::Entries(event_entries)),
-                ..Default::default()
-            }
-        }).collect()
+        rows.into_iter()
+            .filter(|rs| !rs.is_empty())
+            .map(|rs| {
+                let event_entries = EventEntries {
+                    entries: rs.into(),
+                    ..Default::default()
+                };
+                Event {
+                    region_id,
+                    request_id,
+                    event: Some(Event_oneof_event::Entries(event_entries)),
+                    ..Default::default()
+                }
+            })
+            .collect()
     }
 
     pub fn on_scan(&mut self, downstream_id: DownstreamID, entries: Vec<Option<TxnEntry>>) {
@@ -558,7 +565,6 @@ impl Delegate {
             warn!("downstream not found"; "downstream_id" => ?downstream_id, "region_id" => self.region_id);
             return;
         };
-
 
         Self::convert_to_grpc_events(self.region_id, downstream.req_id, entries)
             .into_iter()
@@ -773,13 +779,13 @@ impl Delegate {
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     #[cfg(feature = "prost-codec")]
-        {
-            row.r#type = ty.into();
-        }
+    {
+        row.r#type = ty.into();
+    }
     #[cfg(not(feature = "prost-codec"))]
-        {
-            row.r_type = ty;
-        }
+    {
+        row.r_type = ty;
+    }
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
