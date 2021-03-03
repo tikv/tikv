@@ -334,7 +334,7 @@ impl Config {
         let tick = self.raft_base_tick_interval.as_millis() as u64;
         if lease > election_timeout - tick {
             return Err(box_err!(
-                "lease {} ms should not be larger than election timeout {} ms - 1 tick({} ms)",
+                "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
                 lease,
                 election_timeout,
                 tick
