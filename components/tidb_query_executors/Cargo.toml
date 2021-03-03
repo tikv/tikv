@@ -46,6 +46,7 @@ log_wrappers = { path = "../log_wrappers" }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+itertools = "0.8"
 
 [dev-dependencies]
 failure = "0.1"
