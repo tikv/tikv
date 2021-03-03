@@ -1799,9 +1799,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91a3435fb3d2b1367fff27e8f7bdbad1856459bf1f0fc9bd66527dce569e1523"
+checksum = "1f89a56d830be4dddc939c377c95e3b77e30c86a8df99c20095c34cf9038447b"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -2217,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d1a96e46c24f5c3539834355801721b8745b00c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#884dcc49cab5a470cb27c907b0da6f174544e4d5"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2236,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d1a96e46c24f5c3539834355801721b8745b00c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#884dcc49cab5a470cb27c907b0da6f174544e4d5"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2820,9 +2820,8 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.14.0+1.1.1j"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "055b569b5bd7e5462a1700f595c7c7d487691d73b5ce064176af7f9f0cbb80a9"
+version = "111.10.2+1.1.1g"
+source = "git+https://github.com/busyjay/openssl-src-rs?branch=patch-for-m1#f882f3e06bfcd89b5a27daaecf6ef562cb7ff231"
 dependencies = [
  "cc",
 ]
@@ -3955,7 +3954,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d1a96e46c24f5c3539834355801721b8745b00c7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#884dcc49cab5a470cb27c907b0da6f174544e4d5"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
