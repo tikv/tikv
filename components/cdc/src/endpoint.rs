@@ -31,6 +31,7 @@ use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
 use tikv::storage::txn::TxnEntry;
 use tikv::storage::txn::TxnEntryScanner;
 use tikv::storage::Statistics;
+use tikv_util::impl_display_as_debug;
 use tikv_util::lru::LruCache;
 use tikv_util::time::Instant;
 use tikv_util::timer::SteadyTimer;
@@ -60,11 +61,7 @@ pub enum Deregister {
     Conn(ConnID),
 }
 
-impl fmt::Display for Deregister {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Deregister);
 
 impl fmt::Debug for Deregister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -161,11 +158,7 @@ pub enum Task {
     Validate(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Task);
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

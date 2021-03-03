@@ -16,7 +16,9 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
+use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 use collections::HashSet;
+use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -27,10 +29,9 @@ use kvproto::pdpb::{
 };
 use security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
-
-use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -280,7 +281,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?err; "request failed, retry");
+                error!(?*err; "request failed, retry");
                 false
             }
         }

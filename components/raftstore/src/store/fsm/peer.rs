@@ -677,7 +677,7 @@ where
         let is_applying_snap = s.is_applying_snapshot();
         for (key, is_sending) in snaps {
             if is_sending {
-                let s = match self.ctx.snap_mgr.get_snapshot_for_sending(&key) {
+                let s = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
                     Ok(s) => s,
                     Err(e) => {
                         error!(%e;
@@ -732,7 +732,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "snap_file" => %key,
                 );
-                let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
+                let a = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
                     Ok(a) => a,
                     Err(e) => {
                         error!(%e;

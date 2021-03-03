@@ -10,20 +10,13 @@ MAKEFILE_RUN=${MAKEFILE_RUN:-""}
 if [[ -z $MAKEFILE_RUN ]] ; then
 	COMMAND="$0 $*" exec make run
 fi
+SHELL_DEBUG=${SHELL_DEBUG:-""}
+if [[ -n "$SHELL_DEBUG" ]] ; then
+  set -x
+fi
 
-ALLOWED_CLIPPY_LINTS=(-A clippy::module_inception  \
-	-A clippy::should_implement_trait \
-	-A clippy::new_without_default \
-	-A clippy::too_many_arguments \
-	-A clippy::blacklisted_name \
-	-A clippy::needless_range_loop \
-	-A clippy::new_ret_no_self \
-	-A clippy::unnecessary_sort_by \
-	-A clippy::unnecessary_wraps)
+./scripts/clippy --all-targets
 
-cargo clippy --workspace --all-targets --no-default-features \
-	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-	--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
 # for pkg in "components/cdc" "components/backup" "cmd" "tests"; do
 # 	cd $pkg
 # 	cargo clippy --all-targets --no-default-features \
