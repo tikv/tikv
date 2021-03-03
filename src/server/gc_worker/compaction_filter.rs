@@ -168,6 +168,10 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             .get_property_int("rocksdb.is-write-stalled")
             .unwrap_or_default()
             != 0
+            || db
+                .get_property_int("rocksdb.is-write-stopped")
+                .unwrap_or_default()
+                != 0
         {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
