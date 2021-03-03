@@ -72,6 +72,7 @@ impl<E> RateLimiter<E> {
         let sink_clone = self.sink.clone();
         let mut attempts: u64 = 0;
 
+        let timer = CDC_SCAN_BLOCK_DURATION_HISTOGRAM.start_coarse_timer();
         loop {
             if state_clone.is_sink_closed.load(Ordering::SeqCst) {
                 return Err(RateLimiterError::SinkClosedError(0));
@@ -95,6 +96,7 @@ impl<E> RateLimiter<E> {
             break;
         }
 
+        timer.observe_duration();
         sink_clone.try_send(event).map_err(|e| {
             warn!("cdc send_scan_event error"; "err" => ?e);
             match e {
