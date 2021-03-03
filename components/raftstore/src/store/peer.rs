@@ -92,11 +92,8 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn find_scheduled_ts(&self, index: u64) -> Option<(u64, Instant)> {
-        let (front, back) = self.queue.as_slices();
         let map = |p: &Proposal<_>| (p.index);
-        let idx = front
-            .binary_search_by_key(&index, map)
-            .or_else(|_| back.binary_search_by_key(&index, map));
+        let idx = self.queue.binary_search_by_key(&index, map);
         if let Ok(i) = idx {
             self.queue[i]
                 .cb
