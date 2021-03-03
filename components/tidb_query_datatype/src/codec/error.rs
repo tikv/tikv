@@ -47,6 +47,9 @@ quick_error! {
         Eval(s: String, code:i32) {
             display("evaluation failed: {}", s)
         }
+        CorruptedData(s: String) {
+            display("corrupted data: {}", s)
+        }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
@@ -233,6 +236,7 @@ impl ErrorCodeExt for Error {
             Error::Encoding(_) => error_code::coprocessor::ENCODING,
             Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
             Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
+            Error::CorruptedData(_) => error_code::coprocessor::CORRUPTED_DATA,
             Error::Eval(_, _) => error_code::coprocessor::EVAL,
             Error::Other(_) => error_code::UNKNOWN,
         }

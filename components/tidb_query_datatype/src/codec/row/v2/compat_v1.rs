@@ -10,7 +10,7 @@ use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use crate::codec::{datum, Error, Result};
 
 #[inline]
-fn decode_v2_u64(v: &[u8]) -> Result<u64> {
+pub fn decode_v2_u64(v: &[u8]) -> Result<u64> {
     // See `decodeInt` in TiDB.
     match v.len() {
         1 => Ok(u64::from(v[0])),
