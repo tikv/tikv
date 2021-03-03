@@ -19,9 +19,11 @@ use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use protobuf::Message;
 use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
 use tikv_util::worker::*;
+use tokio::sync::mpsc::channel as tokio_bounded_channel;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
+use futures::select;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -299,6 +301,8 @@ impl ChangeData for Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+        let (close_tx, close_rx) = tokio_bounded_channel::<()>(1);
+
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
@@ -312,13 +316,22 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            let downstream = Downstream::new(
+            let mut downstream = Downstream::new(
                 peer.clone(),
                 region_epoch,
                 req_id,
                 conn_id,
                 enable_old_value,
             );
+
+            let mut close_tx_clone = close_tx.clone();
+            downstream.set_cancel_func(move |_| {
+                match close_tx_clone.try_send(()) {
+                    Ok(_) => info!("cdc send sink close command successful"),
+                    Err(e) => info!("cdc send sink close command failed"; "err" => ?e)
+                }
+            });
+
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
@@ -336,7 +349,7 @@ impl ChangeData for Service {
         });
 
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let mut rx = rx
+        let rx = rx
             .map(|events| {
                 let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
                 events.into_iter().for_each(|e| batcher.push(e));
@@ -373,20 +386,47 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
-            let res = sink.send_all(&mut rx).await;
+            let mut rx = rx.fuse();
+            let mut close_rx = close_rx.fuse();
+            let mut need_close = true;
+            loop {
+                select! {
+                    data = rx.next() => {
+                        match data {
+                            None => break,
+                            Some(Err(e)) => {
+                                warn!("cdc send channel returns error"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
+                                break;
+                            },
+                            Some(Ok(p)) => {
+                                match sink.send(p).await {
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        warn!("cdc send failed"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
+                                        need_close = false;
+                                        break;
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    _ = close_rx.next() => {
+                        let _ = sink.close().await;
+                        need_close = false;
+                        break
+                    },
+                }
+            }
+            // let res = sink.send_all(&mut rx).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e);
             }
-            match res {
-                Ok(_s) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
-                    let _ = sink.close().await;
-                }
-                Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-                }
+
+            info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            if need_close {
+                let _ = sink.close().await;
             }
         });
     }

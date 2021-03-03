@@ -125,7 +125,7 @@ impl<E> Clone for RateLimiter<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tikv_util::mpsc::batch::{bounded, unbounded};
+    use tikv_util::mpsc::batch::unbounded;
 
     type MockCdcEvent = u64;
 

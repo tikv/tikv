@@ -86,6 +86,7 @@ pub struct Downstream {
     rate_limiter: Option<RateLimiter<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
+    cancel_func: Option<Arc<dyn FnMut(grpcio::RpcStatus) -> () + Sync + Send>>,
 }
 
 impl Downstream {
@@ -110,6 +111,7 @@ impl Downstream {
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             enable_old_value,
+            cancel_func: None,
         }
     }
 
@@ -117,16 +119,34 @@ impl Downstream {
     /// The size of `Error` and `ResolvedTS` are considered zero.
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
-        if self.rate_limiter.is_none() {
-            warn!("cdc drop event, no rate_limiter";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-            return;
-        }
 
-        let rate_limiter = self.rate_limiter.as_ref().unwrap();
-        if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
-            info!("cdc send event failed";
+        match event.event {
+            Some(Event_oneof_event::Entries(_)) => {
+                if self.rate_limiter.is_none() {
+                    warn!("cdc drop event, no rate_limiter";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                    return;
+                }
+
+                let rate_limiter = self.rate_limiter.as_ref().unwrap();
+                if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
+                    info!("cdc send event failed";
                         "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+
+                }
+            }
+            _ => {
+                if self.sink.is_none() {
+                    warn!("cdc drop event, no sink";
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
+                    return;
+                }
+                let sink = self.sink.as_ref().unwrap();
+                if let Err(e) = sink.send(CdcEvent::Event(event)) {
+                    info!("cdc send event failed";
+                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+                }
+            }
         }
     }
 
@@ -174,6 +194,10 @@ impl Downstream {
         change_data_event.event = Some(Event_oneof_event::Error(cdc_err));
         change_data_event.region_id = region_id;
         self.sink_event(change_data_event);
+    }
+
+    pub fn set_cancel_func<F: 'static>(&mut self, f: F) where F: FnMut(grpcio::RpcStatus) -> () + Sync + Send {
+        self.cancel_func = Some(Arc::new(f));
     }
 }
 
@@ -251,8 +275,8 @@ impl Delegate {
                 &downstream.region_epoch,
                 region,
                 false, /* check_conf_ver */
-                true,  /* check_ver */
-                true,  /* include_region */
+                true, /* check_ver */
+                true, /* include_region */
             ) {
                 info!("fail to subscribe downstream";
                     "region_id" => region.get_id(),
@@ -474,10 +498,10 @@ impl Delegate {
         for entry in entries {
             match entry {
                 Some(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                }) => {
+                         default,
+                         lock,
+                         old_value,
+                     }) => {
                     let mut row = EventRow::default();
                     let skip = decode_lock(lock.0, Lock::parse(&lock.1).unwrap(), &mut row);
                     if skip {
@@ -494,10 +518,10 @@ impl Delegate {
                     rows.last_mut().unwrap().push(row);
                 }
                 Some(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                }) => {
+                         default,
+                         write,
+                         old_value,
+                     }) => {
                     let mut row = EventRow::default();
                     let skip = decode_write(write.0, &write.1, &mut row, false);
                     if skip {
@@ -779,13 +803,13 @@ impl Delegate {
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     #[cfg(feature = "prost-codec")]
-    {
-        row.r#type = ty.into();
-    }
+        {
+            row.r#type = ty.into();
+        }
     #[cfg(not(feature = "prost-codec"))]
-    {
-        row.r_type = ty;
-    }
+        {
+            row.r_type = ty;
+        }
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {

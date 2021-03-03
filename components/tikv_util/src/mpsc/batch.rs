@@ -144,25 +144,34 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.as_ref().unwrap().send(t)?;
-        self.state.try_notify_post_send();
         self.state.pending_count.fetch_add(1, Ordering::SeqCst);
+        self.sender.as_ref().unwrap().send(t).or_else(|e| {
+            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
+            Err(e)
+        })?;
+        self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.as_ref().unwrap().send(t)?;
-        self.state.notify();
         self.state.pending_count.fetch_add(1, Ordering::SeqCst);
+        self.sender.as_ref().unwrap().send(t).or_else(|e| {
+            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
+            Err(e)
+        })?;
+        self.state.notify();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        self.sender.as_ref().unwrap().try_send(t)?;
-        self.state.try_notify_post_send();
         self.state.pending_count.fetch_add(1, Ordering::SeqCst);
+        self.sender.as_ref().unwrap().try_send(t).or_else(|e| {
+            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
+            Err(e)
+        })?;
+        self.state.try_notify_post_send();
         Ok(())
     }
 
@@ -500,6 +509,19 @@ mod tests {
         assert_eq!(tx.get_pending_count(), 1);
         assert_eq!(rx.recv().unwrap(), 3);
         assert_eq!(tx.get_pending_count(), 0);
+    }
+
+    #[test]
+    fn test_sender_pending_count_after_failures() {
+        let (tx, rx) = unbounded::<i32>(10);
+        assert_eq!(tx.get_pending_count(), 0);
+        tx.send(1).unwrap();
+        assert_eq!(tx.get_pending_count(), 1);
+        drop(rx);
+        tx.send(2).expect_err("error expected");
+        assert_eq!(tx.get_pending_count(), 1);
+        tx.send(3).expect_err("error expected");
+        assert_eq!(tx.get_pending_count(), 1);
     }
 
     #[derive(Clone)]
