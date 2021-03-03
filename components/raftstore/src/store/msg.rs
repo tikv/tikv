@@ -455,7 +455,7 @@ pub enum PeerMsg<EK: KvEngine> {
     Start,
     /// A message only used to notify a peer.
     Noop,
-    Persisted(Instant),
+    Persisted((u64, u64, Instant)),
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage<EK>),
     /// Ask region to report a heartbeat to PD.

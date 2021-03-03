@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::{collections::VecDeque, time::Instant};
@@ -90,49 +89,31 @@ impl SampleWindow {
 
 #[derive(Default)]
 pub struct UnsyncedReady {
+    pub peer_id: u64,
     pub number: u64,
-    pub region_id: u64,
-    pub notifier: Arc<AtomicU64>,
 }
 
 impl UnsyncedReady {
-    fn new(number: u64, region_id: u64, notifier: Arc<AtomicU64>) -> Self {
-        Self {
-            number,
-            region_id,
-            notifier,
-        }
+    fn new(peer_id: u64, number: u64) -> Self {
+        Self { peer_id, number }
     }
 
-    fn flush<EK, ER>(&self, router: &RaftRouter<EK, ER>)
+    fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>)
     where
         EK: KvEngine,
         ER: RaftEngine,
     {
-        loop {
-            let pre_number = self.notifier.load(Ordering::Acquire);
-            // TODO: reduce duplicated messages
-            //assert_ne!(pre_number, self.number);
-            if pre_number >= self.number {
-                break;
-            }
-            if pre_number
-                == self
-                    .notifier
-                    .compare_and_swap(pre_number, self.number, Ordering::AcqRel)
-            {
-                if let Err(e) =
-                    router.force_send(self.region_id, PeerMsg::Persisted(Instant::now()))
-                {
-                    error!(
-                        "failed to send noop to trigger persisted ready";
-                        "region_id" => self.region_id,
-                        "ready_number" => self.number,
-                        "error" => ?e,
-                    );
-                }
-                break;
-            }
+        if let Err(e) = router.force_send(
+            region_id,
+            PeerMsg::Persisted((self.peer_id, self.number, Instant::now())),
+        ) {
+            error!(
+                "failed to send noop to trigger persisted ready";
+                "region_id" => region_id,
+                "peer_id" => self.peer_id,
+                "ready_number" => self.number,
+                "error" => ?e,
+            );
         }
     }
 }
@@ -174,16 +155,9 @@ where
         }
     }
 
-    pub fn update_ready(
-        &mut self,
-        region_id: u64,
-        ready_number: u64,
-        region_notifier: Arc<AtomicU64>,
-    ) {
-        self.unsynced_readies.insert(
-            region_id,
-            UnsyncedReady::new(ready_number, region_id, region_notifier),
-        );
+    pub fn update_ready(&mut self, region_id: u64, peer_id: u64, ready_number: u64) {
+        self.unsynced_readies
+            .insert(region_id, UnsyncedReady::new(peer_id, ready_number));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -521,8 +495,8 @@ where
         task.after_write_to_db();
 
         let callback_begin = UtilInstant::now();
-        for (_, r) in &task.unsynced_readies {
-            r.flush(&self.router);
+        for (region_id, r) in &task.unsynced_readies {
+            r.flush(*region_id, &self.router);
         }
         STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
             .observe(duration_to_sec(callback_begin.elapsed()) as f64);
