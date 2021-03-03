@@ -246,7 +246,7 @@ impl Default for Config {
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
             future_poll_size: 1,
-            hibernate_regions: true,
+            hibernate_regions: tikv_util::build_on_master_branch(),
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
 
@@ -328,6 +328,16 @@ impl Config {
                 "election timeout {} ms is less than lease {} ms",
                 election_timeout,
                 lease
+            ));
+        }
+
+        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        if lease > election_timeout - tick {
+            return Err(box_err!(
+                "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
+                lease,
+                election_timeout,
+                tick
             ));
         }
 
@@ -717,6 +727,12 @@ mod tests {
 
         cfg = Config::new();
         cfg.future_poll_size = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg = Config::new();
+        cfg.raft_base_tick_interval = ReadableDuration::secs(1);
+        cfg.raft_election_timeout_ticks = 11;
+        cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
     }
 }

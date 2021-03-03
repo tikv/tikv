@@ -19,9 +19,10 @@ tokio = { version = "0.2", features = ["macros", "sync", "time"] }
 txn_types = { path = "../txn_types", default-features = false }
 fail = "0.4"
 
+# FIXME: switch to the crates.io version after crossbeam-skiplist is released
 [dependencies.crossbeam-skiplist]
-git = "https://github.com/crossbeam-rs/crossbeam.git"
-tag = "crossbeam-0.7.3"
+git = "https://github.com/sticnarf/crossbeam.git"
+rev = "a58551085ce0cfbb07f28c6c0a3071c2d7d4c878"
 package = "crossbeam-skiplist" 
 
 [dev-dependencies]
