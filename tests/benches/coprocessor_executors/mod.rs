@@ -52,7 +52,7 @@ fn run_bench(measurement: &str) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 fn run_bench(measurement: &str) {
     match measurement {
         "CPU_TIME" => {
