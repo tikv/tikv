@@ -57,7 +57,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 failure = "0.1"
 futures = "0.3"
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -78,7 +78,7 @@ lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.10", default-features = false, features = ["nightly"] }
 protobuf = "2.8"
-prost = "0.6"
+prost = "0.7"
 
 [dev-dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }

@@ -8,8 +8,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-
 /// The result of `get_txn_commit_record`, which is used to get the status of a specified
 /// transaction from write cf.
 #[derive(Debug)]
@@ -513,8 +511,7 @@ pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccPr
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    false
 }
 
 #[cfg(test)]

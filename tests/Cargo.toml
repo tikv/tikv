@@ -117,7 +117,7 @@ configuration = { path = "../components/configuration", default-features = false
 encryption = { path = "../components/encryption", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 futures = "0.3"
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 log_wrappers = { path = "../components/log_wrappers" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 pd_client = { path = "../components/pd_client", default-features = false }

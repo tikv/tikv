@@ -20,7 +20,7 @@ pub fn cleanup<S: Snapshot>(
     protect_rollback: bool,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("cleanup", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts).into()
     ));
 
     match txn.reader.load_lock(&key)? {
@@ -38,14 +38,19 @@ pub fn cleanup<S: Snapshot>(
         }
         l => match check_txn_status_missing_lock(
             txn,
-            key,
+            key.clone(),
             l,
             MissingLockAction::rollback_protect(protect_rollback),
             false,
         )? {
             TxnStatus::Committed { commit_ts } => {
                 MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                Err(ErrorInner::Committed { commit_ts }.into())
+                Err(ErrorInner::Committed {
+                    start_ts: txn.start_ts,
+                    commit_ts,
+                    key: key.into_raw()?,
+                }
+                .into())
             }
             TxnStatus::RolledBack => {
                 // Return Ok on Rollback already exist.

@@ -4,6 +4,7 @@ use std::{cmp, i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
+use regex::Regex;
 
 use collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
@@ -267,8 +268,8 @@ impl Config {
         }
 
         for (k, v) in &self.labels {
-            validate_label(k, "key")?;
-            validate_label(v, "value")?;
+            validate_label_key(k)?;
+            validate_label_value(v)?;
         }
 
         Ok(())
@@ -284,35 +285,34 @@ impl Config {
     }
 }
 
-fn validate_label(s: &str, tp: &str) -> Result<()> {
-    let report_err = || {
-        box_err!(
-            "store label {}: {:?} not match ^[a-zA-Z0-9]([a-zA-Z0-9-._]*[a-zA-Z0-9])?",
-            tp,
-            s
-        )
-    };
-    if s.is_empty() {
-        return Err(report_err());
+lazy_static! {
+    static ref LABEL_KEY_FORMAT: Regex =
+        Regex::new("^[$]?[A-Za-z0-9]([-A-Za-z0-9_./]*[A-Za-z0-9])?$").unwrap();
+    static ref LABEL_VALUE_FORMAT: Regex = Regex::new("^[-A-Za-z0-9_./]*$").unwrap();
+}
+
+fn validate_label_key(s: &str) -> Result<()> {
+    if LABEL_KEY_FORMAT.is_match(s) {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "store label key: {:?} not match {}",
+            s,
+            *LABEL_KEY_FORMAT
+        ))
     }
-    let mut chrs = s.chars();
-    let first_char = chrs.next().unwrap();
-    if !first_char.is_ascii_alphanumeric() {
-        return Err(report_err());
+}
+
+fn validate_label_value(s: &str) -> Result<()> {
+    if LABEL_VALUE_FORMAT.is_match(s) {
+        Ok(())
+    } else {
+        Err(box_err!(
+            "store label value: {:?} not match {}",
+            s,
+            *LABEL_VALUE_FORMAT
+        ))
     }
-    let last_char = match chrs.next_back() {
-        None => return Ok(()),
-        Some(c) => c,
-    };
-    if !last_char.is_ascii_alphanumeric() {
-        return Err(report_err());
-    }
-    for c in chrs {
-        if !c.is_ascii_alphanumeric() && !"-._".contains(c) {
-            return Err(report_err());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -377,18 +377,33 @@ mod tests {
 
     #[test]
     fn test_store_labels() {
-        let invalid_cases = vec!["", "123*", ".123", "💖"];
-
-        for case in invalid_cases {
-            assert!(validate_label(case, "dummy").is_err());
-        }
-
-        let valid_cases = vec![
-            "a", "0", "a.1-2", "Cab", "abC", "b_1.2", "cab-012", "3ac.8b2",
+        let cases = vec![
+            ("", false, true),
+            ("123*", false, false),
+            (".123", false, true),
+            ("💖", false, false),
+            ("a", true, true),
+            ("0", true, true),
+            ("a.1-2", true, true),
+            ("Cab", true, true),
+            ("abC", true, true),
+            ("b_1.2", true, true),
+            ("cab-012", true, true),
+            ("3ac.8b2", true, true),
+            ("/abc", false, true),
+            ("abc/", false, true),
+            ("abc/def", true, true),
+            ("-abc", false, true),
+            ("abc-", false, true),
+            ("abc$def", false, false),
+            ("$abc", true, false),
+            ("$a.b-c/d_e", true, false),
+            (".-_/", false, true),
         ];
 
-        for case in valid_cases {
-            validate_label(case, "dummy").unwrap();
+        for (text, can_be_key, can_be_value) in cases {
+            assert_eq!(validate_label_key(text).is_ok(), can_be_key);
+            assert_eq!(validate_label_value(text).is_ok(), can_be_value);
         }
     }
 }
