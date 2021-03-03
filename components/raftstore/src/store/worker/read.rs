@@ -26,6 +26,7 @@ use crate::Error;
 use crate::Result;
 
 use engine_traits::{KvEngine, RaftEngine};
+use tikv_util::codec::number::decode_var_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
@@ -509,7 +510,7 @@ where
     pub fn propose_raft_command(
         &mut self,
         mut read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
@@ -536,7 +537,9 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        let read_ts = req.get_header().get_read_ts();
+                        let read_ts =
+                            decode_var_u64(&mut req.mut_header().take_flag_data().as_ref())
+                                .unwrap();
                         let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
                         assert!(read_ts > 0);
                         if safe_ts < read_ts {
@@ -550,7 +553,6 @@ where
                             let mut response = cmd_resp::new_error(Error::DataIsNotReady(
                                 delegate.region.get_id(),
                                 delegate.peer_id,
-                                delegate.region.get_region_epoch().clone(),
                                 safe_ts,
                             ));
                             cmd_resp::bind_term(&mut response, delegate.term);
@@ -796,7 +798,9 @@ mod tests {
     use crate::store::Callback;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
+    use tikv_util::codec::number::NumberEncoder;
     use tikv_util::time::monotonic_raw_now;
+    use tikv_util::WriteBatchFlags;
 
     use super::*;
 
@@ -1103,7 +1107,14 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
         assert_eq!(safe_ts.load(Ordering::Relaxed), 1);
 
-        cmd.mut_header().set_read_ts(2);
+        let data = {
+            let mut d = [0u8; 8];
+            (&mut d[..]).encode_var_u64(2).unwrap();
+            d
+        };
+        cmd.mut_header()
+            .set_flags(WriteBatchFlags::STALE_READ.bits());
+        cmd.mut_header().set_flag_data(data.into());
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {

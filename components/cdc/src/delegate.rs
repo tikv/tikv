@@ -32,10 +32,11 @@ use raftstore::store::fsm::ObserveID;
 use raftstore::store::util::compare_region_epoch;
 use raftstore::Error as RaftStoreError;
 use resolved_ts::Resolver;
+use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
-use tikv::{server::raftkv::WriteBatchFlags, storage::txn::TxnEntry};
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
+use tikv_util::WriteBatchFlags;
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};

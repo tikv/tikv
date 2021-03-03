@@ -34,7 +34,7 @@ use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
-use tikv_util::{escape, is_zero_duration, Either};
+use tikv_util::{escape, is_zero_duration, Either, WriteBatchFlags};
 
 use crate::coprocessor::RegionChangeEvent;
 use crate::store::cmd_resp::{bind_term, new_error};
@@ -3210,7 +3210,8 @@ where
             }
         }
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
-        let allow_stale_read = read_only && msg.get_header().get_read_ts() > 0;
+        let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
+        let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
         if !(self.fsm.peer.is_leader()
             || is_read_index_request
             || allow_replica_read

@@ -107,7 +107,6 @@ async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
-bitflags = "1.0.1"
 byteorder = "1.2"
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }

@@ -28,6 +28,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
+use bitflags::bitflags;
 use rand::rngs::ThreadRng;
 
 #[macro_use]
@@ -535,6 +536,18 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 
 pub fn empty_shared_slice<T>() -> Arc<[T]> {
     Vec::new().into()
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
 }
 
 #[cfg(test)]

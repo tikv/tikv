@@ -194,7 +194,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         )?;
         let mut resp = box_try!(fut.await);
         if resp.response.get_header().has_error() {
-            return Err(Error::Request(resp.response.take_header().take_error()));
+            return Err(Error::Request(Box::new(resp.response.take_header().take_error())));
         }
         Ok(resp.snapshot.unwrap())
     }

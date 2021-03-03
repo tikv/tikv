@@ -2140,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/NingLin-P/kvproto.git?branch=stale-read#64f4a4caaf94098ab0aa7a32bfd5bde01fe892fb"
+source = "git+https://github.com/NingLin-P/kvproto.git?branch=stale-read#d76fdec18666a2940bf12a575ec4836a96604d4f"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -5251,7 +5251,6 @@ dependencies = [
  "async-trait",
  "backtrace",
  "batch-system",
- "bitflags",
  "byteorder",
  "chrono",
  "codec",
@@ -5403,6 +5402,7 @@ version = "0.1.0"
 dependencies = [
  "async-speed-limit",
  "backtrace",
+ "bitflags",
  "byteorder",
  "bytes 0.5.3",
  "chrono",

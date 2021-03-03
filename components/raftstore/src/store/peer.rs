@@ -47,10 +47,11 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
+use tikv_util::codec::number::decode_var_u64;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
-use tikv_util::Either;
+use tikv_util::{Either, WriteBatchFlags};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -3123,7 +3124,7 @@ where
     fn handle_read<T>(
         &self,
         ctx: &mut PollContext<EK, ER, T>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse<EK::Snapshot> {
@@ -3140,8 +3141,10 @@ where
                 };
             }
         }
-        if req.get_header().get_read_ts() > 0 {
-            let read_ts = req.get_header().get_read_ts();
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            let read_ts =
+                decode_var_u64(&mut req.mut_header().take_flag_data().as_slice()).unwrap();
             let safe_ts = self.safe_ts.load(Ordering::Relaxed);
             if safe_ts < read_ts {
                 debug!(
@@ -3153,7 +3156,6 @@ where
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady(
                     region.get_id(),
                     self.peer_id(),
-                    region.get_region_epoch().clone(),
                     safe_ts,
                 ));
                 cmd_resp::bind_term(&mut response, self.term());
@@ -3164,6 +3166,7 @@ where
                 };
             }
         }
+
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
@@ -3603,7 +3606,8 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if req.get_header().get_read_ts() > 0 {
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
         }
 
@@ -3886,7 +3890,8 @@ mod tests {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(*op);
             req.set_requests(vec![request].into());
-            req.mut_header().set_read_ts(1);
+            req.mut_header()
+                .set_flags(tikv_util::WriteBatchFlags::STALE_READ.bits());
             table.push((req, RequestPolicy::StaleRead));
         }
 
