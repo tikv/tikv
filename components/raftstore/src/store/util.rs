@@ -1,4 +1,4 @@
-q// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::Display;
 use std::option::Option;
