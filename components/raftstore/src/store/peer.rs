@@ -495,8 +495,7 @@ where
     unpersisted_numbers: VecDeque<(u64, u64)>,
     /// (The number of ready which has a snapshot, Whether this snapshot is scheduled)
     snapshot_ready_status: (u64, bool),
-    /// Outside code use it to notify the latest persisted number to this peer.
-    persisted_notifier: Arc<AtomicU64>,
+    persisted_number: u64,
     /// Async writer id
     async_writer_id: Option<usize>,
 }
@@ -593,7 +592,7 @@ where
             pending_pd_heartbeat_tasks: Arc::new(AtomicU64::new(0)),
             unpersisted_numbers: VecDeque::default(),
             snapshot_ready_status: (0, false),
-            persisted_notifier: Arc::new(AtomicU64::new(0)),
+            persisted_number: 0,
             async_writer_id: None,
         };
 
@@ -1757,7 +1756,6 @@ where
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
-        let notifier = self.persisted_notifier.clone();
         let async_writer_id = if let Some(id) = self.async_writer_id {
             id
         } else {
@@ -1779,7 +1777,6 @@ where
             ctx,
             &mut ready,
             destroy_regions,
-            notifier,
             async_writer_id,
             proposal_times,
         ) {
@@ -1960,8 +1957,7 @@ where
             self.raft_group.advance_append_async(ready);
         } else {
             self.unpersisted_numbers.clear();
-            self.persisted_notifier
-                .store(ready.number(), Ordering::Release);
+            self.persisted_number = ready.number();
 
             let mut light_rd = self.raft_group.advance_append(ready);
 
@@ -1994,11 +1990,14 @@ where
     }
 
     /// Returns if there are new persisted readies.
-    pub fn check_new_persisted(&mut self) -> bool {
+    pub fn check_new_persisted(&mut self, number: u64) -> bool {
         if self.unpersisted_numbers.is_empty() {
             return false;
         }
-        let number = self.persisted_notifier.load(Ordering::Acquire);
+        if self.persisted_number >= number {
+            return false;
+        }
+        self.persisted_number = number;
         if number < self.unpersisted_numbers.front().unwrap().0 {
             return false;
         }

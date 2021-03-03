@@ -34,7 +34,6 @@ use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 
 use crate::store::fsm::async_io::AsyncWriter;
-use std::sync::atomic::AtomicU64;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1380,7 +1379,6 @@ where
         ready_ctx: &mut H,
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
-        region_notifier: Arc<AtomicU64>,
         async_writer_id: usize,
         proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
@@ -1440,7 +1438,7 @@ where
         }
 
         if ready.must_sync() {
-            current.update_ready(region_id, ready.number(), region_notifier);
+            current.update_ready(region_id, self.peer_id, ready.number());
         }
 
         for ts in &proposal_times {
