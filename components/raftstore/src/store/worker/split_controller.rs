@@ -492,29 +492,52 @@ mod tests {
         sc.sample_key(b"", b"d", Position::Contained);
     }
 
+    fn gen_read_stats(region_id: u64, key_ranges: Vec<KeyRange>) -> ReadStats {
+        let mut qps_stats = ReadStats::default();
+        for key_range in &key_ranges {
+            qps_stats.add_qps(region_id, &Peer::default(), key_range.clone());
+        }
+        qps_stats
+    }
     #[test]
     fn test_hub() {
+        // raw key mode
+        let raw_key_ranges = vec![
+            build_key_range(b"a", b"b", false),
+            build_key_range(b"b", b"c", false),
+        ];
         check_split(
-            vec![
-                build_key_range(b"a", b"b", false),
-                build_key_range(b"b", b"c", false),
-            ],
-            b"b",
+            b"raw key",
+            vec![gen_read_stats(1, raw_key_ranges.clone())],
+            vec![b"b"],
         );
 
+        // encoded key mode
         let key_a = Key::from_raw(b"0080").append_ts(2.into());
         let key_b = Key::from_raw(b"0160").append_ts(2.into());
         let key_c = Key::from_raw(b"0240").append_ts(2.into());
+        let encoded_key_ranges = vec![
+            build_key_range(key_a.as_encoded(), key_b.as_encoded(), false),
+            build_key_range(key_b.as_encoded(), key_c.as_encoded(), false),
+        ];
         check_split(
+            b"encoded key",
+            vec![gen_read_stats(1, encoded_key_ranges.clone())],
+            vec![key_b.as_encoded()],
+        );
+
+        // mix mode
+        check_split(
+            b"mix key",
             vec![
-                build_key_range(key_a.as_encoded(), key_b.as_encoded(), false),
-                build_key_range(key_b.as_encoded(), key_c.as_encoded(), false),
+                gen_read_stats(1, raw_key_ranges.clone()),
+                gen_read_stats(2, encoded_key_ranges.clone()),
             ],
-            key_b.as_encoded(),
+            vec![b"b", key_b.as_encoded()],
         );
     }
 
-    fn check_split(key_ranges: Vec<KeyRange>, split_key: &[u8]) {
+    fn check_split(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
         let mut hub = AutoSplitController::new(SplitConfigManager::default());
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
@@ -522,16 +545,22 @@ mod tests {
         hub.cfg.size_threshold = 0;
 
         for i in 0..10 {
-            let mut qps_stats = ReadStats::default();
-            for _j in 0..100 {
-                for key_range in &key_ranges {
-                    qps_stats.add_qps(1, &Peer::default(), key_range.clone());
-                }
-            }
-            let (_, split_infos) = hub.flush(vec![qps_stats]);
+            let (_, split_infos) = hub.flush(qps_stats.clone());
             if (i + 1) % hub.cfg.detect_times == 0 {
-                assert_eq!(split_infos.len(), 1);
-                assert_eq!(split_infos[0].split_key.clone(), split_key);
+                for obtain in &split_infos {
+                    let mut equal = false;
+                    for expect in &split_keys {
+                        if obtain.split_key.cmp(&expect.to_vec()) == Ordering::Equal {
+                            equal = true;
+                            break;
+                        }
+                    }
+                    assert!(
+                        equal,
+                        "mode: {:?}",
+                        String::from_utf8(Vec::from(mode)).unwrap()
+                    );
+                }
             }
         }
     }
