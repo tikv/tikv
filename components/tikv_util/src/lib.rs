@@ -537,6 +537,11 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
     Vec::new().into()
 }
 
+/// A useful hook to check if master branch is being built.
+pub fn build_on_master_branch() -> bool {
+    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
