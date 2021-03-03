@@ -24,6 +24,9 @@ pub const RECORD_ROW_KEY_LEN: usize = PREFIX_LEN + ID_LEN;
 pub const TABLE_PREFIX: &[u8] = b"t";
 pub const RECORD_PREFIX_SEP: &[u8] = b"_r";
 pub const INDEX_PREFIX_SEP: &[u8] = b"_i";
+pub const GRAPH_PREFIX: &[u8] = b"g";
+pub const GRAPH_EDGE_OUT: u8 = 0x01;
+pub const GRAPH_EDGE_IN: u8 = 0x00;
 pub const SEP_LEN: usize = 2;
 pub const TABLE_PREFIX_LEN: usize = 1;
 pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
@@ -140,6 +143,16 @@ pub fn flatten(ctx: &mut EvalContext, data: Datum) -> Result<Datum> {
         Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64(ctx)?)),
         _ => Ok(data),
     }
+}
+
+pub fn encode_graph_tag(vertex_id: i64, tag_id: i64) -> Vec<u8> {
+    let mut key  = Vec::with_capacity(24);
+    key.extend(GRAPH_PREFIX);
+    key.extend(RECORD_PREFIX_SEP);
+    key.write_i64(vertex_id).unwrap();
+    key.write_i64(tag_id).unwrap();
+
+    key
 }
 
 // `encode_row` encodes row data and column ids into a slice of byte.
