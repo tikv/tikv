@@ -491,7 +491,7 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) -> Option<Instant> {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) -> Option<(Instant, u64, u64)> {
         for m in msgs.drain(..) {
             if self.fsm.peer.check_new_persisted() {
                 self.fsm.has_ready = true;
@@ -528,7 +528,7 @@ where
                         }
                     } else {
                         self.propose_batch_raft_command(false);
-                        self.propose_raft_command(cmd.request, cmd.callback)
+                        self.propose_raft_command(cmd.request, cmd.callback);
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -551,26 +551,21 @@ where
         let instant = self.propose_batch_raft_command(true);
         if let Some(ts) = &instant {
             STORE_PROPOSAL_AFTER_PROPOSE_5_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.elapsed()));
+                .observe(duration_to_sec(ts.0.elapsed()));
         }
-        return instant
+        return instant;
     }
 
-    fn propose_batch_raft_command(&mut self, is_end: bool) -> Option<Instant> {
+    fn propose_batch_raft_command(&mut self, is_end: bool) -> Option<(Instant, u64, u64)> {
         if let Some(cmd) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose, is_end)
         {
-            let instant = if let Callback::Write { cb, .. } = &cmd.callback {
-                Some(cb.1.clone())
-            } else {
-                None
-            };
-            self.propose_raft_command(cmd.request, cmd.callback);
+            let instant = self.propose_raft_command(cmd.request, cmd.callback);
             if let Some(ts) = &instant {
                 STORE_PROPOSAL_AFTER_PROPOSE_4_DURATION_HISTOGRAM
-                    .observe(duration_to_sec(ts.elapsed()));
+                    .observe(duration_to_sec(ts.0.elapsed()));
             }
             return instant;
         }
@@ -940,7 +935,7 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self, instant: Option<Instant>) {
+    pub fn collect_ready(&mut self, instant: Option<(Instant, u64, u64)>) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -957,10 +952,6 @@ where
             }
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
-
-            if self.ctx.trans.need_flush() {
-                self.ctx.trans.flush();
-            }
 
             self.post_raft_ready_append(r.0, r.1);
         }
@@ -3228,11 +3219,15 @@ where
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
+    fn propose_raft_command(
+        &mut self,
+        mut msg: RaftCmdRequest,
+        cb: Callback<EK::Snapshot>,
+    ) -> Option<(Instant, u64, u64)> {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
-                return;
+                return None;
             }
             Err(e) => {
                 debug!(
@@ -3243,14 +3238,14 @@ where
                     "err" => %e,
                 );
                 cb.invoke_with_response(new_error(e));
-                return;
+                return None;
             }
             _ => (),
         }
 
         if self.fsm.peer.pending_remove {
             apply::notify_req_region_removed(self.region_id(), cb);
-            return;
+            return None;
         }
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
@@ -3263,7 +3258,7 @@ where
                 "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
-            return;
+            return None;
         }
 
         // Note:
@@ -3274,17 +3269,14 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        let instant = if let Callback::Write { cb, .. } = &cb {
-            Some(cb.1.clone())
-        } else {
-            None
-        };
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
+
+        let mut instant = None;
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, &mut instant) {
             self.fsm.has_ready = true;
         }
         if let Some(ts) = instant {
             STORE_PROPOSAL_AFTER_PROPOSE_2_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.elapsed()));
+                .observe(duration_to_sec(ts.0.elapsed()));
         }
         if self.fsm.peer.should_wake_up {
             self.reset_raft_tick(GroupState::Ordered);
@@ -3293,8 +3285,9 @@ where
         self.register_pd_heartbeat_tick();
         if let Some(ts) = instant {
             STORE_PROPOSAL_AFTER_PROPOSE_3_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.elapsed()));
+                .observe(duration_to_sec(ts.0.elapsed()));
         }
+        instant
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
     }

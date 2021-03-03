@@ -77,6 +77,7 @@ pub enum StaleState {
     LeaderMissing,
 }
 
+#[derive(Debug)]
 struct ProposalQueue<S>
 where
     S: Snapshot,
@@ -92,11 +93,8 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn find_scheduled_ts(&self, index: u64) -> Option<(u64, Instant)> {
-        let (front, back) = self.queue.as_slices();
         let map = |p: &Proposal<_>| (p.index);
-        let idx = front
-            .binary_search_by_key(&index, map)
-            .or_else(|_| back.binary_search_by_key(&index, map));
+        let idx = self.queue.binary_search_by_key(&index, map);
         if let Ok(i) = idx {
             self.queue[i]
                 .cb
@@ -1617,12 +1615,12 @@ where
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        instant: Option<Instant>,
+        instant: Option<(Instant, u64, u64)>,
     ) -> Option<(Ready, InvokeContext)> {
         let now = Instant::now();
         if let Some(ts) = &instant {
             STORE_PROPOSAL_AFTER_PROPOSE_6_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now.sub(*ts)));
+                .observe(duration_to_sec(now.sub(ts.0)));
         }
         if self.pending_remove {
             return None;
@@ -1734,20 +1732,35 @@ where
         let mut proposal_times = vec![];
 
         let mut ready = self.raft_group.ready();
+        let (mut tmp_index, mut tmp_term) = (0, 0);
         for entry in ready.entries() {
             if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
             {
                 if entry.term == term {
                     proposal_times.push(scheduled_ts);
+                    tmp_index = entry.get_index();
+                    tmp_term = term;
                 }
             }
         }
         if proposal_times.len() == 1 {
-            if let Some(instant) = instant {
+            if let Some((instant, index, term)) = instant {
+                if index != tmp_index || term != tmp_term {
+                    error!("doesn't match";
+                        "region_id" => self.region_id,
+                        "index" => index,
+                        "tmp_index" => tmp_index,
+                        "term" => term,
+                        "tmp_term" => tmp_term,
+                        "entries" => ?ready.entries(),
+                        "first" => ?proposal_times.first().unwrap(),
+                        "instant" => ?instant,
+                        "proposals" => ?self.proposals,
+                    );
+                }
                 let first = proposal_times.first().unwrap();
                 if *first > instant {
-                    STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM
-                        .observe(60.0);
+                    STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM.observe(60.0);
                 } else {
                     STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM
                         .observe(duration_to_sec(instant.sub(*first)));
@@ -2364,6 +2377,7 @@ where
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
+        mut instant: &mut Option<(Instant, u64, u64)>,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -2426,6 +2440,7 @@ where
                 if let Callback::Write { cb, .. } = &cb {
                     STORE_PROPOSAL_AFTER_INVOKE_PROPOSED_DURATION_HISTOGRAM
                         .observe(duration_to_sec(cb.1.elapsed()));
+                    *instant = Some((cb.1.clone(), idx, self.term()));
                 }
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;

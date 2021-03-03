@@ -2817,6 +2817,7 @@ impl Registration {
     }
 }
 
+#[derive(Debug)]
 pub struct Proposal<S>
 where
     S: Snapshot,

@@ -165,10 +165,10 @@ where
     S: Snapshot,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
-            Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
+            Callback::Write { cb, .. } => write!(fmt, "Callback::Write({:?})", cb.1),
         }
     }
 }

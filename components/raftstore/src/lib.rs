@@ -8,6 +8,7 @@
 #![feature(box_patterns)]
 #![feature(duration_saturating_ops)]
 #![feature(duration_zero)]
+#![feature(vecdeque_binary_search)]
 #![recursion_limit = "256"]
 
 #[macro_use]
