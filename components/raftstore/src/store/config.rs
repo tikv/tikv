@@ -731,7 +731,7 @@ mod tests {
 
         cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
-        cfg.raft_election_timeout_ticks = 9;
+        cfg.raft_election_timeout_ticks = 11;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(11);
         assert!(cfg.validate().is_err());
     }
