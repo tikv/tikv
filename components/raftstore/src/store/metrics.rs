@@ -23,6 +23,7 @@ make_auto_flush_static_metric! {
         transfer_leader,
         conf_change,
         batch,
+        end_batch,
     }
 
     pub label_enum AdminCmdType {
@@ -329,6 +330,85 @@ lazy_static! {
     pub static ref STORE_REPORT_COMMIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_report_commit_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_PROPOSAL_BEFORE_PROPOSE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_before_propose_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_INVOKE_PROPOSED_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_invoke_proposed_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_2_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_2_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_3_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_3_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_4_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_4_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_5_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_5_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_6_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_6_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_propose_7_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_BEFORE_GET_READY_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_before_get_ready_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_GET_READY_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_get_ready_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_HANDLE_COMMITTED_ENTRIES_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_handle_committed_entries_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_PROPOSAL_AFTER_SEND_MSG_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_proposal_after_send_msg_duration_seconds",
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();

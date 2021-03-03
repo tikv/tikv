@@ -1,10 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, ops::Sub};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{cell::RefCell, ops::Sub};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
@@ -1120,7 +1120,8 @@ where
                 {
                     STORE_KNOW_PERSIST_DURATION_HISTOGRAM
                         .observe(duration_to_sec(scheduled_ts.elapsed()));
-                    STORE_REPORT_PERSIST_DURATION_HISTOGRAM.observe(duration_to_sec(ts.sub(scheduled_ts)));
+                    STORE_REPORT_PERSIST_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(ts.sub(scheduled_ts)));
                 }
             }
         }
@@ -1138,7 +1139,8 @@ where
                 {
                     STORE_KNOW_COMMIT_DURATION_HISTOGRAM
                         .observe(duration_to_sec(scheduled_ts.elapsed()));
-                    STORE_REPORT_COMMIT_DURATION_HISTOGRAM.observe(duration_to_sec(ts.sub(scheduled_ts)));
+                    STORE_REPORT_COMMIT_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(ts.sub(scheduled_ts)));
                 }
             }
         }
@@ -1615,7 +1617,13 @@ where
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
+        instant: Option<Instant>,
     ) -> Option<(Ready, InvokeContext)> {
+        let now = Instant::now();
+        if let Some(ts) = &instant {
+            STORE_PROPOSAL_AFTER_PROPOSE_6_DURATION_HISTOGRAM
+                .observe(duration_to_sec(now.sub(*ts)));
+        }
         if self.pending_remove {
             return None;
         }
@@ -1723,7 +1731,39 @@ where
             "peer_id" => self.peer.get_id(),
         );
 
+        let mut proposal_times = vec![];
+
         let mut ready = self.raft_group.ready();
+        for entry in ready.entries() {
+            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
+            {
+                if entry.term == term {
+                    proposal_times.push(scheduled_ts);
+                }
+            }
+        }
+        if proposal_times.len() == 1 {
+            if let Some(instant) = instant {
+                let first = proposal_times.first().unwrap();
+                if *first > instant {
+                    STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM
+                        .observe(60.0);
+                } else {
+                    STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(instant.sub(*first)));
+                }
+            }
+        }
+
+        for ts in &proposal_times {
+            STORE_PROPOSAL_BEFORE_GET_READY_DURATION_HISTOGRAM
+                .observe(duration_to_sec(now.sub(*ts)));
+        }
+
+        for ts in &proposal_times {
+            STORE_PROPOSAL_AFTER_GET_READY_DURATION_HISTOGRAM
+                .observe(duration_to_sec(ts.elapsed()));
+        }
 
         if !ready.must_sync() {
             // If this ready need not to sync, the term, vote must not be changed,
@@ -1748,6 +1788,15 @@ where
             }
         }
 
+        if !ready.committed_entries().is_empty() {
+            self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
+        }
+
+        for ts in &proposal_times {
+            STORE_PROPOSAL_AFTER_HANDLE_COMMITTED_ENTRIES_DURATION_HISTOGRAM
+                .observe(duration_to_sec(ts.elapsed()));
+        }
+
         if !ready.messages().is_empty() {
             if !self.is_leader() {
                 fail_point!("raft_before_follower_send");
@@ -1758,11 +1807,11 @@ where
             ctx.trans.flush();
         }
 
-        self.apply_reads(ctx, &ready);
-
-        if !ready.committed_entries().is_empty() {
-            self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
+        for ts in &proposal_times {
+            STORE_PROPOSAL_AFTER_SEND_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
         }
+
+        self.apply_reads(ctx, &ready);
 
         let notifier = self.persisted_notifier.clone();
         let async_writer_id = if let Some(id) = self.async_writer_id {
@@ -1773,15 +1822,7 @@ where
             self.async_writer_id = Some(id);
             id
         };
-        let mut proposal_times = vec![];
-        for entry in ready.entries() {
-            if let Some((term, scheduled_ts)) = self.proposals.find_scheduled_ts(entry.get_index())
-            {
-                if entry.term == term {
-                    proposal_times.push(scheduled_ts);
-                }
-            }
-        }
+
         let invoke_ctx = match self.mut_store().handle_raft_ready(
             ctx,
             &mut ready,
@@ -2337,6 +2378,11 @@ where
         };
         let is_urgent = is_request_urgent(&req);
 
+        if let Callback::Write { cb, .. } = &cb {
+            STORE_PROPOSAL_BEFORE_PROPOSE_DURATION_HISTOGRAM
+                .observe(duration_to_sec(cb.1.elapsed()));
+        }
+
         let policy = self.inspect(&req);
         let res = match policy {
             Ok(RequestPolicy::ReadLocal) => {
@@ -2351,6 +2397,11 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
+
+        if let Callback::Write { cb, .. } = &cb {
+            STORE_PROPOSAL_AFTER_PROPOSE_DURATION_HISTOGRAM
+                .observe(duration_to_sec(cb.1.elapsed()));
+        }
 
         match res {
             Err(e) => {
@@ -2371,6 +2422,10 @@ where
                     // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
                     cb.invoke_proposed();
+                }
+                if let Callback::Write { cb, .. } = &cb {
+                    STORE_PROPOSAL_AFTER_INVOKE_PROPOSED_DURATION_HISTOGRAM
+                        .observe(duration_to_sec(cb.1.elapsed()));
                 }
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;

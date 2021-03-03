@@ -787,8 +787,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-        delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready();
+        let instant = delegate.handle_msgs(&mut self.peer_msg_buf);
+        delegate.collect_ready(instant);
         expected_msg_count
     }
 
