@@ -51,7 +51,7 @@ use pd_client::INVALID_ID;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
-use tikv_util::Either;
+use tikv_util::{Either, WriteBatchFlags};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -3155,21 +3155,21 @@ where
                 };
             }
         }
-        if req.get_header().get_read_ts() > 0 {
-            if let Err(e) = ctx.coprocessor_host.pre_read::<RegionSafeTSTracker>(
-                &self.peer_properties,
-                &req,
-                region.get_region_epoch(),
-            ) {
-                let mut response = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut response, self.term());
-                return ReadResponse {
-                    response,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-            }
+
+        if let Err(e) = ctx.coprocessor_host.pre_read::<RegionSafeTSTracker>(
+            &self.peer_properties,
+            &req,
+            region.get_region_epoch(),
+        ) {
+            let mut response = cmd_resp::new_error(e);
+            cmd_resp::bind_term(&mut response, self.term());
+            return ReadResponse {
+                response,
+                snapshot: None,
+                txn_extra_op: TxnExtraOp::Noop,
+            };
         }
+
         let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.max_ts_sync_status = Some(self.max_ts_sync_status.clone());
@@ -3637,7 +3637,8 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
-        if req.get_header().get_read_ts() > 0 {
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
         }
 

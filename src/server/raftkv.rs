@@ -8,7 +8,6 @@ use std::{
 };
 use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
 
-use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
@@ -47,7 +46,9 @@ use raftstore::{
     store::{Callback as StoreCallback, ReadIndexContext, ReadResponse, WriteResponse},
 };
 use raftstore::{coprocessor::ReadIndexObserver, errors::Error as RaftServerError};
+use tikv_util::codec::number::NumberEncoder;
 use tikv_util::time::Instant;
+use tikv_util::WriteBatchFlags;
 
 quick_error! {
     #[derive(Debug)]
@@ -227,7 +228,12 @@ where
         let mut header = self.new_request_header(ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() {
             assert!(!ctx.start_ts.is_zero());
-            header.set_read_ts(ctx.start_ts.into_inner());
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_var_u64(ctx.start_ts.into_inner())
+                .unwrap();
+            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            header.set_flag_data(data.into());
         }
         if !ctx.start_ts.is_zero() {
             debug!("exec_snapshot"; "start_ts" => ctx.start_ts.into_inner(), "req" => ?req)
@@ -707,16 +713,6 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes());
         }
-    }
-}
-
-bitflags! {
-    /// Additional flags for a write batch.
-    /// They should be set in the `flags` field in `RaftRequestHeader`.
-    pub struct WriteBatchFlags: u64 {
-        /// Indicates this request is from a 1PC transaction.
-        /// It helps CDC recognize 1PC transactions and handle them correctly.
-        const ONE_PC = 0b00000001;
     }
 }
 

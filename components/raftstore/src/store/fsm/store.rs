@@ -37,12 +37,13 @@ use engine_traits::{RaftEngine, RaftLogBatch};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::{FeatureGate, PdClient};
 use sst_importer::SSTImporter;
+use tikv_util::codec::number::{decode_var_u64, NumberEncoder};
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue, WriteBatchFlags};
 
 use crate::coprocessor::split_observer::SplitObserver;
 use crate::coprocessor::{
@@ -2594,10 +2595,11 @@ impl PeerPropertyAction for RegionSafeTSTracker {
         req: &RaftCmdRequest,
         epoch: &RegionEpoch,
     ) -> Result<()> {
-        let read_ts = req.get_header().get_read_ts();
-        if read_ts == 0 {
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if !flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(());
         }
+        let read_ts = decode_var_u64(&mut req.get_header().get_flag_data().clone())?;
         let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
         let safe_ts = rrp.safe_ts();
         if read_ts > safe_ts {

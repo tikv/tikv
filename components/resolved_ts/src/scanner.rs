@@ -203,6 +203,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
         let (locks, has_remaining) = reader.scan_locks(
             start,
+            None,
             |l| l.ts >= TimeStamp::zero(),
             DEFAULT_SCAN_BATCH_SIZE,
         )?;
