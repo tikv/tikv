@@ -290,6 +290,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     start_ts,
                     &bypass_locks,
                     &concurrency_manager,
+                    CMD,
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
@@ -381,6 +382,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             start_ts,
                             &bypass_locks,
                             &concurrency_manager,
+                            CMD,
                         ) {
                             Ok(mut snap_ctx) => {
                                 snap_ctx.read_id = read_id.clone();
@@ -496,8 +498,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
                 let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
 
-                let snap_ctx =
-                    prepare_snap_ctx(&ctx, &keys, start_ts, &bypass_locks, &concurrency_manager)?;
+                let snap_ctx = prepare_snap_ctx(
+                    &ctx,
+                    &keys,
+                    start_ts,
+                    &bypass_locks,
+                    &concurrency_manager,
+                    CMD,
+                )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
                 {
@@ -607,6 +615,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 concurrency_manager.update_max_ts(start_ts);
                 if ctx.get_isolation_level() == IsolationLevel::Si {
+                    let begin_instant = Instant::now();
                     concurrency_manager
                         .read_range_check(Some(&start_key), end_key.as_ref(), |key, lock| {
                             Lock::check_ts_conflict(
@@ -616,7 +625,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 &bypass_locks,
                             )
                         })
-                        .map_err(mvcc::Error::from)?;
+                        .map_err(|e| {
+                            CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                                .get(CMD)
+                                .locked
+                                .observe(begin_instant.elapsed().as_secs_f64());
+                            mvcc::Error::from(e)
+                        })?;
+                    CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                        .get(CMD)
+                        .unlocked
+                        .observe(begin_instant.elapsed().as_secs_f64());
                 }
 
                 let snap_ctx = if need_check_locks_in_replica_read(&ctx) {
@@ -732,6 +751,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 let command_duration = tikv_util::time::Instant::now_coarse();
 
                 concurrency_manager.update_max_ts(max_ts);
+                let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
                 // a good idea to return an error to the client, making the GC fail. A better
                 // approach is to wait for these locks to be unlocked.
@@ -742,6 +762,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         // `Lock::check_ts_conflict` can't be used here, because LockType::Lock
                         // can't be ignored in this case.
                         if lock.ts <= max_ts {
+                            CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                                .get(CMD)
+                                .locked
+                                .observe(begin_instant.elapsed().as_secs_f64());
                             Err(mvcc::Error::from(mvcc::ErrorInner::KeyIsLocked(
                                 lock.clone().into_lock_info(key.to_raw()?),
                             )))
@@ -750,6 +774,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         }
                     },
                 )?;
+                CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                    .get(CMD)
+                    .unlocked
+                    .observe(begin_instant.elapsed().as_secs_f64());
 
                 let snap_ctx = SnapContext {
                     pb_ctx: &ctx,
@@ -1601,19 +1629,31 @@ fn prepare_snap_ctx<'a>(
     start_ts: TimeStamp,
     bypass_locks: &'a TsSet,
     concurrency_manager: &ConcurrencyManager,
+    cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     concurrency_manager.update_max_ts(start_ts);
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
     if isolation_level == IsolationLevel::Si {
+        let begin_instant = Instant::now();
         for key in keys.clone() {
             concurrency_manager
                 .read_key_check(&key, |lock| {
                     Lock::check_ts_conflict(Cow::Borrowed(lock), &key, start_ts, bypass_locks)
                 })
-                .map_err(mvcc::Error::from)?;
+                .map_err(|e| {
+                    CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+                        .get(cmd)
+                        .locked
+                        .observe(begin_instant.elapsed().as_secs_f64());
+                    mvcc::Error::from(e)
+                })?;
         }
+        CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC
+            .get(cmd)
+            .unlocked
+            .observe(begin_instant.elapsed().as_secs_f64());
     }
 
     let mut snap_ctx = SnapContext {

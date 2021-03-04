@@ -95,6 +95,11 @@ make_auto_flush_static_metric! {
         seek_for_prev_tombstone,
     }
 
+    pub label_enum ReplicaReadLockCheckResult {
+        unlocked,
+        locked,
+    }
+
     pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
@@ -126,6 +131,10 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+    }
+
+    pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
+        "result" => ReplicaReadLockCheckResult,
     }
 }
 
@@ -209,6 +218,14 @@ lazy_static! {
         &["version", "hash"]
     )
     .unwrap();
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_replica_read_lock_check_duration_seconds",
+            "Duration of memory lock checking for replica read",
+            &["result"],
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 1s
+        )
+        .unwrap();
 }
 
 lazy_static! {
@@ -230,6 +247,10 @@ lazy_static! {
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
         auto_flush_from!(GC_KEYS_COUNTER_VEC, GcKeysCounterVec);
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC: ReplicaReadLockCheckHistogramVec = auto_flush_from!(
+        REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC,
+        ReplicaReadLockCheckHistogramVec
+    );
 }
 
 lazy_static! {
