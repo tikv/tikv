@@ -40,9 +40,6 @@ const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
 
-const LABEL_KEY_FORMAT: &str = "^[$]?[A-Za-z0-9]([-A-Za-z0-9_./]*[A-Za-z0-9])?$";
-const LABEL_VALUE_FORMAT: &str = "^[-A-Za-z0-9_./]*$";
-
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -288,31 +285,33 @@ impl Config {
     }
 }
 
-fn validate_label_key(s: &str) -> Result<()> {
-    let report_err = || box_err!("store label key: {:?} not match {}", s, LABEL_KEY_FORMAT);
-    let format = Regex::new(LABEL_KEY_FORMAT).unwrap();
+lazy_static! {
+    static ref LABEL_KEY_FORMAT: Regex =
+        Regex::new("^[$]?[A-Za-z0-9]([-A-Za-z0-9_./]*[A-Za-z0-9])?$").unwrap();
+    static ref LABEL_VALUE_FORMAT: Regex = Regex::new("^[-A-Za-z0-9_./]*$").unwrap();
+}
 
-    if format.is_match(s) {
+fn validate_label_key(s: &str) -> Result<()> {
+    if LABEL_KEY_FORMAT.is_match(s) {
         Ok(())
     } else {
-        Err(report_err())
+        Err(box_err!(
+            "store label key: {:?} not match {}",
+            s,
+            *LABEL_KEY_FORMAT
+        ))
     }
 }
 
 fn validate_label_value(s: &str) -> Result<()> {
-    let report_err = || {
-        box_err!(
-            "store label value: {:?} not match {}",
-            s,
-            LABEL_VALUE_FORMAT
-        )
-    };
-    let format = Regex::new(LABEL_VALUE_FORMAT).unwrap();
-
-    if format.is_match(s) {
+    if LABEL_VALUE_FORMAT.is_match(s) {
         Ok(())
     } else {
-        Err(report_err())
+        Err(box_err!(
+            "store label value: {:?} not match {}",
+            s,
+            *LABEL_VALUE_FORMAT
+        ))
     }
 }
 
