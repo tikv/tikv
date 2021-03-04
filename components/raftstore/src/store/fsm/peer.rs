@@ -493,15 +493,6 @@ where
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) -> Option<(Instant, u64, u64)> {
         for m in msgs.drain(..) {
-            if self.fsm.peer.check_new_persisted() {
-                self.fsm.has_ready = true;
-                if let Some(mbt) = self.fsm.delayed_destroy {
-                    if !self.fsm.peer.has_unpersisted_ready() {
-                        self.destroy_peer(mbt);
-                    }
-                }
-            }
-
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -544,6 +535,28 @@ where
                     }
                 }
                 PeerMsg::Noop => {}
+                PeerMsg::Persisted((peer_id, number, ts)) => {
+                    if peer_id != self.fsm.peer_id() {
+                        error!(
+                            "peer id is not match";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "persisted_peer_id" => peer_id,
+                            "persisted_number" => number,
+                        );
+                    } else {
+                        STORE_PERSISTED_MSG_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(ts.elapsed()));
+                        if self.fsm.peer.check_new_persisted(number) {
+                            self.fsm.has_ready = true;
+                            if let Some(mbt) = self.fsm.delayed_destroy {
+                                if !self.fsm.peer.has_unpersisted_ready() {
+                                    self.destroy_peer(mbt);
+                                }
+                            }
+                        }
+                    }
+                }
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
             }
         }

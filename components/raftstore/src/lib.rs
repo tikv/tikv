@@ -9,7 +9,7 @@
 #![feature(duration_saturating_ops)]
 #![feature(duration_zero)]
 #![feature(vecdeque_binary_search)]
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 #[macro_use]
 extern crate bitflags;

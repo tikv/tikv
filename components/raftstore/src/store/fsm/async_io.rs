@@ -94,13 +94,13 @@ impl SampleWindow {
 
 #[derive(Default)]
 pub struct UnsyncedReady {
+    pub peer_id: u64,
     pub number: u64,
-    pub notifier: Arc<AtomicU64>,
 }
 
 impl UnsyncedReady {
-    pub fn new(number: u64, notifier: Arc<AtomicU64>) -> Self {
-        Self { number, notifier }
+    pub fn new(peer_id: u64, number: u64) -> Self {
+        Self { peer_id, number }
     }
 
     fn flush<EK, ER>(&self, region_id: u64, router: &RaftRouter<EK, ER>)
@@ -108,28 +108,17 @@ impl UnsyncedReady {
         EK: KvEngine,
         ER: RaftEngine,
     {
-        loop {
-            let pre_number = self.notifier.load(Ordering::Acquire);
-            // TODO: reduce duplicated messages
-            //assert_ne!(pre_number, self.number);
-            if pre_number >= self.number {
-                break;
-            }
-            if pre_number
-                == self
-                    .notifier
-                    .compare_and_swap(pre_number, self.number, Ordering::AcqRel)
-            {
-                if let Err(e) = router.force_send(region_id, PeerMsg::Noop) {
-                    error!(
-                        "failed to send noop to trigger persisted ready";
-                        "region_id" => region_id,
-                        "ready_number" => self.number,
-                        "error" => ?e,
-                    );
-                }
-                break;
-            }
+        if let Err(e) = router.force_send(
+            region_id,
+            PeerMsg::Persisted((self.peer_id, self.number, Instant::now())),
+        ) {
+            error!(
+                "failed to send noop to trigger persisted ready";
+                "region_id" => region_id,
+                "peer_id" => self.peer_id,
+                "ready_number" => self.number,
+                "error" => ?e,
+            );
         }
     }
 }

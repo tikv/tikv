@@ -181,6 +181,12 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref STORE_PERSISTED_MSG_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_persist_msg_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_size_trigger_duration_secs",
