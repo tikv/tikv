@@ -5,7 +5,7 @@ use crossbeam::channel::TrySendError;
 use std::cmp::min;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tikv_util::mpsc::batch::Sender;
+use crossbeam::channel::{unbounded, Sender, Receiver};
 
 #[derive(Debug)]
 pub enum RateLimiterError<E> {
@@ -19,6 +19,11 @@ pub struct RateLimiter<E> {
     state: Arc<State>,
 }
 
+pub struct Drainer<E> {
+    receiver: Receiver<E>,
+    state: Arc<State>,
+}
+
 struct State {
     is_sink_closed: AtomicBool,
     block_scan_threshold: usize,
@@ -28,20 +33,13 @@ struct State {
 }
 
 impl<E> RateLimiter<E> {
-    pub fn new(
+    fn new(
         sink: Sender<E>,
-        block_scan_threshold: usize,
-        close_sink_threshold: usize,
+        state: Arc<State>,
     ) -> RateLimiter<E> {
         return RateLimiter {
             sink,
-            state: Arc::new(State {
-                is_sink_closed: AtomicBool::new(false),
-                block_scan_threshold,
-                close_sink_threshold,
-                #[cfg(test)]
-                has_blocked: AtomicBool::new(false),
-            }),
+            state,
         };
     }
 
@@ -50,7 +48,7 @@ impl<E> RateLimiter<E> {
             return Err(RateLimiterError::SinkClosedError(0));
         }
 
-        let queue_size = self.sink.get_pending_count();
+        let queue_size = self.sink.len();
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(queue_size as f64);
         if queue_size >= self.state.close_sink_threshold {
             warn!("cdc send_realtime_event queue length reached threshold"; "queue_size" => queue_size);
@@ -77,7 +75,7 @@ impl<E> RateLimiter<E> {
                 return Err(RateLimiterError::SinkClosedError(0));
             }
 
-            let queue_size = sink_clone.get_pending_count();
+            let queue_size = sink_clone.len();
             CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(queue_size as f64);
 
             if queue_size >= state_clone.block_scan_threshold {
