@@ -116,7 +116,7 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if from_field_type.tp() == FieldTypeTp::Float {
+            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
@@ -167,7 +167,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
 
         (EvalType::Int, EvalType::DateTime) => {
-            if from_field_type.tp() == FieldTypeTp::Year {
+            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Year {
                 cast_year_as_time_fn_meta()
             } else {
                 cast_int_as_time_fn_meta()
@@ -990,7 +990,7 @@ fn cast_year_as_time(
             ctx.handle_truncate_err(Error::truncated_wrong_val("YEAR", year))?;
             return Ok(None);
         }
-        let time_type = extra.ret_field_type.tp().try_into()?;
+        let time_type = FieldTypeAccessor::tp(extra.ret_field_type).try_into()?;
         let fsp = extra.ret_field_type.decimal() as i8;
         let time = Time::from_year(ctx, year as u32, fsp, time_type)?;
 

@@ -82,9 +82,13 @@ where
             Ok(i) => i,
             Err(i) => i,
         };
-        let list = get_mut(&mut lists[i]);
-        let j = rng.gen_range(0, list.len()) as usize;
-        key_ranges.push(list.remove(j)); // Sampling without replacement
+        if i < lists.len() {
+            let list = get_mut(&mut lists[i]);
+            if !list.is_empty() {
+                let j = rng.gen_range(0, list.len()) as usize;
+                key_ranges.push(list.remove(j)); // Sampling without replacement
+            }
+        }
     }
     key_ranges
 }
