@@ -5,13 +5,20 @@ use crossbeam::channel::TrySendError;
 use std::cmp::min;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use futures::SinkExt;
 use crossbeam::channel::{unbounded, Sender, Receiver};
+use tokio::sync::mpsc::channel as async_channel;
 
 #[derive(Debug)]
 pub enum RateLimiterError<E> {
     SenderError(TrySendError<E>),
     SinkClosedError(usize),
     TryAgainError,
+}
+
+#[derive(Debug)]
+pub enum DrainerError<E> {
+    RateLimitExceededError,
 }
 
 pub struct RateLimiter<E> {
@@ -30,6 +37,19 @@ struct State {
     close_sink_threshold: usize,
     #[cfg(test)]
     has_blocked: AtomicBool,
+}
+
+pub fn new_pair<E>(block_scan_threshold: usize, close_sink_threshold: usize) -> (RateLimiter<E>, Drainer<E>) {
+    let (sender, receiver) = unbounded::<E>();
+    let state = Arc::new(State {
+        is_sink_closed: AtomicBool::new(false),
+        block_scan_threshold,
+        close_sink_threshold,
+        #[cfg(test)]
+        has_blocked: AtomicBool::new(false),
+    });
+    let rate_limiter = RateLimiter::new(sender, state.clone());
+    let drainer = Drainer::new(receiver, state_clone);
 }
 
 impl<E> RateLimiter<E> {
@@ -119,6 +139,19 @@ impl<E> Clone for RateLimiter<E> {
             sink: self.sink.clone(),
             state: self.state.clone(),
         }
+    }
+}
+
+impl<E> Drainer<E> {
+    fn new(receiver: Receiver<E>, state: Arc<State>) -> Drainer<E> {
+        Drainer {
+            receiver,
+            state
+        }
+    }
+
+    pub async fn drain<F: Copy, S: SinkExt<(E, F)>>(self, mut rpc_sink: S, flag: F) -> Result<(), DrainerError<E>> {
+
     }
 }
 
