@@ -530,8 +530,8 @@ mod tests {
         check_split(
             b"mix key",
             vec![
-                gen_read_stats(1, raw_key_ranges.clone()),
-                gen_read_stats(2, encoded_key_ranges.clone()),
+                gen_read_stats(1, raw_key_ranges),
+                gen_read_stats(2, encoded_key_ranges),
             ],
             vec![b"b", key_b.as_encoded()],
         );
