@@ -48,7 +48,7 @@ pub fn cleanup<S: Snapshot>(
                 Err(ErrorInner::Committed {
                     start_ts: txn.start_ts,
                     commit_ts,
-                    key: key.into_raw()?
+                    key: key.into_raw()?,
                 }
                 .into())
             }
