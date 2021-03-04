@@ -24,7 +24,9 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::ConfChangeType;
 
-use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
+use encryption_export::{
+    data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
+};
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
@@ -564,7 +566,7 @@ pub fn create_test_engine(
 ) {
     let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let key_manager =
-        DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
+        data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
 
@@ -677,7 +679,8 @@ pub fn configure_for_lease_read<T: Simulator>(
     let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let election_timeout = base_tick_interval * election_ticks;
     // Adjust max leader lease.
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(election_timeout - base_tick_interval);
     // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
     // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
