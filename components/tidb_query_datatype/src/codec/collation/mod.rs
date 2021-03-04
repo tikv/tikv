@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod charset;
-mod collator;
+pub mod collator;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
