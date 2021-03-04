@@ -326,6 +326,12 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
+    pub static ref STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_know_commit_not_persist_duration_seconds",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_SCHEDULE_COMMIT_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_schedule_commit_duration_seconds",

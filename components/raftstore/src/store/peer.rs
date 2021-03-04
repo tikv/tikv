@@ -1130,8 +1130,13 @@ where
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    STORE_KNOW_COMMIT_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    if index <= self.raft_group.raft.raft_log.persisted {
+                        STORE_KNOW_COMMIT_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    } else {
+                        STORE_KNOW_COMMIT_NOT_PERSIST_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(scheduled_ts.elapsed()));
+                    }
                 }
             }
         }
