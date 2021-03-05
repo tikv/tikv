@@ -216,6 +216,7 @@ struct WriteCompactionFilter {
     write_batch: RocksWriteBatch,
     gc_scheduler: FutureScheduler<GcTask>,
     mvcc_deletions: Vec<Key>,
+    mvcc_deletion_overlaps: Option<usize>,
 
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
@@ -254,6 +255,7 @@ impl WriteCompactionFilter {
             write_batch: RocksWriteBatch::with_capacity(db, DEFAULT_DELETE_BATCH_SIZE),
             gc_scheduler,
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
+            mvcc_deletion_overlaps: None,
 
             mvcc_key_prefix: vec![],
             remove_older: false,
@@ -313,10 +315,15 @@ impl WriteCompactionFilter {
 
         self.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
+            if self.mvcc_deletion_overlaps.take() == Some(0) {
+                self.handle_bottommost_delete();
+            }
             self.switch_key_metrics();
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
+        } else if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
+            *overlaps += 1;
         }
 
         let mut filtered = self.remove_older;
@@ -331,7 +338,7 @@ impl WriteCompactionFilter {
                 WriteType::Delete => {
                     self.remove_older = true;
                     if self.is_bottommost_level {
-                        self.handle_bottommost_delete();
+                        self.mvcc_deletion_overlaps = Some(0);
                     }
                 }
             }
