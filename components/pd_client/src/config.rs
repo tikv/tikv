@@ -30,7 +30,7 @@ pub struct Config {
     pub retry_log_every: usize,
     /// The interval at which to update PD information.
     ///
-    /// Default is 10m.
+    /// Default is 30s.
     pub update_interval: ReadableDuration,
 }
 
@@ -41,7 +41,7 @@ impl Default for Config {
             retry_interval: ReadableDuration::millis(300),
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
-            update_interval: ReadableDuration::minutes(10),
+            update_interval: ReadableDuration::secs(30),
         }
     }
 }

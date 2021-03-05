@@ -132,6 +132,26 @@ fn test_rpc_client() {
 }
 
 #[test]
+fn test_connect_follower() {
+    let try_connect_leader_fp = "try_connect_leader";
+    let eps_count = 2;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+
+    let mut cfg = new_config(eps.clone());
+    cfg.update_interval = ReadableDuration(Duration::from_millis(100));
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client = RpcClient::new(&cfg, None, mgr).unwrap();
+    fail::cfg(try_connect_leader_fp, "return").unwrap();
+    thread::sleep(Duration::from_secs(2));
+    let connection_addr = client.get_address();
+    let leader_addr = client.get_leader().get_client_urls()[0].clone();
+    assert_ne!(leader_addr, connection_addr);
+
+    fail::remove(try_connect_leader_fp);
+}
+
+#[test]
 fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);

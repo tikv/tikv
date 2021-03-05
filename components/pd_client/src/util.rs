@@ -15,13 +15,14 @@ use futures::stream::TryStreamExt;
 use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
+use rand::Rng;
 
 use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Result as GrpcResult,
+    MetadataBuilder, Result as GrpcResult,
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -33,6 +34,9 @@ use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
+const MAX_RETRY_TIMES: usize = 5;
+const RETRY_INTERVAL_SEC: u64 = 1; // 1s
+
 pub struct Inner {
     env: Arc<Environment>,
     pub hb_sender: Either<
@@ -41,6 +45,7 @@ pub struct Inner {
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
     pub client_stub: PdClientStub,
+    address: String,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
@@ -50,7 +55,7 @@ pub struct Inner {
 
 pub struct HeartbeatReceiver {
     receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
-    inner: Arc<LeaderClient>,
+    inner: Arc<Client>,
 }
 
 impl Stream for HeartbeatReceiver {
@@ -87,24 +92,25 @@ impl Stream for HeartbeatReceiver {
 }
 
 /// A leader client doing requests asynchronous.
-pub struct LeaderClient {
+pub struct Client {
     timer: Handle,
     pub(crate) inner: RwLock<Inner>,
     pub feature_gate: FeatureGate,
 }
 
-impl LeaderClient {
+impl Client {
     pub fn new(
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         client_stub: PdClientStub,
         members: GetMembersResponse,
-    ) -> LeaderClient {
+        address: String,
+    ) -> Client {
         let (tx, rx) = client_stub
             .region_heartbeat()
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
 
-        LeaderClient {
+        Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
                 env,
@@ -112,13 +118,69 @@ impl LeaderClient {
                 hb_receiver: Either::Left(Some(rx)),
                 client_stub,
                 members,
+                address,
                 security_mgr,
                 on_reconnect: None,
-
                 last_update: Instant::now(),
             }),
             feature_gate: FeatureGate::default(),
         }
+    }
+
+    pub fn change_client_stub(
+        &self,
+        client_stub: PdClientStub,
+        previous: Option<GetMembersResponse>,
+        members_resp: Option<GetMembersResponse>,
+        address: String,
+    ) {
+        let start_refresh = Instant::now();
+        let mut inner = self.inner.wl();
+        if inner.address == address
+            && previous.is_some()
+            && members_resp.is_some()
+            && previous.unwrap() == members_resp.clone().unwrap()
+        {
+            return;
+        }
+
+        info!("change pd client stub"; "from"=> &inner.address, "to" => &address);
+        let members = if let Some(members) = members_resp {
+            members
+        } else {
+            inner.members.clone()
+        };
+
+        let receiver_addr = get_random_member_addr(members.get_leader());
+
+        let mut builder = MetadataBuilder::with_capacity(1);
+        builder.add_str("receiver", &receiver_addr).unwrap();
+        let metadata = builder.build();
+        let call_option = CallOption::default().headers(metadata);
+
+        let (tx, rx) = client_stub
+            .region_heartbeat_opt(call_option)
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        info!("heartbeat sender and receiver are stale, refreshing ...");
+
+        // Try to cancel an unused heartbeat sender.
+        if let Either::Left(Some(ref mut r)) = inner.hb_sender {
+            r.cancel();
+        }
+        inner.hb_sender = Either::Left(Some(tx));
+        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+        let _ = prev_receiver.right().map(|t| t.wake());
+        inner.client_stub = client_stub;
+        inner.address = address;
+        inner.members = members;
+        inner.last_update = Instant::now();
+        if let Some(ref on_reconnect) = inner.on_reconnect {
+            on_reconnect();
+        }
+        slow_log!(
+            start_refresh.elapsed(),
+            "PD client refresh region heartbeat",
+        );
     }
 
     pub fn handle_region_heartbeat_response<F>(self: &Arc<Self>, f: F) -> PdFuture<()>
@@ -151,7 +213,7 @@ impl LeaderClient {
     ) -> Request<Req, F>
     where
         Req: Clone + 'static,
-        F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
+        F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
             reconnect_count: retry,
@@ -164,6 +226,11 @@ impl LeaderClient {
 
     pub fn get_leader(&self) -> Member {
         self.inner.rl().members.get_leader().clone()
+    }
+
+    /// Only used for test purpose.
+    pub fn get_address(&self) -> String {
+        self.inner.rl().address.clone()
     }
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
@@ -180,9 +247,9 @@ impl LeaderClient {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = async move { connector.reconnect_leader(&members, force).await };
+            let fut = async move { connector.try_connect_pd(&members, force).await };
             slow_log!(start.elapsed(), "PD client try connect leader");
-            (fut, start)
+            (fut, start, inner.members.clone())
         };
 
         let (client, members) = match future.await? {
@@ -191,34 +258,8 @@ impl LeaderClient {
         };
         fail_point!("leader_client_reconnect", |_| Ok(()));
 
-        {
-            let start_refresh = Instant::now();
-            let mut inner = self.inner.wl();
-            let (tx, rx) = client.region_heartbeat().unwrap_or_else(|e| {
-                panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
-            });
-            info!("heartbeat sender and receiver are stale, refreshing ...");
-
-            // Try to cancel an unused heartbeat sender.
-            if let Either::Left(Some(ref mut r)) = inner.hb_sender {
-                debug!("cancel region heartbeat sender");
-                r.cancel();
-            }
-            inner.hb_sender = Either::Left(Some(tx));
-            let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
-            let _ = prev_receiver.right().map(|t| t.wake());
-            inner.client_stub = client;
-            inner.members = members;
-            inner.last_update = Instant::now();
-            if let Some(ref on_reconnect) = inner.on_reconnect {
-                on_reconnect();
-            }
-            slow_log!(
-                start_refresh.elapsed(),
-                "PD client refresh region heartbeat",
-            );
-        }
-        info!("updating PD client done"; "spend" => ?start.elapsed());
+        self.change_client_stub(client, Some(previous_members), Some(members), address);
+        info!("tring to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
@@ -229,7 +270,7 @@ pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
 pub struct Request<Req, F> {
     reconnect_count: usize,
     request_sent: usize,
-    client: Arc<LeaderClient>,
+    client: Arc<Client>,
     req: Req,
     func: F,
 }
@@ -239,7 +280,7 @@ const MAX_REQUEST_COUNT: usize = 3;
 impl<Req, Resp, F> Request<Req, F>
 where
     Req: Clone + Send + 'static,
-    F: FnMut(&LeaderClient, Req) -> PdFuture<Resp> + Send + 'static,
+    F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
@@ -274,7 +315,6 @@ where
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
-
         (self.func)(&self.client, r).await
     }
 
@@ -308,7 +348,7 @@ where
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
+pub fn sync_request<F, R>(client: &Client, retry: usize, func: F) -> Result<R>
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
@@ -465,9 +505,15 @@ impl PdConnector {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Some(client);
             }
+            let _ = GLOBAL_TIMER_HANDLE
+                .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
+                .compat()
+                .await;
         }
         None
     }
+    Err(box_err!("failed to connect to leader"))
+}
 
     pub async fn reconnect_leader(
         &self,
@@ -509,5 +555,33 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::Ok => Ok(()),
+    }
+}
+
+pub fn get_random_member_addr(member: &Member) -> String {
+    let urls = member.get_client_urls();
+    if !urls.is_empty() {
+        let mut rng = rand::thread_rng();
+        let idx = rng.gen_range(0, urls.len());
+        return urls[idx].to_string();
+    }
+    "".to_string()
+}
+
+#[cfg(test)]
+pub mod tests {
+    use kvproto::pdpb::Member;
+
+    use crate::util::get_random_member_addr;
+
+    #[test]
+    fn test_get_random_member_addr() {
+        let mut m = Member::default();
+        assert_eq!(get_random_member_addr(&m), "");
+        m.set_client_urls(vec!["a".to_string(), "b".to_string(), "c".to_string()].into());
+
+        for _ in 0..10 {
+            assert_ne!(get_random_member_addr(&m), "");
+        }
     }
 }
