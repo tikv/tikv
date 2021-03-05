@@ -290,6 +290,22 @@ impl Clone for PeerTickBatch {
     }
 }
 
+pub struct AsyncWriteMsgBatch {
+    pub msgs: Vec<AsyncWriteMsg>,
+    pub begin: Option<Instant>,
+    pub size: usize,
+}
+
+impl AsyncWriteMsgBatch {
+    fn new() -> Self {
+        Self {
+            msgs: vec![],
+            begin: None,
+            size: 0,
+        }
+    }
+}
+
 pub struct PollContext<EK, ER, T>
 where
     EK: KvEngine,
@@ -337,7 +353,7 @@ where
     pub tick_batch: Vec<PeerTickBatch>,
     pub node_start_time: Option<TiInstant>,
     pub async_write_senders: Vec<Sender<Vec<AsyncWriteMsg>>>,
-    pub async_write_msgs: Vec<Vec<AsyncWriteMsg>>,
+    pub async_write_msg_batch: Vec<AsyncWriteMsgBatch>,
     pub io_lock_metrics: StoreIOLockMetrics,
 }
 
@@ -347,8 +363,8 @@ where
     ER: RaftEngine,
 {
     #[inline]
-    fn async_write_vec(&mut self, id: usize) -> &mut Vec<AsyncWriteMsg> {
-        &mut self.async_write_msgs[id]
+    fn async_write_batch(&mut self, id: usize) -> &mut AsyncWriteMsgBatch {
+        &mut self.async_write_msg_batch[id]
     }
 
     #[inline]
@@ -638,21 +654,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
             }
         }
 
-        let hold_lock = TiInstant::now_coarse();
-        for (i, msg) in self.poll_ctx.async_write_msgs.iter_mut().enumerate() {
-            if msg.is_empty() {
-                continue;
-            }
-            let msg = std::mem::take(msg);
-            if let Err(e) = self.poll_ctx.async_write_senders[i].send(msg) {
-                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
-            }
-        }
-        self.poll_ctx
-            .io_lock_metrics
-            .hold_lock_sec
-            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
-
         self.poll_ctx
             .raft_metrics
             .append_log
@@ -690,6 +691,51 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
                 });
             poll_future_notify(f);
         }
+    }
+
+    pub fn maybe_flush_async_write(&mut self, force: bool) {
+        let now = Instant::now();
+        let delay_time = Duration::from_micros(self.poll_ctx.cfg.trigger_send_io_time_us);
+
+        for (i, batch) in self.poll_ctx.async_write_msg_batch.iter_mut().enumerate() {
+            if batch.msgs.is_empty() {
+                continue;
+            }
+            if !(force
+                || now - batch.begin.unwrap() >= delay_time
+                || batch.size >= self.poll_ctx.cfg.trigger_send_io_size.0 as usize)
+            {
+                continue;
+            }
+            if !force {
+                STORE_WRITE_TRIGGER_SEND_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(now - batch.begin.unwrap()));
+                STORE_WRITE_TRIGGER_SEND_BYTES_HISTOGRAM.observe(batch.size as f64);
+            } else {
+                STORE_WRITE_FORCE_TRIGGER_SEND_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(now - batch.begin.unwrap()));
+                STORE_WRITE_FORCE_TRIGGER_SEND_BYTES_HISTOGRAM.observe(batch.size as f64);
+            }
+            for m in &batch.msgs {
+                if let AsyncWriteMsg::WriteTask(task) = m {
+                    for ts in &task.proposal_times {
+                        STORE_WRITE_FORCE_TRIGGER_SEND_DURATION_HISTOGRAM
+                            .observe(duration_to_sec(now - *ts));
+                    }
+                }
+            }
+
+            let msg = std::mem::take(&mut batch.msgs);
+            if let Err(e) = self.poll_ctx.async_write_senders[i].send(msg) {
+                panic!("{} failed to send write msg, err: {:?}", self.tag, e);
+            }
+            batch.begin = None;
+            batch.size = 0;
+        }
+        self.poll_ctx
+            .io_lock_metrics
+            .hold_lock_sec
+            .observe(duration_to_sec(now.elapsed()) as f64);
     }
 }
 
@@ -787,8 +833,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-        let instant = delegate.handle_msgs(&mut self.peer_msg_buf);
-        delegate.collect_ready(instant);
+        delegate.handle_msgs(&mut self.peer_msg_buf);
+        delegate.collect_ready();
+        self.maybe_flush_async_write(false);
         expected_msg_count
     }
 
@@ -796,6 +843,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.flush_ticks();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
+            self.maybe_flush_async_write(true);
         }
         self.poll_ctx.current_time = None;
         self.poll_ctx
@@ -1036,9 +1084,9 @@ where
     type Handler = RaftPoller<EK, ER, T>;
 
     fn build(&mut self) -> RaftPoller<EK, ER, T> {
-        let mut async_write_msgs = vec![];
+        let mut async_write_msg_batch = vec![];
         for _ in 0..self.async_write_senders.len() {
-            async_write_msgs.push(vec![]);
+            async_write_msg_batch.push(AsyncWriteMsgBatch::new());
         }
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
@@ -1073,7 +1121,7 @@ where
             tick_batch: vec![PeerTickBatch::default(); 256],
             node_start_time: Some(TiInstant::now_coarse()),
             async_write_senders: self.async_write_senders.clone(),
-            async_write_msgs,
+            async_write_msg_batch,
             io_lock_metrics: StoreIOLockMetrics::default(),
         };
         ctx.update_ticks_timeout();

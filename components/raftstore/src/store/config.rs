@@ -28,6 +28,10 @@ with_prefix!(prefix_store "store-");
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[config(skip)]
+    pub trigger_send_io_size: ReadableSize,
+    #[config(skip)]
+    pub trigger_send_io_time_us: u64,
+    #[config(skip)]
     pub trigger_apply_io_bytes: u64,
     #[config(skip)]
     pub trigger_apply_io_keys: u64,
@@ -202,6 +206,8 @@ impl Default for Config {
     fn default() -> Config {
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
+            trigger_send_io_size: ReadableSize::kb(1),
+            trigger_send_io_time_us: 50,
             trigger_apply_io_bytes: 1024,
             trigger_apply_io_keys: 32,
             cmd_batch: true,

@@ -21,6 +21,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+use crate::store::fsm::store::AsyncWriteMsgBatch;
 use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
@@ -303,7 +304,7 @@ impl Drop for EntryCache {
 }
 
 pub trait HandleRaftReadyContext {
-    fn async_write_vec(&mut self, id: usize) -> &mut Vec<AsyncWriteMsg>;
+    fn async_write_batch(&mut self, id: usize) -> &mut AsyncWriteMsgBatch;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
 }
@@ -1051,8 +1052,13 @@ where
             cache.append(&self.tag, &entries);
         }
 
+        task.size += entries
+            .iter()
+            .map(|e| e.compute_size() as usize)
+            .sum::<usize>();
         task.entries = entries;
         task.cut_logs = Some((last_index + 1, prev_last_index));
+
         // Delete any previously appended log entries which never committed.
         // TODO: Wrap it as an engine::Error.
 
@@ -1413,6 +1419,7 @@ where
         // Save raft state if it has changed or there is a snapshot.
         if ctx.raft_state != self.raft_state || snapshot_index > 0 {
             write_task.raft_state = Some(ctx.raft_state.clone());
+            write_task.size += 4 * 8;
             //ctx.save_raft_state_to(&mut current.raft_wb)?;
         }
 
@@ -1436,8 +1443,12 @@ where
         write_task.proposal_times = proposal_times;
 
         if !write_task.is_empty() {
-            let vec = ready_ctx.async_write_vec(async_writer_id);
-            vec.push(AsyncWriteMsg::WriteTask(write_task));
+            let batch = ready_ctx.async_write_batch(async_writer_id);
+            if batch.msgs.is_empty() {
+                batch.begin = Some(Instant::now());
+            }
+            batch.size += write_task.size;
+            batch.msgs.push(AsyncWriteMsg::WriteTask(write_task));
         }
 
         Ok(ctx)

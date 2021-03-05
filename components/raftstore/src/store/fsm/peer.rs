@@ -491,7 +491,7 @@ where
         PeerFsmDelegate { fsm, ctx }
     }
 
-    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) -> Option<(Instant, u64, u64)> {
+    pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -561,28 +561,17 @@ where
             }
         }
         // Propose batch request which may be still waiting for more raft-command
-        let instant = self.propose_batch_raft_command(true);
-        if let Some(ts) = &instant {
-            STORE_PROPOSAL_AFTER_PROPOSE_5_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.0.elapsed()));
-        }
-        return instant;
+        self.propose_batch_raft_command(true);
     }
 
-    fn propose_batch_raft_command(&mut self, is_end: bool) -> Option<(Instant, u64, u64)> {
+    fn propose_batch_raft_command(&mut self, is_end: bool) {
         if let Some(cmd) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics.propose, is_end)
         {
-            let instant = self.propose_raft_command(cmd.request, cmd.callback);
-            if let Some(ts) = &instant {
-                STORE_PROPOSAL_AFTER_PROPOSE_4_DURATION_HISTOGRAM
-                    .observe(duration_to_sec(ts.0.elapsed()));
-            }
-            return instant;
+            self.propose_raft_command(cmd.request, cmd.callback);
         }
-        return None;
     }
 
     fn on_update_replication_mode(&mut self) {
@@ -948,7 +937,7 @@ where
         }
     }
 
-    pub fn collect_ready(&mut self, instant: Option<(Instant, u64, u64)>) {
+    pub fn collect_ready(&mut self) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -956,7 +945,7 @@ where
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
-        let res = self.fsm.peer.handle_raft_ready_append(self.ctx, instant);
+        let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(&r.0);
             if r.1.has_new_entries {
@@ -3232,15 +3221,11 @@ where
         }
     }
 
-    fn propose_raft_command(
-        &mut self,
-        mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
-    ) -> Option<(Instant, u64, u64)> {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<EK::Snapshot>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
-                return None;
+                return;
             }
             Err(e) => {
                 debug!(
@@ -3251,14 +3236,14 @@ where
                     "err" => %e,
                 );
                 cb.invoke_with_response(new_error(e));
-                return None;
+                return;
             }
             _ => (),
         }
 
         if self.fsm.peer.pending_remove {
             apply::notify_req_region_removed(self.region_id(), cb);
-            return None;
+            return;
         }
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
@@ -3271,7 +3256,7 @@ where
                 "error_code" => %e.error_code(),
             );
             cb.invoke_with_response(new_error(e));
-            return None;
+            return;
         }
 
         // Note:
@@ -3283,24 +3268,14 @@ where
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
 
-        let mut instant = None;
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, &mut instant) {
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
-        }
-        if let Some(ts) = instant {
-            STORE_PROPOSAL_AFTER_PROPOSE_2_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.0.elapsed()));
         }
         if self.fsm.peer.should_wake_up {
             self.reset_raft_tick(GroupState::Ordered);
         }
 
         self.register_pd_heartbeat_tick();
-        if let Some(ts) = instant {
-            STORE_PROPOSAL_AFTER_PROPOSE_3_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.0.elapsed()));
-        }
-        instant
         // TODO: add timeout, if the command is not applied after timeout,
         // we will call the callback with timeout error.
     }

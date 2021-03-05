@@ -130,6 +130,7 @@ pub struct AsyncWriteTask {
     pub unsynced_ready: Option<UnsyncedReady>,
     pub raft_state: Option<RaftLocalState>,
     pub proposal_times: Vec<Instant>,
+    pub size: usize,
 }
 
 impl AsyncWriteTask {
@@ -141,6 +142,7 @@ impl AsyncWriteTask {
             unsynced_ready: None,
             raft_state: None,
             proposal_times: vec![],
+            size: 0,
         }
     }
 

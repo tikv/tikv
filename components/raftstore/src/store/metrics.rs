@@ -181,6 +181,36 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref STORE_WRITE_WAIT_SEND_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_wait_send_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TRIGGER_SEND_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_trigger_send_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TRIGGER_SEND_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_trigger_send_bytes",
+            "TODO",
+            exponential_buckets(0.5, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_FORCE_TRIGGER_SEND_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_force_trigger_send_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_FORCE_TRIGGER_SEND_BYTES_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_force_trigger_send_bytes",
+            "TODO",
+            exponential_buckets(0.5, 2.0, 20).unwrap()
+        ).unwrap();
     pub static ref STORE_PERSISTED_MSG_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_persist_msg_duration_seconds",
@@ -357,42 +387,6 @@ lazy_static! {
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_2_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_2_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_3_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_3_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_4_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_4_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_5_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_5_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_6_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_6_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_7_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_7_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_PROPOSAL_BEFORE_GET_READY_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_proposal_before_get_ready_duration_seconds",
@@ -402,18 +396,6 @@ lazy_static! {
     pub static ref STORE_PROPOSAL_AFTER_GET_READY_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_proposal_after_get_ready_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_HANDLE_COMMITTED_ENTRIES_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_handle_committed_entries_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_SEND_MSG_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_send_msg_duration_seconds",
             "TODO",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
