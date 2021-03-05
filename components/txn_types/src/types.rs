@@ -1,5 +1,6 @@
 use super::timestamp::TimeStamp;
 use crate::Write;
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
 use kvproto::kvrpcpb;
@@ -399,6 +400,18 @@ impl TxnExtra {
 
 pub trait TxnExtraScheduler: Send + Sync {
     fn schedule(&self, txn_extra: TxnExtra);
+}
+
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+    }
 }
 
 #[cfg(test)]

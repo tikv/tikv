@@ -21,6 +21,7 @@ prost-codec = [
 
 [dependencies]
 byteorder = "1.2"
+bitflags = "1.0.1"
 farmhash = "1.1.5"
 error_code = { path = "../error_code", default-features = false }
 codec = { path = "../codec", default-features = false }

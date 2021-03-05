@@ -7,6 +7,8 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 
+#[macro_use]
+extern crate bitflags;
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]

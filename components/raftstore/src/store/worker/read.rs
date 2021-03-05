@@ -26,7 +26,7 @@ use crate::Error;
 use crate::Result;
 
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::codec::number::decode_var_u64;
+use tikv_util::codec::number::decode_u64;
 use tikv_util::lru::LruCache;
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::time::{Instant, ThreadReadId};
@@ -147,6 +147,7 @@ pub struct ReadDelegate {
     tag: String,
     pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     max_ts_sync_status: Arc<AtomicU64>,
+    // TODO: `safe_ts` serve as a placehodler, should remove it later
     pub safe_ts: Arc<AtomicU64>,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
@@ -538,8 +539,7 @@ where
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts =
-                            decode_var_u64(&mut req.mut_header().take_flag_data().as_ref())
-                                .unwrap();
+                            decode_u64(&mut req.mut_header().take_flag_data().as_ref()).unwrap();
                         let safe_ts = delegate.safe_ts.load(Ordering::Relaxed);
                         assert!(read_ts > 0);
                         if safe_ts < read_ts {
@@ -800,7 +800,7 @@ mod tests {
     use engine_traits::ALL_CFS;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::time::monotonic_raw_now;
-    use tikv_util::WriteBatchFlags;
+    use txn_types::WriteBatchFlags;
 
     use super::*;
 
@@ -1109,7 +1109,7 @@ mod tests {
 
         let data = {
             let mut d = [0u8; 8];
-            (&mut d[..]).encode_var_u64(2).unwrap();
+            (&mut d[..]).encode_u64(2).unwrap();
             d
         };
         cmd.mut_header()

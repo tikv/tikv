@@ -36,8 +36,7 @@ use tikv::storage::txn::TxnEntry;
 use tikv::storage::Statistics;
 use tikv_util::mpsc::batch::Sender as BatchSender;
 use tikv_util::time::Instant;
-use tikv_util::WriteBatchFlags;
-use txn_types::{Key, Lock, LockType, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::endpoint::{OldValueCache, OldValueCallback};
 use crate::metrics::*;

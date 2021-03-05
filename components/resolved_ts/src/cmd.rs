@@ -6,8 +6,9 @@ use kvproto::errorpb;
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raftstore::coprocessor::{Cmd, CmdBatch};
 use raftstore::errors::Error as RaftStoreError;
-use tikv_util::WriteBatchFlags;
-use txn_types::{Key, Lock, LockType, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{
+    Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum ChangeRow {

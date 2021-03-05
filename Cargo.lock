@@ -5403,7 +5403,6 @@ version = "0.1.0"
 dependencies = [
  "async-speed-limit",
  "backtrace",
- "bitflags",
  "byteorder",
  "bytes 0.5.3",
  "chrono",
@@ -5689,6 +5688,7 @@ checksum = "3bfd5b7557925ce778ff9b9ef90e3ade34c524b5ff10e239c69a42d546d2af56"
 name = "txn_types"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "byteorder",
  "codec",
  "collections",

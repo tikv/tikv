@@ -47,11 +47,12 @@ use crate::store::{
 use crate::{Error, Result};
 use collections::{HashMap, HashSet};
 use pd_client::INVALID_ID;
-use tikv_util::codec::number::decode_var_u64;
+use tikv_util::codec::number::decode_u64;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::time::{Instant as UtilInstant, ThreadReadId};
 use tikv_util::worker::{FutureScheduler, Scheduler};
-use tikv_util::{Either, WriteBatchFlags};
+use tikv_util::Either;
+use txn_types::WriteBatchFlags;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -503,6 +504,7 @@ where
     /// task run when there are more than 1 pending tasks.
     pub pending_pd_heartbeat_tasks: Arc<AtomicU64>,
 
+    // TODO: `safe_ts` serve as a placehodler, should remove it later
     pub safe_ts: Arc<AtomicU64>,
 }
 
@@ -3143,8 +3145,7 @@ where
         }
         let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
-            let read_ts =
-                decode_var_u64(&mut req.mut_header().take_flag_data().as_slice()).unwrap();
+            let read_ts = decode_u64(&mut req.mut_header().take_flag_data().as_slice()).unwrap();
             let safe_ts = self.safe_ts.load(Ordering::Relaxed);
             if safe_ts < read_ts {
                 debug!(
