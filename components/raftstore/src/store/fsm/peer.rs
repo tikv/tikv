@@ -63,15 +63,11 @@ use crate::store::{
 use crate::{Error, Result};
 use keys::{self, enc_end_key, enc_start_key};
 
-<<<<<<< HEAD
-=======
 /// Limits the maximum number of regions returned by error.
 ///
 /// Another choice is using coprocessor batch limit, but 10 should be a good fit in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
-const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
->>>>>>> e8cb34e2a... raftstore: return more regions in EpochNotMatch (#9731)
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
