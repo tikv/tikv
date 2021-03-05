@@ -139,7 +139,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 Ok(Some((start_key, end_key))) => {
                     let start = keys::data_key(&start_key);
                     let end = keys::data_end_key(&end_key);
-                    Self::check_ttl_for_range(&self.engine, &start, &end);
+                    Self::check_ttl_for_range(&self.engine, &start, &end, true);
                     if !end_key.is_empty() {
                         key = end_key;
                         continue;
@@ -166,7 +166,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
         }
     }
 
-    pub fn check_ttl_for_range(engine: &E, start_key: &[u8], end_key: &[u8]) {
+    pub fn check_ttl_for_range(engine: &E, start_key: &[u8], end_key: &[u8], without_l0: bool) {
         let mut retry = 0;
         loop {
             let current_ts = UnixSecs::now().into_inner();
@@ -178,7 +178,6 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                         "get range ttl properties failed";
                         "range_start" => log_wrappers::Value::key(&start_key),
                         "range_end" => log_wrappers::Value::key(&end_key),
-                        "files" => ?files,
                         "err" => %e,
                     );
                     TTL_CHECKER_ACTIONS_COUNTER_VEC
@@ -206,15 +205,16 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             }
 
             let timer = Instant::now();
+            let files_count = files.len();
             let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
-            if let Err(e) = engine.compact_files_cf(CF_DEFAULT, &files, None) {
+            if let Err(e) = engine.compact_files_cf(CF_DEFAULT, files, None, without_l0) {
                 retry += 1;
                 if retry > RETRY_CNT {
                     error!(
                         "execute ttl compact files failed";
                         "range_start" => log_wrappers::Value::key(&start_key),
                         "range_end" => log_wrappers::Value::key(&end_key),
-                        "files" => ?files,
+                        "files_count" => files_count,
                         "err" => %e,
                     );
                     TTL_CHECKER_ACTIONS_COUNTER_VEC
@@ -231,7 +231,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
             compact_range_timer.observe_duration();
             info!(
                 "compact files finished";
-                "files" => ?files,
+                "files_count" => files_count,
                 "time_takes" => ?timer.elapsed(),
             );
             TTL_CHECKER_ACTIONS_COUNTER_VEC
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_ttl_checker() {
         let mut cfg = DbConfig::default();
-        cfg.writecf.disable_auto_compactions = true;
+        cfg.defaultcf.disable_auto_compactions = true;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path()).ttl(true);
         let engine = builder.build_with_cfg(&cfg).unwrap();
@@ -296,14 +296,16 @@ mod tests {
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey1", b"zkey25");
+        let _ =
+            Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey1", b"zkey25", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey2", b"zkey6");
+        let _ =
+            Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey2", b"zkey6", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());

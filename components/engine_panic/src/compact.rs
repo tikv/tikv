@@ -44,8 +44,9 @@ impl CompactExt for PanicEngine {
     fn compact_files_cf(
         &self,
         cf: &str,
-        files: &[String],
+        files: Vec<String>,
         output_level: Option<i32>,
+        without_l0: bool,
     ) -> Result<()> {
         panic!()
     }
