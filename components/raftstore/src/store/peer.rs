@@ -3892,7 +3892,7 @@ mod tests {
             request.set_cmd_type(*op);
             req.set_requests(vec![request].into());
             req.mut_header()
-                .set_flags(tikv_util::WriteBatchFlags::STALE_READ.bits());
+                .set_flags(txn_types::WriteBatchFlags::STALE_READ.bits());
             table.push((req, RequestPolicy::StaleRead));
         }
 
