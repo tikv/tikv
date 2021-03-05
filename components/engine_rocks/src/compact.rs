@@ -86,14 +86,15 @@ impl CompactExt for RocksEngine {
             return Ok(());
         }
 
-        self.compact_files_cf(cf, &input_files, Some(output_level))
+        self.compact_files_cf(cf, input_files, Some(output_level), false)
     }
 
     fn compact_files_cf(
         &self,
         cf: &str,
-        files: &[String],
+        mut files: Vec<String>,
         output_level: Option<i32>,
+        without_l0: bool,
     ) -> Result<()> {
         let db = self.as_inner();
         let handle = util::get_cf_handle(db, cf)?;
@@ -106,13 +107,22 @@ impl CompactExt for RocksEngine {
             .unwrap_or(DBCompressionType::No);
         let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
 
+        if without_l0 {
+            let cf_meta = db.get_column_family_meta_data(handle);
+            let mut l0_files = vec![];
+            for f in cf_meta.get_levels()[0].get_files() {
+                l0_files.push(f.get_name());
+            }
+            files.retain(|f| !l0_files.iter().any(|n| f.ends_with(n)));
+        }
+
         let max_subcompactions = cmp::min(num_cpus::get(), 32);
         let mut opts = CompactionOptions::new();
         opts.set_compression(output_compression);
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
 
-        db.compact_files_cf(handle, &opts, files, output_level)?;
+        db.compact_files_cf(handle, &opts, &files, output_level)?;
         Ok(())
     }
 }

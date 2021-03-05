@@ -41,8 +41,13 @@ pub trait CompactExt {
         output_level: Option<i32>,
     ) -> Result<()>;
 
-    fn compact_files_cf(&self, cf: &str, files: &[String], output_level: Option<i32>)
-        -> Result<()>;
+    fn compact_files_cf(
+        &self,
+        cf: &str,
+        files: Vec<String>,
+        output_level: Option<i32>,
+        without_l0: bool,
+    ) -> Result<()>;
 }
 
 pub trait CompactedEvent: Send {
