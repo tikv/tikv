@@ -143,6 +143,14 @@ impl TitanCfConfig {
         let mut opts = TitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
+        // To try zstd dict compression, set dict size to 4k, sample size to 100X dict size
+        opts.set_compression_options(
+            -14,   /* window_bits */
+            32767, /* level */
+            0,     /* strategy */
+            0,     /* zstd dict size */
+            0,     /* zstd sample size */
+        );
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
