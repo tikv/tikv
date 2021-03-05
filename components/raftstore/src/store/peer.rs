@@ -98,13 +98,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
-        let key = (term, index);
-        let map = |p: &Proposal<_>| (p.term, p.index);
-        let (front, back) = self.queue.as_slices();
-        let idx = front
-            .binary_search_by_key(&key, map)
-            .or_else(|_| back.binary_search_by_key(&key, map));
-        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
+        self.queue
+            .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
+            .ok()
+            .map(|i| self.queue[i].renew_lease_time)
+            .flatten()
     }
 
     // Find proposal in front or at the given term and index
@@ -3955,8 +3953,8 @@ mod tests {
             ProposalQueue::new("tag".to_owned());
         let t = monotonic_raw_now();
         let gen_term = |index: u64| (index / 10) + 1;
-        for index in 1..=100 {
-            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+        let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
+            let renew_lease_time = if index % 3 == 0 { None } else { Some(t) };
             pq.push(Proposal {
                 is_conf_change: false,
                 index,
@@ -3965,10 +3963,24 @@ mod tests {
                 renew_lease_time,
                 must_pass_epoch_check: false,
             });
+        };
+        for index in 1..=100 {
+            push_proposal(&mut pq, index);
         }
         let mut pre_remove = 0;
-        for remove_i in &[0, 1, 65, 98, 100] {
-            let remove_i = *remove_i;
+        for remove_i in 1..=100 {
+            let index = remove_i + 100;
+            // Push more proposal
+            push_proposal(&mut pq, index);
+            // Find propose time
+            for i in 1..=index {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= pre_remove || i % 3 == 0 {
+                    assert!(pt.is_none())
+                } else {
+                    assert!(pt.is_some())
+                };
+            }
             // Find a proposal and remove all previous proposals
             for i in 1..=remove_i {
                 let p = pq.find_proposal(gen_term(i), i, 0);
@@ -3977,14 +3989,7 @@ mod tests {
                 assert!(must_found_proposal || proposal_removed_previous);
                 // `find_proposal` will remove proposal so `pop` must return None
                 assert!(pq.pop(gen_term(i), i).is_none());
-            }
-            for i in 1..=100 {
-                let pt = pq.find_propose_time(gen_term(i), i);
-                if i <= remove_i || i % 3 == 1 {
-                    assert!(pt.is_none())
-                } else {
-                    assert!(pt.is_some())
-                };
+                assert!(pq.find_propose_time(gen_term(i), i).is_none());
             }
             pre_remove = remove_i;
         }
