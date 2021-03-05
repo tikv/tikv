@@ -48,8 +48,8 @@ quick_error! {
             cause(err)
             display("{}", err)
         }
-        Committed { commit_ts: TimeStamp } {
-            display("txn already committed @{}", commit_ts)
+        Committed { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8> } {
+            display("txn already committed, start_ts: {}, commit_ts: {}, key: {}", start_ts, commit_ts, log_wrappers::Value::key(key))
         }
         PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
             display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, log_wrappers::Value::key(key))
@@ -57,7 +57,7 @@ quick_error! {
         TxnLockNotFound { start_ts: TimeStamp, commit_ts: TimeStamp, key: Vec<u8> } {
             display("txn lock not found {}-{} key:{}", start_ts, commit_ts, log_wrappers::Value::key(key))
         }
-        TxnNotFound { start_ts:  TimeStamp, key: Vec<u8> } {
+        TxnNotFound { start_ts: TimeStamp, key: Vec<u8> } {
             display("txn not found {} key: {}", start_ts, log_wrappers::Value::key(key))
         }
         LockTypeNotMatch { start_ts: TimeStamp, key: Vec<u8>, pessimistic: bool } {
@@ -164,8 +164,14 @@ impl ErrorInner {
                 min_commit_ts: *min_commit_ts,
             }),
             ErrorInner::KeyVersion => Some(ErrorInner::KeyVersion),
-            ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
+            ErrorInner::Committed {
+                start_ts,
+                commit_ts,
+                key,
+            } => Some(ErrorInner::Committed {
+                start_ts: *start_ts,
                 commit_ts: *commit_ts,
+                key: key.clone(),
             }),
             ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
                 Some(ErrorInner::PessimisticLockRolledBack {
