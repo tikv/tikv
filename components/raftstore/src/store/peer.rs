@@ -3762,6 +3762,7 @@ pub trait AbstractPeer {
 mod tests {
     use super::*;
     use crate::store::msg::ExtCallback;
+    use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3951,16 +3952,14 @@ mod tests {
     fn test_propose_queue_find_proposal() {
         let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
             ProposalQueue::new("tag".to_owned());
-        let t = monotonic_raw_now();
         let gen_term = |index: u64| (index / 10) + 1;
         let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
-            let renew_lease_time = if index % 3 == 0 { None } else { Some(t) };
             pq.push(Proposal {
                 is_conf_change: false,
                 index,
                 term: gen_term(index),
                 cb: Callback::write(Box::new(|_| {})),
-                renew_lease_time,
+                renew_lease_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
             });
         };
@@ -3975,10 +3974,10 @@ mod tests {
             // Find propose time
             for i in 1..=index {
                 let pt = pq.find_propose_time(gen_term(i), i);
-                if i <= pre_remove || i % 3 == 0 {
+                if i <= pre_remove {
                     assert!(pt.is_none())
                 } else {
-                    assert!(pt.is_some())
+                    assert_eq!(pt.unwrap(), u64_to_timespec(i))
                 };
             }
             // Find a proposal and remove all previous proposals
