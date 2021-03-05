@@ -3,11 +3,17 @@
 use crate::metrics::*;
 use crossbeam::channel::TrySendError;
 use std::cmp::min;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
 use std::sync::Arc;
+use std::future::Future;
+use futures::select;
 use futures::SinkExt;
-use crossbeam::channel::{unbounded, Sender, Receiver};
-use tokio::sync::mpsc::channel as async_channel;
+use crossbeam::channel::{unbounded, Sender, Receiver, TryRecvError};
+use tokio::sync::mpsc::{channel as async_channel, Sender as AsyncSender, Receiver as AsyncReceiver};
+use crossbeam::queue::SegQueue as Queue;
+use std::task::{Waker, Context, Poll};
+use futures::task::AtomicWaker;
+use std::pin::Pin;
 
 #[derive(Debug)]
 pub enum RateLimiterError<E> {
@@ -23,11 +29,13 @@ pub enum DrainerError<E> {
 
 pub struct RateLimiter<E> {
     sink: Sender<E>,
+    close_tx: AsyncSender<()>,
     state: Arc<State>,
 }
 
 pub struct Drainer<E> {
     receiver: Receiver<E>,
+    close_rx: AsyncReceiver<()>,
     state: Arc<State>,
 }
 
@@ -35,8 +43,37 @@ struct State {
     is_sink_closed: AtomicBool,
     block_scan_threshold: usize,
     close_sink_threshold: usize,
+    ref_count: AtomicUsize,
+    wait_queue: Queue<Waker>,
+    recv_task: AtomicWaker,
     #[cfg(test)]
     has_blocked: AtomicBool,
+}
+
+impl State {
+    fn yield_drain(&self, cx: &mut Context<'_>) {
+        self.recv_task.register(cx.waker());
+    }
+
+    fn unyield_drain(&self) {
+        let _ = self.recv_task.take();
+    }
+
+    fn wake_up_one(&self) {
+        match self.wait_queue.pop() {
+            Ok(waker) => waker.wake(),
+            Err(_) => {},
+        }
+    }
+
+    fn wake_up_all(&self) {
+        loop {
+            match self.wait_queue.pop() {
+                Ok(waker) => waker.wake(),
+                Err(_) => break
+            }
+        }
+    }
 }
 
 pub fn new_pair<E>(block_scan_threshold: usize, close_sink_threshold: usize) -> (RateLimiter<E>, Drainer<E>) {
@@ -45,20 +82,28 @@ pub fn new_pair<E>(block_scan_threshold: usize, close_sink_threshold: usize) -> 
         is_sink_closed: AtomicBool::new(false),
         block_scan_threshold,
         close_sink_threshold,
+        ref_count: AtomicUsize::new(0),
+        wait_queue: Queue::new(),
+        recv_task: AtomicWaker::new(),
         #[cfg(test)]
         has_blocked: AtomicBool::new(false),
     });
-    let rate_limiter = RateLimiter::new(sender, state.clone());
-    let drainer = Drainer::new(receiver, state_clone);
+    let (close_tx, close_rx) = async_channel(1);
+    let rate_limiter = RateLimiter::new(sender, state.clone(), close_tx);
+    let drainer = Drainer::new(receiver, state_clone, close_rx);
+
+    (rate_limiter, drainer)
 }
 
 impl<E> RateLimiter<E> {
     fn new(
         sink: Sender<E>,
         state: Arc<State>,
+        close_tx: AsyncSender<E>,
     ) -> RateLimiter<E> {
         return RateLimiter {
             sink,
+            close_tx,
             state,
         };
     }
@@ -102,7 +147,7 @@ impl<E> RateLimiter<E> {
             if queue_size >= state_clone.block_scan_threshold {
                 // used for unit testing
                 #[cfg(test)]
-                self.state.has_blocked.store(true, Ordering::SeqCst);
+                    self.state.has_blocked.store(true, Ordering::SeqCst);
 
                 info!("cdc send_scan_event backoff"; "queue_size" => queue_size, "attempts" => attempts);
                 let backoff_ms: u64 = 32 << min(attempts, 10);
@@ -135,23 +180,84 @@ impl<E> RateLimiter<E> {
 
 impl<E> Clone for RateLimiter<E> {
     fn clone(&self) -> Self {
+        self.state.ref_count.fetch_add(1, Ordering::SeqCst);
         RateLimiter {
             sink: self.sink.clone(),
+            close_tx: self.close_tx.clone(),
             state: self.state.clone(),
         }
     }
 }
 
+impl<E> Drop for RateLimiter<E> {
+    fn drop(&mut self) {
+        if self.state.ref_count.fetch_sub(1, Ordering::SeqCst) == 0 {
+            self.close_tx.send(());
+        }
+    }
+}
+
 impl<E> Drainer<E> {
-    fn new(receiver: Receiver<E>, state: Arc<State>) -> Drainer<E> {
+    fn new(receiver: Receiver<E>, state: Arc<State>, close_rx: AsyncReceiver<()>) -> Drainer<E> {
         Drainer {
             receiver,
-            state
+            close_rx,
+            state,
         }
     }
 
     pub async fn drain<F: Copy, S: SinkExt<(E, F)>>(self, mut rpc_sink: S, flag: F) -> Result<(), DrainerError<E>> {
+        loop {
+            select! {
+                next = DrainOne::new(&self.receiver, self.state.as_ref()) => {
+                    match next {
+                        Some(v) => {
+                            rpc_sink.send((v, flag));
+                            self.state.wake_up_one();
+                        },
+                        None => return Ok(()),
+                    }
+                },
+                _ = self.close_rx.next() => {
+                    self.state.wake_up_all();
+                    return Ok(())
+                }
+            }
+        }
+    }
+}
 
+struct DrainOne<'a, E> {
+    receiver: &'a Receiver<E>,
+    state: &'a State,
+}
+
+impl<'a, E> DrainOne<'a, E> {
+    fn wrap(receiver: &Receiver<E>, state: state::State) -> Self {
+        Self {
+            receiver,
+            state,
+        }
+    }
+}
+
+impl<'a, E> Future for DrainOne<'a, E> {
+    type Output = Option<E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.receiver.try_recv() {
+            Ok(v) => Poll::Ready(Some(v)),
+            Err(TryRecvError::Empty) => {
+                self.state.yield_drain(cx);
+                if !self.receiver.is_empty() || self.state.ref_count.load(Ordering::SeqCst) == 0 {
+                    self.state.unyield_drain();
+                }
+                Poll::Pending
+            }
+            Err(TryRecvError::Disconnected) => {
+                Poll::Ready(None)
+            }
+        }
     }
 }
 
