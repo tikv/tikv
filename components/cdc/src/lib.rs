@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
-#![recursion_limit="256"]
+#![recursion_limit = "512"]
 
 #[macro_use]
 extern crate failure;

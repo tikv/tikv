@@ -325,11 +325,9 @@ impl ChangeData for Service {
             );
 
             let mut close_tx_clone = close_tx.clone();
-            downstream.set_cancel_func(move |_| {
-                match close_tx_clone.try_send(()) {
-                    Ok(_) => info!("cdc send sink close command successful"),
-                    Err(e) => info!("cdc send sink close command failed"; "err" => ?e)
-                }
+            downstream.set_cancel_func(move |_| match close_tx_clone.try_send(()) {
+                Ok(_) => info!("cdc send sink close command successful"),
+                Err(e) => info!("cdc send sink close command failed"; "err" => ?e),
             });
 
             let ret = scheduler
