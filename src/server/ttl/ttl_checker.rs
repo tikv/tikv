@@ -146,7 +146,8 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     }
                 }
                 Err(e) => {
-                    error!(?e; "ttl checker: failed to get next region information");
+                    error!("ttl checker: failed to get next region information";
+                        "err" => ?e);
                     TTL_CHECKER_ACTIONS_COUNTER_VEC
                         .with_label_values(&["error"])
                         .inc();

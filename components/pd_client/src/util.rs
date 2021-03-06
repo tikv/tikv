@@ -16,7 +16,9 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
+use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 use collections::HashSet;
+use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
@@ -27,10 +29,9 @@ use kvproto::pdpb::{
 };
 use security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
-
-use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -185,7 +186,7 @@ impl LeaderClient {
         };
 
         let (client, members) = future.await?;
-        fail_point!("leader_client_reconnect");
+        fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
             let start_refresh = Instant::now();
@@ -280,7 +281,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?err; "request failed, retry");
+                error!(?*err; "request failed, retry");
                 false
             }
         }
@@ -341,7 +342,6 @@ pub async fn validate_endpoints(
 ) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
-
     let mut members = None;
     let mut cluster_id = None;
     for ep in &cfg.endpoints {
@@ -436,8 +436,11 @@ pub async fn try_connect_leader(
                 Ok((_, r)) => {
                     let new_cluster_id = r.get_header().get_cluster_id();
                     if new_cluster_id == cluster_id {
-                        resp = Some(r);
-                        break 'outer;
+                        // check whether the response have leader info, otherwise continue to loop the rest members
+                        if r.has_leader() {
+                            resp = Some(r);
+                            break 'outer;
+                        }
                     } else {
                         panic!(
                             "{} no longer belongs to cluster {}, it is in {}",

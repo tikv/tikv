@@ -1289,9 +1289,12 @@ mod tests {
             engine,
         ));
 
-        let mut config = Config::default();
-        config.end_point_request_max_handle_duration =
-            ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
+        let config = Config {
+            end_point_request_max_handle_duration: ReadableDuration::millis(
+                (PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2,
+            ),
+            ..Default::default()
+        };
 
         let cm = ConcurrencyManager::new(1.into());
         let cop =

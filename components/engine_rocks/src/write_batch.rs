@@ -130,6 +130,12 @@ impl Mutable for RocksWriteBatch {
         self.wb.delete_cf(handle, key).map_err(Error::Engine)
     }
 
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.wb
+            .delete_range(begin_key, end_key)
+            .map_err(Error::Engine)
+    }
+
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wb
@@ -283,6 +289,13 @@ impl Mutable for RocksWriteBatchVec {
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wbs[self.index]
             .delete_cf(handle, key)
+            .map_err(Error::Engine)
+    }
+
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.check_switch_batch();
+        self.wbs[self.index]
+            .delete_range(begin_key, end_key)
             .map_err(Error::Engine)
     }
 

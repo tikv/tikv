@@ -31,6 +31,7 @@ use std::io::Error as IoError;
 use txn_types::{Key, TimeStamp};
 
 pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
+pub use self::latch::{Latches, Lock};
 pub use self::scheduler::Scheduler;
 pub use self::store::{
     EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, Store, TxnEntry, TxnEntryScanner,

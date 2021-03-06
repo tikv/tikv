@@ -224,9 +224,9 @@ make_auto_flush_static_metric! {
     }
 }
 
-impl Into<GcKeysCF> for ServerGcKeysCF {
-    fn into(self) -> GcKeysCF {
-        match self {
+impl From<ServerGcKeysCF> for GcKeysCF {
+    fn from(cf: ServerGcKeysCF) -> GcKeysCF {
+        match cf {
             ServerGcKeysCF::default => GcKeysCF::default,
             ServerGcKeysCF::lock => GcKeysCF::lock,
             ServerGcKeysCF::write => GcKeysCF::write,
@@ -234,9 +234,9 @@ impl Into<GcKeysCF> for ServerGcKeysCF {
     }
 }
 
-impl Into<GcKeysDetail> for ServerGcKeysDetail {
-    fn into(self) -> GcKeysDetail {
-        match self {
+impl From<ServerGcKeysDetail> for GcKeysDetail {
+    fn from(detail: ServerGcKeysDetail) -> GcKeysDetail {
+        match detail {
             ServerGcKeysDetail::processed_keys => GcKeysDetail::processed_keys,
             ServerGcKeysDetail::get => GcKeysDetail::get,
             ServerGcKeysDetail::next => GcKeysDetail::next,

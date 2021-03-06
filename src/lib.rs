@@ -26,7 +26,6 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(clamp)]
 #![feature(negative_impls)]
 
 #[macro_use(fail_point)]
@@ -52,8 +51,6 @@ extern crate failure;
 
 #[cfg(test)]
 extern crate test;
-
-extern crate encryption;
 
 pub mod config;
 pub mod coprocessor;

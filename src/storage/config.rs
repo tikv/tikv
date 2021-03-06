@@ -27,7 +27,7 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
-const MIN_RESERVED_SPACE_GB: u64 = 5;
+const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 // 20GB for reserved space is enough because size of one compaction is limited,
 // generally less than 2GB.
 pub const MAX_RESERVED_SPACE_GB: u64 = 20;
@@ -72,7 +72,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if cpu_num >= 16.0 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
-            reserve_space: ReadableSize::gb(MIN_RESERVED_SPACE_GB),
+            reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(24),

@@ -8,8 +8,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-
 /// The result of `get_txn_commit_record`, which is used to get the status of a specified
 /// transaction from write cf.
 #[derive(Debug)]
@@ -398,6 +396,7 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
+        end: Option<&Key>,
         filter: F,
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
@@ -416,6 +415,12 @@ impl<S: Snapshot> MvccReader<S> {
         let mut locks = Vec::with_capacity(limit);
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            if let Some(end) = end {
+                if key >= *end {
+                    return Ok((locks, false));
+                }
+            }
+
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
                 locks.push((key, lock));
@@ -506,8 +511,7 @@ pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccPr
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    false
 }
 
 #[cfg(test)]
@@ -1566,36 +1570,80 @@ mod tests {
         .collect();
 
         // Creates a reader and scan locks,
-        let check_scan_lock =
-            |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
-                let snap =
-                    RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
-                let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
-                let res = reader
-                    .scan_locks(start_key.as_ref(), |l| l.ts <= 10.into(), limit)
-                    .unwrap();
-                assert_eq!(res.0, expect_res);
-                assert_eq!(res.1, expect_is_remain);
-            };
+        let check_scan_lock = |start_key: Option<Key>,
+                               end_key: Option<Key>,
+                               limit,
+                               expect_res: &[_],
+                               expect_is_remain| {
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+            let res = reader
+                .scan_locks(
+                    start_key.as_ref(),
+                    end_key.as_ref(),
+                    |l| l.ts <= 10.into(),
+                    limit,
+                )
+                .unwrap();
+            assert_eq!(res.0, expect_res);
+            assert_eq!(res.1, expect_is_remain);
+        };
 
-        check_scan_lock(None, 6, &visible_locks, false);
-        check_scan_lock(None, 5, &visible_locks, true);
-        check_scan_lock(None, 4, &visible_locks[0..4], true);
-        check_scan_lock(Some(Key::from_raw(b"k2")), 3, &visible_locks[1..4], true);
+        check_scan_lock(None, None, 6, &visible_locks, false);
+        check_scan_lock(None, None, 5, &visible_locks, true);
+        check_scan_lock(None, None, 4, &visible_locks[0..4], true);
+        check_scan_lock(
+            Some(Key::from_raw(b"k2")),
+            None,
+            3,
+            &visible_locks[1..4],
+            true,
+        );
         check_scan_lock(
             Some(Key::from_raw(b"k3\x00")),
+            None,
             1,
             &visible_locks[3..4],
             true,
         );
         check_scan_lock(
             Some(Key::from_raw(b"k3\x00")),
+            None,
             10,
             &visible_locks[3..],
             false,
         );
         // limit = 0 means unlimited.
-        check_scan_lock(None, 0, &visible_locks, false);
+        check_scan_lock(None, None, 0, &visible_locks, false);
+        // Test scanning with limited end_key
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3")),
+            0,
+            &visible_locks[..2],
+            false,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            0,
+            &visible_locks[..3],
+            false,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            3,
+            &visible_locks[..3],
+            true,
+        );
+        check_scan_lock(
+            None,
+            Some(Key::from_raw(b"k3\x00")),
+            2,
+            &visible_locks[..2],
+            true,
+        );
     }
 
     #[test]

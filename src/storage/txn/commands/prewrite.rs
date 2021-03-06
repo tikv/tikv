@@ -656,7 +656,7 @@ impl MutationLock for (Mutation, bool) {
 }
 
 /// Compute the commit ts of a 1pc transaction.
-fn one_pc_commit_ts(
+pub fn one_pc_commit_ts(
     try_one_pc: bool,
     txn: &mut MvccTxn<impl Snapshot>,
     final_min_commit_ts: TimeStamp,

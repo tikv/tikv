@@ -32,10 +32,9 @@ impl<S: Snapshot> TTLSnapshot<S> {
             }
         }
 
-        if let Some(v) = value_with_ttl
-            .as_mut()
-            .unwrap()
-            .as_mut() { truncate_expire_ts(v).unwrap() }
+        if let Some(v) = value_with_ttl.as_mut().unwrap().as_mut() {
+            truncate_expire_ts(v).unwrap()
+        }
         value_with_ttl
     }
 

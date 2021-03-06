@@ -18,7 +18,7 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use collections::{HashMap, HashSet};
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
@@ -604,10 +604,11 @@ impl<T: Simulator> Cluster<T> {
             let mut store = new_store(*id, "".to_owned());
             if let Some(labels) = self.labels.get(id) {
                 for (key, value) in labels.iter() {
-                    let mut l = StoreLabel::default();
-                    l.key = key.clone();
-                    l.value = value.clone();
-                    store.labels.push(l);
+                    store.labels.push(StoreLabel {
+                        key: key.clone(),
+                        value: value.clone(),
+                        ..Default::default()
+                    });
                 }
             }
             self.pd_client.put_store(store).unwrap();
@@ -733,7 +734,8 @@ impl<T: Simulator> Cluster<T> {
     ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
-        while tried_times < 10 || timer.elapsed() < timeout {
+        // At least retry once.
+        while tried_times < 2 || timer.elapsed() < timeout {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
@@ -851,6 +853,18 @@ impl<T: Simulator> Cluster<T> {
             .rl()
             .async_command_on_node(leader.get_store_id(), req, cb)?;
         Ok(rx)
+    }
+
+    pub fn async_exit_joint(&mut self, region_id: u64) -> Result<mpsc::Receiver<RaftCmdResponse>> {
+        let region = block_on(self.pd_client.get_region_by_id(region_id))
+            .unwrap()
+            .unwrap();
+        let exit_joint = new_admin_request(
+            region_id,
+            region.get_region_epoch(),
+            new_change_peer_v2_request(vec![]),
+        );
+        self.async_request(exit_joint)
     }
 
     pub fn async_put(
@@ -995,6 +1009,23 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.apply_state(region_id, store_id).take_truncated_state()
+    }
+
+    pub fn wait_log_truncated(&self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let truncated_state = self.truncated_state(region_id, store_id);
+            if truncated_state.get_index() >= index {
+                return;
+            }
+            if timer.elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not truncated to {}: {:?} on store {}",
+                    region_id, index, truncated_state, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
