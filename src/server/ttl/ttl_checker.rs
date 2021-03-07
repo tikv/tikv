@@ -1,105 +1,70 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io;
+use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Duration;
 
 use crate::server::metrics::*;
-use crossbeam::channel::{unbounded, Receiver, Sender};
 use engine_traits::{KvEngine, CF_DEFAULT};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 const RETRY_CNT: usize = 10;
 
-pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
-    runner: Option<Runner<E, R>>,
+pub enum Task {
+    UpdatePollInterval(Duration),
+}
 
-    sender: Option<Sender<Option<Duration>>>,
-    handle: Option<JoinHandle<()>>,
+impl Display for Task {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Task::UpdatePollInterval(interval) => {
+                write!(f, "[ttl checker] update poll interval to {:?}", interval)
+            }
+        }
+    }
+}
+
+pub struct TTLChecker<E: KvEngine, R: RegionInfoProvider> {
+    engine: E,
+    region_info_provider: R,
+    poll_interval: Duration,
 }
 
 impl<E: KvEngine, R: RegionInfoProvider> TTLChecker<E, R> {
     pub fn new(engine: E, region_info_provider: R, poll_interval: Duration) -> Self {
-        let (tx, rx) = unbounded();
+        TTL_CHECKER_POLL_INTERVAL_GAUGE.set(poll_interval.as_millis() as i64);
         TTLChecker::<E, R> {
-            runner: Some(Runner {
-                engine,
-                region_info_provider,
-                poll_interval,
-                receiver: rx,
-            }),
-            sender: Some(tx),
-            handle: None,
-        }
-    }
-
-    pub fn get_sender(&self) -> Sender<Option<Duration>> {
-        self.sender.as_ref().unwrap().clone()
-    }
-
-    pub fn start(&mut self) -> Result<(), io::Error> {
-        let mut runner = self.runner.take().unwrap();
-        let h = thread::Builder::new()
-            .name("ttl-checker".to_owned())
-            .spawn(move || {
-                tikv_alloc::add_thread_memory_accessor();
-                let mut interval = runner.poll_interval;
-                loop {
-                    TTL_CHECKER_POLL_INTERVAL_GAUGE.set(runner.poll_interval.as_millis() as i64);
-                    match runner.receiver.recv_timeout(interval) {
-                        Err(crossbeam::RecvTimeoutError::Timeout) => {
-                            interval = runner.run();
-                            info!(
-                                "ttl checker finishes a round, wait {}s to start next round",
-                                interval.as_secs()
-                            );
-                            // make sure the data point of metrics is pulled
-                            thread::sleep(Duration::from_secs(40));
-                            TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
-                        }
-                        Ok(None) => break,
-                        Ok(Some(int)) => {
-                            runner.poll_interval = int;
-                            interval = int;
-                            info!(
-                                "ttl checker poll interval is changed, wait {}s to start next round",
-                                interval.as_secs()
-                            );
-                        }
-                        _ => break,
-                    }
-                }
-                tikv_alloc::remove_thread_memory_accessor();
-            })?;
-        self.handle = Some(h);
-        Ok(())
-    }
-
-    pub fn stop(&mut self) {
-        let h = self.handle.take();
-        if h.is_none() {
-            return;
-        }
-        drop(self.sender.take().unwrap());
-        if let Err(e) = h.unwrap().join() {
-            error!("join ttl checker failed"; "err" => ?e);
-            return;
+            engine,
+            region_info_provider,
+            poll_interval,
         }
     }
 }
 
-struct Runner<E: KvEngine, R: RegionInfoProvider> {
-    engine: E,
-    region_info_provider: R,
-    poll_interval: Duration,
-    receiver: Receiver<Option<Duration>>,
+impl<E: KvEngine, R: RegionInfoProvider> Runnable for TTLChecker<E, R>
+where
+    E: KvEngine,
+{
+    type Task = Task;
+
+    fn run(&mut self, task: Task) {
+        match task {
+            Task::UpdatePollInterval(interval) => {
+                self.poll_interval = interval;
+                info!(
+                    "ttl checker poll interval is changed, wait {}s to start next round",
+                    interval.as_secs()
+                );
+            }
+        }
+    }
 }
 
-impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
-    fn run(&self) -> Duration {
-        let round_start_time = Instant::now();
+impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> {
+    fn on_timeout(&mut self) {
         let mut key = vec![];
         loop {
             let (tx, rx) = mpsc::channel();
@@ -139,7 +104,7 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                 Ok(Some((start_key, end_key))) => {
                     let start = keys::data_key(&start_key);
                     let end = keys::data_end_key(&end_key);
-                    Self::check_ttl_for_range(&self.engine, &start, &end, true);
+                    check_ttl_for_range(&self.engine, &start, &end, true);
                     if !end_key.is_empty() {
                         key = end_key;
                         continue;
@@ -153,96 +118,106 @@ impl<E: KvEngine, R: RegionInfoProvider> Runner<E, R> {
                     continue;
                 }
             }
-
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["finish"])
-                .inc();
-            // checks a round
-            let round_time = Instant::now() - round_start_time;
-            if self.poll_interval > round_time {
-                return self.poll_interval - round_time;
-            }
-            return Duration::new(0, 0);
-        }
-    }
-
-    pub fn check_ttl_for_range(engine: &E, start_key: &[u8], end_key: &[u8], without_l0: bool) {
-        let mut retry = 0;
-        loop {
-            let current_ts = UnixSecs::now().into_inner();
-            let mut files = Vec::new();
-            let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!(
-                        "get range ttl properties failed";
-                        "range_start" => log_wrappers::Value::key(&start_key),
-                        "range_end" => log_wrappers::Value::key(&end_key),
-                        "err" => %e,
-                    );
-                    TTL_CHECKER_ACTIONS_COUNTER_VEC
-                        .with_label_values(&["error"])
-                        .inc();
-                    return;
-                }
-            };
-            if res.is_empty() {
-                TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["empty"])
-                    .inc();
-                return;
-            }
-            for (file_name, prop) in res {
-                if prop.max_expire_ts <= current_ts {
-                    files.push(file_name);
-                }
-            }
-            if files.is_empty() {
-                TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["skip"])
-                    .inc();
-                return;
-            }
-
-            let timer = Instant::now();
-            let files_count = files.len();
-            let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
-            if let Err(e) = engine.compact_files_cf(CF_DEFAULT, files, None, without_l0) {
-                retry += 1;
-                if retry > RETRY_CNT {
-                    error!(
-                        "execute ttl compact files failed";
-                        "range_start" => log_wrappers::Value::key(&start_key),
-                        "range_end" => log_wrappers::Value::key(&end_key),
-                        "files_count" => files_count,
-                        "err" => %e,
-                    );
-                    TTL_CHECKER_ACTIONS_COUNTER_VEC
-                        .with_label_values(&["error"])
-                        .inc();
-                    return;
-                }
-                TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["retry"])
-                    .inc();
-                thread::sleep(Duration::from_secs(2));
-                continue;
-            }
-            compact_range_timer.observe_duration();
-            info!(
-                "compact files finished";
-                "files_count" => files_count,
-                "time_takes" => ?timer.elapsed(),
-            );
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["compact"])
-                .inc();
             break;
         }
-
-        // wait a while
-        thread::sleep(Duration::from_secs(2));
+        TTL_CHECKER_ACTIONS_COUNTER_VEC
+            .with_label_values(&["finish"])
+            .inc();
+        info!(
+            "ttl checker finishes a round, wait {}s to start next round",
+            self.poll_interval.as_secs()
+        );
+        // make sure the data point of metrics is pulled
+        thread::sleep(Duration::from_secs(40));
+        TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
     }
+
+    fn get_interval(&self) -> Duration {
+        self.poll_interval
+    }
+}
+
+fn check_ttl_for_range<E: KvEngine>(
+    engine: &E,
+    start_key: &[u8],
+    end_key: &[u8],
+    without_l0: bool,
+) {
+    let mut retry = 0;
+    loop {
+        let current_ts = UnixSecs::now().into_inner();
+        let mut files = Vec::new();
+        let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(
+                    "get range ttl properties failed";
+                    "range_start" => log_wrappers::Value::key(&start_key),
+                    "range_end" => log_wrappers::Value::key(&end_key),
+                    "err" => %e,
+                );
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["error"])
+                    .inc();
+                return;
+            }
+        };
+        if res.is_empty() {
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["empty"])
+                .inc();
+            return;
+        }
+        for (file_name, prop) in res {
+            if prop.max_expire_ts <= current_ts {
+                files.push(file_name);
+            }
+        }
+        if files.is_empty() {
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["skip"])
+                .inc();
+            return;
+        }
+
+        let timer = Instant::now();
+        let files_count = files.len();
+        let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
+        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, files, None, without_l0) {
+            retry += 1;
+            if retry > RETRY_CNT {
+                error!(
+                    "execute ttl compact files failed";
+                    "range_start" => log_wrappers::Value::key(&start_key),
+                    "range_end" => log_wrappers::Value::key(&end_key),
+                    "files_count" => files_count,
+                    "err" => %e,
+                );
+                TTL_CHECKER_ACTIONS_COUNTER_VEC
+                    .with_label_values(&["error"])
+                    .inc();
+                return;
+            }
+            TTL_CHECKER_ACTIONS_COUNTER_VEC
+                .with_label_values(&["retry"])
+                .inc();
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+        compact_range_timer.observe_duration();
+        info!(
+            "compact files finished";
+            "files_count" => files_count,
+            "time_takes" => ?timer.elapsed(),
+        );
+        TTL_CHECKER_ACTIONS_COUNTER_VEC
+            .with_label_values(&["compact"])
+            .inc();
+        break;
+    }
+
+    // wait a while
+    thread::sleep(Duration::from_secs(2));
 }
 
 #[cfg(test)]
