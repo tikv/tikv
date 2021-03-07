@@ -28,22 +28,19 @@ pub fn prewrite<S: Snapshot>(
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
-    #[cfg(feature = "failpoints")]
-    {
-        let fail_point = if txn_props.is_pessimistic() {
+   fail_point!(
+        if txn_props.is_pessimistic() {
             "pessimistic_prewrite"
         } else {
             "prewrite"
-        };
-        fail_point!(fail_point, |err| Err(
-            crate::storage::mvcc::txn::make_txn_error(
-                err,
-                &mutation.key,
-                mutation.txn_props.start_ts
-            )
-            .into()
-        ));
-    }
+        },
+        |err| Err(crate::storage::mvcc::txn::make_txn_error(
+            err,
+            &mutation.key,
+            mutation.txn_props.start_ts
+        )
+        .into())
+    );
 
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, is_pessimistic_lock)?,

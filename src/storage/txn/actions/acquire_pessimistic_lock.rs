@@ -497,8 +497,8 @@ pub mod tests {
         must_get_commit_ts(&engine, k, 30, 31);
 
         // Rollback collapsed.
-        must_rollback_collapsed(&engine, k, 32);
-        must_rollback_collapsed(&engine, k, 33);
+        must_rollback(&engine, k, 32);
+        must_rollback(&engine, k, 33);
         must_err(&engine, k, k, 32, 32);
         // Currently we cannot avoid this.
         must_succeed(&engine, k, k, 32, 34);
@@ -571,7 +571,7 @@ pub mod tests {
         must_cleanup(&engine, k, 49, 0);
         must_get_rollback_protected(&engine, k, 49, true);
         must_prewrite_put(&engine, k, v, k, 51);
-        must_rollback_collapsed(&engine, k, 51);
+        must_rollback(&engine, k, 51);
         must_err(&engine, k, k, 49, 60);
 
         // Overlapped rollback record will be written when the current start_ts equals to another write

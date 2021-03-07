@@ -54,7 +54,7 @@ pub fn cleanup<S: Snapshot>(
             TxnStatus::Committed { commit_ts } => {
                 MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                 Err(ErrorInner::Committed {
-                    start_ts: txn.start_ts,
+                    start_ts: reader.start_ts,
                     commit_ts,
                     key: key.into_raw()?,
                 }

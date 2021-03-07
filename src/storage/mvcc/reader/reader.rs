@@ -6,7 +6,6 @@ use crate::storage::mvcc::{
     reader::{OverlappedWrite, TxnCommitRecord},
     seek_for_valid_write, Result,
 };
-use engine_traits::IterOptions;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -506,7 +505,7 @@ pub mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{IterOptions, Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
+    use engine_traits::{IterOptions, Mutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::Context;
     use kvproto::metapb::{Peer, Region};

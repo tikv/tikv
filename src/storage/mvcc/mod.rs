@@ -328,6 +328,7 @@ pub mod tests {
     use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
+    use std::borrow::Cow;
     use txn_types::Key;
 
     pub fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
@@ -343,10 +344,26 @@ pub mod tests {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
-        assert_eq!(
-            reader.get(&Key::from_raw(key), ts).unwrap().unwrap(),
-            expect
-        );
+        let key = &Key::from_raw(key);
+
+        check_lock(&mut reader, key, ts).unwrap();
+        assert_eq!(reader.get(key, ts).unwrap().unwrap(), expect);
+    }
+
+    /// Checks if there is a lock which blocks reading the key at the given ts.
+    /// Returns the blocking lock as the `Err` variant.
+    fn check_lock(
+        reader: &mut SnapshotReader<impl Snapshot>,
+        key: &Key,
+        ts: TimeStamp,
+    ) -> Result<()> {
+        if let Some(lock) = reader.load_lock(key)? {
+            if let Err(e) = Lock::check_ts_conflict(Cow::Owned(lock), key, ts, &Default::default())
+            {
+                return Err(e.into());
+            }
+        }
+        Ok(())
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {

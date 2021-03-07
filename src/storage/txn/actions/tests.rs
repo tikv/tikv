@@ -440,24 +440,6 @@ pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<Time
     write(engine, &ctx, txn.into_modifies());
 }
 
-pub fn must_rollback_collapsed<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
-    let ctx = Context::default();
-    let snapshot = engine.snapshot(Default::default()).unwrap();
-    let start_ts = start_ts.into();
-    let cm = ConcurrencyManager::new(start_ts);
-    let mut txn = MvccTxn::new(start_ts, cm);
-    let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-    txn::cleanup(
-        &mut txn,
-        &mut reader,
-        Key::from_raw(key),
-        TimeStamp::zero(),
-        false,
-    )
-    .unwrap();
-    write(engine, &ctx, txn.into_modifies());
-}
-
 pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();

@@ -103,7 +103,7 @@ pub fn check_txn_status_missing_lock(
         TxnCommitRecord::None { overlapped_write } => {
             if MissingLockAction::ReturnError == action {
                 return Err(ErrorInner::TxnNotFound {
-                    start_ts: txn.start_ts,
+                    start_ts: reader.start_ts,
                     key: primary_key.into_raw()?,
                 }
                 .into());

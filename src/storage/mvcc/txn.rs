@@ -69,10 +69,6 @@ impl MvccTxn {
         }
     }
 
-    pub fn set_start_ts(&mut self, start_ts: TimeStamp) {
-        self.start_ts = start_ts;
-    }
-
     pub fn into_modifies(self) -> Vec<Modify> {
         assert!(self.locks_for_1pc.is_empty());
         self.modifies
@@ -812,20 +808,20 @@ pub(crate) mod tests {
 
         // Add a Rollback whose start ts is 1.
         must_prewrite_put(&engine, key, value, key, 1);
-        must_rollback_collapsed(&engine, key, 1);
+        must_rollback(&engine, key, 1);
         must_get_rollback_ts(&engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
         must_prewrite_put(&engine, key, value, key, 2);
-        must_rollback_collapsed(&engine, key, 2);
+        must_rollback(&engine, key, 2);
         must_get_none(&engine, key, 2);
         must_get_rollback_ts(&engine, key, 2);
         must_get_rollback_ts_none(&engine, key, 1);
 
         // Rollback arrive before Prewrite, it will collapse the
         // previous rollback whose start ts is 2.
-        must_rollback_collapsed(&engine, key, 3);
+        must_rollback(&engine, key, 3);
         must_get_none(&engine, key, 3);
         must_get_rollback_ts(&engine, key, 3);
         must_get_rollback_ts_none(&engine, key, 2);
