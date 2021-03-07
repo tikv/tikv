@@ -238,7 +238,10 @@ impl<E> Clone for RateLimiter<E> {
 
 impl<E> Drop for RateLimiter<E> {
     fn drop(&mut self) {
-        self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
+        let previous = self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
+        if previous == 1 {
+            warn!("cdc RateLimiter ref_count = 0");
+        }
     }
 }
 

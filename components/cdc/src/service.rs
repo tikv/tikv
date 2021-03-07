@@ -5,9 +5,10 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use collections::HashMap;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
+use futures::future::{self, TryFutureExt, Future, FutureExt, BoxFuture};
+use futures::sink::{SinkExt, Sink};
 use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::task::{Poll, Context, AtomicWaker};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, WriteFlags,
@@ -25,6 +26,10 @@ use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 use futures::select;
 use crate::rate_limiter::{new_pair, RateLimiter};
+use std::pin::Pin;
+use tokio::sync::watch::Ref;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -149,6 +154,83 @@ impl EventBatcher {
     }
 }
 
+struct EventBatcherSink<'a, S>
+    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a
+{
+    buf: Vec<CdcEvent>,
+    inner_sink: Arc<Mutex<Option<S>>>,
+    flush: Option<BoxFuture<'a, Result<(), grpcio::Error>>>,
+    waker: AtomicWaker,
+}
+
+impl <'a, S> EventBatcherSink<'a, S>
+    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a
+{
+    fn new(sink: S) -> Self {
+        Self {
+            buf: vec![],
+            inner_sink: Arc::new(Mutex::new(Some(sink))),
+            flush: None,
+            waker: AtomicWaker::new(),
+        }
+    }
+}
+
+impl<'a, S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<'a, S>
+    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a {
+    type Error = grpcio::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let self_mut = self.get_mut();
+        if self_mut.buf.len() >= 1024 {
+            self_mut.waker.register(cx.waker());
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: (CdcEvent, WriteFlags)) -> Result<(), Self::Error> {
+        let self_mut = self.get_mut();
+        let (event, _) = item;
+        self_mut.buf.push(event);
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let self_mut = self.get_mut();
+        if self_mut.flush.is_none() {
+            if self_mut.inner_sink.lock().unwrap().is_none() {
+                return Poll::Pending;
+            }
+            let flush_vec = std::mem::replace(&mut self_mut.buf, vec!());
+            self_mut.waker.wake();
+            let mut inner_sink = self_mut.inner_sink.clone();
+            // Create a flush representing the flush task.
+            let fut = async move {
+                let mut batcher = EventBatcher::with_capacity(128);
+                flush_vec.into_iter().for_each(|event| batcher.push(event));
+                let mut st = stream::iter(batcher.build()).map(|event| Ok((event, WriteFlags::default())));
+                let mut inner_inner_sink = inner_sink.lock().unwrap().take().unwrap();
+                inner_inner_sink.send_all(&mut st).await?;
+                *inner_sink.lock().unwrap() = Some(inner_inner_sink);
+                Ok(())
+            }.boxed();
+            self_mut.flush = Some(fut);
+        }
+
+        self_mut.flush.as_mut().unwrap().poll_unpin(cx).map_ok(|_| {
+            self_mut.flush.take();
+        })
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if let Some(inner_sink) = self.inner_sink.lock().unwrap().as_mut() {
+            return inner_sink.poll_close_unpin(cx);
+        }
+        Poll::Pending
+    }
+}
+
 bitflags::bitflags! {
     pub struct FeatureGate: u8 {
         const BATCH_RESOLVED_TS = 0b00000001;
@@ -268,6 +350,7 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl Service {
@@ -275,7 +358,10 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>) -> Service {
-        Service { scheduler }
+        Service {
+            scheduler,
+            runtime: Arc::new(tokio::runtime::Builder::new().threaded_scheduler().enable_time().build().unwrap()),
+        }
     }
 }
 
@@ -289,9 +375,10 @@ impl ChangeData for Service {
         // let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
         let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 8192);
         let peer = ctx.peer();
-        let conn = Conn::new(tx, peer);
+        let conn = Conn::new(rate_limiter, peer);
         let conn_id = conn.get_id();
 
+        info!("cdc 1");
         if let Err(status) = self
             .scheduler
             .schedule(Task::OpenConn { conn })
@@ -305,6 +392,7 @@ impl ChangeData for Service {
             return;
         }
 
+        info!("cdc 2");
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         let recv_req = stream.try_for_each(move |request| {
@@ -320,6 +408,7 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
+            info!("cdc request"; "request_id" => req_id);
             let mut downstream = Downstream::new(
                 peer.clone(),
                 region_epoch,
@@ -341,6 +430,7 @@ impl ChangeData for Service {
                         Some(format!("{:?}", e)),
                     ))
                 });
+            info!("cdc request ready"; "request_id" => req_id);
             future::ready(ret)
         });
 
@@ -361,6 +451,7 @@ impl ChangeData for Service {
             .flatten();
         */
 
+        info!("cdc 3");
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
@@ -380,13 +471,21 @@ impl ChangeData for Service {
             }
         });
 
+        info!("cdc 4");
+
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        ctx.spawn(async move {
-            let drain_res = drainer.drain(sink, WriteFlags::default().buffer_hint(false)).await;
+        info!("cdc 5");
+        let tokio_handle = self.runtime.spawn(async move {
+            let mut batched_sink = EventBatcherSink::new(&mut sink);
+            info!("cdc 6");
+            let drain_res = drainer.drain(batched_sink, WriteFlags::default().buffer_hint(false)).await;
+            info!("cdc 7");
             match drain_res {
-                Ok(_) => {},
+                Ok(_) => {
+                    info!("cdc drainer exit");
+                },
                 Err(e) => {
                     error!("cdc drainer exit"; "error" => ?e);
                 }
@@ -400,6 +499,17 @@ impl ChangeData for Service {
             info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
             let _ = sink.close().await;
         });
+
+        ctx.spawn(async move {
+            match tokio_handle.await {
+                Ok(_) => {
+                    info!("cdc tokio finished");
+                },
+                Err(e) => {
+                    info!("cdc tokio error"; "error" => ?e);
+                }
+            }
+        })
     }
 }
 
