@@ -26,7 +26,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{
-    compaction_job::CompactionJobInfo, Engines, KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE,
+    compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -46,7 +46,7 @@ use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor, RegionInfoProvider,
+        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
     },
     router::ServerRaftStoreRouter,
     store::{
@@ -493,11 +493,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
 
     fn init_servers(&mut self) -> Arc<ServerConfig> {
         let gc_worker = self.init_gc_worker();
-        let mut ttl_checker = Box::new(TTLChecker::new(
-            self.engines.as_ref().unwrap().engine.kv_engine(),
-            self.region_info_accessor.clone(),
-            self.config.storage.ttl_check_poll_interval.into(),
-        ));
+        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
+        let ttl_scheduler = ttl_checker.scheduler();
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -505,7 +502,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             Box::new(StorageConfigManger::new(
                 self.engines.as_ref().unwrap().engine.kv_engine(),
                 self.config.storage.block_cache.shared,
-                ttl_checker.get_sender(),
+                ttl_scheduler,
             )),
         );
 
@@ -722,10 +719,11 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         initial_metric(&self.config.metric);
-
-        if let Err(e) = ttl_checker.start() {
-            fatal!("failed to start ttl checker, error: {}", e);
-        }
+        ttl_checker.start_with_timer(TTLChecker::new(
+            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.region_info_accessor.clone(),
+            self.config.storage.ttl_check_poll_interval.into(),
+        ));
         self.to_stop.push(ttl_checker);
 
         // Start CDC.
@@ -1186,12 +1184,6 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-impl<E: KvEngine, R: RegionInfoProvider> Stop for TTLChecker<E, R> {
-    fn stop(mut self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
 const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60_000);
 
 pub struct EngineMetricsManager<R: RaftEngine> {
@@ -1208,11 +1200,11 @@ impl<R: RaftEngine> EngineMetricsManager<R> {
     }
 
     pub fn flush(&mut self, now: Instant) {
-        KvEngine::flush_metrics(&self.engines.kv, "kv");
-        RaftEngine::flush_metrics(&self.engines.raft, "raft");
+        self.engines.kv.flush_metrics("kv");
+        self.engines.raft.flush_metrics("raft");
         if now.duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            KvEngine::reset_statistics(&self.engines.kv);
-            RaftEngine::reset_statistics(&self.engines.raft);
+            self.engines.kv.reset_statistics();
+            self.engines.raft.reset_statistics();
             self.last_reset = now;
         }
     }
