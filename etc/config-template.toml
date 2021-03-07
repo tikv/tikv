@@ -706,11 +706,11 @@
 # blob-file-compression = "lz4"
 
 # blob file zstd compression options
-window_bits = -14
-level = 32767
-stragety = 0
-max-dict-bytes = 0
-max-train-bytes = 0
+# window_bits = -14
+# level = 32767
+# strategy = 0
+# max-dict-bytes = 0
+# max-train-bytes = 0
 
 ## Specifics cache size for blob records
 # default: 0
