@@ -582,6 +582,9 @@ where
             let msg = self.queue.try_pop().unwrap();
             report_unreachable(&self.builder.router, &msg)
         }
+        REPORT_FAILURE_MSG_COUNTER
+            .with_label_values(&["unreachable", &self.store_id.to_string()])
+            .inc_by(len as i64);
     }
 
     fn connect(&self, addr: &str) -> TikvClient {
@@ -750,6 +753,8 @@ struct CachedQueue {
     /// it will be marked to true. And all dirty queues are expected to be
     /// notified during flushing.
     dirty: bool,
+    /// Mark if the connection is full.
+    full: bool,
 }
 
 /// A raft client that can manages connections correctly.
@@ -768,6 +773,7 @@ pub struct RaftClient<S, R> {
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
+    full_stores: Vec<(u64, usize)>,
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
 }
@@ -787,6 +793,7 @@ where
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool,
             builder,
         }
@@ -828,6 +835,7 @@ where
             CachedQueue {
                 queue: s,
                 dirty: false,
+                full: false,
             },
         );
         true
@@ -875,6 +883,10 @@ where
                     Err(DiscardReason::Full) => {
                         s.queue.notify();
                         s.dirty = false;
+                        if !s.full {
+                            s.full = true;
+                            self.full_stores.push((store_id, conn_id));
+                        }
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
@@ -893,8 +905,28 @@ where
         !self.need_flush.is_empty()
     }
 
+    fn flush_full_metrics(&mut self) {
+        if self.full_stores.is_empty() {
+            return;
+        }
+
+        for id in &self.full_stores {
+            if let Some(s) = self.cache.get_mut(id) {
+                s.full = false;
+            }
+            REPORT_FAILURE_MSG_COUNTER
+                .with_label_values(&["full", &id.0.to_string()])
+                .inc();
+        }
+        self.full_stores.clear();
+        if self.full_stores.capacity() > 2048 {
+            self.full_stores.shrink_to(512);
+        }
+    }
+
     /// Flushes all buffered messages.
     pub fn flush(&mut self) {
+        self.flush_full_metrics();
         if self.need_flush.is_empty() {
             return;
         }
@@ -928,6 +960,7 @@ where
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
+            full_stores: vec![],
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
         }
