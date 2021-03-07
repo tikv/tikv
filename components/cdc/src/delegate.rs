@@ -82,8 +82,7 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
-    sink: Option<BatchSender<CdcEvent>>,
-    rate_limiter: Option<RateLimiter<CdcEvent>>,
+    sink: Option<RateLimiter<CdcEvent>>,
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
     cancel_func: Option<Arc<dyn FnMut(grpcio::RpcStatus) -> () + Sync + Send>>,
@@ -107,7 +106,6 @@ impl Downstream {
             conn_id,
             peer,
             region_epoch,
-            rate_limiter: None,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             enable_old_value,
@@ -120,42 +118,25 @@ impl Downstream {
     pub fn sink_event(&self, mut event: Event) {
         event.set_request_id(self.req_id);
 
-        match event.event {
-            Some(Event_oneof_event::Entries(_)) => {
-                if self.rate_limiter.is_none() {
-                    warn!("cdc drop event, no rate_limiter";
+        if self.sink.is_none() {
+            warn!("cdc drop event, no rate_limiter";
                 "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                    return;
-                }
+            return;
+        }
 
-                let rate_limiter = self.rate_limiter.as_ref().unwrap();
-                if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
-                    info!("cdc send event failed";
+        let rate_limiter = self.sink.as_ref().unwrap();
+        if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
+            info!("cdc send event failed";
                         "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
-                }
-            }
-            _ => {
-                if self.sink.is_none() {
-                    warn!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
-                    return;
-                }
-                let sink = self.sink.as_ref().unwrap();
-                if let Err(e) = sink.send(CdcEvent::Event(event)) {
-                    info!("cdc send event failed";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
-                }
-            }
         }
     }
 
-    pub fn set_sink(&mut self, sink: BatchSender<CdcEvent>) {
+    pub fn set_sink(&mut self, sink: RateLimiter<CdcEvent>) {
         self.sink = Some(sink.clone());
-        //self.rate_limiter = Some(RateLimiter::new(sink, 64, 8192));
     }
 
     pub fn get_rate_limiter(&self) -> Option<RateLimiter<CdcEvent>> {
-        self.rate_limiter.clone()
+        self.sink.clone()
     }
 
     pub fn get_id(&self) -> DownstreamID {
@@ -920,7 +901,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        let (sink, rx) = batch::unbounded(1);
+        // let (sink, rx) = batch::unbounded(1);
+
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;
         let mut downstream =

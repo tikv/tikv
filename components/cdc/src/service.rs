@@ -24,6 +24,7 @@ use tokio::sync::mpsc::channel as tokio_bounded_channel;
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 use futures::select;
+use crate::rate_limiter::{new_pair, RateLimiter};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -158,14 +159,15 @@ bitflags::bitflags! {
 
 pub struct Conn {
     id: ConnID,
-    sink: BatchSender<CdcEvent>,
+    // sink: BatchSender<CdcEvent>,
+    sink: RateLimiter<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
     peer: String,
     version: Option<(semver::Version, FeatureGate)>,
 }
 
 impl Conn {
-    pub fn new(sink: BatchSender<CdcEvent>, peer: String) -> Conn {
+    pub fn new(sink: RateLimiter<CdcEvent>, peer: String) -> Conn {
         Conn {
             id: ConnID::new(),
             sink,
@@ -226,7 +228,7 @@ impl Conn {
         self.downstreams
     }
 
-    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
+    pub fn get_sink(&self) -> RateLimiter<CdcEvent> {
         self.sink.clone()
     }
 
@@ -249,11 +251,14 @@ impl Conn {
     }
 
     pub fn flush(&self) {
+        /*
         if !self.sink.is_empty() {
             if let Some(notifier) = self.sink.get_notifier() {
                 notifier.notify();
             }
         }
+         */
+        // no-op for now
     }
 }
 
@@ -281,7 +286,8 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
+        // let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
+        let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 8192);
         let peer = ctx.peer();
         let conn = Conn::new(tx, peer);
         let conn_id = conn.get_id();
@@ -301,8 +307,6 @@ impl ChangeData for Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
-        let (close_tx, close_rx) = tokio_bounded_channel::<()>(1);
-
         let recv_req = stream.try_for_each(move |request| {
             let region_epoch = request.get_region_epoch().clone();
             let req_id = request.get_request_id();
@@ -324,12 +328,6 @@ impl ChangeData for Service {
                 enable_old_value,
             );
 
-            let mut close_tx_clone = close_tx.clone();
-            downstream.set_cancel_func(move |_| match close_tx_clone.try_send(()) {
-                Ok(_) => info!("cdc send sink close command successful"),
-                Err(e) => info!("cdc send sink close command failed"; "err" => ?e),
-            });
-
             let ret = scheduler
                 .schedule(Task::Register {
                     request,
@@ -346,6 +344,7 @@ impl ChangeData for Service {
             future::ready(ret)
         });
 
+        /*
         let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
         let rx = rx
             .map(|events| {
@@ -360,6 +359,7 @@ impl ChangeData for Service {
                 }))
             })
             .flatten();
+        */
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -384,38 +384,13 @@ impl ChangeData for Service {
         let scheduler = self.scheduler.clone();
 
         ctx.spawn(async move {
-            let mut rx = rx.fuse();
-            let mut close_rx = close_rx.fuse();
-            let mut need_close = true;
-            loop {
-                select! {
-                    data = rx.next() => {
-                        match data {
-                            None => break,
-                            Some(Err(e)) => {
-                                warn!("cdc send channel returns error"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
-                                break;
-                            },
-                            Some(Ok(p)) => {
-                                match sink.send(p).await {
-                                    Ok(_) => {},
-                                    Err(e) => {
-                                        warn!("cdc send failed"; "error" => ?e, "downstream" => peer.clone(), "conn_id" => ?conn_id);
-                                        need_close = false;
-                                        break;
-                                    },
-                                }
-                            }
-                        }
-                    }
-                    _ = close_rx.next() => {
-                        let _ = sink.close().await;
-                        need_close = false;
-                        break
-                    },
+            let drain_res = drainer.drain(sink, WriteFlags::default().buffer_hint(false)).await;
+            match drain_res {
+                Ok(_) => {},
+                Err(e) => {
+                    error!("cdc drainer exit"; "error" => ?e);
                 }
             }
-            // let res = sink.send_all(&mut rx).await;
             // Unregister this downstream only.
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -423,9 +398,7 @@ impl ChangeData for Service {
             }
 
             info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
-            if need_close {
-                let _ = sink.close().await;
-            }
+            let _ = sink.close().await;
         });
     }
 }

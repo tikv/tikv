@@ -95,6 +95,8 @@ impl State {
                     if let Some(waker) = waker.take() {
                         waker.wake();
                         return;
+                    } else {
+                        println!("empty wake");
                     }
                 }
                 // Queue is empty now.
@@ -236,9 +238,7 @@ impl<E> Clone for RateLimiter<E> {
 
 impl<E> Drop for RateLimiter<E> {
     fn drop(&mut self) {
-        if self.state.ref_count.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let _ = self.close_tx.try_send(());
-        }
+        self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -255,11 +255,27 @@ impl<'a, Cond> BlockSender<'a, Cond>
 where
     Cond: Fn() -> bool + Unpin + 'a,
 {
+    #[inline]
     fn block_sender(state: &'a State, cond: Cond) -> Self {
         Self {
             state,
             cond,
             waker: None,
+        }
+    }
+
+    #[inline]
+    fn unblock(&mut self) {
+        if let Some(waker_arc) = self.waker.take() {
+            waker_arc.lock().unwrap().take();
+            #[cfg(test)]
+                {
+                    let prev_count = self
+                        .state
+                        .blocked_sender_count
+                        .fetch_sub(1, Ordering::SeqCst);
+                    debug_assert!(prev_count > 0, "prev_count = {}", prev_count);
+                }
         }
     }
 }
@@ -273,26 +289,25 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if !(self.cond)() || self.state.is_sink_closed.load(Ordering::SeqCst) {
             let mut_self = self.get_mut();
-            if let Some(waker_arc) = mut_self.waker.take() {
-                waker_arc.lock().unwrap().take();
-                #[cfg(test)]
-                {
-                    let prev_count = mut_self
-                        .state
-                        .blocked_sender_count
-                        .fetch_sub(1, Ordering::SeqCst);
-                    debug_assert!(prev_count > 0, "prev_count = {}", prev_count);
-                }
-            }
+            mut_self.unblock();
             Poll::Ready(())
         } else {
+            // Takes the read lock of the queue
             let queue = self.state.wait_queue.read().unwrap();
             if !(self.cond)() || self.state.is_sink_closed.load(Ordering::SeqCst) {
+                self.get_mut().unblock();
                 Poll::Ready(())
             } else {
-                if self.waker.is_some() {
+                if let Some(ref waker_arc) = self.waker {
+                    let mut waker_slot = waker_arc.lock().unwrap();
+                    if waker_slot.is_none() {
+                        *waker_slot = Some(cx.waker().clone());
+                        queue.push(waker_arc.clone());
+                    }
+
                     return Poll::Pending;
                 }
+
                 let waker_arc = Arc::new(Mutex::new(Some(cx.waker().clone())));
                 queue.push(waker_arc.clone());
                 let mut mut_self = self.get_mut();
@@ -388,9 +403,11 @@ impl<E> Drainer<E> {
                 },
 
                 // handles a close signal, where usually means that congestion has caused the drainer to abort.
-                _ = close_rx.next() => {
-                    self.state.wake_up_all_senders();
-                    return Err(DrainerError::RateLimitExceededError);
+                item = close_rx.next() => {
+                    if item.is_some() {
+                        self.state.wake_up_all_senders();
+                        return Err(DrainerError::RateLimitExceededError);
+                    }
                 },
 
                 // handles the timer event that flushes the sink periodically
@@ -415,15 +432,14 @@ impl<E> Drop for Drainer<E> {
 struct DrainOne<'a, E> {
     receiver: &'a Receiver<E>,
     state: &'a State,
-    terminated: AtomicBool,
 }
 
 impl<'a, E> DrainOne<'a, E> {
+    #[inline]
     fn wrap(receiver: &'a Receiver<E>, state: &'a State) -> Self {
         Self {
             receiver,
             state,
-            terminated: AtomicBool::new(false),
         }
     }
 }
@@ -451,12 +467,10 @@ impl<'a, E> Future for DrainOne<'a, E> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             if self.receiver.is_empty() && self.state.ref_count.load(Ordering::SeqCst) == 0 {
-                println!("wee0");
                 return Poll::Ready(None);
             }
             return match self.receiver.try_recv() {
                 Ok(v) => {
-                    self.terminated.store(true, Ordering::SeqCst);
                     Poll::Ready(Some(v))
                 }
                 Err(TryRecvError::Empty) => {
@@ -469,8 +483,6 @@ impl<'a, E> Future for DrainOne<'a, E> {
                     Poll::Pending
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.terminated.store(true, Ordering::SeqCst);
-                    println!("wee1");
                     Poll::Ready(None)
                 }
             };
@@ -482,6 +494,7 @@ impl<'a, E> Future for DrainOne<'a, E> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use futures::sink;
 
     type MockCdcEvent = u64;
     /// MockWriteFlag is used to mock grpcio::WriteFlags,
@@ -558,7 +571,7 @@ mod tests {
 
         async fn recv(&self) -> Option<MockCdcEvent> {
             let value_clone = self.value.clone();
-            MockRpcSinkBlockRecv::new(self, move || value_clone.lock().unwrap().is_none()).await;
+            MockRpcSinkBlockRecv::new(self, move || value_clone.lock().unwrap().is_none() && !self.sink_closed.load(Ordering::SeqCst)).await;
 
             let ret = self.value.lock().unwrap().take();
             self.send_waker.wake();
@@ -908,20 +921,66 @@ mod tests {
         tokio::task::yield_now().await;
 
         let verifier_handler = tokio::spawn(async move {
-            for i in 0..10000000u64 {
+            for i in 0..100000u64 {
                 assert_eq!(mock_sink.recv().await.unwrap(), i);
             }
             let close_res = mock_sink.close().await;
             assert_eq!(close_res, Ok(()));
         });
 
-        for i in 0..10000000u64 {
+        for i in 0..100000u64 {
             rate_limiter.send_scan_event(i).await?;
         }
 
         verifier_handler.await.unwrap();
         let drain_res = drain_handle.await.unwrap();
         assert_eq!(drain_res, Err(DrainerError::RpcSinkError(MockRpcError::SinkClosed)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_multi_thread_many_events() {
+        let mut builder = tokio::runtime::Builder::new();
+        let mut runtime = builder.threaded_scheduler()
+            .core_threads(16)
+            .enable_all().build().unwrap();
+
+        runtime.block_on(async {
+            do_test_multi_thread_many_events().await.unwrap();
+        });
+    }
+
+    async fn do_test_multi_thread_many_events() -> Result<(), RateLimiterError> {
+        let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, usize::MAX);
+        let drain_handle = tokio::spawn(async move{
+            match drainer.drain(sink::drain(), ()).await {
+                Ok(_) => {},
+                Err(err) => panic!("drainer exited with error {:?}", err),
+            }
+        });
+
+        tokio::task::yield_now().await;
+
+        let mut handles = vec![];
+        for i in 0..100 {
+            let rate_limiter = rate_limiter.clone();
+            let handle = tokio::spawn(async move {
+                for j in 0..10000u64 {
+                    // println!("sending i = {}, j = {}", i, j);
+                    rate_limiter.send_scan_event(j).await.unwrap();
+                }
+            });
+            handles.push(handle);
+        }
+
+        // drop the original rate limiter, so that the ref_count will go to zero.
+        drop(rate_limiter);
+
+        for handle in handles.into_iter() {
+            handle.await.unwrap();
+        }
+        drain_handle.await.unwrap();
 
         Ok(())
     }

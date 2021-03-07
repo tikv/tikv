@@ -651,17 +651,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         };
 
         let send_cdc_event = |conn: &Conn, event| {
-            if let Err(e) = conn.get_sink().try_send(event) {
-                match e {
-                    crossbeam::TrySendError::Disconnected(_) => {
-                        debug!("send event failed, disconnected";
-                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
-                    }
-                    crossbeam::TrySendError::Full(_) => {
-                        info!("send event failed, full";
-                            "conn_id" => ?conn.get_id(), "downstream" => conn.get_peer());
-                    }
-                }
+            if let Err(e) = conn.get_sink().send_realtime_event(event) {
+                info!("send event failed"; "e" => ?e);
             }
         };
         for conn in self.connections.values() {
