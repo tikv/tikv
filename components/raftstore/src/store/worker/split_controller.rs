@@ -500,6 +500,7 @@ mod tests {
         }
         qps_stats
     }
+
     #[test]
     fn test_hub() {
         // raw key mode

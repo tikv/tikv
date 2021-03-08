@@ -578,18 +578,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                let mut key = &vec![];
-                if let Some(end_key) = &end_key {
-                    key = end_key.as_encoded();
+                {
+                    let end_key = match &end_key {
+                        Some(k) => k.as_encoded().as_slice(),
+                        None => &[],
+                    };
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        start_key.as_encoded(),
+                        end_key,
+                        reverse_scan,
+                    );
                 }
-                tls_collect_qps(
-                    ctx.get_region_id(),
-                    ctx.get_peer(),
-                    start_key.as_encoded(),
-                    key,
-                    reverse_scan,
-                );
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
