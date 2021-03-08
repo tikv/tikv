@@ -553,7 +553,7 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
-        Ok(RegionSnapshot::iter_cf(self, cf, iter_opt)?)
+        RegionSnapshot::iter_cf(self, cf, iter_opt).map_err(kv::Error::from)
     }
 
     #[inline]
