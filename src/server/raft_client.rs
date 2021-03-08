@@ -151,8 +151,6 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
-    /// Clears all messages and invoke hook before dropping.
-    fn clear(&mut self, hook: impl FnMut(&RaftMessage));
 }
 
 /// A buffer for BatchRaftMessage.
@@ -220,19 +218,6 @@ impl Buffer for BatchMessageBuffer {
         }
         res
     }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in self.batch.get_msgs() {
-            hook(msg);
-        }
-        self.batch.mut_msgs().clear();
-
-        if let Some(ref msg) = self.overflowing {
-            hook(msg);
-        }
-        self.overflowing.take();
-    }
 }
 
 /// A buffer for non-batch RaftMessage.
@@ -276,14 +261,6 @@ impl Buffer for MessageBuffer {
         } else {
             Ok(())
         }
-    }
-
-    #[inline]
-    fn clear(&mut self, mut hook: impl FnMut(&RaftMessage)) {
-        for msg in &self.batch {
-            hook(msg);
-        }
-        self.batch.clear();
     }
 }
 
