@@ -180,7 +180,7 @@ impl Recorder {
         self.times >= self.detect_num
     }
 
-    fn collect(&mut self, config: &SplitConfig) -> Option<Vec<u8>> {
+    fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
         let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
         let key_ranges = self.key_ranges.clone();
         let mut samples = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
@@ -229,7 +229,7 @@ impl Recorder {
         split_balance_score: f64,
         split_contained_score: f64,
         sample_threshold: i32,
-    ) -> Option<Vec<u8>> {
+    ) -> Vec<u8> {
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for (index, sample) in samples.iter().enumerate() {
@@ -253,9 +253,9 @@ impl Recorder {
             }
         }
         if best_index >= 0 {
-            return Some(samples[best_index as usize].key.clone());
+            return samples[best_index as usize].key.clone();
         }
-        None
+        return vec![];
     }
 }
 
@@ -375,7 +375,8 @@ impl AutoSplitController {
 
             recorder.record(key_ranges);
             if recorder.is_ready() {
-                if let Some(key) = recorder.collect(&self.cfg) {
+                let key = recorder.collect(&self.cfg);
+                if !key.is_empty() {
                     let split_info = SplitInfo {
                         region_id,
                         split_key: key,
