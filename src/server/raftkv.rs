@@ -28,9 +28,9 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
-    SnapContext, Snapshot as EngineSnapshot, WriteData,
+    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
+    ExtCallback, Iterator as EngineIterator, Modify, SnapContext, Snapshot as EngineSnapshot,
+    WriteData,
 };
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
@@ -542,33 +542,18 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter(self, iter_opt),
-            mode,
-            prefix_seek,
-        ))
+        Ok(RegionSnapshot::iter(self, iter_opt))
     }
 
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
-            mode,
-            prefix_seek,
-        ))
+        Ok(RegionSnapshot::iter_cf(self, cf, iter_opt)?)
     }
 
     #[inline]

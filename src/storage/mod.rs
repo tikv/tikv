@@ -49,9 +49,9 @@ use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
-        TestEngineBuilder,
+        CbContext, CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter,
+        Iterator, PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
+        Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
