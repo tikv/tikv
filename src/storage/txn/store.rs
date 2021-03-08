@@ -596,8 +596,8 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        SnapContext, TestEngineBuilder, WriteData,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+        TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use crate::storage::txn::{
@@ -768,24 +768,11 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())

@@ -2,7 +2,7 @@
 
 use super::ttl::TTLSnapshot;
 
-use crate::storage::kv::{Result, ScanMode, Snapshot};
+use crate::storage::kv::{Cursor, Result, ScanMode, Snapshot};
 use crate::storage::Statistics;
 
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
@@ -153,7 +153,7 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Forward)?;
+        let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(&start_key, statistics)? {
             return Ok(vec![]);
@@ -197,7 +197,11 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
         option: IterOptions,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut cursor = self.snapshot.iter_cf(cf, option, ScanMode::Backward)?;
+        let mut cursor = Cursor::new(
+            self.snapshot.iter_cf(cf, option)?,
+            ScanMode::Backward,
+            false,
+        );
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(&start_key, statistics)? {
             return Ok(vec![]);
