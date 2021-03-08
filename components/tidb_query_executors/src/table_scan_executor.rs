@@ -6,10 +6,8 @@ use std::sync::Arc;
 
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::ColumnInfo;
-use tipb::FieldType;
-use tipb::TableScan;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tipb::{ColumnInfo, FieldType, TableScan};
 
 use super::util::scan_executor::*;
 use crate::interface::*;
@@ -68,8 +66,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
                 handle_indices.push(index);
             } else {
                 if !primary_column_ids_set.contains(&ci.get_column_id())
-                    || (ci.is_string_like() && !ci.flag().contains(FieldTypeFlag::BINARY))
                     || primary_prefix_column_ids_set.contains(&ci.get_column_id())
+                    || ci.need_restored_data()
                 {
                     is_key_only = false;
                 }
@@ -397,7 +395,7 @@ mod tests {
     use std::sync::Arc;
 
     use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::ColumnInfo;
     use tipb::FieldType;
 
@@ -1375,7 +1373,7 @@ mod tests {
         ]);
     }
 
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone, Default, Debug)]
     struct Column {
         // Indicate if this column is a primary column.
         is_primary_column: bool,
@@ -1409,12 +1407,9 @@ mod tests {
 
                 ci.set_column_id(i as i64);
                 if need_restore_data {
-                    ci.as_mut_accessor().set_tp(FieldTypeTp::String);
-
-                    let mut flag = ci.as_accessor().flag();
-                    flag.remove(FieldTypeFlag::BINARY);
-                    ci.as_mut_accessor().set_flag(flag);
-
+                    ci.as_mut_accessor()
+                        .set_tp(FieldTypeTp::VarString)
+                        .set_collation(Collation::Utf8Mb4GeneralCi);
                     schema.push(field_type_from_column_info(&ci))
                 } else {
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
@@ -1466,7 +1461,9 @@ mod tests {
 
         let mut result = executor.next_batch(10);
         assert_eq!(result.is_drained.unwrap(), true);
-        assert_eq!(result.logical_rows.len(), 1);
+        if !columns_info.is_empty() {
+            assert_eq!(result.logical_rows.len(), 1);
+        }
         assert_eq!(
             result.physical_columns.columns_len(),
             columns.len() - missed_columns_info.len()
