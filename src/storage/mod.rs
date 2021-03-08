@@ -1528,8 +1528,10 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager> {
 impl TestStorageBuilder<RocksEngine, DummyLockManager> {
     /// Build `Storage<RocksEngine>`.
     pub fn new(lock_mgr: DummyLockManager, enable_ttl: bool) -> Self {
-        let mut config = Config::default();
-        config.enable_ttl = enable_ttl;
+        let config = Config {
+            enable_ttl,
+            ..Default::default()
+        };
         Self {
             engine: TestEngineBuilder::new().ttl(enable_ttl).build().unwrap(),
             config,
