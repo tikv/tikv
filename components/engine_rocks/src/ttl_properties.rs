@@ -24,9 +24,10 @@ impl RocksTTLProperties {
     }
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<TTLProperties> {
-        let mut res = TTLProperties::default();
-        res.max_expire_ts = props.decode_u64(PROP_MAX_EXPIRE_TS)?;
-        res.min_expire_ts = props.decode_u64(PROP_MIN_EXPIRE_TS)?;
+        let res = TTLProperties {
+            max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS)?,
+            min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS)?,
+        };
         Ok(res)
     }
 }
