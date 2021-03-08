@@ -10,8 +10,6 @@ use kvproto::kvrpcpb::IsolationLevel;
 use raftstore::coprocessor::properties::MvccProperties;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
-
 pub struct MvccReader<S: Snapshot> {
     snapshot: S,
     pub statistics: Statistics,
@@ -414,8 +412,7 @@ pub fn check_need_gc(
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    false
 }
 
 fn get_mvcc_properties(
