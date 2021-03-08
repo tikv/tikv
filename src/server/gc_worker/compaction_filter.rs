@@ -287,17 +287,15 @@ impl WriteCompactionFilter {
         assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
-
-        if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
-            self.gc_mvcc_deletions();
-        }
     }
 
     fn gc_mvcc_deletions(&mut self) {
-        let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
-        let keys = mem::replace(&mut self.mvcc_deletions, empty);
-        let safe_point = self.safe_point.into();
-        self.schedule_gc_task(GcTask::GcKeys { keys, safe_point });
+        if !self.mvcc_deletions.is_empty() {
+            let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
+            let keys = mem::replace(&mut self.mvcc_deletions, empty);
+            let safe_point = self.safe_point.into();
+            self.schedule_gc_task(GcTask::GcKeys { keys, safe_point });
+        }
     }
 
     fn do_filter(
@@ -317,6 +315,9 @@ impl WriteCompactionFilter {
         if self.mvcc_key_prefix != mvcc_key_prefix {
             if self.mvcc_deletion_overlaps.take() == Some(0) {
                 self.handle_bottommost_delete();
+                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                    self.gc_mvcc_deletions();
+                }
             }
             self.switch_key_metrics();
             self.mvcc_key_prefix.clear();
@@ -475,7 +476,11 @@ impl Drop for WriteCompactionFilter {
     // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
     // becomes installed into the DB instance.
     fn drop(&mut self) {
+        if self.mvcc_deletion_overlaps.take() == Some(0) {
+            self.handle_bottommost_delete();
+        }
         self.gc_mvcc_deletions();
+
         if let Err(e) = self.flush_pending_writes_if_need(true) {
             error!("compaction filter flush writes fail"; "err" => ?e);
         }
@@ -765,7 +770,7 @@ pub mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use crate::storage::mvcc::tests::{must_get, must_get_none};
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_traits::{MiscExt, Peekable, SyncMutable, CF_WRITE};
+    use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -821,10 +826,29 @@ pub mod tests {
     // Test dirty versions before a deletion mark can be handled correctly.
     #[test]
     fn test_compaction_filter_handle_deleting() {
+        let value = vec![b'v'; 512];
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
-        let value = vec![b'v'; 512];
         let mut gc_runner = TestGCRunner::new(0);
+
+        let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
+            gc_runner.safe_point(500).gc(&raw_engine);
+
+            if let Ok(Some(task)) = gc_runner.gc_receiver.try_next() {
+                assert!(expect_tasks, "a GC task is expected");
+                match task.unwrap() {
+                    GcTask::GcKeys { keys, .. } => {
+                        assert_eq!(keys.len(), 1);
+                        let got = keys[0].as_encoded();
+                        let expect = Key::from_raw(prefix);
+                        assert_eq!(got, &expect.as_encoded()[1..]);
+                    }
+                    _ => unreachable!(),
+                }
+                return;
+            }
+            assert!(!expect_tasks, "no GC task is expected");
+        };
 
         // No key switch after the deletion mark.
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -832,26 +856,32 @@ pub mod tests {
         must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
 
-        gc_runner.safe_point(200).gc(&raw_engine);
-        must_get_none(&engine, b"zkey", 110);
-        match gc_runner.gc_receiver.try_next().unwrap().unwrap().unwrap() {
-            GcTask::GcKeys { keys, .. } => {
-                assert_eq!(keys.len(), 1);
-                let got = keys[0].as_encoded();
-                let expect = Key::from_raw(b"zkey");
-                assert_eq!(got, &expect.as_encoded()[1..]);
-            }
-            _ => unreachable!(),
-        }
+        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        gc_and_check(false, b"zkey");
+        // A GC task should be emit after older versions are cleaned.
+        gc_and_check(true, b"zkey");
 
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 200);
-        must_commit(&engine, b"zkey", 200, 210);
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 220);
-        must_commit(&engine, b"zkey", 220, 230);
-        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 220);
+        // Clean the engine, prepare for later tests.
+        raw_engine
+            .delete_ranges_cf(
+                CF_WRITE,
+                DeleteStrategy::DeleteFiles,
+                &[Range::new(b"z", b"zz")],
+            )
+            .unwrap();
+
+        // Key switch after the deletion mark.
+        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 200);
+        must_commit(&engine, b"zkey1", 200, 210);
+        must_prewrite_delete(&engine, b"zkey1", b"zkey1", 220);
         must_commit(&engine, b"zkey1", 220, 230);
-        gc_runner.safe_point(300).gc(&raw_engine);
-        must_get_none(&engine, b"zkey", 210);
+        must_prewrite_put(&engine, b"zkey2", &value, b"zkey2", 220);
+        must_commit(&engine, b"zkey2", 220, 230);
+
+        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        gc_and_check(false, b"zkey1");
+        // A GC task should be emit after older versions are cleaned.
+        gc_and_check(true, b"zkey1");
     }
 
     // Test if there are not enought garbage in SST files involved by a compaction, no compaction
