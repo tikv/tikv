@@ -2842,7 +2842,7 @@ impl Debug for ObserveCmd {
 }
 
 #[derive(Debug)]
-pub struct ChangeCmd {
+pub struct ChangeObserver {
     pub observe_id: ObserveID,
     pub region_id: u64,
 }
@@ -2861,7 +2861,7 @@ where
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     },
@@ -2910,7 +2910,7 @@ where
                 write!(f, "[region {}] requests a snapshot", region_id)
             }
             Msg::Change {
-                cmd: ChangeCmd { region_id, .. },
+                cmd: ChangeObserver { region_id, .. },
                 ..
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
@@ -3246,11 +3246,11 @@ where
     fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        cmd: ChangeCmd,
+        cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
-        let ChangeCmd {
+        let ChangeObserver {
             observe_id,
             region_id,
         } = cmd;
@@ -3637,7 +3637,7 @@ where
                     return;
                 }
                 Msg::Change {
-                    cmd: ChangeCmd { region_id, .. },
+                    cmd: ChangeObserver { region_id, .. },
                     cb,
                     ..
                 } => {
@@ -4650,7 +4650,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
                 },
@@ -4709,17 +4709,13 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
-        // Must not receive new cmd.
-        // cmdbatch_rx
-        //     .recv_timeout(Duration::from_millis(100))
-        //     .unwrap_err();
 
         // Must response a RegionNotFound error.
         router.schedule_task(
             2,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 2,
                 },
@@ -4895,7 +4891,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch: region_epoch.clone(),
-                cmd: ChangeCmd {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
                 },
@@ -5053,7 +5049,7 @@ mod tests {
             1,
             Msg::Change {
                 region_epoch,
-                cmd: ChangeCmd {
+                cmd: ChangeObserver {
                     observe_id,
                     region_id: 1,
                 },

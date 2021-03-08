@@ -21,7 +21,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
+use raftstore::store::fsm::{ChangeObserver, ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use security::SecurityManager;
@@ -484,7 +484,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 delegate.id
             );
         };
-        let change_cmd = ChangeCmd {
+        let change_cmd = ChangeObserver {
             region_id,
             observe_id: delegate.id,
         };
