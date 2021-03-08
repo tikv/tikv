@@ -879,7 +879,7 @@ where
     }
 
     pub fn need_flush(&self) -> bool {
-        !self.need_flush.is_empty()
+        !self.need_flush.is_empty() || !self.full_stores.is_empty()
     }
 
     fn flush_full_metrics(&mut self) {
