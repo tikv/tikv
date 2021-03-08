@@ -537,7 +537,7 @@ mod tests {
             (Some(r#""3""#), false, Some(r#""3""#)),
             (Some(r#""3""#), true, Some(r#"3"#)),
             (Some(r#"{"a":  "b"}"#), false, Some(r#"{"a":  "b"}"#)),
-            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a":"b"}"#)),
+            (Some(r#"{"a":  "b"}"#), true, Some(r#"{"a": "b"}"#)),
             (
                 Some(r#"hello,\"quoted string\",world"#),
                 false,

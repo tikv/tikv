@@ -117,9 +117,9 @@ impl<'a> ChunkRef<'a, JsonRef<'a>> for &'a ChunkedVecJson {
     }
 }
 
-impl Into<ChunkedVecJson> for Vec<Option<Json>> {
-    fn into(self) -> ChunkedVecJson {
-        ChunkedVecJson::from_vec(self)
+impl From<Vec<Option<Json>>> for ChunkedVecJson {
+    fn from(v: Vec<Option<Json>>) -> ChunkedVecJson {
+        ChunkedVecJson::from_vec(v)
     }
 }
 

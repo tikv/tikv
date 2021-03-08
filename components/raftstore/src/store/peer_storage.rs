@@ -1002,6 +1002,14 @@ where
         ))
     }
 
+    pub fn has_gen_snap_task(&self) -> bool {
+        self.gen_snap_task.borrow().is_some()
+    }
+
+    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
+        self.gen_snap_task.get_mut()
+    }
+
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
     }
@@ -1289,18 +1297,24 @@ where
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_cancelled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
-                if status.compare_and_swap(
-                    JOB_STATUS_PENDING,
-                    JOB_STATUS_CANCELLING,
-                    Ordering::SeqCst,
-                ) == JOB_STATUS_PENDING
+                if status
+                    .compare_exchange(
+                        JOB_STATUS_PENDING,
+                        JOB_STATUS_CANCELLING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
                 {
                     true
-                } else if status.compare_and_swap(
-                    JOB_STATUS_RUNNING,
-                    JOB_STATUS_CANCELLING,
-                    Ordering::SeqCst,
-                ) == JOB_STATUS_RUNNING
+                } else if status
+                    .compare_exchange(
+                        JOB_STATUS_RUNNING,
+                        JOB_STATUS_CANCELLING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
                 {
                     return false;
                 } else {
@@ -1518,6 +1532,7 @@ pub fn do_snapshot<E>(
     region_id: u64,
     last_applied_index_term: u64,
     last_applied_state: RaftApplyState,
+    for_balance: bool,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1586,6 +1601,7 @@ where
         &mut snap_data,
         &mut stat,
     )?;
+    snap_data.mut_meta().set_for_balance(for_balance);
     let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
@@ -1597,8 +1613,10 @@ where
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<W: RaftLogBatch>(raft_wb: &mut W, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftLocalState::default();
-    raft_state.last_index = RAFT_INIT_LOG_INDEX;
+    let mut raft_state = RaftLocalState {
+        last_index: RAFT_INIT_LOG_INDEX,
+        ..Default::default()
+    };
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
     raft_wb.put_raft_state(region_id, &raft_state)?;
@@ -1654,7 +1672,7 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot, KvTestWriteBatch};
     use engine_test::raft::{RaftTestEngine, RaftTestWriteBatch};
     use engine_traits::Engines;
-    use engine_traits::{Iterable, SyncMutable, WriteBatchExt};
+    use engine_traits::{Iterable, SyncMutable, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
@@ -1744,8 +1762,8 @@ mod tests {
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        store.engines.raft.write(&ready_ctx.raft_wb).unwrap();
-        store.engines.kv.write(&kv_wb).unwrap();
+        ready_ctx.raft_wb.write().unwrap();
+        kv_wb.write().unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1758,7 +1776,7 @@ mod tests {
             .append(&mut ctx, ents.to_vec(), &mut ready_ctx)
             .unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        store.engines.raft.write(&ready_ctx.raft_wb).unwrap();
+        ready_ctx.raft_wb.write().unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1860,8 +1878,8 @@ mod tests {
         let mut kv_wb = store.engines.kv.write_batch();
         let mut raft_wb = store.engines.raft.write_batch();
         store.clear_meta(&mut kv_wb, &mut raft_wb).unwrap();
-        store.engines.kv.write(&kv_wb).unwrap();
-        store.engines.raft.write(&raft_wb).unwrap();
+        kv_wb.write().unwrap();
+        raft_wb.write().unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
     }
@@ -1967,7 +1985,7 @@ mod tests {
             if res.is_ok() {
                 let mut kv_wb = store.engines.kv.write_batch();
                 ctx.save_apply_state_to(&mut kv_wb).unwrap();
-                store.engines.kv.write(&kv_wb).unwrap();
+                kv_wb.write().unwrap();
             }
         }
     }
@@ -2076,8 +2094,8 @@ mod tests {
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        s.engines.kv.write(&kv_wb).unwrap();
-        s.engines.raft.write(&ready_ctx.raft_wb).unwrap();
+        kv_wb.write().unwrap();
+        ready_ctx.raft_wb.write().unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
@@ -2085,7 +2103,7 @@ mod tests {
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         kv_wb = s.engines.kv.write_batch();
         ctx.save_apply_state_to(&mut kv_wb).unwrap();
-        s.engines.kv.write(&kv_wb).unwrap();
+        kv_wb.write().unwrap();
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();
@@ -2478,10 +2496,8 @@ mod tests {
 
     #[test]
     fn test_sync_log() {
-        let mut tbl = vec![];
-
         // Do not sync empty entrise.
-        tbl.push((Entry::default(), false));
+        let mut tbl = vec![(Entry::default(), false)];
 
         // Sync if sync_log is set.
         let mut e = Entry::default();

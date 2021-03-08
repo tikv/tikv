@@ -71,7 +71,8 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::LongBlob
             | crate::FieldTypeTp::Blob
             | crate::FieldTypeTp::VarString
-            | crate::FieldTypeTp::String => EvalType::Bytes,
+            | crate::FieldTypeTp::String
+            | crate::FieldTypeTp::Null => EvalType::Bytes,
             _ => {
                 // In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
                 // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode and decode.
@@ -81,5 +82,60 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             }
         };
         Ok(eval_type)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FieldTypeAccessor;
+    use crate::FieldTypeTp::*;
+    use std::convert::TryFrom;
+
+    #[test]
+    fn test_fieldtype_to_evaltype() {
+        let cases = vec![
+            (Unspecified, None),
+            (Tiny, Some(EvalType::Int)),
+            (Short, Some(EvalType::Int)),
+            (Long, Some(EvalType::Int)),
+            (Float, Some(EvalType::Real)),
+            (Double, Some(EvalType::Real)),
+            (Null, Some(EvalType::Bytes)),
+            (Timestamp, Some(EvalType::DateTime)),
+            (LongLong, Some(EvalType::Int)),
+            (Int24, Some(EvalType::Int)),
+            (Date, Some(EvalType::DateTime)),
+            (Duration, Some(EvalType::Duration)),
+            (DateTime, Some(EvalType::DateTime)),
+            (Year, Some(EvalType::Int)),
+            (NewDate, None),
+            (VarChar, Some(EvalType::Bytes)),
+            (Bit, None),
+            (JSON, Some(EvalType::Json)),
+            (NewDecimal, Some(EvalType::Decimal)),
+            (Enum, None),
+            (Set, None),
+            (TinyBlob, Some(EvalType::Bytes)),
+            (MediumBlob, Some(EvalType::Bytes)),
+            (LongBlob, Some(EvalType::Bytes)),
+            (Blob, Some(EvalType::Bytes)),
+            (VarString, Some(EvalType::Bytes)),
+            (String, Some(EvalType::Bytes)),
+            (Geometry, None),
+        ];
+
+        for (tp, etype) in cases {
+            let mut ft = tipb::FieldType::default();
+            ft.set_tp(tp as i32);
+
+            let ftt = EvalType::try_from(ft.as_accessor().tp());
+
+            if let Some(etype) = etype {
+                assert_eq!(ftt.unwrap(), etype);
+            } else {
+                assert!(ftt.is_err());
+            }
+        }
     }
 }

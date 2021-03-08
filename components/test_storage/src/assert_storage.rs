@@ -602,6 +602,7 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         max_ts: impl Into<TimeStamp>,
         start_key: &[u8],
+        end_key: &[u8],
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
@@ -610,10 +611,15 @@ impl<E: Engine> AssertionStorage<E> {
         } else {
             Some(Key::from_raw(&start_key))
         };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(&end_key))
+        };
 
         assert_eq!(
             self.store
-                .scan_locks(self.ctx.clone(), max_ts.into(), start_key, limit)
+                .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)
                 .unwrap(),
             expect
         );

@@ -8,7 +8,7 @@ TiKV has many dependent repositories. If you need any help or mentoring getting 
 
 ## Building and setting up a development workspace
 
-TiKV is mostly written in Rust, but has components written in C++ (RocksDB) and Go (gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
+TiKV is mostly written in Rust, but has components written in C++ (RocksDB, gRPC). We are currently using the Rust nightly toolchain. To provide consistency, we use linters and automated formatting tools.
 
 ### Prerequisites
 
@@ -19,6 +19,7 @@ To build TiKV you'll need to at least have the following installed:
 * `make` - Build tool (run common workflows)
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
+* C++ compiler - gcc 4.9+ (required for gRPC)
 
 If you are targeting platforms other than x86_64 linux, you'll also need:
 
@@ -186,3 +187,38 @@ The body of the commit message should describe why the change was made and at a 
 The project uses [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/).
 
 Use option `git commit -s` to sign off your commits.
+
+
+### Testing AWS
+
+Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
+
+```
+git clone https://github.com/localstack/localstack.git
+cd localstack
+docker-compose up
+```
+
+For example, to test KMS, create a key:
+
+```
+pip install awscli-local
+awslocal kms create-key`
+```
+
+Then add then use the returned ID in key-id:
+
+```
+[security.encryption.master-key]
+type = "kms"
+region = "us-west-2"
+endpoint = "http://localhost:4566"
+key-id = "KMS key id"
+```
+
+When you run TiKV, make sure to set the localstck credentials
+
+```
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+```

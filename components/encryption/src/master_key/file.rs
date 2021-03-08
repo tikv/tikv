@@ -1,15 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use file_system::File;
 use kvproto::encryptionpb::EncryptedContent;
 
 use super::{Backend, MemAesGcmBackend};
 use crate::AesGcmCrypter;
 use crate::{Error, Iv, Result};
 
+#[derive(Debug)]
 pub struct FileBackend {
     backend: MemAesGcmBackend,
 }

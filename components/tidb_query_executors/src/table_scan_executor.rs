@@ -42,6 +42,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         primary_column_ids: Vec<i64>,
         is_backward: bool,
         is_scanned_range_aware: bool,
+        primary_prefix_column_ids: Vec<i64>,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -51,6 +52,8 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         let mut column_id_index = HashMap::default();
 
         let primary_column_ids_set = primary_column_ids.iter().collect::<HashSet<_>>();
+        let primary_prefix_column_ids_set =
+            primary_prefix_column_ids.iter().collect::<HashSet<_>>();
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
@@ -66,6 +69,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             } else {
                 if !primary_column_ids_set.contains(&ci.get_column_id())
                     || (ci.is_string_like() && !ci.flag().contains(FieldTypeFlag::BINARY))
+                    || primary_prefix_column_ids_set.contains(&ci.get_column_id())
                 {
                     is_key_only = false;
                 }
@@ -200,8 +204,8 @@ impl TableScanExecutorImpl {
                     // but will output a log anyway.
                     warn!(
                         "Ignored duplicated row datum in table scan";
-                        "key" => hex::encode_upper(&key),
-                        "value" => hex::encode_upper(&value),
+                        "key" => log_wrappers::Value::key(&key),
+                        "value" => log_wrappers::Value::value(&value),
                         "dup_column_id" => column_id,
                     );
                 }
@@ -660,6 +664,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap();
 
@@ -743,6 +748,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap()
         .collect_summary(1);
@@ -882,6 +888,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -988,6 +995,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1024,6 +1032,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1062,6 +1071,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1082,6 +1092,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1115,6 +1126,7 @@ mod tests {
                 vec![],
                 false,
                 false,
+                vec![],
             )
             .unwrap();
 
@@ -1164,6 +1176,7 @@ mod tests {
             vec![],
             false,
             false,
+            vec![],
         )
         .unwrap();
 
@@ -1199,6 +1212,166 @@ mod tests {
         test_multi_handle_column_impl(&[true, false, true]);
         test_multi_handle_column_impl(&[
             false, false, false, true, false, false, true, true, false, false,
+        ]);
+    }
+
+    #[derive(Copy, Clone)]
+    struct VarcharColumn {
+        is_primary: bool,
+        prefix_len: usize,
+    }
+
+    fn test_prefix_column_handle_impl(columns: &[VarcharColumn]) {
+        const TABLE_ID: i64 = 2333;
+        let mut columns_info = vec![];
+        let mut schema = vec![];
+        let mut handle = vec![];
+        let mut primary_column_ids = vec![];
+        let mut primary_prefix_column_ids = vec![];
+        let column_ids = (0..columns.len() as i64).collect::<Vec<_>>();
+        let mut row = vec![];
+        let mut column_bytes_val = vec![];
+
+        for (i, &column) in columns.iter().enumerate() {
+            let VarcharColumn {
+                is_primary,
+                prefix_len,
+            } = column;
+
+            let mut ci = ColumnInfo::default();
+            ci.set_column_id(i as i64);
+            ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+            columns_info.push(ci);
+            schema.push(FieldTypeTp::VarChar.into());
+
+            if is_primary {
+                let str_val = i.to_string() + "0000";
+                let row_val = str_val.as_bytes();
+                let idx_val = if prefix_len > 0 {
+                    primary_prefix_column_ids.push(i as i64);
+                    &row_val[..prefix_len]
+                } else {
+                    row_val
+                };
+                handle.push(Datum::Bytes(idx_val.to_vec()));
+                primary_column_ids.push(i as i64);
+                row.push(Datum::Bytes(row_val.to_vec()));
+                column_bytes_val.push(str_val);
+            } else {
+                row.push(Datum::Bytes(i.to_string().as_bytes().to_vec()));
+                column_bytes_val.push(i.to_string());
+            }
+        }
+
+        let handle = datum::encode_key(&mut EvalContext::default(), &handle).unwrap();
+        let key = table::encode_common_handle_for_test(TABLE_ID, &handle);
+        let value = table::encode_row(&mut EvalContext::default(), row, &column_ids).unwrap();
+
+        // Constructs a range that includes the constructed key.
+        let mut key_range = KeyRange::default();
+        let begin = table::encode_common_handle_for_test(TABLE_ID - 1, &handle);
+        let end = table::encode_common_handle_for_test(TABLE_ID + 1, &handle);
+        key_range.set_start(begin);
+        key_range.set_end(end);
+
+        let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
+
+        let mut executor = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info,
+            vec![key_range],
+            primary_column_ids,
+            false,
+            false,
+            primary_prefix_column_ids,
+        )
+        .unwrap();
+
+        let mut result = executor.next_batch(10);
+        assert_eq!(result.is_drained.unwrap(), true);
+        assert_eq!(result.logical_rows.len(), 1);
+
+        // We expect we fill the primary column with the value embedded in the common handle.
+        for i in 0..result.physical_columns.columns_len() {
+            result.physical_columns[i]
+                .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
+                .unwrap();
+
+            assert_eq!(
+                result.physical_columns[i].decoded().to_bytes_vec(),
+                &[Some(column_bytes_val[i].as_bytes().to_vec())],
+            );
+        }
+    }
+
+    #[test]
+    fn test_prefix_column_handle() {
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: false,
+                prefix_len: 0,
+            },
+        ]);
+
+        test_prefix_column_handle_impl(&[
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 0,
+            },
+            VarcharColumn {
+                is_primary: true,
+                prefix_len: 1,
+            },
         ]);
     }
 
@@ -1287,6 +1460,7 @@ mod tests {
             primary_column_ids,
             false,
             false,
+            vec![],
         )
         .unwrap();
 
@@ -1318,6 +1492,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     fn test_common_handle() {
         test_common_handle_impl(&[Column {

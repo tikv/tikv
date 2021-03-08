@@ -477,17 +477,19 @@ fn test_txn_store_scan_lock() {
         vec![Some((b"k1", b"v1")), None, None, None, None],
     );
 
-    store.scan_locks_ok(10, b"", 1, vec![lock(b"p1", b"p1", 5)]);
+    store.scan_locks_ok(10, b"", b"", 1, vec![lock(b"p1", b"p1", 5)]);
 
     store.scan_locks_ok(
         10,
         b"s",
+        b"",
         2,
         vec![lock(b"s1", b"p1", 5), lock(b"s2", b"p2", 10)],
     );
 
     store.scan_locks_ok(
         10,
+        b"",
         b"",
         0,
         vec![
@@ -500,6 +502,7 @@ fn test_txn_store_scan_lock() {
 
     store.scan_locks_ok(
         10,
+        b"",
         b"",
         100,
         vec![
@@ -537,7 +540,7 @@ fn test_txn_store_resolve_lock() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 20, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"", 100, vec![]);
+    store.scan_locks_ok(30, b"", b"", 100, vec![]);
 }
 
 fn test_txn_store_resolve_lock_batch(key_prefix_len: usize, n: usize) {
@@ -584,7 +587,7 @@ fn test_txn_store_resolve_lock_in_a_batch() {
     store.get_none(b"s1", 30);
     store.get_ok(b"p2", 30, b"v10");
     store.get_ok(b"s2", 30, b"v10");
-    store.scan_locks_ok(30, b"", 100, vec![]);
+    store.scan_locks_ok(30, b"", b"", 100, vec![]);
 }
 
 #[test]

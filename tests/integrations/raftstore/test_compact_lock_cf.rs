@@ -34,6 +34,7 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.lock_cf_compact_interval = ReadableDuration::millis(interval);
     // Set lock_cf_compact_bytes_threshold.
     cluster.cfg.raft_store.lock_cf_compact_bytes_threshold = ReadableSize(100);
+    cluster.cfg.rocksdb.lockcf.disable_auto_compactions = true;
     cluster.run();
 
     // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.

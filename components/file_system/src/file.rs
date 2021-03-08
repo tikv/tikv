@@ -10,6 +10,7 @@ use std::sync::Arc;
 use fs2::FileExt;
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
+#[derive(Debug)]
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,
@@ -209,23 +210,33 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        set_io_rate_limiter(IORateLimiter::new(1));
+        let (_guard, stats) = WithIORateLimit::new(1);
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("magic words");
         {
-            WithIOType::new(IOType::Write);
+            let _guard = WithIOType::new(IOType::ForegroundWrite);
             let mut f = File::create(&tmp_file).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
+            assert_eq!(
+                stats.fetch(IOType::ForegroundWrite, IOOp::Write),
+                content.len()
+            );
         }
         {
-            WithIOType::new(IOType::Read);
+            let _guard = WithIOType::new(IOType::ForegroundRead);
             let mut buffer = String::new();
             let mut f = File::open(&tmp_file).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
+            // read_to_string only exit when file.read() returns zero, which means
+            // it requires two EOF reads to finish the call.
+            assert_eq!(
+                stats.fetch(IOType::ForegroundRead, IOOp::Read),
+                content.len() + 2
+            );
         }
     }
 }

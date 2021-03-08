@@ -653,7 +653,7 @@ async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: 
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
-        error!(?e; "failed to backoff");
+        error_unknown!(?e; "failed to backoff");
     }
     *last_wake_time = Instant::now();
 }
@@ -691,7 +691,7 @@ async fn start<S, R>(
             Err(e) => {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message();
-                error!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
+                error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
                 // TOMBSTONE
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
@@ -800,25 +800,27 @@ where
         let (s, pool_len) = {
             let mut pool = self.pool.lock().unwrap();
             if pool.tombstone_stores.contains(&store_id) {
+                let pool_len = pool.connections.len();
+                drop(pool);
+                self.cache.resize(pool_len);
                 return false;
             }
-            (
-                pool.connections
-                    .entry((store_id, conn_id))
-                    .or_insert_with(|| {
-                        let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
-                        let back_end = StreamBackEnd {
-                            store_id,
-                            queue: queue.clone(),
-                            builder: self.builder.clone(),
-                        };
-                        self.future_pool
-                            .spawn(start(back_end, conn_id, self.pool.clone()));
-                        queue
-                    })
-                    .clone(),
-                pool.connections.len(),
-            )
+            let conn = pool
+                .connections
+                .entry((store_id, conn_id))
+                .or_insert_with(|| {
+                    let queue = Arc::new(Queue::with_capacity(QUEUE_CAPACITY));
+                    let back_end = StreamBackEnd {
+                        store_id,
+                        queue: queue.clone(),
+                        builder: self.builder.clone(),
+                    };
+                    self.future_pool
+                        .spawn(start(back_end, conn_id, self.pool.clone()));
+                    queue
+                })
+                .clone();
+            (conn, pool.connections.len())
         };
         self.cache.resize(pool_len);
         self.cache.insert(

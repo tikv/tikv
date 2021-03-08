@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::Infallible;
+use tikv_util::impl_format_delegate_newtype;
+
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::Fail;
 
@@ -47,6 +50,24 @@ impl From<tikv_util::deadline::DeadlineError> for EvaluateError {
     }
 }
 
+impl From<Infallible> for EvaluateError {
+    fn from(e: Infallible) -> Self {
+        match e {}
+    }
+}
+
+impl From<std::str::Utf8Error> for EvaluateError {
+    fn from(err: std::str::Utf8Error) -> Self {
+        EvaluateError::Other(format!("invalid input value: {:?}", err))
+    }
+}
+
+impl From<std::string::FromUtf8Error> for EvaluateError {
+    fn from(err: std::string::FromUtf8Error) -> Self {
+        EvaluateError::Other(format!("invalid input value: {:?}", err))
+    }
+}
+
 impl ErrorCodeExt for EvaluateError {
     fn error_code(&self) -> ErrorCode {
         match self {
@@ -82,19 +103,10 @@ pub enum ErrorInner {
     Evaluate(#[fail(cause)] EvaluateError),
 }
 
+#[derive(Debug)]
 pub struct Error(pub Box<ErrorInner>);
 
-impl std::fmt::Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
+impl_format_delegate_newtype!(Error);
 
 impl From<StorageError> for Error {
     #[inline]

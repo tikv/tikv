@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate tikv_util;
 
-use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::sync::Arc;
 
-use encryption::{Backend, Error, KmsBackend, KmsConfig, Result};
+pub use cloud::kms::Config as CloudConfig;
+#[cfg(feature = "aws")]
+use encryption_export::{create_cloud_backend, KmsConfig};
+use encryption_export::{Backend, Error, Result};
+use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
@@ -67,23 +69,15 @@ struct KmsCommand {
 fn create_kms_backend(
     cmd: &KmsCommand,
     credential_file: Option<&String>,
-) -> Result<Arc<dyn Backend>> {
+) -> Result<Box<dyn Backend>> {
     let mut config = KmsConfig::default();
 
     if let Some(credential_file) = credential_file {
         let ini = Ini::load_from_file(credential_file)
             .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
-        let props = ini
+        let _props = ini
             .section(Some("default"))
             .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
-        config.access_key = props
-            .get("aws_access_key_id")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
-        config.secret_access_key = props
-            .get("aws_secret_access_key")
-            .ok_or_else(|| Error::Other(box_err!("fail to parse credential")))?
-            .clone();
     }
     if let Some(ref region) = cmd.region {
         config.region = region.to_string();
@@ -92,7 +86,7 @@ fn create_kms_backend(
         config.endpoint = endpoint.to_string();
     }
     config.key_id = cmd.key_id.to_owned();
-    Ok(Arc::new(KmsBackend::new(config)?))
+    create_cloud_backend(&config)
 }
 
 #[allow(irrefutable_let_patterns)]

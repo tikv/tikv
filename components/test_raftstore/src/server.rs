@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
@@ -229,7 +229,7 @@ impl Simulator for ServerCluster {
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone());
 
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host, &bg_worker);
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -246,6 +246,10 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
+        let latest_ts =
+            block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
+        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             sim_router.clone(),
@@ -254,12 +258,9 @@ impl Simulator for ServerCluster {
         );
         gc_worker.start().unwrap();
         gc_worker
-            .start_observe_lock_apply(&mut coprocessor_host)
+            .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
 
-        let latest_ts =
-            block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
         let mut lock_mgr = LockManager::new(cfg.pessimistic_txn.pipelined);
         let store = create_raft_storage(
             engine,
@@ -273,7 +274,6 @@ impl Simulator for ServerCluster {
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
-        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         // Create import service.
         let importer = {
             let dir = Path::new(engines.kv.path()).join("import-sst");
@@ -284,11 +284,10 @@ impl Simulator for ServerCluster {
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
-            security_mgr.clone(),
         );
 
         // Create deadlock service.
-        let deadlock_service = lock_mgr.deadlock_service(security_mgr.clone());
+        let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
         let (resolver, state) =
@@ -297,6 +296,7 @@ impl Simulator for ServerCluster {
             .encryption_key_manager(key_manager)
             .build(tmp_str);
         let server_cfg = Arc::new(cfg.server.clone());
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
@@ -323,7 +323,6 @@ impl Simulator for ServerCluster {
             debug_thread_handle,
             raft_router,
             ConfigController::default(),
-            security_mgr.clone(),
         );
 
         for _ in 0..100 {
@@ -380,7 +379,7 @@ impl Simulator for ServerCluster {
             Arc::new(VersionTrack::new(raft_store)),
             Arc::clone(&self.pd_client),
             state,
-            Some(bg_worker.clone()),
+            bg_worker.clone(),
         );
 
         // Register the role change observer of the lock manager.

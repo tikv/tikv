@@ -1,12 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use tikv_util::config::ReadableDuration;
-
-#[cfg(test)]
-use crate::master_key::Backend;
-#[cfg(test)]
-use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -54,35 +49,22 @@ pub struct FileConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
     pub key_id: String,
-
-    // Providing access_key and secret_access_key is recommended as it has
-    // security risk.
-    #[doc(hidden)]
-    // We don's want to write access_key and secret_access_key to config file
-    // accidentally.
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub access_key: String,
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub secret_access_key: String,
-
     pub region: String,
     pub endpoint: String,
+    pub vendor: String,
 }
 
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub struct Mock(pub Arc<dyn Backend>);
-#[cfg(test)]
-impl PartialEq for Mock {
-    fn eq(&self, _: &Self) -> bool {
-        false
+impl KmsConfig {
+    pub fn into_proto(self) -> MasterKeyKms {
+        MasterKeyKms {
+            key_id: self.key_id,
+            region: self.region,
+            endpoint: self.endpoint,
+            vendor: self.vendor,
+            ..MasterKeyKms::default()
+        }
     }
 }
-#[cfg(test)]
-impl Eq for Mock {}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
@@ -104,10 +86,6 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
-
-    #[cfg(test)]
-    #[serde(skip)]
-    Mock(Mock),
 }
 
 impl Default for MasterKeyConfig {
@@ -187,10 +165,9 @@ mod tests {
             master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
                     key_id: "key_id".to_owned(),
-                    access_key: "access_key".to_owned(),
-                    secret_access_key: "secret_access_key".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
+                    vendor: "".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
@@ -207,8 +184,6 @@ mod tests {
         [master-key]
         type = "kms"
         key-id = "key_id"
-        access-key = "access_key"
-        secret-access-key = "secret_access_key"
         region = "region"
         endpoint = "endpoint"
         "#;

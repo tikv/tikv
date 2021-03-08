@@ -1,10 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel;
-use engine_rocks::raw::DB;
 use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use std::mem;
 use std::sync::atomic::AtomicBool;
@@ -292,7 +291,7 @@ fn test_read_after_cleanup_range_for_snap() {
     let last_index = cluster.raft_local_state(r1, 1).last_index;
     (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
     // Ensure logs are compacted, then node 1 will send a snapshot to node 3 later
-    must_truncated_to(cluster.get_engine(1), r1, last_index + 1);
+    cluster.wait_log_truncated(r1, 1, last_index + 1);
 
     fail::cfg("send_snapshot", "pause").unwrap();
     cluster.run_node(3).unwrap();
@@ -355,7 +354,9 @@ fn test_read_after_cleanup_range_for_snap() {
 }
 
 /// Tests the learner of new split region will know its leader without waiting for the leader heartbeat timeout.
-/// The learner of a new split region may not know its leader if it applies log slowly and drops the no-op
+///
+/// Before https://github.com/tikv/tikv/pull/8820,
+/// the learner of a new split region may not know its leader if it applies log slowly and drops the no-op
 /// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
 /// can't handle any read request.
 #[test]
@@ -389,8 +390,8 @@ fn test_new_split_learner_can_not_find_leader() {
 
     fail::remove("apply_before_split_1_3");
 
-    // Wait learner split
-    thread::sleep(Duration::from_millis(500));
+    // Wait the learner split. Then it can receive a `MsgAppend`.
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
 
     let new_region = cluster.get_region(b"k2");
     let learner_peer = find_peer(&new_region, 3).unwrap().clone();
@@ -400,18 +401,77 @@ fn test_new_split_learner_can_not_find_leader() {
     assert_eq!(exp_value, b"v2");
 }
 
-fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
-    for _ in 1..300 {
-        let apply_state: RaftApplyState = engine
-            .c()
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-            .unwrap()
-            .unwrap();
-        let truncated_index = apply_state.get_truncated_state().get_index();
-        if truncated_index > index {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
+/// Test if the read index request can get a correct response when the commit index of leader
+/// if not up-to-date after transferring leader.
+#[test]
+fn test_replica_read_after_transfer_leader() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    assert_eq!(r, 1);
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_peer(3, 3));
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Make sure the peer 3 exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    // peer 2 does not know the latest commit index if it cann't receive hearbeat.
+    // It's because the mechanism of notifying commit index in raft-rs is lazy.
+    let recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgHeartbeat),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter_2);
+
+    cluster.must_put(b"k1", b"v2");
+
+    // Delay the response raft messages to peer 2.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let response_recv_filter_2 = Box::new(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .msg_type(MessageType::MsgAppendResponse)
+            .msg_type(MessageType::MsgHeartbeatResponse),
+    );
+    cluster.sim.wl().add_recv_filter(2, response_recv_filter_2);
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    cluster.clear_send_filters();
+
+    // Wait peer 1 and 3 to send heartbeat response to peer 2
+    sleep_ms(100);
+    // Pause before collecting message to make the these message be handled in one loop
+    let on_peer_collect_message_2 = "on_peer_collect_message_2";
+    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+
+    let router = cluster.sim.wl().get_router(2).unwrap();
+    for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        router.send_raft_message(raft_msg).unwrap();
     }
-    panic!("raft log is not truncated to {}", index);
+
+    let new_region = cluster.get_region(b"k1");
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), new_region, b"k1", true, true);
+    // Wait peer 2 to send read index to peer 1003
+    sleep_ms(100);
+
+    fail::remove(on_peer_collect_message_2);
+
+    let resp = resp_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let exp_value = resp.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v2");
 }
