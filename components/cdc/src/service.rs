@@ -5,10 +5,10 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use collections::HashMap;
-use futures::future::{self, TryFutureExt, Future, FutureExt, BoxFuture};
-use futures::sink::{SinkExt, Sink};
+use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
+use futures::sink::{Sink, SinkExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use futures::task::{Poll, Context, AtomicWaker};
+use futures::task::{AtomicWaker, Context, Poll};
 use grpcio::{
     DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
     RpcStatusCode, WriteFlags,
@@ -24,12 +24,12 @@ use tokio::sync::mpsc::channel as tokio_bounded_channel;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
-use futures::select;
 use crate::rate_limiter::{new_pair, RateLimiter};
-use std::pin::Pin;
-use tokio::sync::watch::Ref;
+use futures::select;
 use std::cell::RefCell;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch::Ref;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -155,7 +155,8 @@ impl EventBatcher {
 }
 
 struct EventBatcherSink<'a, S>
-    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a
+where
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
 {
     buf: Vec<CdcEvent>,
     inner_sink: Arc<Mutex<Option<S>>>,
@@ -163,8 +164,9 @@ struct EventBatcherSink<'a, S>
     waker: AtomicWaker,
 }
 
-impl <'a, S> EventBatcherSink<'a, S>
-    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a
+impl<'a, S> EventBatcherSink<'a, S>
+where
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
 {
     fn new(sink: S) -> Self {
         Self {
@@ -177,7 +179,9 @@ impl <'a, S> EventBatcherSink<'a, S>
 }
 
 impl<'a, S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<'a, S>
-    where S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a {
+where
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
+{
     type Error = grpcio::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -202,19 +206,21 @@ impl<'a, S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<'a, S>
             if self_mut.inner_sink.lock().unwrap().is_none() {
                 return Poll::Pending;
             }
-            let flush_vec = std::mem::replace(&mut self_mut.buf, vec!());
+            let flush_vec = std::mem::replace(&mut self_mut.buf, vec![]);
             self_mut.waker.wake();
             let mut inner_sink = self_mut.inner_sink.clone();
             // Create a flush representing the flush task.
             let fut = async move {
                 let mut batcher = EventBatcher::with_capacity(128);
                 flush_vec.into_iter().for_each(|event| batcher.push(event));
-                let mut st = stream::iter(batcher.build()).map(|event| Ok((event, WriteFlags::default())));
+                let mut st =
+                    stream::iter(batcher.build()).map(|event| Ok((event, WriteFlags::default())));
                 let mut inner_inner_sink = inner_sink.lock().unwrap().take().unwrap();
                 inner_inner_sink.send_all(&mut st).await?;
                 *inner_sink.lock().unwrap() = Some(inner_inner_sink);
                 Ok(())
-            }.boxed();
+            }
+            .boxed();
             self_mut.flush = Some(fut);
         }
 
@@ -350,6 +356,8 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
+    // We are using a tokio runtime because there are some futures that require a timer,
+    // and the tokio library provides a good implementation for using timers with futures.
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -358,9 +366,14 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>) -> Service {
+        let tokio_runtime = tokio::runtime::Builder::new()
+            .threaded_scheduler()
+            .enable_time()
+            .build()
+            .unwrap();
         Service {
             scheduler,
-            runtime: Arc::new(tokio::runtime::Builder::new().threaded_scheduler().enable_time().build().unwrap()),
+            runtime: Arc::new(tokio_runtime),
         }
     }
 }
@@ -375,24 +388,22 @@ impl ChangeData for Service {
         // let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
         let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 8192);
         let peer = ctx.peer();
-        let conn = Conn::new(rate_limiter, peer);
+        let conn = Conn::new(rate_limiter, peer.clone());
         let conn_id = conn.get_id();
 
-        info!("cdc 1");
+        debug!("cdc streaming request accepted"; "peer" => ?peer, "conn_id" => ?conn_id);
         if let Err(status) = self
             .scheduler
             .schedule(Task::OpenConn { conn })
             .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
         {
-            error!("cdc connection initiate failed"; "error" => ?status);
-            ctx.spawn(
-                sink.fail(status)
-                    .unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e)),
-            );
+            error!("cdc connection failed to initialize"; "error" => ?status);
+            ctx.spawn(sink.fail(status).unwrap_or_else(
+                |e| error!("cdc failed to failed to initialize error"; "error" => ?e),
+            ));
             return;
         }
 
-        info!("cdc 2");
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         let recv_req = stream.try_for_each(move |request| {
@@ -408,7 +419,7 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            info!("cdc request"; "request_id" => req_id);
+            debug!("new cdc request"; "request_id" => req_id);
             let mut downstream = Downstream::new(
                 peer.clone(),
                 region_epoch,
@@ -430,28 +441,10 @@ impl ChangeData for Service {
                         Some(format!("{:?}", e)),
                     ))
                 });
-            info!("cdc request ready"; "request_id" => req_id);
+            debug!("cdc request ready"; "request_id" => req_id);
             future::ready(ret)
         });
 
-        /*
-        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let rx = rx
-            .map(|events| {
-                let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-                events.into_iter().for_each(|e| batcher.push(e));
-                let resps = batcher.build();
-                let last_idx = resps.len() - 1;
-                stream::iter(resps.into_iter().enumerate().map(move |(i, e)| {
-                    // Buffer messages and flush them at once.
-                    let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
-                    GrpcResult::Ok((e, write_flags))
-                }))
-            })
-            .flatten();
-        */
-
-        info!("cdc 3");
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
         ctx.spawn(async move {
@@ -463,31 +456,36 @@ impl ChangeData for Service {
             }
             match res {
                 Ok(()) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                    info!("cdc receive half closed"; "downstream" => peer, "conn_id" => ?conn_id);
                 }
                 Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                    warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
                 }
             }
         });
 
-        info!("cdc 4");
-
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        info!("cdc 5");
-        let tokio_handle = self.runtime.spawn(async move {
+        // We are using a tokio runtime to drive the drainer because internally the drainer periodically
+        // flushes the sink, which requires a runtime that has a timer built in.
+        // The executor that comes with grpcio does not have this feature.
+        let drain_handle = self.runtime.spawn(async move {
+            // EventBatcherSink is used to pack CdcEvents into ChangeDataEvents.
+            // Internally, EventBatcherSink composes a "inverted flat map" in front of the final sink.
             let mut batched_sink = EventBatcherSink::new(&mut sink);
-            info!("cdc 6");
+            // The drainer will block asynchronously, until
+            // 1) all senders have exited,
+            // 2) the grpc sink has been closed,
+            // 3) an error has occurred in the grpc sink,
+            // or 4) the sink has been forced to close due to a congestion.
             let drain_res = drainer.drain(batched_sink, WriteFlags::default().buffer_hint(false)).await;
-            info!("cdc 7");
             match drain_res {
                 Ok(_) => {
-                    info!("cdc drainer exit");
+                    info!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
                 },
                 Err(e) => {
-                    error!("cdc drainer exit"; "error" => ?e);
+                    error!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id, "error" => ?e);
                 }
             }
             // Unregister this downstream only.
@@ -496,17 +494,19 @@ impl ChangeData for Service {
                 error!("cdc deregister failed"; "error" => ?e);
             }
 
-            info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            info!("cdc send half closed"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
             let _ = sink.close().await;
         });
 
         ctx.spawn(async move {
-            match tokio_handle.await {
+            // await the tokio runtime here
+            // TODO confirm that we do need this.
+            match drain_handle.await {
                 Ok(_) => {
-                    info!("cdc tokio finished");
-                },
+                    debug!("cdc tokio finished");
+                }
                 Err(e) => {
-                    info!("cdc tokio error"; "error" => ?e);
+                    debug!("cdc tokio error"; "error" => ?e);
                 }
             }
         })

@@ -20,8 +20,6 @@ struct State {
     // How many messages are sent without notify.
     pending: AtomicUsize,
     notifier_registered: AtomicBool,
-    // How many messages are in the queue
-    pending_count: AtomicUsize,
 }
 
 impl State {
@@ -34,7 +32,6 @@ impl State {
             notify_size,
             pending: AtomicUsize::new(0),
             notifier_registered: AtomicBool::new(false),
-            pending_count: AtomicUsize::new(0),
         }
     }
 
@@ -51,7 +48,7 @@ impl State {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
         if !t.is_null() {
             self.pending.store(0, Ordering::Release);
-            // Safety: see comment on `recv_task`.hannel.
+            // Safety: see comment on `recv_task`.
             let t = unsafe { Box::from_raw(t) };
             t.wake();
         }
@@ -97,10 +94,7 @@ impl Drop for Notifier {
     #[inline]
     fn drop(&mut self) {
         let notifier_registered = &self.0.notifier_registered;
-        if notifier_registered
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if !notifier_registered.compare_and_swap(true, false, Ordering::AcqRel) {
             unreachable!("notifier_registered must be true");
         }
         self.0.notify();
@@ -144,33 +138,21 @@ impl<T> Sender<T> {
 
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
-        self.sender.as_ref().unwrap().send(t).or_else(|e| {
-            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
-            Err(e)
-        })?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
-        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
-        self.sender.as_ref().unwrap().send(t).or_else(|e| {
-            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
-            Err(e)
-        })?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.notify();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        self.state.pending_count.fetch_add(1, Ordering::SeqCst);
-        self.sender.as_ref().unwrap().try_send(t).or_else(|e| {
-            self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
-            Err(e)
-        })?;
+        self.sender.as_ref().unwrap().try_send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
@@ -178,36 +160,22 @@ impl<T> Sender<T> {
     #[inline]
     pub fn get_notifier(&self) -> Option<Notifier> {
         let notifier_registered = &self.state.notifier_registered;
-        if notifier_registered
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+        if !notifier_registered.compare_and_swap(false, true, Ordering::AcqRel) {
             return Some(Notifier(Arc::clone(&self.state)));
         }
         None
-    }
-
-    /// returns a hint at the number of elements that have been sent but not yet received.
-    #[inline]
-    pub fn get_pending_count(&self) -> usize {
-        // TODO could Ordering::SeqCst impact performance?
-        self.state.pending_count.load(Ordering::SeqCst)
     }
 }
 
 impl<T> Receiver<T> {
     #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
-        let ret = self.receiver.recv();
-        self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
-        ret
+        self.receiver.recv()
     }
 
     #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        let ret = self.receiver.try_recv()?;
-        self.state.pending_count.fetch_sub(1, Ordering::SeqCst);
-        Ok(ret)
+        self.receiver.try_recv()
     }
 
     #[inline]
@@ -491,37 +459,6 @@ mod tests {
         // again to advance the progress.
         drop(tx);
         assert!(task.future.lock().unwrap().is_none());
-    }
-
-    #[test]
-    fn test_sender_pending_count() {
-        let (tx, rx) = unbounded::<i32>(10);
-        assert_eq!(tx.get_pending_count(), 0);
-        tx.send(1).unwrap();
-        assert_eq!(tx.get_pending_count(), 1);
-        tx.send(2).unwrap();
-        tx.send(3).unwrap();
-        assert_eq!(tx.get_pending_count(), 3);
-
-        assert_eq!(rx.recv().unwrap(), 1);
-        assert_eq!(tx.get_pending_count(), 2);
-        assert_eq!(rx.recv().unwrap(), 2);
-        assert_eq!(tx.get_pending_count(), 1);
-        assert_eq!(rx.recv().unwrap(), 3);
-        assert_eq!(tx.get_pending_count(), 0);
-    }
-
-    #[test]
-    fn test_sender_pending_count_after_failures() {
-        let (tx, rx) = unbounded::<i32>(10);
-        assert_eq!(tx.get_pending_count(), 0);
-        tx.send(1).unwrap();
-        assert_eq!(tx.get_pending_count(), 1);
-        drop(rx);
-        tx.send(2).expect_err("error expected");
-        assert_eq!(tx.get_pending_count(), 1);
-        tx.send(3).expect_err("error expected");
-        assert_eq!(tx.get_pending_count(), 1);
     }
 
     #[derive(Clone)]

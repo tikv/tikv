@@ -20,7 +20,9 @@ use tokio::time::interval as tokio_timer_interval;
 #[derive(Debug, PartialEq, Eq)]
 pub enum RateLimiterError {
     DisconnectedError,
-    CongestedError(usize /* queue length when the congestion is detected */),
+    CongestedError(
+        usize, /* queue length when the congestion is detected */
+    ),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -91,12 +93,10 @@ impl State {
                 Ok(waker) => {
                     let mut waker = waker.lock().unwrap();
                     // waker may have already been taken away, because the runtime has
-                    // decided to poll the sender for some reason and the sender has unblocked itself.
+                    // decided to poll the sender for some reason (spurious wake-up) and the sender has unblocked itself.
                     if let Some(waker) = waker.take() {
                         waker.wake();
                         return;
-                    } else {
-                        println!("empty wake");
                     }
                 }
                 // Queue is empty now.
@@ -130,6 +130,8 @@ pub fn new_pair<E>(
     block_scan_threshold: usize,
     close_sink_threshold: usize,
 ) -> (RateLimiter<E>, Drainer<E>) {
+    // The channel we create here is a block-free mpsc channel.
+    // (Although crossbeam's doc says it's mpmc, we use it as a mpsc channel.)
     let (sender, receiver) = unbounded::<E>();
     let state = Arc::new(State {
         is_sink_closed: AtomicBool::new(false),
@@ -141,6 +143,9 @@ pub fn new_pair<E>(
         #[cfg(test)]
         blocked_sender_count: AtomicUsize::new(0),
     });
+    // We create a channel that sends the "cancel" message directly to the sink,
+    // by-passing the main channel.
+    // Since we do not need high performance for this channel, we use the pre-made tokio async channel.
     let (close_tx, close_rx) = async_channel::<()>(1);
     let rate_limiter = RateLimiter::new(sender, state.clone(), close_tx);
     let drainer = Drainer::new(receiver, state, close_rx);
@@ -158,8 +163,11 @@ impl<E> RateLimiter<E> {
         };
     }
 
+    /// send_realtime_event is suitable for sending messages that cannot be delayed.
+    /// This function is guaranteed to not block the current thread and returns as soon as possible.
     pub fn send_realtime_event(&self, event: E) -> Result<(), RateLimiterError> {
         if self.state.is_sink_closed.load(Ordering::SeqCst) {
+            // fail fast path in the case where the sink has been closed (usually due to congestion).
             return Err(RateLimiterError::DisconnectedError);
         }
 
@@ -167,7 +175,10 @@ impl<E> RateLimiter<E> {
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(queue_size as f64);
         if queue_size >= self.state.close_sink_threshold {
             warn!("cdc send_realtime_event queue length reached threshold"; "queue_size" => queue_size);
+            // mark the sink as closed.
             self.state.is_sink_closed.store(true, Ordering::SeqCst);
+            // notify the drainer so that the drainer exits immediately.
+            // use `try_send` here to avoid unnecessary blocking.
             let _ = self.close_tx.clone().try_send(());
             return Err(RateLimiterError::CongestedError(queue_size));
         }
@@ -183,6 +194,7 @@ impl<E> RateLimiter<E> {
         Ok(())
     }
 
+    /// send_scan_event
     pub async fn send_scan_event(&self, event: E) -> Result<(), RateLimiterError> {
         let sink_clone = self.sink.clone();
         let state_clone = self.state.clone();
@@ -208,13 +220,9 @@ impl<E> RateLimiter<E> {
             Err(_err) => {
                 // We don't need to care about the value of `_err`, because since
                 // we are using the unbounded queue, `_err` is bound to be `TrySendError::Disconnected`.
-                return Err(RateLimiterError::DisconnectedError)
+                return Err(RateLimiterError::DisconnectedError);
             }
         }
-    }
-
-    pub fn notify_close(self) {
-        self.state.is_sink_closed.store(true, Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -238,13 +246,11 @@ impl<E> Clone for RateLimiter<E> {
 
 impl<E> Drop for RateLimiter<E> {
     fn drop(&mut self) {
-        let previous = self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
-        if previous == 1 {
-            warn!("cdc RateLimiter ref_count = 0");
-        }
+        self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
+/// BlockSender is the future used to block send_scan_event.
 struct BlockSender<'a, Cond>
 where
     Cond: Fn() -> bool + Unpin + 'a,
@@ -272,13 +278,13 @@ where
         if let Some(waker_arc) = self.waker.take() {
             waker_arc.lock().unwrap().take();
             #[cfg(test)]
-                {
-                    let prev_count = self
-                        .state
-                        .blocked_sender_count
-                        .fetch_sub(1, Ordering::SeqCst);
-                    debug_assert!(prev_count > 0, "prev_count = {}", prev_count);
-                }
+            {
+                let prev_count = self
+                    .state
+                    .blocked_sender_count
+                    .fetch_sub(1, Ordering::SeqCst);
+                debug_assert!(prev_count > 0, "prev_count = {}", prev_count);
+            }
         }
     }
 }
@@ -291,19 +297,32 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if !(self.cond)() || self.state.is_sink_closed.load(Ordering::SeqCst) {
+            // the cond is not satisfied, so we can unblock (or just skip blocking if we have never blocked before).
             let mut_self = self.get_mut();
             mut_self.unblock();
             Poll::Ready(())
         } else {
             // Takes the read lock of the queue
+            // NOTE: we can do `push` on the queue under the read lock because the queue
+            // is thread-safe by itself. We use the read lock to signify the shared access by
+            // a sender.
             let queue = self.state.wait_queue.read().unwrap();
+            // Checks the condition again under the lock, so that we do not block ourselves
+            // under the false impression that the condition still holds, while in fact the drainer
+            // has consumed some messages and tried to unblock a waiter and we have missed it.
             if !(self.cond)() || self.state.is_sink_closed.load(Ordering::SeqCst) {
+                // Cond no longer holds, so we can unblock.
                 self.get_mut().unblock();
                 Poll::Ready(())
             } else {
+                // Checks if we have been blocked.
                 if let Some(ref waker_arc) = self.waker {
+                    // We have been blocked.
                     let mut waker_slot = waker_arc.lock().unwrap();
+                    // Checks if we have been woken up.
                     if waker_slot.is_none() {
+                        // Although we have been woken up, since the condition holds, we still need
+                        // to block, so we put the waker back.
                         *waker_slot = Some(cx.waker().clone());
                         queue.push(waker_arc.clone());
                     }
@@ -311,6 +330,7 @@ where
                     return Poll::Pending;
                 }
 
+                // This is the first time we have been polled and we decide to block.
                 let waker_arc = Arc::new(Mutex::new(Some(cx.waker().clone())));
                 queue.push(waker_arc.clone());
                 let mut mut_self = self.get_mut();
@@ -440,10 +460,7 @@ struct DrainOne<'a, E> {
 impl<'a, E> DrainOne<'a, E> {
     #[inline]
     fn wrap(receiver: &'a Receiver<E>, state: &'a State) -> Self {
-        Self {
-            receiver,
-            state,
-        }
+        Self { receiver, state }
     }
 }
 
@@ -473,9 +490,7 @@ impl<'a, E> Future for DrainOne<'a, E> {
                 return Poll::Ready(None);
             }
             return match self.receiver.try_recv() {
-                Ok(v) => {
-                    Poll::Ready(Some(v))
-                }
+                Ok(v) => Poll::Ready(Some(v)),
                 Err(TryRecvError::Empty) => {
                     self.state.yield_drainer(cx);
                     if !self.receiver.is_empty() || self.state.ref_count.load(Ordering::SeqCst) == 0
@@ -485,9 +500,7 @@ impl<'a, E> Future for DrainOne<'a, E> {
                     }
                     Poll::Pending
                 }
-                Err(TryRecvError::Disconnected) => {
-                    Poll::Ready(None)
-                }
+                Err(TryRecvError::Disconnected) => Poll::Ready(None),
             };
         }
     }
@@ -496,8 +509,8 @@ impl<'a, E> Future for DrainOne<'a, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use futures::sink;
+    use std::sync::Mutex;
 
     type MockCdcEvent = u64;
     /// MockWriteFlag is used to mock grpcio::WriteFlags,
@@ -574,7 +587,10 @@ mod tests {
 
         async fn recv(&self) -> Option<MockCdcEvent> {
             let value_clone = self.value.clone();
-            MockRpcSinkBlockRecv::new(self, move || value_clone.lock().unwrap().is_none() && !self.sink_closed.load(Ordering::SeqCst)).await;
+            MockRpcSinkBlockRecv::new(self, move || {
+                value_clone.lock().unwrap().is_none() && !self.sink_closed.load(Ordering::SeqCst)
+            })
+            .await;
 
             let ret = self.value.lock().unwrap().take();
             self.send_waker.wake();
@@ -618,14 +634,20 @@ mod tests {
             Ok(())
         }
 
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             if let Some(err) = self.injected_send_error.lock().unwrap().take() {
                 return Poll::Ready(Err(err));
             }
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
             if let Some(err) = self.injected_send_error.lock().unwrap().take() {
                 return Poll::Ready(Err(err));
             }
@@ -910,7 +932,10 @@ mod tests {
 
         mock_sink.inject_send_error(MockRpcError::InjectedRpcError);
         let res = drain_handle.await.unwrap();
-        assert_eq!(res, Err(DrainerError::RpcSinkError(MockRpcError::InjectedRpcError)));
+        assert_eq!(
+            res,
+            Err(DrainerError::RpcSinkError(MockRpcError::InjectedRpcError))
+        );
 
         Ok(())
     }
@@ -937,7 +962,10 @@ mod tests {
 
         verifier_handler.await.unwrap();
         let drain_res = drain_handle.await.unwrap();
-        assert_eq!(drain_res, Err(DrainerError::RpcSinkError(MockRpcError::SinkClosed)));
+        assert_eq!(
+            drain_res,
+            Err(DrainerError::RpcSinkError(MockRpcError::SinkClosed))
+        );
 
         Ok(())
     }
@@ -945,9 +973,12 @@ mod tests {
     #[test]
     fn test_multi_thread_many_events() {
         let mut builder = tokio::runtime::Builder::new();
-        let mut runtime = builder.threaded_scheduler()
+        let mut runtime = builder
+            .threaded_scheduler()
             .core_threads(16)
-            .enable_all().build().unwrap();
+            .enable_all()
+            .build()
+            .unwrap();
 
         runtime.block_on(async {
             do_test_multi_thread_many_events().await.unwrap();
@@ -956,9 +987,9 @@ mod tests {
 
     async fn do_test_multi_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, usize::MAX);
-        let drain_handle = tokio::spawn(async move{
+        let drain_handle = tokio::spawn(async move {
             match drainer.drain(sink::drain(), ()).await {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(err) => panic!("drainer exited with error {:?}", err),
             }
         });
