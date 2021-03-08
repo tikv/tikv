@@ -91,6 +91,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
+<<<<<<< HEAD
     fn find_propose_time(&self, key: (u64, u64)) -> Option<Timespec> {
         let (front, back) = self.queue.as_slices();
         let map = |p: &Proposal<_>| (p.term, p.index);
@@ -98,6 +99,14 @@ impl<S: Snapshot> ProposalQueue<S> {
             .binary_search_by_key(&key, map)
             .or_else(|_| back.binary_search_by_key(&key, map));
         idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
+=======
+    fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
+        self.queue
+            .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
+            .ok()
+            .map(|i| self.queue[i].renew_lease_time)
+            .flatten()
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
     }
 
     // Return all proposals that before (and included) the proposal
@@ -3642,6 +3651,11 @@ impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for Peer<EK, ER> {
 #[cfg(test)]
 mod tests {
     use super::*;
+<<<<<<< HEAD
+=======
+    use crate::store::msg::ExtCallback;
+    use crate::store::util::u64_to_timespec;
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3828,6 +3842,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_propose_queue_find_propose_time() {
         let mut pq: ProposalQueue<engine_panic::PanicSnapshot> = ProposalQueue::new();
         let t = monotonic_raw_now();
@@ -3839,9 +3854,26 @@ mod tests {
                 term: (index / 10) + 1,
                 cb: Callback::None,
                 renew_lease_time,
+=======
+    fn test_propose_queue_find_proposal() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
+        let gen_term = |index: u64| (index / 10) + 1;
+        let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: gen_term(index),
+                cb: Callback::write(Box::new(|_| {})),
+                renew_lease_time: Some(u64_to_timespec(index)),
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
                 must_pass_epoch_check: false,
             });
+        };
+        for index in 1..=100 {
+            push_proposal(&mut pq, index);
         }
+<<<<<<< HEAD
         for remove_i in &[0, 65, 98] {
             let _ = pq.take(*remove_i, (*remove_i / 10) + 1);
             for i in 1..=100 {
@@ -3851,6 +3883,31 @@ mod tests {
                 } else {
                     assert!(pt.is_some())
                 };
+=======
+        let mut pre_remove = 0;
+        for remove_i in 1..=100 {
+            let index = remove_i + 100;
+            // Push more proposal
+            push_proposal(&mut pq, index);
+            // Find propose time
+            for i in 1..=index {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= pre_remove {
+                    assert!(pt.is_none())
+                } else {
+                    assert_eq!(pt.unwrap(), u64_to_timespec(i))
+                };
+            }
+            // Find a proposal and remove all previous proposals
+            for i in 1..=remove_i {
+                let p = pq.find_proposal(gen_term(i), i, 0);
+                let must_found_proposal = p.is_some() && (i > pre_remove);
+                let proposal_removed_previous = p.is_none() && (i <= pre_remove);
+                assert!(must_found_proposal || proposal_removed_previous);
+                // `find_proposal` will remove proposal so `pop` must return None
+                assert!(pq.pop(gen_term(i), i).is_none());
+                assert!(pq.find_propose_time(gen_term(i), i).is_none());
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
             }
         }
     }
