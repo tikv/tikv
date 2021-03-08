@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, Iterator, Result, ScanMode, Snapshot};
+use crate::storage::kv::{Iterator, Result, Snapshot};
 use crate::storage::Statistics;
 
 use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
@@ -104,21 +104,15 @@ impl<S: Snapshot> Snapshot for TTLSnapshot<S> {
         self.map_value(self.s.get_cf_opt(opts, cf, key))
     }
 
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
-        self.s
-            .iter(iter_opt, mode)
-            .map(|c| c.into_with(|i| TTLIterator::new(i, self.current_ts)))
+    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
+        Ok(TTLIterator::new(self.s.iter(iter_opt)?, self.current_ts))
     }
 
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> Result<Cursor<Self::Iter>> {
-        self.s
-            .iter_cf(cf, iter_opt, mode)
-            .map(|c| c.into_with(|i| TTLIterator::new(i, self.current_ts)))
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
+        Ok(TTLIterator::new(
+            self.s.iter_cf(cf, iter_opt)?,
+            self.current_ts,
+        ))
     }
 
     #[inline]
@@ -344,9 +338,8 @@ mod tests {
         let snapshot = engine.snapshot(SnapContext::default()).unwrap();
         let ttl_snapshot = TTLSnapshot::from(snapshot);
         let mut iter = ttl_snapshot
-            .iter(IterOptions::new(None, None, false), ScanMode::Mixed)
-            .unwrap()
-            .iter();
+            .iter(IterOptions::new(None, None, false))
+            .unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(iter.key(), b"key1");
         assert_eq!(iter.value(), b"value1");
