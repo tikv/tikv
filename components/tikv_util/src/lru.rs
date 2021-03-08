@@ -148,7 +148,10 @@ impl<K> Trace<K> {
     fn remove_stale_tail(&mut self) -> Option<K> {
         unsafe {
             let mut record = self.tail.prev;
-            if record.as_mut().update_time + STALE_SECS >= self.cur_time {
+            if record.as_ptr() == &mut *self.head as *mut _ {
+                return None;
+            }
+            if record.as_mut().update_time + STALE_SECS > self.cur_time {
                 return None;
             }
             cut_out(record.as_mut());
@@ -197,11 +200,16 @@ impl<K, V> LruCache<K, V>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
 {
-    #[inline]
-    pub fn resize(&mut self, mut new_cap: usize) {
+    fn clean_stale_tail(&mut self) {
+        self.trace.cur_time = time::coarse_now_secs();
         while let Some(k) = self.trace.remove_stale_tail() {
             self.map.remove(&k);
         }
+    }
+
+    #[inline]
+    pub fn resize(&mut self, mut new_cap: usize) {
+        self.clean_stale_tail();
         if new_cap == 0 {
             new_cap = 1;
         }
@@ -240,16 +248,12 @@ where
         if let Some(o) = old_key {
             self.map.remove(&o);
         }
-        while let Some(k) = self.trace.remove_stale_tail() {
-            self.map.remove(&k);
-        }
+        self.clean_stale_tail();
     }
 
     #[inline]
     pub fn remove(&mut self, key: &K) {
-        while let Some(k) = self.trace.remove_stale_tail() {
-            self.map.remove(&k);
-        }
+        self.clean_stale_tail();
         if let Some(v) = self.map.remove(key) {
             self.trace.delete(v.record);
         }
@@ -380,6 +384,9 @@ mod tests {
     #[test]
     fn test_resize() {
         let mut map = LruCache::with_capacity(10);
+        // Resize on empty map should be safe.
+        map.resize(0);
+        map.resize(10);
         for i in 0..10 {
             map.insert(i, i);
         }
@@ -449,6 +456,50 @@ mod tests {
         }
         for i in 0..10 {
             assert_eq!(map.get(&i), Some(&i));
+        }
+    }
+
+    #[test]
+    fn test_clean_on_timeout() {
+        let mut map = LruCache::with_capacity(10);
+        for i in 0..3 {
+            map.insert(i, i);
+        }
+        time::add_coarse_now_secs(super::STALE_SECS / 2);
+        for i in 3..6 {
+            map.insert(i, i);
+        }
+        time::add_coarse_now_secs(super::STALE_SECS / 2);
+        for i in 6..9 {
+            map.insert(i, i);
+        }
+        // Although capacity is not reached, previous items should be cleared
+        // at timeout.
+        for i in 0..3 {
+            assert_eq!(map.get(&i), None);
+        }
+        for i in 3..6 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+
+        time::add_coarse_now_secs(super::STALE_SECS / 2);
+        for i in 6..9 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+        time::add_coarse_now_secs(super::STALE_SECS / 2);
+        map.remove(&9);
+        // Remove should also trigger clearing.
+        for i in 0..6 {
+            assert_eq!(map.get(&i), None);
+        }
+        for i in 6..9 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+        time::add_coarse_now_secs(super::STALE_SECS);
+        // Resize should also trigger clearing.
+        map.resize(12);
+        for i in 0..9 {
+            assert_eq!(map.get(&i), None);
         }
     }
 }

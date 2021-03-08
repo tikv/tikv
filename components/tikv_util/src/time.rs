@@ -95,6 +95,11 @@ pub fn coarse_now_secs() -> u64 {
     COARSE_NOW_SECS.load(atomic::Ordering::Relaxed)
 }
 
+#[cfg(test)]
+pub fn add_coarse_now_secs(secs: u64) {
+    COARSE_NOW_SECS.fetch_add(secs, atomic::Ordering::Relaxed);
+}
+
 pub struct Monitor {
     tx: Sender<bool>,
     handle: Option<JoinHandle<()>>,
