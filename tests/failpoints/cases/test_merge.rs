@@ -1108,7 +1108,7 @@ fn test_node_merge_crash_before_snapshot_then_catch_up_logs() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     // election timeout must be greater than lease
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(99);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 
@@ -1209,7 +1209,7 @@ fn test_node_merge_crash_when_snapshot() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
     // election timeout must be greater than lease
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(99);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 

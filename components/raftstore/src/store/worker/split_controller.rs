@@ -82,9 +82,13 @@ where
             Ok(i) => i,
             Err(i) => i,
         };
-        let list = get_mut(&mut lists[i]);
-        let j = rng.gen_range(0, list.len()) as usize;
-        key_ranges.push(list.remove(j)); // Sampling without replacement
+        if i < lists.len() {
+            let list = get_mut(&mut lists[i]);
+            if !list.is_empty() {
+                let j = rng.gen_range(0, list.len()) as usize;
+                key_ranges.push(list.remove(j)); // Sampling without replacement
+            }
+        }
     }
     key_ranges
 }
@@ -514,6 +518,32 @@ mod tests {
                     b"b"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_sample_key_num() {
+        let mut hub = AutoSplitController::new(SplitConfigManager::default());
+        hub.cfg.qps_threshold = 2000;
+        hub.cfg.sample_num = 2000;
+        hub.cfg.sample_threshold = 0;
+        hub.cfg.key_threshold = 0;
+        hub.cfg.size_threshold = 0;
+
+        for _ in 0..100 {
+            // qps_stats_vec contains 2000 qps and a readStats with a key range;
+            let mut qps_stats_vec = vec![];
+
+            let mut qps_stats = ReadStats::default();
+            qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats_vec.push(qps_stats);
+
+            let mut qps_stats = ReadStats::default();
+            for _ in 0..2000 {
+                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"b", b"c", false));
+            }
+            qps_stats_vec.push(qps_stats);
+            hub.flush(qps_stats_vec);
         }
     }
 

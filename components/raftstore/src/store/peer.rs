@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64, usize};
 
 use crossbeam::atomic::AtomicCell;
+use crossbeam::channel::TrySendError;
 use engine_traits::{Engines, KvEngine, RaftEngine, Snapshot, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
+use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb::{self, PeerRole};
 use kvproto::pdpb::PeerStats;
@@ -35,10 +37,12 @@ use time::Timespec;
 use uuid::Uuid;
 
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::errors::RAFTSTORE_IS_BUSY;
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
 use crate::store::hibernate_state::GroupState;
+use crate::store::msg::RaftCommand;
 use crate::store::worker::{HeartbeatTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask};
 use crate::store::{
     Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse,
@@ -94,13 +98,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
-        let key = (term, index);
-        let map = |p: &Proposal<_>| (p.term, p.index);
-        let (front, back) = self.queue.as_slices();
-        let idx = front
-            .binary_search_by_key(&key, map)
-            .or_else(|_| back.binary_search_by_key(&key, map));
-        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
+        self.queue
+            .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
+            .ok()
+            .map(|i| self.queue[i].renew_lease_time)
+            .flatten()
     }
 
     // Find proposal in front or at the given term and index
@@ -1976,10 +1978,22 @@ where
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
         while let Some(mut read) = self.pending_reads.pop_front() {
-            // addition_request indicates an ongoing lock checking. We must wait until lock checking finished.
-            if read.addition_request.is_some() {
-                self.pending_reads.push_front(read);
-                break;
+            // The response of this read index request is lost, but we need it for
+            // the memory lock checking result. Resend the request.
+            if let Some(read_index) = read.addition_request.take() {
+                assert_eq!(read.cmds.len(), 1);
+                let (mut req, cb, _) = read.cmds.pop().unwrap();
+                assert_eq!(req.requests.len(), 1);
+                req.requests[0].set_read_index(*read_index);
+                let read_cmd = RaftCommand::new(req, cb);
+                info!(
+                    "re-propose read index request because the response is lost";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                RAFT_READ_INDEX_PENDING_COUNT.sub(1);
+                self.send_read_command(ctx, read_cmd);
+                continue;
             }
 
             assert!(read.read_index.is_some());
@@ -1997,6 +2011,36 @@ where
                 break;
             }
         }
+    }
+
+    fn send_read_command<T>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        read_cmd: RaftCommand<EK::Snapshot>,
+    ) {
+        let mut err = errorpb::Error::default();
+        let read_cb = match ctx.router.send_raft_command(read_cmd) {
+            Ok(()) => return,
+            Err(TrySendError::Full(cmd)) => {
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                cmd.callback
+            }
+            Err(TrySendError::Disconnected(cmd)) => {
+                err.set_message(format!("region {} is missing", self.region_id));
+                err.mut_region_not_found().set_region_id(self.region_id);
+                cmd.callback
+            }
+        };
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        let read_resp = ReadResponse {
+            response: resp,
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        read_cb.invoke_read(read_resp);
     }
 
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
@@ -3718,6 +3762,7 @@ pub trait AbstractPeer {
 mod tests {
     use super::*;
     use crate::store::msg::ExtCallback;
+    use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3907,22 +3952,34 @@ mod tests {
     fn test_propose_queue_find_proposal() {
         let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
             ProposalQueue::new("tag".to_owned());
-        let t = monotonic_raw_now();
         let gen_term = |index: u64| (index / 10) + 1;
-        for index in 1..=100 {
-            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+        let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
             pq.push(Proposal {
                 is_conf_change: false,
                 index,
                 term: gen_term(index),
                 cb: Callback::write(Box::new(|_| {})),
-                renew_lease_time,
+                renew_lease_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
             });
+        };
+        for index in 1..=100 {
+            push_proposal(&mut pq, index);
         }
         let mut pre_remove = 0;
-        for remove_i in &[0, 1, 65, 98, 100] {
-            let remove_i = *remove_i;
+        for remove_i in 1..=100 {
+            let index = remove_i + 100;
+            // Push more proposal
+            push_proposal(&mut pq, index);
+            // Find propose time
+            for i in 1..=index {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= pre_remove {
+                    assert!(pt.is_none())
+                } else {
+                    assert_eq!(pt.unwrap(), u64_to_timespec(i))
+                };
+            }
             // Find a proposal and remove all previous proposals
             for i in 1..=remove_i {
                 let p = pq.find_proposal(gen_term(i), i, 0);
@@ -3931,14 +3988,7 @@ mod tests {
                 assert!(must_found_proposal || proposal_removed_previous);
                 // `find_proposal` will remove proposal so `pop` must return None
                 assert!(pq.pop(gen_term(i), i).is_none());
-            }
-            for i in 1..=100 {
-                let pt = pq.find_propose_time(gen_term(i), i);
-                if i <= remove_i || i % 3 == 1 {
-                    assert!(pt.is_none())
-                } else {
-                    assert!(pt.is_some())
-                };
+                assert!(pq.find_propose_time(gen_term(i), i).is_none());
             }
             pre_remove = remove_i;
         }
