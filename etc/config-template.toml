@@ -705,12 +705,11 @@
 # default: lz4
 # blob-file-compression = "lz4"
 
-# blob file zstd compression options
-# window_bits = -14
-# level = 32767
-# strategy = 0
-# max-dict-bytes = 0
-# max-train-bytes = 0
+## blob file zstd compression options
+## set zstd dictionary compression, default(0) will use zstd compression
+## it is recommend to set dictionary size to 4k, 16k
+## sample data to train dictionary is of size 100X dictionary size.
+# zstd-dict-size = 0
 
 ## Specifics cache size for blob records
 # default: 0
