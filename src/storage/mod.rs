@@ -354,11 +354,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res =
             self.read_pool.spawn_handle(
                 async move {
-                    for get in &requests {
-                        let region_id = get.get_context().get_region_id();
-                        let peer = get.get_context().get_peer();
-                        tls_collect_qps(region_id, peer, &get.key, &get.key, false);
-                    }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -370,6 +365,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut req_snaps = vec![];
 
                     for mut req in requests {
+                        let region_id = req.get_context().get_region_id();
+                        let peer = req.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, &req.get_key(), &req.get_key(), false);
                         let key = Key::from_raw(req.get_key());
                         let start_ts = req.get_version().into();
                         let mut ctx = req.take_context();
@@ -708,15 +706,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res = self.read_pool.spawn_handle(
             async move {
                 if let Some(start_key) = &start_key {
-                    let mut key = &vec![];
-                    if let Some(end_key) = &end_key {
-                        key = end_key.as_encoded();
-                    }
+                    let end_key = match &end_key {
+                        Some(k) => k.as_encoded().as_slice(),
+                        None => &[],
+                    };
                     tls_collect_qps(
                         ctx.get_region_id(),
                         ctx.get_peer(),
                         start_key.as_encoded(),
-                        key,
+                        end_key,
                         false,
                     );
                 }

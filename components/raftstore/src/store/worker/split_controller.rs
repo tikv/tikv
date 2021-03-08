@@ -378,7 +378,7 @@ impl AutoSplitController {
                 if let Some(key) = recorder.collect(&self.cfg) {
                     let split_info = SplitInfo {
                         region_id,
-                        split_key: key.clone(),
+                        split_key: key,
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
