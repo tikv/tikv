@@ -4,7 +4,13 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
+<<<<<<< HEAD
 #![feature(specialization)]
+=======
+#![feature(min_specialization)]
+#![feature(box_patterns)]
+#![feature(vecdeque_binary_search)]
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
 
 #[macro_use]
 extern crate bitflags;

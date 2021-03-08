@@ -83,10 +83,28 @@ pub struct ProposalMeta {
     pub txn_extra: TxnExtra,
 }
 
+<<<<<<< HEAD
 #[derive(Default)]
 struct ProposalQueue {
     queue: VecDeque<ProposalMeta>,
 }
+=======
+impl<S: Snapshot> ProposalQueue<S> {
+    fn new(tag: String) -> ProposalQueue<S> {
+        ProposalQueue {
+            tag,
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
+        self.queue
+            .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
+            .ok()
+            .map(|i| self.queue[i].renew_lease_time)
+            .flatten()
+    }
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
 
 impl ProposalQueue {
     fn pop(&mut self, term: u64) -> Option<ProposalMeta> {
@@ -3415,6 +3433,13 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 
 #[cfg(test)]
 mod tests {
+<<<<<<< HEAD
+=======
+    use super::*;
+    use crate::store::msg::ExtCallback;
+    use crate::store::util::u64_to_timespec;
+    use kvproto::raft_cmdpb;
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
 
@@ -3596,6 +3621,105 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
+=======
+    fn test_propose_queue_find_proposal() {
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
+        let gen_term = |index: u64| (index / 10) + 1;
+        let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
+            pq.push(Proposal {
+                is_conf_change: false,
+                index,
+                term: gen_term(index),
+                cb: Callback::write(Box::new(|_| {})),
+                renew_lease_time: Some(u64_to_timespec(index)),
+                must_pass_epoch_check: false,
+            });
+        };
+        for index in 1..=100 {
+            push_proposal(&mut pq, index);
+        }
+        let mut pre_remove = 0;
+        for remove_i in 1..=100 {
+            let index = remove_i + 100;
+            // Push more proposal
+            push_proposal(&mut pq, index);
+            // Find propose time
+            for i in 1..=index {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= pre_remove {
+                    assert!(pt.is_none())
+                } else {
+                    assert_eq!(pt.unwrap(), u64_to_timespec(i))
+                };
+            }
+            // Find a proposal and remove all previous proposals
+            for i in 1..=remove_i {
+                let p = pq.find_proposal(gen_term(i), i, 0);
+                let must_found_proposal = p.is_some() && (i > pre_remove);
+                let proposal_removed_previous = p.is_none() && (i <= pre_remove);
+                assert!(must_found_proposal || proposal_removed_previous);
+                // `find_proposal` will remove proposal so `pop` must return None
+                assert!(pq.pop(gen_term(i), i).is_none());
+                assert!(pq.find_propose_time(gen_term(i), i).is_none());
+            }
+            pre_remove = remove_i;
+        }
+    }
+
+    #[test]
+    fn test_uncommitted_proposals() {
+        struct DropPanic(bool);
+        impl Drop for DropPanic {
+            fn drop(&mut self) {
+                if self.0 {
+                    unreachable!()
+                }
+            }
+        }
+        fn must_call() -> ExtCallback {
+            let mut d = DropPanic(true);
+            Box::new(move || {
+                d.0 = false;
+            })
+        }
+        fn must_not_call() -> ExtCallback {
+            Box::new(move || unreachable!())
+        }
+        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+            ProposalQueue::new("tag".to_owned());
+
+        // (1, 4) and (1, 5) is not committed
+        let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];
+        let committed = vec![(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
+        for (index, term) in entries.clone() {
+            if term != 1 {
+                continue;
+            }
+            let cb = if committed.contains(&(index, term)) {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_call()))
+            } else {
+                Callback::write_ext(Box::new(|_| {}), None, Some(must_not_call()))
+            };
+            pq.push(Proposal {
+                index,
+                term,
+                cb,
+                is_conf_change: false,
+                renew_lease_time: None,
+                must_pass_epoch_check: false,
+            });
+        }
+        for (index, term) in entries {
+            if let Some(mut p) = pq.find_proposal(term, index, 0) {
+                p.cb.invoke_committed();
+            }
+        }
+    }
+
+    #[test]
+>>>>>>> 045c8b3a8... raftstore: fix find_propose_time may return older instant (#9754)
     fn test_cmd_epoch_checker() {
         use std::sync::mpsc;
         fn new_admin_request(cmd_type: AdminCmdType) -> RaftCmdRequest {
