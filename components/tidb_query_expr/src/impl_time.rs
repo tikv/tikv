@@ -323,24 +323,30 @@ pub fn add_datetime_and_string(
     arg0: &DateTime,
     arg1: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let arg1 = std::str::from_utf8(&arg1).map_err(Error::Encoding)?;
-    let arg1 = match Duration::parse(ctx, arg1, MAX_FSP) {
-        Ok(arg) => arg,
-        Err(_) => return Ok(None),
-    };
+    let duration = parse_duration(ctx, arg1)?;
+    match duration {
+        Some(dur) => add_datetime_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
+    }
+}
 
-    let res = match arg0.checked_add(ctx, arg1) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DATETIME",
-                    format!("({} + {})", arg0, arg1),
-                ))
-                .map(|_| Ok(None))?;
-        }
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn add_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &Duration,
+    arg1: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let parsed_duration = parse_duration(ctx, arg1)?;
+    let added: Result<Option<Duration>> = match parsed_duration {
+        Some(dur) => add_duration_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
     };
-    Ok(Some(res))
+    added.map(|result| match result {
+        Some(dur) => writer.write(Some(duration_to_string(dur).into_bytes())),
+        None => writer.write(None),
+    })
 }
 
 #[rpn_fn(capture=[ctx])]
@@ -395,24 +401,30 @@ pub fn sub_datetime_and_string(
     datetime: &DateTime,
     duration_str: BytesRef,
 ) -> Result<Option<DateTime>> {
-    let duration_str = std::str::from_utf8(&duration_str).map_err(Error::Encoding)?;
-    let duration = match Duration::parse(ctx, duration_str, MAX_FSP) {
-        Ok(duration) => duration,
-        Err(_) => return Ok(None),
-    };
+    let duration = parse_duration(ctx, duration_str)?;
+    match duration {
+        Some(dur) => sub_datetime_and_duration(ctx, datetime, &dur),
+        None => Ok(None),
+    }
+}
 
-    let res = match datetime.checked_sub(ctx, duration) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DATETIME",
-                    format!("({} - {})", datetime, duration),
-                ))
-                .map(|_| Ok(None))?;
-        }
+#[rpn_fn(writer, capture = [ctx])]
+#[inline]
+pub fn sub_date_and_string(
+    ctx: &mut EvalContext,
+    arg0: &Duration,
+    arg1: BytesRef,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let parsed_duration = parse_duration(ctx, arg1)?;
+    let subbed: Result<Option<Duration>> = match parsed_duration {
+        Some(dur) => sub_duration_and_duration(ctx, arg0, &dur),
+        None => Ok(None),
     };
-    Ok(Some(res))
+    subbed.map(|result| match result {
+        Some(dur) => writer.write(Some(duration_to_string(dur).into_bytes())),
+        None => writer.write(None),
+    })
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -686,24 +698,11 @@ pub fn add_duration_and_string(
     arg1: &Duration,
     arg2: BytesRef,
 ) -> Result<Option<Duration>> {
-    let arg2 = std::str::from_utf8(&arg2).map_err(Error::Encoding)?;
-    let arg2 = match Duration::parse(ctx, arg2, MAX_FSP) {
-        Ok(arg) => arg,
-        Err(_) => return Ok(None),
-    };
-
-    let res = match arg1.checked_add(arg2) {
-        Some(res) => res,
-        None => {
-            return ctx
-                .handle_invalid_time_error(Error::overflow(
-                    "DURATION",
-                    format!("({} + {})", arg1, arg2),
-                ))
-                .map(|_| Ok(None))?;
-        }
-    };
-    Ok(Some(res))
+    let duration = parse_duration(ctx, arg2)?;
+    match duration {
+        Some(dur) => add_duration_and_duration(ctx, arg1, &dur),
+        None => Ok(None),
+    }
 }
 
 /// Cast Duration into string representation and drop subsec if possible.
@@ -723,6 +722,12 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
     datetime.to_string()
 }
 
+#[inline]
+fn parse_duration(ctx: &mut EvalContext, unparsed: BytesRef) -> Result<Option<Duration>> {
+    let str = std::str::from_utf8(&unparsed).map_err(Error::Encoding)?;
+    Ok(Duration::parse(ctx, str, MAX_FSP).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,8 +736,9 @@ mod tests {
 
     use crate::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::builder::FieldTypeBuilder;
+    use tidb_query_datatype::codec::convert::ConvertTo;
     use tidb_query_datatype::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use tidb_query_datatype::codec::mysql::{Time, MAX_FSP};
+    use tidb_query_datatype::codec::mysql::MAX_FSP;
     use tidb_query_datatype::FieldTypeTp;
 
     #[test]
@@ -862,23 +868,30 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
 
-        //                // TODO: pass this test after refactoring the issue #3953 is fixed.
-        //                {
-        //                    let format: Option<Bytes> =  Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
-        //                    let time: Option<DateTime> = Some( DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
-        //
-        //                    let mut cfg = EvalConfig::new();
-        //                    cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
-        //                    let ctx = EvalContext::new(Arc::new(cfg));
-        //
-        //                    let output = RpnFnScalarEvaluator::new()
-        //                        .context(ctx)
-        //                        .push_param(time.clone())
-        //                        .push_param(format)
-        //                        .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
-        //                    assert!(output.is_err());
-        //                }
+        {
+            let format: Option<Bytes> = Some("abc%b %M %m %c %D %d %e %j".as_bytes().to_vec());
+            let time: Option<DateTime> = Some(
+                DateTime::parse_datetime(
+                    &mut EvalContext::default(),
+                    "0000-00-00 00:00:00",
+                    6,
+                    true,
+                )
+                .unwrap(),
+            );
+
+            let mut cfg = EvalConfig::new();
+            cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+                .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+            let ctx = EvalContext::new(Arc::new(cfg));
+
+            let output = RpnFnScalarEvaluator::new()
+                .context(ctx)
+                .push_param(time)
+                .push_param(format)
+                .evaluate::<Bytes>(ScalarFuncSig::DateFormatSig);
+            assert!(output.is_err());
+        }
 
         {
             let mut cfg = EvalConfig::new();
@@ -899,14 +912,13 @@ mod tests {
         let cases: Vec<(Option<&str>, Option<&str>)> = vec![
             (Some("2010-01-07 23:12:34.12345"), None),
             (None, None),
-            // TODO: pass this test after refactoring the issue #3953 is fixed.
-            //            (
-            //                "0000-00-00 00:00:00",
-            //                Some(
-            //                    "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
-            //                            %x %Y %y %%",
-            //                ),
-            //            ),
+            (
+                Some("0000-00-00 00:00:00"),
+                Some(
+                    "%b %M %m %c %D %d %e %j %k %H %i %p %r %T %s %f %v
+                                       %x %Y %y %%",
+                ),
+            ),
         ];
 
         for (date, format) in cases {
@@ -934,8 +946,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (date, expect) in cases {
             let date = Some(DateTime::parse_datetime(&mut ctx, date, MAX_FSP, true).unwrap());
-            let expect =
-                expect.map(|expect| Time::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
+            let expect = expect
+                .map(|expect| DateTime::parse_datetime(&mut ctx, expect, MAX_FSP, true).unwrap());
 
             let output = RpnFnScalarEvaluator::new()
                 .push_param(date)
@@ -1197,7 +1209,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let time = match arg {
-                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
+                Some(arg) => Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
                 None => None,
             };
             let output = RpnFnScalarEvaluator::new()
@@ -1221,7 +1233,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = Time::parse_datetime(&mut ctx, arg, 6, true).unwrap();
+            let time = DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::ToSeconds)
@@ -1342,8 +1354,8 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
-            let arg1 = Time::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
-            let arg2 = Time::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
+            let arg1 = DateTime::parse_datetime(&mut ctx, arg1, 6, true).unwrap();
+            let arg2 = DateTime::parse_datetime(&mut ctx, arg2, 6, true).unwrap();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -1402,9 +1414,10 @@ mod tests {
             ),
         ];
         for (arg1, arg2, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
-                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+                arg1.map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
@@ -1446,9 +1459,10 @@ mod tests {
             ),
         ];
         for (arg0, arg1, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg0 =
-                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+                arg0.map(|arg0| DateTime::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
             let arg1 = arg1.map(|str| str.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
@@ -1507,9 +1521,10 @@ mod tests {
             ),
         ];
         for (arg1, arg2, exp, null_case) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg1 =
-                arg1.map(|arg1| Time::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
+                arg1.map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, MAX_FSP, true).unwrap());
             let arg2 = arg2.map(|arg2| Duration::parse(&mut ctx, arg2, MAX_FSP).unwrap());
             if null_case {
                 let output = RpnFnScalarEvaluator::new()
@@ -1560,9 +1575,10 @@ mod tests {
             ),
         ];
         for (arg0, arg1, exp) in cases {
-            let exp = exp.map(|exp| Time::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
+            let exp =
+                exp.map(|exp| DateTime::parse_datetime(&mut ctx, exp, MAX_FSP, true).unwrap());
             let arg0 =
-                arg0.map(|arg0| Time::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
+                arg0.map(|arg0| DateTime::parse_datetime(&mut ctx, arg0, MAX_FSP, true).unwrap());
             let arg1 = arg1.map(|str| str.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
@@ -1596,9 +1612,9 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let datetime: Option<Time> =
-                exp.map(|exp: &str| Time::parse_date(&mut ctx, exp).unwrap());
-            let output: Option<Time> = RpnFnScalarEvaluator::new()
+            let datetime: Option<DateTime> =
+                exp.map(|exp: &str| DateTime::parse_date(&mut ctx, exp).unwrap());
+            let output: Option<DateTime> = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::FromDays)
                 .unwrap();
@@ -1624,7 +1640,7 @@ mod tests {
             (Some(100i64), Some(3615901i64)),
         ];
         for (arg1, arg2) in null_cases {
-            let exp: Option<Time> = None;
+            let exp: Option<DateTime> = None;
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -1650,7 +1666,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
-            let exp = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let exp = Some(DateTime::parse_date(&mut ctx, exp).unwrap());
             let arg2 = Some(arg2);
             let arg1 = Some(arg1);
             let output = RpnFnScalarEvaluator::new()
@@ -1730,7 +1746,7 @@ mod tests {
         ];
         for (time, err_code, expect) in cases {
             let mut ctx = EvalContext::default();
-            let time = time.map(|time: &str| Time::parse_date(&mut ctx, time).unwrap());
+            let time = time.map(|time: &str| DateTime::parse_date(&mut ctx, time).unwrap());
             let (output, ctx) = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .context(ctx)
@@ -1889,7 +1905,7 @@ mod tests {
 
         for (arg, err_code, exp) in cases {
             let mut ctx = EvalContext::default();
-            let arg = arg.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let arg = arg.map(|arg: &str| DateTime::parse_date(&mut ctx, arg).unwrap());
             let (output, ctx) = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .context(ctx)
@@ -1977,8 +1993,8 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = Some(Time::parse_date(&mut ctx, arg).unwrap());
-            let exp_val = Some(Time::parse_date(&mut ctx, exp).unwrap());
+            let time = Some(DateTime::parse_date(&mut ctx, arg).unwrap());
+            let exp_val = Some(DateTime::parse_date(&mut ctx, exp).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::LastDay)
@@ -1987,16 +2003,16 @@ mod tests {
         }
         let none_cases = vec!["2011-00-01 10:10:10"];
         for case in none_cases {
-            let time = Some(Time::parse_date(&mut ctx, case).unwrap());
+            let time = Some(DateTime::parse_date(&mut ctx, case).unwrap());
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
-                .evaluate::<Time>(ScalarFuncSig::LastDay)
+                .evaluate::<DateTime>(ScalarFuncSig::LastDay)
                 .unwrap();
             assert_eq!(output, None);
         }
         let output = RpnFnScalarEvaluator::new()
-            .push_param(None::<Time>)
-            .evaluate::<Time>(ScalarFuncSig::LastDay)
+            .push_param(None::<DateTime>)
+            .evaluate::<DateTime>(ScalarFuncSig::LastDay)
             .unwrap();
         assert_eq!(output, None);
     }
@@ -2096,6 +2112,64 @@ mod tests {
                 )
                 .evaluate::<Duration>(ScalarFuncSig::MakeTime);
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_add_sub_date_and_string() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (None, None, None, None),
+            (None, Some("1 00:00:00"), None, None),
+            (Some("2021-02-03"), Some("invalid"), None, None),
+            (Some("2021-02-03"), Some("2021-02-04"), None, None),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00"),
+                Some("01:00:00"),
+                Some("-01:00:00"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("1 00:00:00"),
+                Some("24:00:00"),
+                Some("-24:00:00"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00.555941"),
+                Some("01:00:00.555941"),
+                Some("-01:00:00.555941"),
+            ),
+            (
+                Some("2021-02-03"),
+                Some("01:00:00.5559"),
+                Some("01:00:00.555900"),
+                Some("-01:00:00.555900"),
+            ),
+        ];
+        for (date, duration, add_expected, sub_expected) in cases {
+            let date: Option<DateTime> =
+                date.map(|date| DateTime::parse_date(&mut ctx, date).unwrap());
+            // similates implicit cast from date to duration that is inserted in tidb
+            let date_cast_as_duration: Option<Duration> =
+                date.map(|d| d.convert(&mut ctx).unwrap());
+            let duration: Option<Vec<u8>> = duration.map(|str| str.as_bytes().to_vec());
+
+            let add_output = RpnFnScalarEvaluator::new()
+                .push_param(date_cast_as_duration)
+                .push_param(duration.clone())
+                .evaluate::<Bytes>(ScalarFuncSig::AddDateAndString)
+                .unwrap();
+            assert_eq!(add_output, add_expected.map(|str| str.as_bytes().to_vec()));
+
+            let sub_output = RpnFnScalarEvaluator::new()
+                .push_param(date_cast_as_duration)
+                .push_param(duration)
+                .evaluate::<Bytes>(ScalarFuncSig::SubDateAndString)
+                .unwrap();
+            assert_eq!(sub_output, sub_expected.map(|str| str.as_bytes().to_vec()));
         }
     }
 }
