@@ -86,7 +86,13 @@ impl CompactExt for RocksEngine {
             return Ok(());
         }
 
-        self.compact_files_cf(cf, input_files, Some(output_level), false)
+        self.compact_files_cf(
+            cf,
+            input_files,
+            Some(output_level),
+            cmp::min(num_cpus::get(), 32) as u32,
+            false,
+        )
     }
 
     fn compact_files_cf(
@@ -94,6 +100,7 @@ impl CompactExt for RocksEngine {
         cf: &str,
         mut files: Vec<String>,
         output_level: Option<i32>,
+        max_subcompactions: u32,
         without_l0: bool,
     ) -> Result<()> {
         let db = self.as_inner();
@@ -116,7 +123,10 @@ impl CompactExt for RocksEngine {
             files.retain(|f| !l0_files.iter().any(|n| f.ends_with(n)));
         }
 
-        let max_subcompactions = cmp::min(num_cpus::get(), 32);
+        if files.is_empty() {
+            return Ok(());
+        }
+
         let mut opts = CompactionOptions::new();
         opts.set_compression(output_compression);
         opts.set_max_subcompactions(max_subcompactions as i32);
