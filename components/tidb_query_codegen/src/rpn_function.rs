@@ -1625,7 +1625,7 @@ impl NormalRpnFn {
         let mut impl_evaluator_generics = self.item_fn.sig.generics.clone();
         impl_evaluator_generics.params.push(parse_quote! { 'arg_ });
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-        let (impl_eval_generics, _, _) = impl_evaluator_generics.split_for_impl();
+        let (impl_eval_generics, ..) = impl_evaluator_generics.split_for_impl();
 
         let evaluator_ident = &self.evaluator_ident;
         let fn_trait_ident = &self.fn_trait_ident;

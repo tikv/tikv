@@ -2263,7 +2263,7 @@ impl Eq for Decimal {}
 impl Ord for Decimal {
     fn cmp(&self, right: &Decimal) -> Ordering {
         if self.negative == right.negative {
-            let (carry, _, _, _) = calc_sub_carry(self, right);
+            let (carry, ..) = calc_sub_carry(self, right);
             carry.map_or(Ordering::Equal, |carry| {
                 if (carry > 0) == self.negative {
                     Ordering::Greater

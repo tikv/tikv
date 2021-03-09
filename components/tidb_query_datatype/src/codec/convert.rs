@@ -2670,7 +2670,7 @@ mod tests {
                         assert!(r.is_ok(), "{}", log);
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
-                    Err(Error::Eval(_, _)) => {
+                    Err(Error::Eval(..)) => {
                         if let Error::Eval(_, d) = r.err().unwrap() {
                             assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
                         } else {

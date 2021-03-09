@@ -2022,7 +2022,7 @@ where
             match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
                 Ok(_) => {}
                 // PD could dispatch redundant conf changes.
-                Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+                Err(raft::Error::NotExists(..)) | Err(raft::Error::Exists(..)) => {}
                 _ => unreachable!(),
             }
         } else {
