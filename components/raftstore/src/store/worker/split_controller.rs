@@ -13,8 +13,6 @@ use rand::Rng;
 use collections::HashMap;
 use tikv_util::config::Tracker;
 
-use txn_types::Key;
-
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
@@ -381,7 +379,7 @@ impl AutoSplitController {
                 if !key.is_empty() {
                     let split_info = SplitInfo {
                         region_id,
-                        split_key: Key::from_raw(&key).into_encoded(),
+                        split_key: key,
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
@@ -422,6 +420,7 @@ impl AutoSplitController {
 mod tests {
     use super::*;
     use crate::store::util::build_key_range;
+    use txn_types::Key;
 
     enum Position {
         Left,
@@ -494,29 +493,76 @@ mod tests {
         sc.sample_key(b"", b"d", Position::Contained);
     }
 
+    fn gen_read_stats(region_id: u64, key_ranges: Vec<KeyRange>) -> ReadStats {
+        let mut qps_stats = ReadStats::default();
+        for key_range in &key_ranges {
+            qps_stats.add_qps(region_id, &Peer::default(), key_range.clone());
+        }
+        qps_stats
+    }
+
     #[test]
     fn test_hub() {
+        // raw key mode
+        let raw_key_ranges = vec![
+            build_key_range(b"a", b"b", false),
+            build_key_range(b"b", b"c", false),
+        ];
+        check_split(
+            b"raw key",
+            vec![gen_read_stats(1, raw_key_ranges.clone())],
+            vec![b"b"],
+        );
+
+        // encoded key mode
+        let key_a = Key::from_raw(b"0080").append_ts(2.into());
+        let key_b = Key::from_raw(b"0160").append_ts(2.into());
+        let key_c = Key::from_raw(b"0240").append_ts(2.into());
+        let encoded_key_ranges = vec![
+            build_key_range(key_a.as_encoded(), key_b.as_encoded(), false),
+            build_key_range(key_b.as_encoded(), key_c.as_encoded(), false),
+        ];
+        check_split(
+            b"encoded key",
+            vec![gen_read_stats(1, encoded_key_ranges.clone())],
+            vec![key_b.as_encoded()],
+        );
+
+        // mix mode
+        check_split(
+            b"mix key",
+            vec![
+                gen_read_stats(1, raw_key_ranges),
+                gen_read_stats(2, encoded_key_ranges),
+            ],
+            vec![b"b", key_b.as_encoded()],
+        );
+    }
+
+    fn check_split(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
         let mut hub = AutoSplitController::new(SplitConfigManager::default());
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
         hub.cfg.key_threshold = 0;
         hub.cfg.size_threshold = 0;
 
-        for i in 0..100 {
-            let mut qps_stats = ReadStats::default();
-            for _ in 0..100 {
-                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
-                qps_stats.add_qps(1, &Peer::default(), build_key_range(b"b", b"c", false));
-            }
-            let (_, split_infos) = hub.flush(vec![qps_stats]);
+        for i in 0..10 {
+            let (_, split_infos) = hub.flush(qps_stats.clone());
             if (i + 1) % hub.cfg.detect_times == 0 {
-                assert_eq!(split_infos.len(), 1);
-                assert_eq!(
-                    Key::from_encoded(split_infos[0].split_key.clone())
-                        .into_raw()
-                        .unwrap(),
-                    b"b"
-                );
+                for obtain in &split_infos {
+                    let mut equal = false;
+                    for expect in &split_keys {
+                        if obtain.split_key.cmp(&expect.to_vec()) == Ordering::Equal {
+                            equal = true;
+                            break;
+                        }
+                    }
+                    assert!(
+                        equal,
+                        "mode: {:?}",
+                        String::from_utf8(Vec::from(mode)).unwrap()
+                    );
+                }
             }
         }
     }
@@ -639,7 +685,7 @@ mod tests {
                     }
                 }
                 qps_stats.add_qps(
-                    0,
+                    1,
                     &Peer::default(),
                     build_key_range(&start_key, &key, false),
                 );
@@ -651,7 +697,7 @@ mod tests {
     fn qps_add(b: &mut test::Bencher) {
         let mut qps_stats = default_qps_stats();
         b.iter(|| {
-            qps_stats.add_qps(0, &Peer::default(), build_key_range(b"a", b"b", false));
+            qps_stats.add_qps(1, &Peer::default(), build_key_range(b"a", b"b", false));
         });
     }
 }

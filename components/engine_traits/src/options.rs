@@ -105,9 +105,8 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOptions {
+    pub fn use_prefix_seek(&mut self) {
         self.seek_mode = SeekMode::Prefix;
-        self
     }
 
     #[inline]
@@ -218,9 +217,8 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+    pub fn set_prefix_same_as_start(&mut self, enable: bool) {
         self.prefix_same_as_start = enable;
-        self
     }
 
     #[inline]
@@ -229,9 +227,8 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_max_skippable_internal_keys(mut self, threshold: u64) -> IterOptions {
+    pub fn set_max_skippable_internal_keys(&mut self, threshold: u64) {
         self.max_skippable_internal_keys = threshold;
-        self
     }
 }
 
