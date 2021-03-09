@@ -1,10 +1,11 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::storage::mvcc::{
     metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
     ErrorInner, Key, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader, TimeStamp,
 };
 use crate::storage::{Snapshot, TxnStatus};
-
-use super::check_txn_status::{check_txn_status_missing_lock, rollback_lock, MissingLockAction};
+use crate::storage::mvcc::txn::check_txn_status::{check_txn_status_missing_lock, rollback_lock, MissingLockAction};
 
 /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
 /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
