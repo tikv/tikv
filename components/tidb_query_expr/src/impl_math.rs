@@ -1292,10 +1292,12 @@ mod tests {
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(Some(Real::from(0.0_f64)))
-            .evaluate::<Real>(ScalarFuncSig::Cot)
-            .is_err());
+        assert!(
+            RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(0.0_f64)))
+                .evaluate::<Real>(ScalarFuncSig::Cot)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1344,11 +1346,13 @@ mod tests {
         ];
 
         for (lhs, rhs) in invalid_cases {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(lhs)
-                .push_param(rhs)
-                .evaluate::<Real>(ScalarFuncSig::Pow)
-                .is_err());
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(lhs)
+                    .push_param(rhs)
+                    .evaluate::<Real>(ScalarFuncSig::Pow)
+                    .is_err()
+            );
         }
     }
 

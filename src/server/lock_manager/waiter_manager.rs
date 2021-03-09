@@ -896,15 +896,17 @@ pub mod tests {
         }
         assert_eq!(wait_table.count(), 0);
         assert!(wait_table.wait_table.is_empty());
-        assert!(wait_table
-            .remove_waiter(
-                Lock {
-                    ts: TimeStamp::zero(),
-                    hash: 0
-                },
-                TimeStamp::zero(),
-            )
-            .is_none());
+        assert!(
+            wait_table
+                .remove_waiter(
+                    Lock {
+                        ts: TimeStamp::zero(),
+                        hash: 0
+                    },
+                    TimeStamp::zero(),
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -915,9 +917,11 @@ pub mod tests {
             ts: 20.into(),
             hash: 20,
         };
-        assert!(wait_table
-            .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
-            .is_none());
+        assert!(
+            wait_table
+                .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
+                .is_none()
+        );
         let waiter = wait_table
             .add_waiter(dummy_waiter(waiter_ts, lock.ts, lock.hash))
             .unwrap();

@@ -337,8 +337,10 @@ mod tests {
 
     #[test]
     fn test_parse_mount_point_from_line() {
-        let lines = vec!["1 0 252:0 / / rw,noatime - ext4 /dev/dm-0 rw,errors=remount-ro,data=ordered",
-                         "31 23 0:24 /docker /sys/fs/cgroup/cpu rw,nosuid,nodev,noexec,relatime shared:1 - cgroup cgroup rw,cpu"];
+        let lines = vec![
+            "1 0 252:0 / / rw,noatime - ext4 /dev/dm-0 rw,errors=remount-ro,data=ordered",
+            "31 23 0:24 /docker /sys/fs/cgroup/cpu rw,nosuid,nodev,noexec,relatime shared:1 - cgroup cgroup rw,cpu",
+        ];
         let expected_mps = vec![
             MountPoint {
                 mount_id: 1,

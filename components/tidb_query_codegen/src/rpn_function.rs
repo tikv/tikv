@@ -966,7 +966,10 @@ impl VargsRpnFn {
     fn get_args_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<VargsRpnFnSignatureParam> {
         let param = parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`"))
+            Err(Error::new_spanned(
+                fn_arg,
+                "Expect parameter type to be like `&[Option<&T>]`, `&[Option<JsonRef>]` or `&[Option<BytesRef>]`",
+            ))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,
@@ -1314,7 +1317,10 @@ impl NormalRpnFn {
     fn get_arg_type(attr: &RpnFnAttr, fn_arg: &FnArg) -> Result<RpnFnSignatureParam> {
         let param = parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream())?;
         if attr.nullable && !param.has_option {
-            Err(Error::new_spanned(fn_arg, "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`"))
+            Err(Error::new_spanned(
+                fn_arg,
+                "Expect parameter type to be like `Option<&T>`, `Option<JsonRef>`, `Option<EnumRef>`, `Option<SetRef>` or `Option<BytesRef>`",
+            ))
         } else if !attr.nullable && param.has_option {
             Err(Error::new_spanned(
                 fn_arg,

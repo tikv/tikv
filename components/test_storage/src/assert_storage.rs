@@ -572,15 +572,16 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) {
-        assert!(self
-            .store
-            .cleanup(
-                self.ctx.clone(),
-                Key::from_raw(key),
-                start_ts.into(),
-                current_ts.into()
-            )
-            .is_err());
+        assert!(
+            self.store
+                .cleanup(
+                    self.ctx.clone(),
+                    Key::from_raw(key),
+                    start_ts.into(),
+                    current_ts.into()
+                )
+                .is_err()
+        );
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
@@ -592,10 +593,11 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(self
-            .store
-            .rollback(self.ctx.clone(), keys, start_ts.into())
-            .is_err());
+        assert!(
+            self.store
+                .rollback(self.ctx.clone(), keys, start_ts.into())
+                .is_err()
+        );
     }
 
     pub fn scan_locks_ok(

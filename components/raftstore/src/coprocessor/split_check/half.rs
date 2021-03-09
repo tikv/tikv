@@ -57,8 +57,10 @@ where
     }
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &E) -> Result<Vec<Vec<u8>>> {
-        let ks = box_try!(get_region_approximate_middle(engine, region)
-            .map(|keys| keys.map_or(vec![], |key| vec![key])));
+        let ks = box_try!(
+            get_region_approximate_middle(engine, region)
+                .map(|keys| keys.map_or(vec![], |key| vec![key]))
+        );
 
         Ok(ks)
     }
