@@ -145,8 +145,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         // TODO: send a message to raftstore would consume too much cpu time,
         // try to handle it outside raftstore.
         let regions: Vec<_> = regions
-            .iter()
-            .copied()
+            .into_iter()
             .map(|region_id| {
                 let raft_router_clone = raft_router.clone();
                 async move {
@@ -187,63 +186,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
         min_ts: TimeStamp,
     ) -> Vec<u64> {
-        let region_has_quorum = |region: &Region, stores: &[u64]| {
-            let mut voters = 0;
-            let mut incoming_voters = 0;
-            let mut demoting_voters = 0;
-
-            let mut resp_voters = 0;
-            let mut resp_incoming_voters = 0;
-            let mut resp_demoting_voters = 0;
-
-            region.get_peers().iter().for_each(|peer| {
-                let mut in_resp = false;
-                for store_id in stores {
-                    if *store_id == peer.store_id {
-                        in_resp = true;
-                        break;
-                    }
-                }
-                match peer.get_role() {
-                    PeerRole::Voter => {
-                        voters += 1;
-                        if in_resp {
-                            resp_voters += 1;
-                        }
-                    }
-                    PeerRole::IncomingVoter => {
-                        incoming_voters += 1;
-                        if in_resp {
-                            resp_incoming_voters += 1;
-                        }
-                    }
-                    PeerRole::DemotingVoter => {
-                        demoting_voters += 1;
-                        if in_resp {
-                            resp_demoting_voters += 1;
-                        }
-                    }
-                    PeerRole::Learner => (),
-                }
-            });
-
-            let has_incoming_majority =
-                (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
-            let has_demoting_majority =
-                (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
-
-            has_incoming_majority && has_demoting_majority
-        };
-
-        let find_store_id = |region: &Region, peer_id| {
-            for peer in region.get_peers() {
-                if peer.id == peer_id {
-                    return Some(peer.store_id);
-                }
-            }
-            None
-        };
-
         // store_id -> leaders info, record the request to each stores
         let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
         // region_id -> region, cache the information of regions
@@ -344,4 +286,61 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             })
             .collect()
     }
+}
+
+fn region_has_quorum(region: &Region, stores: &[u64]) -> bool {
+    let mut voters = 0;
+    let mut incoming_voters = 0;
+    let mut demoting_voters = 0;
+
+    let mut resp_voters = 0;
+    let mut resp_incoming_voters = 0;
+    let mut resp_demoting_voters = 0;
+
+    region.get_peers().iter().for_each(|peer| {
+        let mut in_resp = false;
+        for store_id in stores {
+            if *store_id == peer.store_id {
+                in_resp = true;
+                break;
+            }
+        }
+        match peer.get_role() {
+            PeerRole::Voter => {
+                voters += 1;
+                if in_resp {
+                    resp_voters += 1;
+                }
+            }
+            PeerRole::IncomingVoter => {
+                incoming_voters += 1;
+                if in_resp {
+                    resp_incoming_voters += 1;
+                }
+            }
+            PeerRole::DemotingVoter => {
+                demoting_voters += 1;
+                if in_resp {
+                    resp_demoting_voters += 1;
+                }
+            }
+            PeerRole::Learner => (),
+        }
+    });
+
+    let has_incoming_majority =
+        (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+    let has_demoting_majority =
+        (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+    has_incoming_majority && has_demoting_majority
+}
+
+fn find_store_id(region: &Region, peer_id: u64) -> Option<u64> {
+    for peer in region.get_peers() {
+        if peer.id == peer_id {
+            return Some(peer.store_id);
+        }
+    }
+    None
 }

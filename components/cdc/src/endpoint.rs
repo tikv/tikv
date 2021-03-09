@@ -1143,7 +1143,6 @@ impl Initializer {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region, takes: Duration) {
         let observe_id = self.observe_id;
-        resolver.init();
         let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "resolver initialized and schedule resolver ready";
@@ -1599,8 +1598,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(1);
-        resolver.init();
+        let resolver = Resolver::new(1);
         let observe_id = ep.capture_regions[&1].id;
         ep.on_region_ready(observe_id, resolver, region.clone());
         ep.run(Task::MinTS {
@@ -1624,8 +1622,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 6),
         });
-        let mut resolver = Resolver::new(2);
-        resolver.init();
+        let resolver = Resolver::new(2);
         region.set_id(2);
         let observe_id = ep.capture_regions[&2].id;
         ep.on_region_ready(observe_id, resolver, region);
@@ -1657,8 +1654,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let mut resolver = Resolver::new(3);
-        resolver.init();
+        let resolver = Resolver::new(3);
         region.set_id(3);
         let observe_id = ep.capture_regions[&3].id;
         ep.on_region_ready(observe_id, resolver, region);

@@ -406,10 +406,7 @@ impl Delegate {
         }
         debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = match resolver.resolve(min_ts) {
-            Some(rts) => rts,
-            None => return None,
-        };
+        let resolved_ts = resolver.resolve(min_ts);
         debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
@@ -649,7 +646,7 @@ impl Delegate {
                 };
                 // validate commit_ts must be greater than the current resolved_ts
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    assert!(commit_ts > resolver.resolved_ts().unwrap_or_default());
+                    assert!(commit_ts > resolver.resolved_ts());
                 }
 
                 match rows.get_mut(&row.key) {
@@ -887,8 +884,7 @@ mod tests {
         delegate.subscribe(downstream);
         let enabled = delegate.enabled();
         assert!(enabled.load(Ordering::SeqCst));
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        let resolver = Resolver::new(region_id);
         for downstream in delegate.on_region_ready(resolver, region) {
             delegate.subscribe(downstream);
         }
@@ -1101,8 +1097,7 @@ mod tests {
         set_event_row_type(&mut row3, EventLogType::Initialized);
         check_event(vec![row1, row2, row3]);
 
-        let mut resolver = Resolver::new(region_id);
-        resolver.init();
+        let resolver = Resolver::new(region_id);
         delegate.on_region_ready(resolver, region);
     }
 }

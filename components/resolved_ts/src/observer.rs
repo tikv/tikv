@@ -81,24 +81,13 @@ impl<E: KvEngine> RegionChangeObserver for ChangeDataObserver<E> {
         event: RegionChangeEvent,
         _: StateRole,
     ) {
-        match event {
-            RegionChangeEvent::Destroy => {
-                if let Err(e) = self
-                    .scheduler
-                    .schedule(Task::RegionDestroyed(ctx.region().clone()))
-                {
-                    info!("failed to schedule region destroyed event"; "err" => ?e);
-                }
+        if let RegionChangeEvent::Destroy = event {
+            if let Err(e) = self
+                .scheduler
+                .schedule(Task::RegionDestroyed(ctx.region().clone()))
+            {
+                info!("failed to schedule region destroyed event"; "err" => ?e);
             }
-            RegionChangeEvent::Update => {
-                if let Err(e) = self
-                    .scheduler
-                    .schedule(Task::RegionUpdated(ctx.region().clone()))
-                {
-                    info!("failed to schedule region updated event"; "err" => ?e);
-                }
-            }
-            RegionChangeEvent::Create => (),
         }
     }
 }
