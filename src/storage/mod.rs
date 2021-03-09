@@ -49,9 +49,9 @@ use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
-        TestEngineBuilder,
+        CbContext, CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter,
+        Iterator, PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
+        Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
@@ -72,7 +72,6 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
     CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
@@ -269,9 +268,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(key) = key.to_raw() {
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &key, &key, false);
-                }
+                tls_collect_qps(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key.as_encoded(),
+                    key.as_encoded(),
+                    false,
+                );
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -351,12 +354,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let res =
             self.read_pool.spawn_handle(
                 async move {
-                    for get in &requests {
-                        let key = get.key.to_owned();
-                        let region_id = get.get_context().get_region_id();
-                        let peer = get.get_context().get_peer();
-                        tls_collect_qps(region_id, peer, &key, &key, false);
-                    }
                     KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
                         .get(CMD)
@@ -368,6 +365,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let mut req_snaps = vec![];
 
                     for mut req in requests {
+                        let region_id = req.get_context().get_region_id();
+                        let peer = req.get_context().get_peer();
+                        tls_collect_qps(region_id, peer, &req.get_key(), &req.get_key(), false);
                         let key = Key::from_raw(req.get_key());
                         let start_ts = req.get_version().into();
                         let mut ctx = req.take_context();
@@ -483,9 +483,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             async move {
                 let mut key_ranges = vec![];
                 for key in &keys {
-                    if let Ok(key) = key.to_raw() {
-                        key_ranges.push(build_key_range(&key, &key, false));
-                    }
+                    key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
                 }
                 tls_collect_qps_batch(ctx.get_region_id(), ctx.get_peer(), key_ranges);
 
@@ -587,22 +585,19 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key.to_raw() {
-                    let mut key = vec![];
-                    if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_raw() {
-                            key = end_key;
-                        }
-                    }
+                {
+                    let end_key = match &end_key {
+                        Some(k) => k.as_encoded().as_slice(),
+                        None => &[],
+                    };
                     tls_collect_qps(
                         ctx.get_region_id(),
                         ctx.get_peer(),
-                        &start_key,
-                        &key,
+                        start_key.as_encoded(),
+                        end_key,
                         reverse_scan,
                     );
                 }
-
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
                     .get(priority_tag)
@@ -729,18 +724,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if let Ok(start_key) = start_key
-                    .as_ref()
-                    .map(|k| k.to_raw())
-                    .unwrap_or_else(|| Ok(vec![]))
-                {
-                    let mut key = vec![];
-                    if let Some(end_key) = &end_key {
-                        if let Ok(end_key) = end_key.to_raw() {
-                            key = end_key;
-                        }
-                    }
-                    tls_collect_qps(ctx.get_region_id(), ctx.get_peer(), &start_key, &key, false);
+                if let Some(start_key) = &start_key {
+                    let end_key = match &end_key {
+                        Some(k) => k.as_encoded().as_slice(),
+                        None => &[],
+                    };
+                    tls_collect_qps(
+                        ctx.get_region_id(),
+                        ctx.get_peer(),
+                        start_key.as_encoded(),
+                        end_key,
+                        false,
+                    );
                 }
 
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
@@ -1276,14 +1271,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
+        let mut cursor = CursorBuilder::new(snapshot, Self::rawkv_cf(cf)?)
+            .range(None, end_key)
+            .scan_mode(ScanMode::Forward)
+            .key_only(key_only)
+            .build()?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -1327,14 +1319,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
+        let mut cursor = CursorBuilder::new(snapshot, Self::rawkv_cf(cf)?)
+            .range(end_key, None)
+            .scan_mode(ScanMode::Backward)
+            .key_only(key_only)
+            .build()?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);

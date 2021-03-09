@@ -1162,12 +1162,9 @@ mod tests {
 
     #[test]
     fn test_out_of_sync_max_ts() {
-        use crate::storage::{
-            kv::Result, CfName, ConcurrencyManager, Cursor, DummyLockManager, IterOptions,
-            ScanMode, Value,
-        };
+        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
         use engine_rocks::RocksEngineIterator;
-        use engine_traits::ReadOptions;
+        use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
         #[derive(Clone)]
         struct MockSnapshot;
@@ -1184,15 +1181,10 @@ mod tests {
             fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
             }
-            fn iter(&self, _: IterOptions, _: ScanMode) -> Result<Cursor<Self::Iter>> {
+            fn iter(&self, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
-            fn iter_cf(
-                &self,
-                _: CfName,
-                _: IterOptions,
-                _: ScanMode,
-            ) -> Result<Cursor<Self::Iter>> {
+            fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
             fn is_max_ts_synced(&self) -> bool {

@@ -24,8 +24,8 @@ use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, ErrorInner, ExtCallback,
-    Iterator as EngineIterator, Modify, Result, ScanMode, SnapContext, Snapshot, WriteData,
+    Callback, CbContext, Engine, Error, ErrorInner, ExtCallback, Iterator as EngineIterator,
+    Modify, Result, SnapContext, Snapshot, WriteData,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -361,23 +361,14 @@ impl Snapshot for Arc<RocksSnapshot> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create iterator");
-        let prefix_seek = iter_opt.prefix_seek_used();
-        let iter = self.iterator_opt(iter_opt)?;
-        Ok(Cursor::new(iter, mode, prefix_seek))
+        Ok(self.iterator_opt(iter_opt)?)
     }
 
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> Result<Cursor<Self::Iter>> {
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
-        let prefix_seek = iter_opt.prefix_seek_used();
-        let iter = self.iterator_cf_opt(cf, iter_opt)?;
-        Ok(Cursor::new(iter, mode, prefix_seek))
+        Ok(self.iterator_cf_opt(cf, iter_opt)?)
     }
 }
 
@@ -425,6 +416,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
+    use crate::storage::{Cursor, CursorBuilder, ScanMode};
     use txn_types::TimeStamp;
 
     #[test]
@@ -497,8 +489,9 @@ mod tests {
         must_put(&engine, b"foo2", b"bar2");
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
-        let mut iter = snapshot.iter(iter_opt, ScanMode::Forward).unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_max_skippable_internal_keys(1);
+        let mut iter = Cursor::new(snapshot.iter(iter_opt).unwrap(), ScanMode::Forward, false);
 
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
@@ -522,9 +515,11 @@ mod tests {
         must_delete(engine, b"foo5");
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut iter = snapshot
-            .iter(IterOptions::default(), ScanMode::Forward)
-            .unwrap();
+        let mut iter = Cursor::new(
+            snapshot.iter(IterOptions::default()).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         let mut statistics = CfStatistics::default();
 
@@ -593,11 +588,10 @@ mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let iter_opt = IterOptions::default()
-            .use_prefix_seek()
-            .set_prefix_same_as_start(true);
-        let mut iter = snapshot
-            .iter_cf("write", iter_opt, ScanMode::Forward)
+        let mut iter = CursorBuilder::new(&snapshot, CF_WRITE)
+            .prefix_seek(true)
+            .scan_mode(ScanMode::Forward)
+            .build()
             .unwrap();
 
         let mut statistics = CfStatistics::default();
