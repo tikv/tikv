@@ -12,6 +12,8 @@ use super::metrics::*;
 use crate::coprocessor::*;
 use crate::storage::Statistics;
 
+use txn_types::Key;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
     /// The tracker is initialized.
@@ -328,7 +330,13 @@ impl Tracker {
             false
         };
 
-        tls_collect_qps(region_id, peer, start_key, end_key, reverse_scan);
+        tls_collect_qps(
+            region_id,
+            peer,
+            Key::from_raw(start_key).as_encoded(),
+            Key::from_raw(end_key).as_encoded(),
+            reverse_scan,
+        );
         self.current_stage = TrackerState::Tracked;
     }
 }
