@@ -164,15 +164,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db
-            .get_property_int("rocksdb.is-write-stalled")
-            .unwrap_or_default()
-            != 0
-            || db
-                .get_property_int("rocksdb.is-write-stopped")
-                .unwrap_or_default()
-                != 0
-        {
+        if is_stalled_or_stoped(&db) {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
@@ -215,7 +207,11 @@ struct WriteCompactionFilter {
 
     write_batch: RocksWriteBatch,
     gc_scheduler: FutureScheduler<GcTask>,
+    // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
+    // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
+    // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
+    // a little optimization to reduce modifications on write CF.
     mvcc_deletion_overlaps: Option<usize>,
 
     mvcc_key_prefix: Vec<u8>,
@@ -276,15 +272,19 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn schedule_gc_task(&self, task: GcTask) {
+    // `log_on_error` indicates whether to print an error log on scheduling failures.
+    // It's only enabled for `GcTask::OrphanVersions`.
+    fn schedule_gc_task(&self, task: GcTask, log_on_error: bool) {
         if let Err(e) = self.gc_scheduler.schedule(task) {
-            error!("compaction filter schedule {} fail", e.0);
+            if log_on_error {
+                error!("compaction filter schedule {} fail", e.0);
+            }
         }
     }
 
     fn handle_bottommost_delete(&mut self) {
         // Valid MVCC records should begin with `DATA_PREFIX`.
-        assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
+        debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
     }
@@ -294,7 +294,7 @@ impl WriteCompactionFilter {
             let empty = Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT);
             let keys = mem::replace(&mut self.mvcc_deletions, empty);
             let safe_point = self.safe_point.into();
-            self.schedule_gc_task(GcTask::GcKeys { keys, safe_point });
+            self.schedule_gc_task(GcTask::GcKeys { keys, safe_point }, false);
         }
     }
 
@@ -398,7 +398,7 @@ impl WriteCompactionFilter {
                    "compaction filter handles {} fail, dispatch to gc worker", task;
                    "err" => ?e,
                 );
-                self.schedule_gc_task(task);
+                self.schedule_gc_task(task, true);
                 return Err(e);
             }
             self.write_batch.clear();
@@ -606,6 +606,13 @@ fn check_need_gc(
     }
 
     (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
+}
+
+fn is_stalled_or_stoped(db: &DB) -> bool {
+    let stalled = "rocksdb.is-write-stalled";
+    let stopped = "rocksdb.is-write-stopped";
+    db.get_property_int(stalled).unwrap_or_default() != 0
+        || db.get_property_int(stopped).unwrap_or_default() != 0
 }
 
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
