@@ -55,9 +55,10 @@ where
             Task::UpdatePollInterval(interval) => {
                 self.poll_interval = interval;
                 info!(
-                    "ttl checker poll interval is changed, wait {}s to start next round",
+                    "ttl checker poll interval is changed to {}s, will be take effect after next round",
                     interval.as_secs()
                 );
+                TTL_CHECKER_POLL_INTERVAL_GAUGE.set(self.poll_interval.as_millis() as i64);
             }
         }
     }
