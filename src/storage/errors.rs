@@ -231,7 +231,7 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
 pub fn extract_committed(err: &Error) -> Option<TimeStamp> {
     match *err {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Committed { commit_ts },
+            box MvccErrorInner::Committed { commit_ts, .. },
         ))))) => Some(commit_ts),
         _ => None,
     }
@@ -333,7 +333,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_too_large(commit_ts_too_large);
         }
         _ => {
-            error!(?err; "txn aborts");
+            error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

@@ -683,6 +683,14 @@ pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64
 
 #[rpn_fn]
 #[inline]
+pub fn instr(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
+    Ok(twoway::find_bytes(&s, &substr)
+        .map(|i| 1 + i as i64)
+        .or(Some(0)))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn instr_utf8(s: BytesRef, substr: BytesRef) -> Result<Option<Int>> {
     let s = String::from_utf8_lossy(s);
     let substr = String::from_utf8_lossy(substr);
@@ -894,6 +902,7 @@ fn strip_whitespace(input: &[u8]) -> Vec<u8> {
     input_copy
 }
 
+// See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_quote
 #[rpn_fn(nullable)]
 #[inline]
 pub fn quote(input: Option<BytesRef>) -> Result<Option<Bytes>> {
@@ -3299,6 +3308,54 @@ mod tests {
                 .evaluate(ScalarFuncSig::Strcmp)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_instr() {
+        let cases = vec![
+            (Some(b"a".to_vec()), Some(b"abcdefg".to_vec()), Some(1)),
+            (Some(b"0".to_vec()), Some(b"abcdefg".to_vec()), Some(0)),
+            (Some(b"c".to_vec()), Some(b"abcdefg".to_vec()), Some(3)),
+            (Some(b"F".to_vec()), Some(b"abcdefg".to_vec()), Some(0)),
+            (Some(b"cd".to_vec()), Some(b"abcdefg".to_vec()), Some(3)),
+            (Some(b" ".to_vec()), Some(b"abcdefg".to_vec()), Some(0)),
+            (Some(b"".to_vec()), Some(b"".to_vec()), Some(1)),
+            (Some(b" ".to_vec()), Some(b"".to_vec()), Some(0)),
+            (Some(b"".to_vec()), Some(b" ".to_vec()), Some(1)),
+            (Some(b"eFg".to_vec()), Some(b"abcdefg".to_vec()), Some(0)),
+            (Some(b"deF".to_vec()), Some(b"abcdefg".to_vec()), Some(0)),
+            (
+                Some("字节".as_bytes().to_vec()),
+                Some("a多字节".as_bytes().to_vec()),
+                Some(5),
+            ),
+            (
+                Some(b"a".to_vec()),
+                Some("a多字节".as_bytes().to_vec()),
+                Some(1),
+            ),
+            (Some(b"bar".to_vec()), Some(b"foobarbar".to_vec()), Some(4)),
+            (Some(b"bAr".to_vec()), Some(b"foobarbar".to_vec()), Some(0)),
+            (
+                Some("好世".as_bytes().to_vec()),
+                Some("你好世界".as_bytes().to_vec()),
+                Some(4),
+            ),
+            (None, Some(b"".to_vec()), None),
+            (None, Some(b"foobar".to_vec()), None),
+            (Some(b"".to_vec()), None, None),
+            (Some(b"bar".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (substr, s, exp) in cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(substr)
+                .evaluate::<Int>(ScalarFuncSig::Instr)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 
