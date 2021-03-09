@@ -404,13 +404,18 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 ) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
+    debug!("finding lock");
     let lock = reader.load_lock(key)?;
+    debug!("got lock");
     loop {
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
+                if commit_ts.is_zero() {
+                    break;
+                }
+                ts = commit_ts.prev();
             }
             None => break,
         };
