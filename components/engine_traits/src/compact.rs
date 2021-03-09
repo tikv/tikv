@@ -46,6 +46,7 @@ pub trait CompactExt {
         cf: &str,
         files: Vec<String>,
         output_level: Option<i32>,
+        max_subcompactions: u32,
         without_l0: bool,
     ) -> Result<()>;
 }

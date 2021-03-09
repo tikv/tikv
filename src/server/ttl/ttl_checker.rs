@@ -11,8 +11,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-const RETRY_CNT: usize = 10;
-
+#[derive(Debug)]
 pub enum Task {
     UpdatePollInterval(Duration),
 }
@@ -145,81 +144,69 @@ fn check_ttl_for_range<E: KvEngine>(
     end_key: &[u8],
     without_l0: bool,
 ) {
-    let mut retry = 0;
-    loop {
-        let current_ts = UnixSecs::now().into_inner();
-        let mut files = Vec::new();
-        let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
-            Ok(v) => v,
-            Err(e) => {
-                error!(
-                    "get range ttl properties failed";
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "err" => %e,
-                );
-                TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["error"])
-                    .inc();
-                return;
-            }
-        };
-        if res.is_empty() {
+    let current_ts = UnixSecs::now().into_inner();
+    let mut files = Vec::new();
+    let res = match engine.get_range_ttl_properties_cf(CF_DEFAULT, start_key, end_key) {
+        Ok(v) => v,
+        Err(e) => {
+            error!(
+                "get range ttl properties failed";
+                "range_start" => log_wrappers::Value::key(&start_key),
+                "range_end" => log_wrappers::Value::key(&end_key),
+                "err" => %e,
+            );
             TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["empty"])
+                .with_label_values(&["error"])
                 .inc();
             return;
         }
-        for (file_name, prop) in res {
-            if prop.max_expire_ts <= current_ts {
-                files.push(file_name);
-            }
+    };
+    if res.is_empty() {
+        TTL_CHECKER_ACTIONS_COUNTER_VEC
+            .with_label_values(&["empty"])
+            .inc();
+        return;
+    }
+    for (file_name, prop) in res {
+        if prop.max_expire_ts <= current_ts {
+            files.push(file_name);
         }
-        if files.is_empty() {
-            TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["skip"])
-                .inc();
-            return;
-        }
+    }
+    if files.is_empty() {
+        TTL_CHECKER_ACTIONS_COUNTER_VEC
+            .with_label_values(&["skip"])
+            .inc();
+        return;
+    }
 
-        let timer = Instant::now();
-        let files_count = files.len();
+    let timer = Instant::now();
+    let files_count = files.len();
+    for file in files {
         let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
-        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, files, None, without_l0) {
-            retry += 1;
-            if retry > RETRY_CNT {
-                error!(
-                    "execute ttl compact files failed";
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "files_count" => files_count,
-                    "err" => %e,
-                );
-                TTL_CHECKER_ACTIONS_COUNTER_VEC
-                    .with_label_values(&["error"])
-                    .inc();
-                return;
-            }
+        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, vec![file], None, 0, without_l0) {
+            error!(
+                "execute ttl compact files failed";
+                "range_start" => log_wrappers::Value::key(&start_key),
+                "range_end" => log_wrappers::Value::key(&end_key),
+                "err" => %e,
+            );
             TTL_CHECKER_ACTIONS_COUNTER_VEC
-                .with_label_values(&["retry"])
+                .with_label_values(&["error"])
                 .inc();
-            thread::sleep(Duration::from_secs(2));
             continue;
         }
         compact_range_timer.observe_duration();
-        info!(
-            "compact files finished";
-            "files_count" => files_count,
-            "time_takes" => ?timer.elapsed(),
-        );
         TTL_CHECKER_ACTIONS_COUNTER_VEC
             .with_label_values(&["compact"])
             .inc();
-        break;
+        thread::sleep(Duration::from_secs(2));
     }
 
-    // wait a while
-    thread::sleep(Duration::from_secs(2));
+    info!(
+        "compact files finished";
+        "files_count" => files_count,
+        "time_takes" => ?timer.elapsed(),
+    );
 }
 
 #[cfg(test)]
@@ -231,7 +218,6 @@ mod tests {
     use crate::storage::kv::TestEngineBuilder;
     use engine_traits::util::append_expire_ts;
     use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT};
-    use raftstore::RegionInfoAccessor;
 
     #[test]
     fn test_ttl_checker() {
@@ -273,16 +259,14 @@ mod tests {
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ =
-            Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey1", b"zkey25", false);
+        let _ = check_ttl_for_range(&kvdb, b"zkey1", b"zkey25", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ =
-            Runner::<_, RegionInfoAccessor>::check_ttl_for_range(&kvdb, b"zkey2", b"zkey6", false);
+        let _ = check_ttl_for_range(&kvdb, b"zkey2", b"zkey6", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());

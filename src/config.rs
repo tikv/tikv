@@ -3075,8 +3075,8 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::ttl::TTLCheckerTask;
     use crate::storage::config::StorageConfigManger;
-    use crossbeam::channel::{unbounded, Receiver};
     use engine_rocks::raw_util::new_engine_opt;
     use engine_traits::DBOptions as DBOptionsTrait;
     use raft_log_engine::RecoveryMode;
@@ -3084,6 +3084,7 @@ mod tests {
     use slog::Level;
     use std::sync::Arc;
     use std::time::Duration;
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     #[test]
     fn test_check_critical_cfg_with() {
@@ -3344,7 +3345,13 @@ mod tests {
         );
     }
 
-    fn new_engines(cfg: TiKvConfig) -> (RocksEngine, ConfigController, Receiver<Option<Duration>>) {
+    fn new_engines(
+        cfg: TiKvConfig,
+    ) -> (
+        RocksEngine,
+        ConfigController,
+        ReceiverWrapper<TTLCheckerTask>,
+    ) {
         let engine = RocksEngine::from_db(Arc::new(
             new_engine_opt(
                 &cfg.storage.data_dir,
@@ -3363,12 +3370,12 @@ mod tests {
             Module::Rocksdb,
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv, shared)),
         );
-        let (tx, rx) = unbounded();
+        let (scheduler, receiver) = dummy_scheduler();
         cfg_controller.register(
             Module::Storage,
-            Box::new(StorageConfigManger::new(engine.clone(), shared, tx)),
+            Box::new(StorageConfigManger::new(engine.clone(), shared, scheduler)),
         );
-        (engine, cfg_controller, rx)
+        (engine, cfg_controller, receiver)
     }
 
     #[test]
@@ -3519,14 +3526,16 @@ mod tests {
         let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
-        let (_, cfg_controller, rx) = new_engines(cfg);
+        let (_, cfg_controller, mut rx) = new_engines(cfg);
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
             .update_config("storage.ttl_check_poll_interval", "10s")
             .unwrap();
-
-        assert_eq!(rx.recv(), Ok(Some(Duration::from_secs(10))),);
+        match rx.recv() {
+            None => assert!(false),
+            Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
+        }
     }
 
     #[test]
