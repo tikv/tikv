@@ -2157,6 +2157,11 @@ mod tests {
                 Some("-00:00:01"),
                 Some("838:59:59.000000"),
             ),
+            (
+                Some("838:59:59.000000"),
+                Some("-838:59:59.000000"),
+                Some("838:59:59.000000"),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (duration1, duration2, exp) in cases {
