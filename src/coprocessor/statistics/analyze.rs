@@ -396,15 +396,15 @@ impl<S: Snapshot> SampleBuilder<S> {
                 let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
-                    for handle_id in &self.common_handle_col_ids {
+                    for i in 0..self.common_handle_col_ids.len() {
                         let mut handle_col_val = vec![];
-                        columns_slice[*handle_id as usize].encode(
+                        columns_slice[i].encode(
                             *logical_row,
-                            &columns_info[*handle_id as usize],
+                            &columns_info[i],
                             &mut EvalContext::default(),
                             &mut handle_col_val,
                         )?;
-                        data.append(&mut handle_col_val);
+                        data.extend_from_slice(&mut handle_col_val);
                         if let Some(common_handle_cms) = common_handle_cms.as_mut() {
                             common_handle_cms.insert(&data);
                         }
