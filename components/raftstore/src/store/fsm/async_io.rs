@@ -11,13 +11,15 @@ use crate::store::config::Config;
 use crate::store::fsm::RaftRouter;
 use crate::store::local_metrics::AsyncWriterStoreMetrics;
 use crate::store::metrics::*;
+use crate::store::transport::Transport;
 use crate::store::util::PerfContextStatistics;
 use crate::store::PeerMsg;
 use crate::{observe_perf_context_type, report_perf_context, Result};
 
 use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
-use kvproto::raft_serverpb::RaftLocalState;
+use error_code::ErrorCodeExt;
+use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use raft::eraftpb::Entry;
 
 use std::time::Duration;
@@ -130,6 +132,7 @@ pub struct AsyncWriteTask {
     pub unsynced_ready: Option<UnsyncedReady>,
     pub raft_state: Option<RaftLocalState>,
     pub proposal_times: Vec<Instant>,
+    pub messages: Vec<RaftMessage>,
     pub size: usize,
 }
 
@@ -142,6 +145,7 @@ impl AsyncWriteTask {
             unsynced_ready: None,
             raft_state: None,
             proposal_times: vec![],
+            messages: vec![],
             size: 0,
         }
     }
@@ -152,6 +156,7 @@ impl AsyncWriteTask {
             && self.unsynced_ready.is_none()
             && self.raft_state.is_none()
             && self.proposal_times.is_empty()
+            && self.messages.is_empty()
     }
 }
 
@@ -171,8 +176,8 @@ where
     pub begin: Option<UtilInstant>,
     pub unsynced_readies: HashMap<u64, UnsyncedReady>,
     pub raft_states: HashMap<u64, RaftLocalState>,
-    pub proposal_times: Vec<Vec<Instant>>,
     pub state_size: usize,
+    pub tasks: Vec<AsyncWriteTask>,
     _phantom: PhantomData<EK>,
 }
 
@@ -189,7 +194,7 @@ where
             begin: None,
             unsynced_readies: HashMap::default(),
             raft_states: HashMap::default(),
-            proposal_times: vec![],
+            tasks: vec![],
             state_size: 0,
             _phantom: PhantomData,
         }
@@ -201,23 +206,22 @@ where
         }
     }
 
-    fn add_write_task(&mut self, task: AsyncWriteTask) {
-        self.raft_wb.append(task.region_id, task.entries).unwrap();
+    fn add_write_task(&mut self, mut task: AsyncWriteTask) {
+        let entries = std::mem::take(&mut task.entries);
+        self.raft_wb.append(task.region_id, entries).unwrap();
         if let Some((from, to)) = task.cut_logs {
             self.raft_wb.cut_logs(task.region_id, from, to);
         }
-        if let Some(ready) = task.unsynced_ready {
+        if let Some(ready) = task.unsynced_ready.take() {
             self.unsynced_readies.insert(task.region_id, ready);
         }
-        if let Some(raft_state) = task.raft_state {
+        if let Some(raft_state) = task.raft_state.take() {
             if !self.raft_states.contains_key(&task.region_id) {
                 self.state_size += 4 * 8;
             }
             self.raft_states.insert(task.region_id, raft_state);
         }
-        if !task.proposal_times.is_empty() {
-            self.proposal_times.push(task.proposal_times);
-        }
+        self.tasks.push(task);
     }
 
     fn is_empty(&self) -> bool {
@@ -225,6 +229,7 @@ where
             && self.unsynced_readies.is_empty()
             && self.raft_states.is_empty()
             && self.kv_wb.is_empty()
+            && self.tasks.is_empty()
     }
 
     fn clear(&mut self) {
@@ -233,7 +238,7 @@ where
         self.begin = None;
         self.unsynced_readies.clear();
         self.raft_states.clear();
-        self.proposal_times.clear();
+        self.tasks.clear();
         self.state_size = 0;
     }
 
@@ -242,8 +247,8 @@ where
     }
 
     fn before_write_to_db(&mut self) {
-        for vec in &self.proposal_times {
-            for ts in vec {
+        for task in &self.tasks {
+            for ts in &task.proposal_times {
                 STORE_TO_WRITE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
             }
         }
@@ -252,24 +257,24 @@ where
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         self.state_size = 0;
-        for vec in &self.proposal_times {
-            for ts in vec {
+        for task in &self.tasks {
+            for ts in &task.proposal_times {
                 STORE_FILL_WB_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
             }
         }
     }
 
     fn after_write_to_kv_db(&self) {
-        for vec in &self.proposal_times {
-            for ts in vec {
+        for task in &self.tasks {
+            for ts in &task.proposal_times {
                 STORE_WRITE_KVDB_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
             }
         }
     }
 
     fn after_write_to_db(&self) {
-        for vec in &self.proposal_times {
-            for ts in vec {
+        for task in &self.tasks {
+            for ts in &task.proposal_times {
                 STORE_WRITE_END_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
             }
         }
@@ -408,10 +413,11 @@ where
     }
 }
 
-struct AsyncWriteWorker<EK, ER>
+struct AsyncWriteWorker<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport,
 {
     store_id: u64,
     tag: String,
@@ -420,14 +426,16 @@ where
     router: RaftRouter<EK, ER>,
     receiver: Receiver<Vec<AsyncWriteMsg>>,
     queue: AsyncWriteAdaptiveQueue<EK, ER>,
+    trans: T,
     perf_context_statistics: PerfContextStatistics,
     io_max_wait_us: i64,
 }
 
-impl<EK, ER> AsyncWriteWorker<EK, ER>
+impl<EK, ER, T> AsyncWriteWorker<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
+    T: Transport,
 {
     fn new(
         store_id: u64,
@@ -436,6 +444,7 @@ where
         raft_engine: ER,
         router: RaftRouter<EK, ER>,
         receiver: Receiver<Vec<AsyncWriteMsg>>,
+        trans: T,
         config: &Config,
     ) -> Self {
         let queue = AsyncWriteAdaptiveQueue::new(
@@ -455,6 +464,7 @@ where
             router,
             receiver,
             queue,
+            trans,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
             io_max_wait_us: config.apply_batch_system.io_max_wait_us as i64,
         }
@@ -465,6 +475,7 @@ where
         loop {
             let loop_begin = UtilInstant::now_coarse();
 
+
             if !self.queue.has_task() {
                 let msg = match self.receiver.recv() {
                     Ok(msg) => msg,
@@ -473,10 +484,14 @@ where
                 msgs.push(msg);
             }
 
+            let begin = UtilInstant::now_coarse();
             let len = self.receiver.len();
             for _ in 0..len {
                 msgs.push(self.receiver.try_recv().unwrap());
             }
+            STORE_WRITE_RECEIVE_MSG_DURATION_HISTOGRAM
+                .observe(duration_to_sec(begin.elapsed()));
+            let begin = UtilInstant::now_coarse();
             for msg_vec in msgs.drain(..) {
                 for msg in msg_vec {
                     match msg {
@@ -488,6 +503,8 @@ where
                     }
                 }
             }
+            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
+                .observe(duration_to_sec(begin.elapsed()));
 
             if !self.queue.has_task() {
                 continue;
@@ -499,7 +516,7 @@ where
             STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.get_raft_size() as f64);
 
             STORE_WRITE_WAIT_DURATION_HISTOGRAM
-                .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);
+                .observe(duration_to_sec(task.begin.unwrap().elapsed()));
 
             self.sync_write(&mut task);
 
@@ -551,33 +568,33 @@ where
         }
     }
 
-    fn sync_write(&mut self, task: &mut AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch>) {
-        task.before_write_to_db();
+    fn sync_write(&mut self, batch: &mut AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch>) {
+        batch.before_write_to_db();
 
         self.perf_context_statistics.start();
         fail_point!("raft_before_save");
-        if !task.kv_wb.is_empty() {
+        if !batch.kv_wb.is_empty() {
             let now = UtilInstant::now_coarse();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.kv_engine
-                .write_opt(&task.kv_wb, &write_opts)
+                .write_opt(&batch.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to write to kv engine: {:?}", self.tag, e);
                 });
-            if task.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
-                task.kv_wb = self.kv_engine.write_batch_with_cap(4 * 1024);
+            if batch.kv_wb.data_size() > KV_WB_SHRINK_SIZE {
+                batch.kv_wb = self.kv_engine.write_batch_with_cap(4 * 1024);
             }
 
             STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
         }
-        task.after_write_to_kv_db();
+        batch.after_write_to_kv_db();
         fail_point!("raft_between_save");
-        if !task.raft_wb.is_empty() {
+        if !batch.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
             let now = UtilInstant::now_coarse();
             self.raft_engine
-                .consume_and_shrink(&mut task.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
+                .consume_and_shrink(&mut batch.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to write to raft engine: {:?}", self.tag, e);
                 });
@@ -588,14 +605,37 @@ where
             self.perf_context_statistics,
             STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
         );
-        task.after_write_to_db();
+        batch.after_write_to_db();
+
+        let send_begin = UtilInstant::now_coarse();
+        for task in &mut batch.tasks {
+            for msg in task.messages.drain(..) {
+                let region_id = msg.get_region_id();
+                let from_peer_id = msg.get_from_peer().get_id();
+                let to_peer_id = msg.get_to_peer().get_id();
+                let to_store_id = msg.get_to_peer().get_store_id();
+                if let Err(e) = self.trans.send(msg) {
+                    warn!(
+                        "failed to send msg to other peer in async-writer";
+                        "region_id" => region_id,
+                        "peer_id" => from_peer_id,
+                        "target_peer_id" => to_peer_id,
+                        "target_store_id" => to_store_id,
+                        "err" => ?e,
+                        "error_code" => %e.error_code(),
+                    );
+                    // TODO: send msg to this region
+                }
+            }
+        }
+        self.trans.flush();
+        STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(send_begin.elapsed()));
 
         let callback_begin = UtilInstant::now_coarse();
-        for (region_id, r) in &task.unsynced_readies {
+        for (region_id, r) in &batch.unsynced_readies {
             r.flush(*region_id, &self.router);
         }
-        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM
-            .observe(duration_to_sec(callback_begin.elapsed()) as f64);
+        STORE_WRITE_CALLBACK_DURATION_HISTOGRAM.observe(duration_to_sec(callback_begin.elapsed()));
 
         fail_point!("raft_after_save");
     }
@@ -618,12 +658,13 @@ impl AsyncWriters {
         &self.writers
     }
 
-    pub fn spawn<EK: KvEngine, ER: RaftEngine>(
+    pub fn spawn<EK: KvEngine, ER: RaftEngine, T: Transport + 'static>(
         &mut self,
         store_id: u64,
         kv_engine: &EK,
         raft_engine: &ER,
         router: &RaftRouter<EK, ER>,
+        trans: &T,
         config: &Config,
     ) -> Result<()> {
         for i in 0..config.store_batch_system.io_pool_size {
@@ -636,6 +677,7 @@ impl AsyncWriters {
                 raft_engine.clone(),
                 router.clone(),
                 rx,
+                trans.clone(),
                 config,
             );
             let t = thread::Builder::new().name(thd_name!(tag)).spawn(move || {

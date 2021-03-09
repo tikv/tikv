@@ -999,11 +999,15 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn switch_to_raft_msg<I>(
+        &mut self,
+        msgs: I,
+        metrics: &mut RaftMessageMetrics,
+    ) -> Vec<RaftMessage>
     where
-        T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
+        let mut raft_msgs = vec![];
         for msg in msgs {
             let msg_type = msg.get_msg_type();
             match msg_type {
@@ -1045,8 +1049,11 @@ where
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum => {}
             }
-            self.send_raft_message(msg, trans);
+            if let Some(m) = self.fill_raft_message(msg) {
+                raft_msgs.push(m);
+            }
         }
+        raft_msgs
     }
 
     /// Steps the raft message.
@@ -1771,15 +1778,20 @@ where
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
-        if !ready.messages().is_empty() {
-            if !self.is_leader() {
+        let msgs = if !ready.messages().is_empty() {
+            let msgs =
+                self.switch_to_raft_msg(ready.take_messages(), &mut ctx.raft_metrics.message);
+            if self.is_leader() {
+                self.send_raft_messages(&mut ctx.trans, msgs);
+                ctx.trans.flush();
+                Vec::new()
+            } else {
                 fail_point!("raft_before_follower_send");
+                msgs
             }
-            for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
-            }
-            ctx.trans.flush();
-        }
+        } else {
+            Vec::new()
+        };
 
         self.apply_reads(ctx, &ready);
 
@@ -1797,6 +1809,7 @@ where
             &mut ready,
             destroy_regions,
             async_writer_id,
+            msgs,
             proposal_times,
         ) {
             Ok(r) => r,
@@ -1995,12 +2008,16 @@ where
             }
 
             if !light_rd.messages().is_empty() {
-                if !self.is_leader() {
+                assert!(self.is_leader());
+                /*if !self.is_leader() {
                     fail_point!("raft_before_follower_send");
-                }
-                for vec_msg in light_rd.take_messages() {
-                    self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
-                }
+                }*/
+
+                let msgs = self
+                    .switch_to_raft_msg(light_rd.take_messages(), &mut ctx.raft_metrics.message);
+
+                self.send_raft_messages(&mut ctx.trans, msgs);
+                ctx.trans.flush();
             }
 
             if !light_rd.committed_entries().is_empty() {
@@ -3473,7 +3490,7 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn fill_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -3489,7 +3506,7 @@ where
                     "peer_id" => self.peer.get_id(),
                     "to_peer" => msg.get_to(),
                 );
-                return;
+                return None;
             }
         };
 
@@ -3524,24 +3541,33 @@ where
         }
         send_msg.set_message(msg);
 
-        if let Err(e) = trans.send(send_msg) {
-            warn!(
-                "failed to send msg to other peer";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target_peer_id" => to_peer_id,
-                "target_store_id" => to_store_id,
-                "err" => ?e,
-                "error_code" => %e.error_code(),
-            );
-            if to_peer_id == self.leader_id() {
-                self.leader_unreachable = true;
-            }
-            // unreachable store
-            self.raft_group.report_unreachable(to_peer_id);
-            if msg_type == eraftpb::MessageType::MsgSnapshot {
-                self.raft_group
-                    .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+        Some(send_msg)
+    }
+
+    pub fn send_raft_messages<T: Transport>(&mut self, trans: &mut T, send_msgs: Vec<RaftMessage>) {
+        for msg in send_msgs {
+            let to_peer_id = msg.get_to_peer().get_id();
+            let to_store_id = msg.get_to_peer().get_store_id();
+            let msg_type = msg.get_message().get_msg_type();
+            if let Err(e) = trans.send(msg) {
+                warn!(
+                    "failed to send msg to other peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "target_peer_id" => to_peer_id,
+                    "target_store_id" => to_store_id,
+                    "err" => ?e,
+                    "error_code" => %e.error_code(),
+                );
+                if to_peer_id == self.leader_id() {
+                    self.leader_unreachable = true;
+                }
+                // unreachable store
+                self.raft_group.report_unreachable(to_peer_id);
+                if msg_type == eraftpb::MessageType::MsgSnapshot {
+                    self.raft_group
+                        .report_snapshot(to_peer_id, SnapshotStatus::Failure);
+                }
             }
         }
     }

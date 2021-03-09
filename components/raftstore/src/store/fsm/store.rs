@@ -1255,6 +1255,7 @@ where
             &engines.kv,
             &engines.raft,
             &self.router,
+            &trans,
             &cfg.value(),
         )?;
 

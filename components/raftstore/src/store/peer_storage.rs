@@ -15,7 +15,8 @@ use engine_traits::{Engines, KvEngine, Mutable, Peekable};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftSnapshotData,
+    RegionLocalState,
 };
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
@@ -1382,6 +1383,7 @@ where
         ready: &mut Ready,
         destroy_regions: Vec<metapb::Region>,
         async_writer_id: usize,
+        msgs: Vec<RaftMessage>,
         proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
         let region_id = self.get_region_id();
@@ -1441,6 +1443,7 @@ where
             STORE_TO_WRITE_QUEUE_DURATION_HISTOGRAM.observe(duration_to_sec(ts.elapsed()));
         }
         write_task.proposal_times = proposal_times;
+        write_task.messages = msgs;
 
         if !write_task.is_empty() {
             let batch = ready_ctx.async_write_batch(async_writer_id);
