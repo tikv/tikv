@@ -77,7 +77,7 @@ lazy_static! {
     .unwrap();
 
     pub static ref GC_COMPACTION_FILTER_ORPHAN_VERSIONS: IntCounterVec = register_int_counter_vec!(
-        "tikv_gc_compaction_orphan_versions",
+        "tikv_gc_compaction_filter_orphan_versions",
         "Compaction filter orphan versions for default CF",
         &["tag"]
     ).unwrap();
