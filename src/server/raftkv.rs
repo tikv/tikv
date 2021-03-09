@@ -230,7 +230,7 @@ where
             assert!(!ctx.start_ts.is_zero());
             let mut data = [0u8; 8];
             (&mut data[..])
-                .encode_var_u64(ctx.start_ts.into_inner())
+                .encode_u64(ctx.start_ts.into_inner())
                 .unwrap();
             header.set_flags(WriteBatchFlags::STALE_READ.bits());
             header.set_flag_data(data.into());
