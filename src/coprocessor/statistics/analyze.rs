@@ -404,7 +404,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                             &mut EvalContext::default(),
                             &mut handle_col_val,
                         )?;
-                        data.extend_from_slice(&mut handle_col_val);
+                        data.extend_from_slice(&handle_col_val);
                         if let Some(common_handle_cms) = common_handle_cms.as_mut() {
                             common_handle_cms.insert(&data);
                         }
