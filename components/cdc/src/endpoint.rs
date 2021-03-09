@@ -11,6 +11,7 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::compat::Future01CompatExt;
+use futures::future::FutureExt;
 use grpcio::{ChannelBuilder, Environment};
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -45,6 +46,8 @@ use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
+use futures::select;
+use futures::stream::StreamExt;
 
 pub enum Deregister {
     Downstream {
@@ -1007,6 +1010,15 @@ struct Initializer {
     build_resolver: bool,
 }
 
+struct IncrementalScanBatchContext<S>
+where
+    S: Snapshot + 'static,
+{
+    resolver: RefCell<Option<Resolver>>,
+    batch_size: usize,
+    scanner: RefCell<DeltaScanner<S>>,
+}
+
 impl Initializer {
     async fn on_change_cmd(&self, mut resp: ReadResponse<RocksSnapshot>) {
         if let Some(region_snapshot) = resp.snapshot {
@@ -1108,6 +1120,43 @@ impl Initializer {
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
+    async fn async_do_blocking<F, O>(&self, job: F) -> Option<O>
+    where
+        F: FnOnce() -> O + Send + 'static,
+        O: Send + 'static,
+    {
+        let runtime_handle = tokio::runtime::Handle::current();
+        let mut task_fut = runtime_handle.spawn_blocking(job).fuse();
+
+        let start_time = std::time::Instant::now();
+        let mut interval_timer = tokio::time::interval(std::time::Duration::from_secs(5)).fuse();
+
+        loop {
+            select! {
+                result = task_fut => {
+                    debug!("cdc incremental scan batch done");
+                    return match result {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            error!("cdc incremental scan batch failed"; "error" => ?e);
+                            None
+                        }
+                    }
+                },
+                inst = interval_timer.next() => {
+                    if inst.is_none() {
+                        unreachable!();
+                    }
+                    let duration = inst.unwrap().duration_since(start_time.into());
+                    debug!("cdc incremental scan batch not done"; "duration" => ?duration);
+                    if duration > std::time::Duration::from_secs(60) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
     async fn async_incremental_scan_v2<S: Snapshot + 'static>(&self, snap: S, region: Region) {
         let downstream_id = self.downstream_id;
         let conn_id = self.conn_id;
@@ -1132,6 +1181,13 @@ impl Initializer {
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
+
+        let scan_context = Arc::new(Mutex::new(IncrementalScanBatchContext {
+            resolver: RefCell::new(resolver),
+            batch_size: self.batch_size,
+            scanner: RefCell::new(scanner),
+        }));
+
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
@@ -1141,9 +1197,22 @@ impl Initializer {
                     "observe_id" => ?self.observe_id);
                 return;
             }
-            let entries = match Self::scan_batch(&mut scanner, self.batch_size, resolver.as_mut()) {
-                Ok(res) => res,
-                Err(e) => {
+            let batch_size = self.batch_size;
+            let scan_context = scan_context.clone();
+            let entries = match self
+                .async_do_blocking(move || {
+                    let mut context = scan_context.lock().unwrap();
+                    let res = Self::scan_batch(
+                        &mut context.scanner.borrow_mut(),
+                        context.batch_size,
+                        context.resolver.borrow_mut().as_mut(),
+                    );
+                    res
+                })
+                .await
+            {
+                Some(Ok(res)) => res,
+                Some(Err(e)) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                     // TODO: record in metrics.
                     let deregister = Deregister::Downstream {
@@ -1155,6 +1224,10 @@ impl Initializer {
                     if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                         error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
                     }
+                    return;
+                }
+                None => {
+                    error!("cdc scan entries timed out!");
                     return;
                 }
             };
@@ -1197,7 +1270,7 @@ impl Initializer {
         }
 
         let takes = start.elapsed();
-        if let Some(resolver) = resolver {
+        if let Some(resolver) = scan_context.lock().unwrap().resolver.take() {
             self.finish_building_resolver(resolver, region, takes);
         }
 
@@ -1321,6 +1394,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
     fn on_timeout(&mut self) {
+        debug!("cdc thread pool is alive");
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
