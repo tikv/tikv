@@ -20,22 +20,18 @@ pub struct TTLSnapshot<S: Snapshot> {
 }
 
 impl<S: Snapshot> TTLSnapshot<S> {
-    fn map_value(&self, mut value_with_ttl: Result<Option<Value>>) -> Result<Option<Value>> {
-        if value_with_ttl.is_err() {
-            return value_with_ttl;
+    fn map_value(&self, value_with_ttl: Result<Option<Value>>) -> Result<Option<Value>> {
+        match value_with_ttl? {
+            Some(mut v) => {
+                let expire_ts = get_expire_ts(&v)?;
+                if expire_ts != 0 && expire_ts <= self.current_ts {
+                    return Ok(None);
+                }
+                truncate_expire_ts(&mut v).unwrap();
+                Ok(Some(v))
+            },
+            None => Ok(None)
         }
-
-        if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
-            let expire_ts = get_expire_ts(v)?;
-            if expire_ts != 0 && expire_ts <= self.current_ts {
-                return Ok(None);
-            }
-        }
-
-        if let Some(v) = value_with_ttl.as_mut().unwrap().as_mut() {
-            truncate_expire_ts(v).unwrap()
-        }
-        value_with_ttl
     }
 
     #[cfg(not(test))]
@@ -56,17 +52,13 @@ impl<S: Snapshot> TTLSnapshot<S> {
         key: &Key,
         stats: &mut Statistics,
     ) -> Result<Option<u64>> {
-        let value_with_ttl = self.s.get_cf(cf, key);
-
-        if let Err(e) = value_with_ttl {
-            return Err(e);
-        }
+        let value_with_ttl = self.s.get_cf(cf, key)?;
 
         stats.data.flow_stats.read_keys = 1;
         stats.data.flow_stats.read_bytes = key.as_encoded().len();
-        if let Some(v) = value_with_ttl.as_ref().unwrap().as_ref() {
+        if let Some(v) = value_with_ttl {
             stats.data.flow_stats.read_bytes += v.len();
-            let expire_ts = get_expire_ts(v)?;
+            let expire_ts = get_expire_ts(&v)?;
             if expire_ts == 0 {
                 return Ok(Some(0));
             }
