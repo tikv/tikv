@@ -52,7 +52,7 @@ pub trait MiscExt: CFNamesExt {
     ///      so you shouldn't expect to be able to read data from the range using existing snapshots
     ///      any more.
     ///
-    /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
+    /// Ref: <https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys>
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
     fn path(&self) -> &str;
