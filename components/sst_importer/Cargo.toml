@@ -41,7 +41,7 @@ external_storage = { path = "../external_storage", default-features = false }
 file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
 keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"

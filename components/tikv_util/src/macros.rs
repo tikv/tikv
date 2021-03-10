@@ -202,6 +202,28 @@ macro_rules! safe_panic {
     });
 }
 
+#[macro_export]
+macro_rules! impl_format_delegate_newtype {
+    ($t:ty) => {
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_display_as_debug {
+    ($t:ty) => {
+        impl std::fmt::Display for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{:?}", self)
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;

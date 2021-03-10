@@ -253,7 +253,11 @@ impl Lock {
                         rollback_ts.push(number::decode_u64(&mut b)?.into());
                     }
                 }
-                flag => panic!("invalid flag [{}] in lock", flag),
+                _ => {
+                    // To support forward compatibility, all fields should be serialized in order
+                    // and stop parsing if meets an unknown byte.
+                    break;
+                }
             }
         }
         let mut lock = Lock::new(
@@ -564,8 +568,12 @@ mod tests {
             0,
             TimeStamp::zero(),
         );
-        let v = lock.to_bytes();
+        let mut v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
+        // Test `Lock::parse()` ignores unknown bytes.
+        v.extend(b"unknown");
+        let l = Lock::parse(&v).unwrap();
+        assert_eq!(l, lock);
     }
 
     #[test]
