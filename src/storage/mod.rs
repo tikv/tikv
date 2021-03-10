@@ -49,9 +49,9 @@ use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CbContext, CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
-        PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot, Statistics,
-        TestEngineBuilder,
+        CbContext, CfStatistics, Cursor, CursorBuilder, Engine, FlowStatistics, FlowStatsReporter,
+        Iterator, PerfStatisticsDelta, PerfStatisticsInstant, RocksEngine, ScanMode, Snapshot,
+        Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
@@ -72,7 +72,6 @@ use crate::storage::{
 };
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
     CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
@@ -1244,14 +1243,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
+        let mut cursor = CursorBuilder::new(snapshot, Self::rawkv_cf(cf)?)
+            .range(None, end_key)
+            .scan_mode(ScanMode::Forward)
+            .key_only(key_only)
+            .build()?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -1295,14 +1291,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         statistics: &mut Statistics,
         key_only: bool,
     ) -> Result<Vec<Result<KvPair>>> {
-        let mut option = IterOptions::default();
-        if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        if key_only {
-            option.set_key_only(key_only);
-        }
-        let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
+        let mut cursor = CursorBuilder::new(snapshot, Self::rawkv_cf(cf)?)
+            .range(end_key, None)
+            .scan_mode(ScanMode::Backward)
+            .key_only(key_only)
+            .build()?;
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
