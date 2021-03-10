@@ -107,7 +107,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        prev_ts.into()
+        cmp::max(TimeStamp::new(prev_ts), new_resolved_ts)
     }
 }
 
