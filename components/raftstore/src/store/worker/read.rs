@@ -548,6 +548,9 @@ where
                             &req,
                             delegate.region.get_region_epoch(),
                         ) {
+
+                            warn!("stale read met error"; "err" => ?e);
+
                             self.metrics.rejected_by_safe_timestamp += 1;
                             let mut response = cmd_resp::new_error(e);
                             cmd_resp::bind_term(&mut response, delegate.term);

@@ -29,7 +29,7 @@ impl ChangeLog {
         let Cmd { index, request, .. } = cmd;
         let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
         if flags.contains(WriteBatchFlags::ONE_PC) {
-            debug!("skip encode one pc change log");
+            info!("skip one pc change log");
             return ChangeLog {
                 index,
                 rows: vec![],

@@ -51,9 +51,11 @@ use raftstore::{
     store::{
         config::RaftstoreConfigManager,
         fsm,
-        fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
-        AutoSplitController, GlobalReplicationState, LocalReader, RegionSafeTSTracker,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
+        fsm::store::{
+            RaftBatchSystem, RaftRouter, RegionSafeTSTracker, StoreMeta, PENDING_MSG_CAP,
+        },
+        AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
+        SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;

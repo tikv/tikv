@@ -2143,7 +2143,8 @@ where
         self.pending_reads.gc();
 
         ctx.coprocessor_host
-            .on_applied_update::<RegionSafeTSTracker>(&self.peer_properties, applied_index);
+            .on_applied_update::<RegionSafeTSTracker>(&self.peer_properties, applied_index)
+            .unwrap();
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {

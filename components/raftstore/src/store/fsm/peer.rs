@@ -1263,7 +1263,8 @@ where
                     .property_from_bytes::<RegionSafeTSTracker>(
                         &self.fsm.peer.peer_properties,
                         extra_ctx,
-                    )?;
+                    )
+                    .unwrap();
             }
         }
 
@@ -2811,7 +2812,8 @@ where
                 source_properties,
                 &self.fsm.peer.peer_properties,
                 applied_index,
-            );
+            )
+            .unwrap();
     }
 
     fn on_ready_commit_merge(

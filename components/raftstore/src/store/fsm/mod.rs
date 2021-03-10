@@ -17,5 +17,5 @@ pub use self::apply::{
 };
 pub use self::peer::{CollectedReady, DestroyPeerJob, PeerFsm};
 pub use self::store::{
-    create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreInfo, StoreMeta,
+    create_raft_batch_system, RaftBatchSystem, RaftPollerBuilder, RaftRouter, StoreInfo, StoreMeta, RegionSafeTSTracker
 };

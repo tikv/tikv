@@ -2510,7 +2510,7 @@ impl RegionReadProgress {
         }
         self.applied_index.fetch_max(applied, Ordering::Relaxed);
         if ts_to_update > self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed) {
-            debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts_to_update);
+            info!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts_to_update);
         }
     }
 
@@ -2519,7 +2519,7 @@ impl RegionReadProgress {
 
         let last_merge_index = self.last_merge_index.load(Ordering::Relaxed);
         if last_merge_index > apply_index {
-            debug!(
+            info!(
                 "ignore item less than `last_merge_index`";
                 "tag" => &self.tag,
                 "item" => ?(apply_index, ts),
@@ -2541,7 +2541,7 @@ impl RegionReadProgress {
             self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
             if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
-                debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
+                info!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
             }
         }
     }
@@ -2555,7 +2555,7 @@ impl RegionReadProgress {
         self.last_merge_index.store(merge_index, Ordering::Relaxed);
         // Reset target region's `safe_ts`
         if source_safe_ts < self.safe_ts.fetch_min(source_safe_ts, Ordering::Relaxed) {
-            debug!(
+            info!(
                 "safe ts decrease due to merge";
                 "tag" => &self.tag,
                 "safe ts" => source_safe_ts
