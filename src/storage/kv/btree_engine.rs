@@ -13,9 +13,8 @@ use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
 use crate::storage::kv::{
-    Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
-    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
-    WriteData,
+    Callback as EngineCallback, CbContext, Engine, Error as EngineError,
+    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
 
 use super::SnapContext;
@@ -243,23 +242,13 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-        self.iter_cf(CF_DEFAULT, iter_opt, mode)
+    fn iter(&self, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
+        self.iter_cf(CF_DEFAULT, iter_opt)
     }
     #[inline]
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> EngineResult<Cursor<Self::Iter>> {
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            BTreeEngineIterator::new(tree, iter_opt),
-            mode,
-            prefix_seek,
-        ))
+        Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
 }
 
@@ -299,6 +288,8 @@ pub mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
+    use crate::storage::{Cursor, ScanMode};
+    use engine_traits::IterOptions;
 
     #[test]
     fn test_btree_engine() {
@@ -337,13 +328,13 @@ pub mod tests {
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
-        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
+        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
-        let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
+        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
         assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());
