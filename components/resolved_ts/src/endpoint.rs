@@ -265,7 +265,7 @@ where
             mode: ScanMode::LockOnly,
             region,
             checkpoint_ts: TimeStamp::zero(),
-            cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
+            is_cancelled: Box::new(move || cancelled.load(Ordering::Acquire)),
             send_entries: Box::new(move |entries| {
                 scheduler
                     .schedule(Task::ScanLocks {

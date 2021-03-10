@@ -37,7 +37,7 @@ use time::Timespec;
 use txn_types::TimeStamp;
 use uuid::Uuid;
 
-use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
+use crate::coprocessor::{CoprocessorHost, PeerProperties, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::{PollContext, RegionReadProgress, RegionSafeTSTracker};
 use crate::store::fsm::{apply, Apply, ApplyMetrics, ApplyTask, CollectedReady, Proposal};
@@ -69,6 +69,7 @@ use super::util::{
     Lease, LeaseState, ADMIN_CMD_EPOCH_MAP, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
 };
 use super::DestroyPeerJob;
+use crate::errors::RAFTSTORE_IS_BUSY;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s

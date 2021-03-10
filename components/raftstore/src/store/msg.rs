@@ -16,7 +16,7 @@ use raft::SnapshotStatus;
 use std::borrow::Cow;
 
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
-use crate::store::fsm::apply::{CatchUpLogs, ChangeObserver};
+use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
@@ -271,7 +271,7 @@ where
     },
     /// Capture the changes of the region.
     CaptureChange {
-        cmd: ChangeObserver,
+        cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         callback: Callback<SK>,
     },

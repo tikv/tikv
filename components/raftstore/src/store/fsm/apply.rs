@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -2886,7 +2886,7 @@ where
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     Change {
-        cmd: ChangeObserver,
+        cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     },
@@ -2937,7 +2937,7 @@ where
             Msg::Change {
                 cmd: ChangeCmd { region_id, .. },
                 ..
-            } => write!(f, "[region {}] change cmd", region_id),
+            } => write!(f, "[region {}] cmd snapshot", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -3271,7 +3271,7 @@ where
     fn handle_change<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        cmd: ChangeObserver,
+        cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
@@ -4781,6 +4781,10 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 2, vec![put_entry], vec![])));
+        // Must not receive new cmd.
+        cmdbatch_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
 
         // Must response a RegionNotFound error.
         router.schedule_task(

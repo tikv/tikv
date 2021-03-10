@@ -41,8 +41,7 @@ use crate::store::cmd_resp::{bind_term, new_error};
 use crate::store::fsm::store::RegionSafeTSTracker;
 use crate::store::fsm::store::{PollContext, StoreMeta};
 use crate::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
-    ExecResult,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeCmd, ChangePeer, ExecResult,
 };
 use crate::store::hibernate_state::{GroupState, HibernateState};
 use crate::store::local_metrics::RaftProposeMetrics;
@@ -781,7 +780,7 @@ where
 
     fn on_capture_change(
         &mut self,
-        cmd: ChangeObserver,
+        cmd: ChangeCmd,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
     ) {
