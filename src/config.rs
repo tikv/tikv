@@ -30,7 +30,7 @@ use engine_rocks::util::{
 };
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    RocksSstPartitionerFactory, RocksLevelRegionAccessor, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFHandleExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
@@ -41,7 +41,7 @@ use raft_log_engine::RaftEngineConfig as RawRaftEngineConfig;
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::{Config as CopConfig, RegionInfoAccessor};
 use raftstore::store::Config as RaftstoreConfig;
-use raftstore::store::{CompactionGuardGeneratorFactory, SplitConfig};
+use raftstore::store::{CompactionGuardGeneratorFactory, SizeRatioCompaction, SplitConfig};
 use security::SecurityConfig;
 use tikv_util::config::{
     self, LogFormat, OptionReadableSize, ReadableDuration, ReadableSize, TomlWriter, GB, MB,
@@ -250,6 +250,8 @@ macro_rules! cf_config {
             pub compaction_guard_min_output_file_size: ReadableSize,
             #[config(skip)]
             pub compaction_guard_max_output_file_size: ReadableSize,
+            #[config(skip)]
+            pub enable_size_ratio_compaction: bool,
             #[config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -448,6 +450,17 @@ macro_rules! build_cf_opt {
                 warn!("compaction guard is disabled due to region info accessor not available")
             }
         }
+        if $opt.enable_size_ratio_compaction {
+            if let Some(accessor) = $region_info_accessor {
+                cf_opts.set_level_region_accessor(RocksLevelRegionAccessor(
+                    SizeRatioCompaction::new(
+                        accessor.clone(),
+                    ),
+                ));
+            } else {
+                warn!("size ratio compaction is disabled due to region info accessor not available")
+            }
+        }
         cf_opts
     }};
 }
@@ -501,6 +514,7 @@ impl Default for DefaultCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -575,6 +589,7 @@ impl Default for WriteCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan,
         }
     }
@@ -657,6 +672,7 @@ impl Default for LockCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan,
         }
     }
@@ -728,6 +744,7 @@ impl Default for RaftCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan,
         }
     }
@@ -799,6 +816,7 @@ impl Default for VersionCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -1129,6 +1147,7 @@ impl Default for RaftDefaultCfConfig {
             enable_compaction_guard: false,
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            enable_size_ratio_compaction: false,
             titan: TitanCfConfig::default(),
         }
     }

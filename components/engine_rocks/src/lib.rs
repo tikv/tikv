@@ -55,6 +55,8 @@ mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
+mod level_region_accessor;
+pub use crate::level_region_accessor::*;
 mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;

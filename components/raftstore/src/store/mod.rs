@@ -11,6 +11,7 @@ pub mod util;
 
 mod bootstrap;
 mod compaction_guard;
+mod size_ratio_compaction;
 mod local_metrics;
 mod metrics;
 mod peer;
@@ -26,6 +27,7 @@ pub use self::bootstrap::{
     prepare_bootstrap_cluster,
 };
 pub use self::compaction_guard::CompactionGuardGeneratorFactory;
+pub use self::size_ratio_compaction::SizeRatioCompaction;
 pub use self::config::Config;
 pub use self::fsm::{DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{

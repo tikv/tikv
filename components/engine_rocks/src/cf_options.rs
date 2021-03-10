@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitionerFactory};
-use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory};
+use crate::{db_options::RocksTitanDBOptions, sst_partitioner::RocksSstPartitionerFactory, level_region_accessor::RocksLevelRegionAccessor};
+use engine_traits::{ColumnFamilyOptions, SstPartitionerFactory, LevelRegionAccessor};
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
 
 #[derive(Clone)]
@@ -63,5 +63,9 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F) {
         self.0
             .set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
+    }
+    fn set_level_region_accessor<A: LevelRegionAccessor>(&mut self, accessor: A) {
+        self.0
+            .set_level_region_accessor(RocksLevelRegionAccessor(accessor));
     }
 }
