@@ -51,6 +51,9 @@ enum PendingLock {
     },
 }
 
+// Records information related to observed region.
+// observe_id is used for avoid ABA problems in incremental scan task, advance resolved ts task,
+// and command observing.
 struct ObserveRegion {
     meta: Region,
     observe_id: ObserveID,
@@ -66,7 +69,6 @@ impl ObserveRegion {
             resolver: Resolver::from_shared(meta.id, resolved_ts),
             meta,
             observe_id: ObserveID::new(),
-            // lease: None,
             resolver_status: ResolverStatus::Pending {
                 locks: vec![],
                 cancelled: Arc::new(AtomicBool::new(false)),
