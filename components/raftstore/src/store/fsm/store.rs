@@ -1279,6 +1279,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 let peer = peer_fsm.get_peer();
                 meta.readers
                     .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
+                meta.peer_properties
+                    .insert(peer_fsm.region_id(), Arc::default());
             }
         }
 

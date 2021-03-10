@@ -58,3 +58,15 @@ txn_types = { path = "../txn_types" }
 security = { path = "../security" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+
+[dev-dependencies]
+engine_rocks = { path = "../engine_rocks", default-features = false }
+tempfile = "3.0"
+test_raftstore = { path = "../test_raftstore", default-features = false }
+test_util = { path = "../test_util", default-features = false }
+panic_hook = { path = "../panic_hook" }
+raft = { version = "0.6.0-alpha", default-features = false }
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"

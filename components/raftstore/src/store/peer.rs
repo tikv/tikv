@@ -1774,6 +1774,7 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
+            meta.peer_properties.insert(self.region_id, Arc::default());
         }
 
         apply_snap_result
