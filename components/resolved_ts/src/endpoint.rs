@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, Snapshot};
 use grpcio::Environment;
+use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raft::StateRole;
@@ -27,6 +28,7 @@ use crate::cmd::{ChangeLog, ChangeRow};
 use crate::errors::{Error, Result};
 use crate::resolver::Resolver;
 use crate::scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool};
+use crate::sinker::{CmdSinker, SinkCmd};
 
 enum ResolverStatus {
     Pending {
@@ -156,26 +158,6 @@ impl ObserveRegion {
     }
 }
 
-// Sink commands to upstream workers.
-pub trait CmdSinker<S: Snapshot>: Send {
-    fn sink_cmd(
-        &mut self,
-        change_logs: Vec<(ObserveID, Vec<ChangeLog>)>,
-        snapshot: RegionSnapshot<S>,
-    );
-}
-
-pub struct DummySinker<S: Snapshot>(PhantomData<S>);
-
-impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
-    fn sink_cmd(
-        &mut self,
-        _change_logs: Vec<(ObserveID, Vec<ChangeLog>)>,
-        _snapshot: RegionSnapshot<S>,
-    ) {
-    }
-}
-
 pub struct Endpoint<T, E: KvEngine, C> {
     store_meta: Arc<Mutex<StoreMeta>>,
     regions: HashMap<u64, ObserveRegion>,
@@ -288,9 +270,10 @@ where
                     .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
             }),
             before_start: None,
-            on_error: Some(Box::new(move |observe_id, _region, error| {
+            on_error: Some(Box::new(move |observe_id, _region, e| {
+                let error = e.extract_error_header();
                 scheduler_error
-                    .schedule(Task::RegionRangeChanged {
+                    .schedule(Task::RegionError {
                         region_id,
                         observe_id,
                         error,
@@ -353,13 +336,13 @@ where
 
     // Deregister current observed region and try to register it again.
     // Call after the version of region epoch changed.
-    fn region_range_changed(&mut self, region_id: u64, observe_id: ObserveID, error: Error) {
+    fn region_error(&mut self, region_id: u64, observe_id: ObserveID, error: ErrorHeader) {
         if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.observe_id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
                 return;
             }
-            info!("region met error, recreate it"; "region_id" => region_id, "error" => ?error);
+            info!("region met error, try to register again"; "region_id" => region_id, "error" => ?error);
             self.deregister_region(region_id);
             let region;
             {
@@ -404,12 +387,16 @@ where
                         let observe_id = batch.observe_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.observe_id == observe_id {
-                            let change_logs = ChangeLog::encode_change_log(region_id, batch);
-                            if let Err(e) = observe_region.track_change_log(&change_logs) {
+                            let logs = ChangeLog::encode_change_log(region_id, batch);
+                            if let Err(e) = observe_region.track_change_log(&logs) {
                                 drop(observe_region);
-                                self.region_range_changed(region_id, observe_id, e)
+                                self.region_error(region_id, observe_id, e.extract_error_header())
                             }
-                            return Some((observe_id, change_logs));
+                            return Some(SinkCmd {
+                                region_id,
+                                observe_id,
+                                logs,
+                            });
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
@@ -458,10 +445,10 @@ pub enum Task<S: Snapshot> {
         region: Region,
         role: StateRole,
     },
-    RegionRangeChanged {
+    RegionError {
         region_id: u64,
         observe_id: ObserveID,
-        error: Error,
+        error: ErrorHeader,
     },
     RegisterAdvanceEvent,
     AdvanceResolvedTs {
@@ -495,7 +482,7 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
                 .field("region", &region)
                 .field("role", &role)
                 .finish(),
-            Task::RegionRangeChanged {
+            Task::RegionError {
                 ref region_id,
                 ref observe_id,
                 ref error,
@@ -547,11 +534,11 @@ where
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
             Task::RegionRoleChanged { region, role } => self.region_role_changed(region, role),
-            Task::RegionRangeChanged {
+            Task::RegionError {
                 region_id,
                 observe_id,
                 error,
-            } => self.region_range_changed(region_id, observe_id, error),
+            } => self.region_error(region_id, observe_id, error),
             Task::AdvanceResolvedTs { regions, ts } => self.advance_resolved_ts(regions, ts),
             Task::ChangeLog {
                 cmd_batch,
