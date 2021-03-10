@@ -8,10 +8,12 @@
 //! `tikv_receiver_addr` to check where the message should delievered to. If
 //! there is no such metadata, it will handle the message by itself.
 
+use crate::server::Config;
 use collections::HashMap;
 use grpcio::{CallOption, Channel, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
 use kvproto::tikvpb::TikvClient;
 use security::SecurityManager;
+use std::ffi::CString;
 use std::future::Future;
 use std::str;
 use std::sync::{Arc, Weak};
@@ -53,40 +55,78 @@ struct Client {
     client: TikvClient,
 }
 
+pub struct ClientPool {
+    pool: Vec<Client>,
+    last_pos: usize,
+}
+
+impl ClientPool {
+    fn with_capacity(cap: usize) -> ClientPool {
+        ClientPool {
+            pool: Vec::with_capacity(cap),
+            last_pos: 0,
+        }
+    }
+
+    fn get_connection(
+        &mut self,
+        env: &Weak<Environment>,
+        mgr: &SecurityManager,
+        cfg: &Config,
+        addr: &str,
+    ) -> Option<Client> {
+        if self.last_pos == self.pool.len() {
+            if self.last_pos < cfg.proxy_max_connections_per_address {
+                let env = match env.upgrade() {
+                    Some(e) => e,
+                    None => return None,
+                };
+                let cb = ChannelBuilder::new(env)
+                    .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
+                    .max_receive_message_len(-1) // 1G.
+                    .max_send_message_len(-1)
+                    // Memory should be limited by incomming connections already.
+                    // And maintaining a shared resource quota doesn't seem easy.
+                    .keepalive_time(cfg.grpc_keepalive_time.into())
+                    .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
+                    .raw_cfg_int(CString::new("connection id").unwrap(), self.last_pos as i32);
+                let ch = mgr.connect(cb, addr);
+                let client = Client {
+                    client: TikvClient::new(ch.clone()),
+                    channel: ch,
+                };
+                self.pool.push(client.clone());
+                self.last_pos += 1;
+                Some(client)
+            } else {
+                self.last_pos = 0;
+                Some(self.pool[self.last_pos].clone())
+            }
+        } else {
+            let client = self.pool[self.last_pos].clone();
+            self.last_pos += 1;
+            Some(client)
+        }
+    }
+}
+
 /// A proxy struct that maintains connections to different addresses.
 pub struct Proxy {
     mgr: Arc<SecurityManager>,
     env: Weak<Environment>,
+    cfg: Arc<Config>,
     // todo: Release client if it's not used anymore. For example, become tombstone.
-    clients: HashMap<String, Client>,
+    pool: HashMap<String, ClientPool>,
 }
 
 impl Proxy {
-    pub fn new(mgr: Arc<SecurityManager>, env: &Arc<Environment>) -> Proxy {
+    pub fn new(mgr: Arc<SecurityManager>, env: &Arc<Environment>, cfg: Arc<Config>) -> Proxy {
         Proxy {
             mgr,
             env: Arc::downgrade(env),
-            clients: HashMap::default(),
+            cfg,
+            pool: HashMap::default(),
         }
-    }
-
-    fn connect(&self, addr: &str) -> Option<Client> {
-        let env = match self.env.upgrade() {
-            Some(e) => e,
-            None => return None,
-        };
-
-        let cb = ChannelBuilder::new(env)
-            .max_receive_message_len(1 << 30) // 1G.
-            .max_send_message_len(1 << 30)
-            .keepalive_time(Duration::from_secs(10))
-            .keepalive_timeout(Duration::from_secs(3));
-
-        let ch = self.mgr.connect(cb, addr);
-        Some(Client {
-            client: TikvClient::new(ch.clone()),
-            channel: ch,
-        })
     }
 
     /// Get a client and do work on the client.
@@ -94,15 +134,16 @@ impl Proxy {
     where
         C: FnOnce(&TikvClient) + Send + 'static,
     {
-        let client = match self.clients.get(addr) {
-            Some(client) => Some(client.clone()),
-            None => match self.connect(addr) {
-                Some(c) => {
-                    self.clients.insert(addr.to_owned(), c.clone());
-                    Some(c)
-                }
-                None => None,
-            },
+        let client = match self.pool.get_mut(addr) {
+            Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg, addr),
+            None => {
+                let p = ClientPool::with_capacity(self.cfg.proxy_max_connections_per_address);
+                self.pool.insert(addr.to_string(), p);
+                self.pool
+                    .get_mut(addr)
+                    .unwrap()
+                    .get_connection(&self.env, &self.mgr, &self.cfg, addr)
+            }
         };
 
         async move {
@@ -125,7 +166,8 @@ impl Clone for Proxy {
         Proxy {
             env: self.env.clone(),
             mgr: self.mgr.clone(),
-            clients: HashMap::default(),
+            cfg: self.cfg.clone(),
+            pool: HashMap::default(),
         }
     }
 }
