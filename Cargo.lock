@@ -1746,7 +1746,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.8.1"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "397c5a9f569ba6beabec1e5b0b622d5e182913de45480666ae76849dd7ac01c9"
 dependencies = [
  "bytes 1.0.1",
  "futures 0.3.7",
@@ -1775,6 +1777,8 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f89a56d830be4dddc939c377c95e3b77e30c86a8df99c20095c34cf9038447b"
 dependencies = [
  "bindgen",
  "boringssl-src",
