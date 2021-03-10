@@ -1071,20 +1071,31 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-                        if let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await
-                        {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                region,
-                                vec![split_info.split_key],
-                                split_info.peer,
-                                true,
-                                Callback::None,
-                                String::from("auto_split"),
-                            );
+                        let region_id = split_info.region_id;
+                        if let Ok(Some(region)) = pd_client.get_region_by_id(region_id).await {
+                            if !split_info.split_key.is_empty() {
+                                Self::handle_ask_batch_split(
+                                    router.clone(),
+                                    scheduler.clone(),
+                                    pd_client.clone(),
+                                    region,
+                                    vec![split_info.split_key],
+                                    split_info.peer,
+                                    true,
+                                    Callback::None,
+                                    String::from("load_base_split"),
+                                )
+                            } else {
+                                let msg = CasualMessage::HalfSplitRegion {
+                                    region_epoch: region.get_region_epoch().clone(),
+                                    policy: pdpb::CheckPolicy::Scan,
+                                    source: "load_base_split",
+                                };
+                                if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg))
+                                {
+                                    error!("load_base_split send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
+                                }
+                            }
                         }
                     }
                 };
