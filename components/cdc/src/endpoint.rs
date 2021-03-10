@@ -21,7 +21,7 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID, StoreMeta};
+use raftstore::store::fsm::{ObserveID, StoreMeta};
 use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
 use resolved_ts::Resolver;
 use security::SecurityManager;
@@ -472,7 +472,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
             return;
         }
-        let change_cmd = if is_new_delegate {
+        if is_new_delegate {
             // The region has never been registered.
             // Subscribe the change events of the region.
             let old_id = self.observer.subscribe_region(region_id, delegate.id);
@@ -483,20 +483,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 old_id,
                 delegate.id
             );
-
-            // ChangeCmd::RegisterObserver {
-            //     observe_id: delegate.id,
-            //     region_id,
-            //     enabled: delegate.enabled(),
-            // }
-            unimplemented!()
-        } else {
-            // ChangeCmd::Snapshot {
-            //     observe_id: delegate.id,
-            //     region_id,
-            // }
-            unimplemented!()
         };
+        let change_cmd = { unimplemented!() };
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();

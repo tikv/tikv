@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -14,10 +16,14 @@ use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
-use crate::endpoint::Task;
 use crate::errors::{Error, Result};
 
 const DEFAULT_SCAN_BATCH_SIZE: usize = 1024;
+
+pub type BeforeStartCallback = Box<dyn Fn() + Send>;
+pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
+pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>) + Send>;
+pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 
 pub enum ScanMode {
     LockOnly,
@@ -31,10 +37,10 @@ pub struct ScanTask {
     pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
-    pub cancelled: Box<dyn Fn() -> bool + Send>,
-    pub send_entries: Box<dyn Fn(Vec<ScanEntry>) + Send>,
-    pub before_start: Option<Box<dyn Fn() + Send>>,
-    pub on_error: Option<Box<dyn Fn(ObserveID, Region, Error) + Send>>,
+    pub is_cancelled: IsCancelledCallback,
+    pub send_entries: OnEntriesCallback,
+    pub before_start: Option<BeforeStartCallback>,
+    pub on_error: Option<OnErrorCallback>,
 }
 
 #[derive(Debug)]
@@ -100,7 +106,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                         .build_delta_scanner(task.checkpoint_ts, txn_extra_op)
                         .unwrap();
                     let mut done = false;
-                    while !done && !(task.cancelled)() {
+                    while !done && !(task.is_cancelled)() {
                         let (es, has_remaining) = match Self::scan_delta(&mut scanner) {
                             Ok(rs) => rs,
                             Err(e) => {
@@ -130,13 +136,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                     );
                     let mut done = false;
                     let mut start = None;
-                    while !done && !(task.cancelled)() {
+                    while !done && !(task.is_cancelled)() {
                         let (locks, has_remaining) =
                             match Self::scan_locks(&mut reader, start.as_ref(), task.checkpoint_ts)
                             {
                                 Ok(rs) => rs,
                                 Err(e) => {
-                                    warn!("resolved_ts scan delta failed"; "err" => ?e);
+                                    warn!("resolved_ts scan lock failed"; "err" => ?e);
                                     let ScanTask {
                                         on_error,
                                         region,
@@ -201,12 +207,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         start: Option<&Key>,
         _checkpoint_ts: TimeStamp,
     ) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let (locks, has_remaining) = reader.scan_locks(
-            start,
-            None,
-            |l| l.ts >= TimeStamp::zero(),
-            DEFAULT_SCAN_BATCH_SIZE,
-        )?;
+        let (locks, has_remaining) =
+            reader.scan_locks(start, None, |_| true, DEFAULT_SCAN_BATCH_SIZE)?;
         Ok((locks, has_remaining))
     }
 
