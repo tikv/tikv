@@ -14,6 +14,7 @@ pub trait ImportExt: CFHandleExt {
         files: &[&str],
     ) -> Result<()>;
 
+<<<<<<< HEAD
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &Self::CFHandle,
@@ -21,6 +22,9 @@ pub trait ImportExt: CFHandleExt {
         expected_size: u64,
         expected_checksum: u32,
     ) -> Result<()>;
+=======
+    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> Result<()>;
+>>>>>>> 3d3dd779d... sst_importer: make ingest reentrant (#9624)
 }
 
 pub trait IngestExternalFileOptions {

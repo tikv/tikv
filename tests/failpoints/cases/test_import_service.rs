@@ -1,6 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use futures::{stream, Future, Stream};
+=======
+use file_system::calc_crc32;
+use futures::executor::block_on;
+use futures::{stream, SinkExt};
+>>>>>>> 3d3dd779d... sst_importer: make ingest reentrant (#9624)
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use std::sync::mpsc::channel;
@@ -79,6 +85,52 @@ fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<U
     let (tx, rx) = import.upload().unwrap();
     let stream = stream::iter_ok(reqs);
     stream.forward(tx).and_then(|_| rx).wait()
+}
+
+#[test]
+fn test_ingest_reentrant() {
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_reentrant")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    upload_sst(&import, &meta, &data).unwrap();
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx);
+    ingest.set_sst(meta.clone());
+
+    // Don't delete ingested sst file or we cannot find sst file in next ingest.
+    fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
+
+    let node_id = *cluster.sim.rl().get_node_ids().iter().next().unwrap();
+    // Use sst save path to track the sst file checksum.
+    let save_path = cluster
+        .sim
+        .rl()
+        .importers
+        .get(&node_id)
+        .unwrap()
+        .get_path(&meta);
+
+    let checksum1 = calc_crc32(save_path.clone()).unwrap();
+    // Do ingest and it will ingest successs.
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+
+    let checksum2 = calc_crc32(save_path).unwrap();
+    // Checksums are different because ingest changed global seqno in sst file.
+    assert_ne!(checksum1, checksum2);
+    // Do ingest again and it can be reentrant
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
 }
 
 #[test]
