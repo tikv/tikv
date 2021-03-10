@@ -1128,9 +1128,7 @@ impl Initializer {
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
                     match lock.lock_type {
-                        LockType::Put | LockType::Delete => {
-                            resolver.track_lock(lock.ts, &Key::new(key))
-                        }
+                        LockType::Put | LockType::Delete => resolver.track_lock(lock.ts, key),
                         _ => (),
                     };
                 }

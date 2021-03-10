@@ -3,7 +3,7 @@
 use collections::HashSet;
 use crossbeam::atomic::AtomicCell;
 use std::cmp;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use txn_types::{Key, TimeStamp};
@@ -12,8 +12,10 @@ use txn_types::{Key, TimeStamp};
 // the timestamp.
 pub struct Resolver {
     region_id: u64,
+    // key -> start_ts
+    locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-    locks: BTreeMap<TimeStamp, HashSet<Key>>,
+    lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: Arc<AtomicU64>,
     // The timestamps that advance the resolved_ts when there is no more write.
@@ -25,7 +27,8 @@ impl Resolver {
         Resolver {
             region_id,
             resolved_ts,
-            locks: BTreeMap::new(),
+            locks_by_key: HashMap::default(),
+            lock_ts_heap: BTreeMap::new(),
             min_ts: TimeStamp::zero(),
         }
     }
@@ -34,76 +37,45 @@ impl Resolver {
         Self::from_resolved_ts(region_id, Arc::new(AtomicU64::new(0)))
     }
 
-    // pub fn resolved_ts(&self) -> Arc<AtomicCell<TimeStamp>> {
-    //     self.resolved_ts.clone()
-    // }
-
-    pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Key>> {
-        &self.locks
+    pub fn resolved_ts(&self) -> TimeStamp {
+        TimeStamp::from(self.resolved_ts.load(Ordering::Relaxed))
     }
 
-    pub fn track_lock(&mut self, start_ts: TimeStamp, key: &Key) {
+    pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
+        &self.lock_ts_heap
+    }
+
+    pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
         debug!(
             "track lock {}@{}, region {}",
-            log_wrappers::Value(key.as_encoded()),
+            &log_wrappers::Value::key(&key),
             start_ts,
             self.region_id
         );
-        self.locks.entry(start_ts).or_default().insert(key.clone());
+        let key: Arc<[u8]> = key.into_boxed_slice().into();
+        self.locks_by_key.insert(key.clone(), start_ts);
+        self.lock_ts_heap.entry(start_ts).or_default().insert(key);
     }
 
-    pub fn untrack_lock(&mut self, start_ts: TimeStamp, commit_ts: Option<TimeStamp>, key: &Key) {
+    pub fn untrack_lock(&mut self, key: &[u8]) {
+        let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
+            start_ts
+        } else {
+            debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
+            return;
+        };
         debug!(
-            "untrack lock {}@{}, commit@{}, region {}",
-            log_wrappers::Value(key.as_encoded()),
+            "untrack lock {}@{}, region {}",
+            &log_wrappers::Value::key(key),
             start_ts,
-            commit_ts.clone().unwrap_or_else(TimeStamp::zero),
             self.region_id,
         );
-        if let Some(commit_ts) = commit_ts {
-            assert!(
-                commit_ts > TimeStamp::from(self.resolved_ts.load(Ordering::Relaxed)),
-                "{}@{}, commit@{} < {:?}, region {}",
-                log_wrappers::Value(key.as_encoded()),
-                start_ts,
-                commit_ts,
-                self.resolved_ts,
-                self.region_id
-            );
-            assert!(
-                commit_ts > self.min_ts,
-                "{}@{}, commit@{} < {:?}, region {}",
-                log_wrappers::Value(key.as_encoded()),
-                start_ts,
-                commit_ts,
-                self.min_ts,
-                self.region_id
-            );
-        }
 
-        let entry = self.locks.get_mut(&start_ts);
-        // It's possible that rollback happens on a not existing transaction.
-        // ["7480000000000000FF315F728000000000FF00DE690000000000FA@422464381892427787, commit@422464384631832582 is not tracked, region 100"]
-        assert!(
-            entry.is_some() || commit_ts.is_none(),
-            "{}@{}, commit@{} is not tracked, region {}",
-            log_wrappers::Value(key.as_encoded()),
-            start_ts,
-            commit_ts.unwrap_or_else(TimeStamp::zero),
-            self.region_id
-        );
+        let entry = self.lock_ts_heap.get_mut(&start_ts);
         if let Some(locked_keys) = entry {
-            assert!(
-                locked_keys.remove(&key) || commit_ts.is_none(),
-                "{}@{}, commit@{} is not tracked, region {}, {:?}",
-                log_wrappers::Value(key.as_encoded()),
-                start_ts,
-                commit_ts.unwrap_or_else(TimeStamp::zero),
-                self.region_id,
-                locked_keys
-            );
+            locked_keys.remove(key);
             if locked_keys.is_empty() {
-                self.locks.remove(&start_ts);
+                self.lock_ts_heap.remove(&start_ts);
             }
         }
     }
@@ -113,7 +85,7 @@ impl Resolver {
     /// `min_ts` advances the resolver even if there is no write.
     pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
         // Find the min start ts.
-        let min_lock = self.locks.keys().next().cloned();
+        let min_lock = self.lock_ts_heap.keys().next().cloned();
         let has_lock = min_lock.is_some();
         let min_start_ts = min_lock.unwrap_or(min_ts);
 
@@ -216,10 +188,8 @@ mod tests {
             let mut resolver = Resolver::new(1);
             for e in case.clone() {
                 match e {
-                    Event::Lock(start_ts, key) => resolver.track_lock(start_ts.into(), &key),
-                    Event::Unlock(start_ts, commit_ts, key) => {
-                        resolver.untrack_lock(start_ts.into(), commit_ts.map(Into::into), &key)
-                    }
+                    Event::Lock(start_ts, key) => resolver.track_lock(start_ts.into(), key.0),
+                    Event::Unlock(start_ts, commit_ts, key) => resolver.untrack_lock(&key.0),
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }

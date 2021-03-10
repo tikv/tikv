@@ -100,14 +100,14 @@ impl ObserveRegion {
                 for log in change_logs {
                     log.rows.iter().for_each(|row| match row {
                         ChangeRow::Prewrite { key, lock, .. } => {
-                            self.resolver.track_lock(lock.ts, key)
+                            self.resolver.track_lock(lock.ts, key.0.clone())
                         }
                         ChangeRow::Commit {
                             key,
                             commit_ts,
                             write,
                             ..
-                        } => self.resolver.untrack_lock(write.start_ts, *commit_ts, key),
+                        } => self.resolver.untrack_lock(&key.0),
                     })
                 }
             }
@@ -122,7 +122,7 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.resolver.track_lock(lock.ts, &key);
+                        self.resolver.track_lock(lock.ts, key.0);
                     }
                 }
                 ScanEntry::None => {
@@ -132,13 +132,13 @@ impl ObserveRegion {
                         ResolverStatus::Pending { locks, .. } => {
                             locks.into_iter().for_each(|lock| match lock {
                                 PendingLock::Track { key, start_ts } => {
-                                    self.resolver.track_lock(start_ts, &key)
+                                    self.resolver.track_lock(start_ts, key.0.clone())
                                 }
                                 PendingLock::Untrack {
                                     key,
                                     start_ts,
                                     commit_ts,
-                                } => self.resolver.untrack_lock(start_ts, commit_ts, &key),
+                                } => self.resolver.untrack_lock(&key.0),
                             })
                         }
                         ResolverStatus::Ready => {
