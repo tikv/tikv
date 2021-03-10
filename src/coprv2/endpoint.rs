@@ -21,6 +21,10 @@ impl<E: Engine> CoprV2Endpoint<E> {
         }
     }
 
+    /// Handles a request to the coprocessor framework.
+    ///
+    /// Each request is dispatched to the corresponding coprocessor plugin based on it's `copr_name`
+    /// field. A plugin with a matching name must be loaded by TiKV, otherwise an error is returned.
     #[inline]
     pub fn handle_request(
         &self,
