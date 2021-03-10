@@ -127,8 +127,6 @@ pub struct StoreMeta {
     /// Used for reminding the source peer to switch to ready in `atomic_snap_regions`.
     pub destroyed_region_for_snap: HashMap<u64, bool>,
 
-    pub region_read_progress: HashMap<u64, RegionReadProgress>,
-
     pub peer_properties: HashMap<u64, Arc<PeerProperties>>,
 }
 
@@ -146,7 +144,6 @@ impl StoreMeta {
             targets_map: HashMap::default(),
             atomic_snap_regions: HashMap::default(),
             destroyed_region_for_snap: HashMap::default(),
-            region_read_progress: HashMap::default(),
             peer_properties: HashMap::default(),
         }
     }
@@ -2390,9 +2387,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             )
                             .is_ok()
                         {
-                            if let Some(pr) = meta.region_read_progress.get(&leader_info.region_id)
+                            if let Some(peer_properties) =
+                                meta.peer_properties.get(&leader_info.region_id)
                             {
-                                pr.forward_safe_ts(
+                                let pp = peer_properties
+                                    .get::<RegionSafeTSTracker>()
+                                    .expect("no peer property found");
+                                let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
+                                rrp.forward_safe_ts(
                                     leader_info.get_read_state().get_applied_index(),
                                     leader_info.get_read_state().get_safe_ts(),
                                 );
@@ -2428,33 +2430,34 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
 fn get_range_safe_ts(meta: &StoreMeta, key_range: KeyRange) -> u64 {
-    if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
-        // Fast path to get the min `safe_ts` of all regions in this store
-        meta.region_read_progress
-            .iter()
-            .map(|(_, rrp)| rrp.safe_ts.load(Ordering::Relaxed))
-            .min()
-            .unwrap_or(0)
-    } else {
-        let (start_key, end_key) = (
-            data_key(key_range.get_start_key()),
-            data_end_key(key_range.get_end_key()),
-        );
-        meta.region_ranges
-            // get overlapped regions
-            .range((Excluded(start_key), Unbounded))
-            .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
-            // get the min `safe_ts`
-            .map(|(_, id)| {
-                meta.region_read_progress
-                    .get(id)
-                    .unwrap()
-                    .safe_ts
-                    .load(Ordering::Relaxed)
-            })
-            .min()
-            .unwrap_or(0)
-    }
+    unimplemented!()
+    // if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
+    //     // Fast path to get the min `safe_ts` of all regions in this store
+    //     meta.region_read_progress
+    //         .iter()
+    //         .map(|(_, rrp)| rrp.safe_ts.load(Ordering::Relaxed))
+    //         .min()
+    //         .unwrap_or(0)
+    // } else {
+    //     let (start_key, end_key) = (
+    //         data_key(key_range.get_start_key()),
+    //         data_end_key(key_range.get_end_key()),
+    //     );
+    //     meta.region_ranges
+    //         // get overlapped regions
+    //         .range((Excluded(start_key), Unbounded))
+    //         .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+    //         // get the min `safe_ts`
+    //         .map(|(_, id)| {
+    //             meta.region_read_progress
+    //                 .get(id)
+    //                 .unwrap()
+    //                 .safe_ts
+    //                 .load(Ordering::Relaxed)
+    //         })
+    //         .min()
+    //         .unwrap_or(0)
+    // }
 }
 
 #[derive(Clone)]
@@ -2719,7 +2722,7 @@ mod tests {
             rrp.safe_ts.store(safe_ts, Ordering::Relaxed);
             meta.region_ranges.insert(enc_end_key(&region), id);
             meta.regions.insert(id, region);
-            meta.region_read_progress.insert(id, rrp);
+            // meta.region_read_progress.insert(id, rrp);
         }
 
         fn key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {

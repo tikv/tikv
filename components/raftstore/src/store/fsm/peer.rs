@@ -2030,7 +2030,7 @@ where
             }
         }
         meta.leaders.remove(&region_id);
-        meta.region_read_progress.remove(&region_id);
+        meta.peer_properties.remove(&region_id);
     }
 
     // Update some region infos
@@ -2843,6 +2843,7 @@ where
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         meta.readers.remove(&source.get_id());
+        meta.peer_properties.remove(&source.get_id());
 
         self.reset_read_progress_when_commit_merge(&meta, source.get_id(), index);
 
@@ -3061,6 +3062,7 @@ where
             let prev = meta.region_ranges.remove(&enc_end_key(&r));
             assert_eq!(prev, Some(r.get_id()));
             assert!(meta.regions.remove(&r.get_id()).is_some());
+            meta.peer_properties.remove(&r.get_id());
             meta.readers.remove(&r.get_id());
         }
         // Remove the data from `atomic_snap_regions` and `destroyed_region_for_snap`

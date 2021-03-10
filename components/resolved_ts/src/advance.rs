@@ -11,6 +11,7 @@ use kvproto::metapb::{PeerRole, Region, RegionEpoch};
 use kvproto::tikvpb::TikvClient;
 use pd_client::PdClient;
 use raftstore::router::RaftStoreRouter;
+use raftstore::store::fsm::store::{RegionReadProgress, RegionSafeTSTracker};
 use raftstore::store::fsm::StoreMeta;
 use raftstore::store::msg::{Callback, SignificantMsg};
 use security::SecurityManager;
@@ -288,9 +289,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
                                 continue;
                             }
                             let mut read_state = ReadState::default();
-                            if let Some(rp) = meta.region_read_progress.get(&region_id) {
-                                read_state.set_applied_index(rp.applied_index());
-                                read_state.set_safe_ts(rp.safe_ts());
+                            if let Some(peer_properties) = meta.peer_properties.get(&region_id) {
+                                let pp = peer_properties
+                                    .get::<RegionSafeTSTracker>()
+                                    .expect("no peer property found");
+                                let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
+                                read_state.set_applied_index(rrp.applied_index());
+                                read_state.set_safe_ts(rrp.safe_ts());
                             }
                             let mut leader_info = LeaderInfo::default();
                             leader_info.set_peer_id(*leader_id);

@@ -1730,6 +1730,18 @@ where
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task behind apply task, so it gets latest
+        // snapshot.
+        // TODO: maybe we should move this code to other place to make the logic more clear.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        }
+
         let invoke_ctx = match self
             .mut_store()
             .handle_raft_ready(ctx, &mut ready, destroy_regions)
@@ -1782,9 +1794,12 @@ where
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.readers
                 .insert(self.region_id, ReadDelegate::from_peer(self));
-            if let Some(rp) = meta.region_read_progress.get(&self.region_id) {
-                rp.update_applied(self.get_store().applied_index());
-            }
+            ctx.coprocessor_host
+                .on_applied_update::<RegionSafeTSTracker>(
+                    &self.peer_properties,
+                    self.get_store().applied_index(),
+                )
+                .unwrap();
         }
 
         apply_snap_result
@@ -1876,17 +1891,6 @@ where
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
-        // Check whether there is a pending generate snapshot task, the task
-        // needs to be sent to the apply system.
-        // Always sending snapshot task behind apply task, so it gets latest
-        // snapshot.
-        // TODO: maybe we should move this code to other place to make the logic more clear.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
     }
 
     pub fn handle_raft_ready_advance<T: Transport>(
