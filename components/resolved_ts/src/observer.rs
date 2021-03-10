@@ -13,35 +13,57 @@ use tikv_util::worker::Scheduler;
 
 use crate::endpoint::Task;
 
-pub struct ChangeDataObserver<E: KvEngine> {
+pub struct Observer<E: KvEngine> {
     cmd_batches: RefCell<Vec<CmdBatch>>,
     scheduler: Scheduler<Task<E::Snapshot>>,
 }
 
-impl<E: KvEngine> ChangeDataObserver<E> {
+impl<E: KvEngine> Observer<E> {
     pub fn new(scheduler: Scheduler<Task<E::Snapshot>>) -> Self {
-        ChangeDataObserver {
+        Observer {
             cmd_batches: RefCell::default(),
             scheduler,
         }
     }
+
+    pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
+        // 100 is the priority of the observer. CDC should have a high priority.
+        coprocessor_host
+            .registry
+            .register_cmd_observer(100, BoxCmdObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_role_observer(100, BoxRoleObserver::new(self.clone()));
+        coprocessor_host
+            .registry
+            .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
+    }
 }
 
-impl<E: KvEngine> Coprocessor for ChangeDataObserver<E> {}
+impl<E: KvEngine> Clone for Observer<E> {
+    fn clone(&self) -> Self {
+        Self {
+            cmd_batches: self.cmd_batches.clone(),
+            scheduler: self.scheduler.clone(),
+        }
+    }
+}
 
-impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+impl<E: KvEngine> Coprocessor for Observer<E> {}
+
+impl<E: KvEngine> CmdObserver<E> for Observer<E> {
+    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(observe_id, region_id));
+            .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .unwrap_or_else(|| panic!("region {} should exist some cmd batch", region_id))
-            .push(observe_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -63,7 +85,7 @@ impl<E: KvEngine> CmdObserver<E> for ChangeDataObserver<E> {
     }
 }
 
-impl<E: KvEngine> RoleObserver for ChangeDataObserver<E> {
+impl<E: KvEngine> RoleObserver for Observer<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         if let Err(e) = self.scheduler.schedule(Task::RegionRoleChanged {
             role,
@@ -74,7 +96,7 @@ impl<E: KvEngine> RoleObserver for ChangeDataObserver<E> {
     }
 }
 
-impl<E: KvEngine> RegionChangeObserver for ChangeDataObserver<E> {
+impl<E: KvEngine> RegionChangeObserver for Observer<E> {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,

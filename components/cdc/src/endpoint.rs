@@ -484,10 +484,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 delegate.id
             );
         };
-        let change_cmd = ChangeObserver {
-            region_id,
-            observe_id: delegate.id,
-        };
+        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.id);
         let txn_extra_op = request.get_extra_op();
         if txn_extra_op != TxnExtraOp::Noop {
             delegate.txn_extra_op = request.get_extra_op();

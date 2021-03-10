@@ -175,10 +175,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     ) -> Result<RegionSnapshot<E::Snapshot>> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
-        let change_cmd = ChangeObserver {
-            observe_id: task.id,
-            region_id: task.region.id,
-        };
+        let change_cmd = ChangeObserver::from_rts(task.region.id, task.id);
         raft_router.significant_send(
             task.region.id,
             SignificantMsg::CaptureChange {

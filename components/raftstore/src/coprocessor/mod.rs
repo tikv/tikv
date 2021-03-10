@@ -177,23 +177,26 @@ impl Cmd {
 
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
-    pub observe_id: ObserveID,
+    pub cdc_id: ObserveID,
+    pub rts_id: ObserveID,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }
 
 impl CmdBatch {
-    pub fn new(observe_id: ObserveID, region_id: u64) -> CmdBatch {
+    pub fn new(cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) -> CmdBatch {
         CmdBatch {
-            observe_id,
+            cdc_id,
+            rts_id,
             region_id,
             cmds: Vec::new(),
         }
     }
 
-    pub fn push(&mut self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    pub fn push(&mut self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         assert_eq!(region_id, self.region_id);
-        assert_eq!(observe_id, self.observe_id);
+        assert_eq!(cdc_id, self.cdc_id);
+        assert_eq!(rts_id, self.rts_id);
         self.cmds.push(cmd)
     }
 
@@ -232,9 +235,9 @@ impl CmdBatch {
 
 pub trait CmdObserver<E>: Coprocessor {
     /// Hook to call after preparing for applying write requests.
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64);
+    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64);
     /// Hook to call after applying a write request.
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd);
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd);
     /// Hook to call after flushing writes to db.
     fn on_flush_apply(&self, engine: E);
 }

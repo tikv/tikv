@@ -164,7 +164,7 @@ pub struct Endpoint<T, E: KvEngine, C> {
     // raft_router: T,
     scanner_pool: ScannerPool<T, E>,
     scheduler: Scheduler<Task<E::Snapshot>>,
-    sinker: Option<C>,
+    sinker: C,
     advance_worker: AdvanceTsWorker<T, E>,
     _phantom: PhantomData<(T, E)>,
 }
@@ -184,7 +184,7 @@ where
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        sinker: Option<C>,
+        sinker: C,
     ) -> Self {
         let advance_worker = AdvanceTsWorker::new(
             pd_client,
@@ -363,13 +363,18 @@ where
             return;
         }
 
-        for region_id in regions {
+        let mut min_ts = TimeStamp::max();
+        for region_id in regions.iter().copied() {
             if let Some(observe_region) = self.regions.get_mut(&region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    observe_region.resolver.resolve(ts);
+                    let resolved_ts = observe_region.resolver.resolve(ts);
+                    if resolved_ts < min_ts {
+                        min_ts = resolved_ts;
+                    }
                 }
             }
         }
+        self.sinker.sink_resolved_ts(regions, ts);
     }
 
     // Tracking or untracking locks with incoming commands that corresponding observe id is valid.
@@ -384,7 +389,7 @@ where
             .map(|batch| {
                 if !batch.is_empty() {
                     if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.observe_id;
+                        let observe_id = batch.cdc_id;
                         let region_id = observe_region.meta.id;
                         if observe_region.observe_id == observe_id {
                             let logs = ChangeLog::encode_change_log(region_id, batch);
@@ -400,7 +405,7 @@ where
                         } else {
                             debug!("resolved ts CmdBatch discarded";
                                 "region_id" => batch.region_id,
-                                "observe_id" => ?batch.observe_id,
+                                "observe_id" => ?batch.cdc_id,
                                 "current" => ?observe_region.observe_id,
                             );
                         }
@@ -410,9 +415,7 @@ where
             })
             .filter_map(|v| v)
             .collect();
-        if let Some(sinker) = self.sinker.as_mut() {
-            sinker.sink_cmd(logs, snapshot);
-        }
+        self.sinker.sink_cmd(logs, snapshot);
     }
 
     fn handle_scan_locks(

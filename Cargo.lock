@@ -678,6 +678,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "rand 0.7.3",
+ "resolved_ts",
  "security",
  "serde_json",
  "signal",

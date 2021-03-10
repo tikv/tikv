@@ -22,6 +22,12 @@ pub trait CmdSinker<S: Snapshot>: Send {
 
 pub struct DummySinker<S: Snapshot>(PhantomData<S>);
 
+impl<S: Snapshot> DummySinker<S> {
+    pub fn new() -> Self {
+        Self(PhantomData::default())
+    }
+}
+
 impl<S: Snapshot> CmdSinker<S> for DummySinker<S> {
     fn sink_cmd(&mut self, _sink_cmd: Vec<SinkCmd>, _snapshot: RegionSnapshot<S>) {}
 

@@ -100,18 +100,18 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    fn on_prepare_for_apply(&self, observe_id: ObserveID, region_id: u64) {
+    fn on_prepare_for_apply(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64) {
         self.cmd_batches
             .borrow_mut()
-            .push(CmdBatch::new(observe_id, region_id));
+            .push(CmdBatch::new(cdc_id, rts_id, region_id));
     }
 
-    fn on_apply_cmd(&self, observe_id: ObserveID, region_id: u64, cmd: Cmd) {
+    fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
         self.cmd_batches
             .borrow_mut()
             .last_mut()
             .expect("should exist some cmd batch")
-            .push(observe_id, region_id, cmd);
+            .push(cdc_id, rts_id, region_id, cmd);
     }
 
     fn on_flush_apply(&self, engine: E) {
@@ -320,9 +320,12 @@ mod tests {
         let observe_id = ObserveID::new();
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(&observer, observe_id, 0);
+        <CdcObserver as CmdObserver<RocksEngine>>::on_prepare_for_apply(
+            &observer, observe_id, observe_id, 0,
+        );
         <CdcObserver as CmdObserver<RocksEngine>>::on_apply_cmd(
             &observer,
+            observe_id,
             observe_id,
             0,
             Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default()),

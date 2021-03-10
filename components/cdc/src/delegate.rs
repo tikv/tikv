@@ -421,7 +421,7 @@ impl Delegate {
         old_value_cache: &mut OldValueCache,
     ) -> Result<()> {
         // Stale CmdBatch, drop it sliently.
-        if batch.observe_id != self.id {
+        if batch.cdc_id != self.id {
             return Ok(());
         }
         for cmd in batch.into_iter(self.region_id) {

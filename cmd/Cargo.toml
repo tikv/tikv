@@ -106,6 +106,7 @@ raft = { version = "0.6.0-alpha", default-features = false }
 raft_log_engine = { path = "../components/raft_log_engine", default-features = false }
 raftstore = { path = "../components/raftstore", default-features = false }
 rand = "0.7"
+resolved_ts = { path = "../components/resolved_ts", default-features = false }
 security = { path = "../components/security", default-features = false }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
