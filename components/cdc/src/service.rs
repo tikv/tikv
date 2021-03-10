@@ -25,8 +25,10 @@ use tokio::sync::mpsc::channel as tokio_bounded_channel;
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 use crate::rate_limiter::{new_pair, RateLimiter};
-use futures::select;
+use futures::ready;
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch::Ref;
@@ -154,86 +156,126 @@ impl EventBatcher {
     }
 }
 
-struct EventBatcherSink<'a, S>
+struct EventBatcherSink<S>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
 {
-    buf: Vec<CdcEvent>,
-    inner_sink: Arc<Mutex<Option<S>>>,
-    flush: Option<BoxFuture<'a, Result<(), grpcio::Error>>>,
-    waker: AtomicWaker,
+    // buf stores events just received.
+    buf: Option<Vec<CdcEvent>>,
+    // a queue for protobuf events ready to send out.
+    send_buf: VecDeque<ChangeDataEvent>,
+    // the final downstream sink
+    inner_sink: S,
 }
 
-impl<'a, S> EventBatcherSink<'a, S>
+impl<S> EventBatcherSink<S>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
 {
     fn new(sink: S) -> Self {
         Self {
-            buf: vec![],
-            inner_sink: Arc::new(Mutex::new(Some(sink))),
-            flush: None,
-            waker: AtomicWaker::new(),
+            buf: None,
+            send_buf: VecDeque::new(),
+            inner_sink: sink,
         }
+    }
+
+    /// converts all buffered CdcEvents into ChangeDataEvents.
+    /// consumes `buf`
+    fn prepare_flush(&mut self) {
+        debug_assert!(self.buf.is_some());
+
+        let mut batcher = EventBatcher::with_capacity(128);
+        self.buf
+            .take()
+            .unwrap()
+            .into_iter()
+            .for_each(|event| batcher.push(event));
+        batcher
+            .build()
+            .into_iter()
+            .for_each(|event| self.send_buf.push_back(event));
     }
 }
 
-impl<'a, S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<'a, S>
+impl<S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<S>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin + 'a,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
 {
     type Error = grpcio::Error;
 
+    /// Will block the task if:
+    /// 1) there are ChangeDataEvents not sent out, or buf` has at least 1024 messages,
+    /// and 2) they cannot be successfully flushed down the `inner_sink` immediately.
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let self_mut = self.get_mut();
-        if self_mut.buf.len() >= 1024 {
-            self_mut.waker.register(cx.waker());
-            return Poll::Pending;
+        let this = self.get_mut();
+
+        if !this.send_buf.is_empty() {
+            ready!(this.poll_flush_unpin(cx))?;
         }
+
+        if this.buf.is_none() {
+            this.buf = Some(vec![]);
+            return Poll::Ready(Ok(()));
+        }
+
+        if this.buf.as_ref().unwrap().len() >= 1024 {
+            this.prepare_flush();
+            ready!(this.inner_sink.poll_flush_unpin(cx))?;
+
+            debug_assert!(this.buf.is_none());
+            this.buf = Some(vec![]);
+            return Poll::Ready(Ok(()));
+        }
+
         Poll::Ready(Ok(()))
     }
 
+    /// Will always succeed as long as called correctly.
     fn start_send(self: Pin<&mut Self>, item: (CdcEvent, WriteFlags)) -> Result<(), Self::Error> {
-        let self_mut = self.get_mut();
+        let this = self.get_mut();
+        debug_assert!(this.buf.is_some());
+
         let (event, _) = item;
-        self_mut.buf.push(event);
+        this.buf.as_mut().unwrap().push(event);
         Ok(())
     }
 
+    /// Converts any CdcEvents in `buf` to ChangeDataEvents,
+    /// then try to feed them to the `inner_sink`,
+    /// and after finishing sending the ChangeDataEvents,
+    /// it flushes the `inner_sink`.
+    ///
+    /// The above process will block and yield if any step is blocked.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let self_mut = self.get_mut();
-        if self_mut.flush.is_none() {
-            if self_mut.inner_sink.lock().unwrap().is_none() {
-                return Poll::Pending;
-            }
-            let flush_vec = std::mem::replace(&mut self_mut.buf, vec![]);
-            self_mut.waker.wake();
-            let mut inner_sink = self_mut.inner_sink.clone();
-            // Create a flush representing the flush task.
-            let fut = async move {
-                let mut batcher = EventBatcher::with_capacity(128);
-                flush_vec.into_iter().for_each(|event| batcher.push(event));
-                let mut st =
-                    stream::iter(batcher.build()).map(|event| Ok((event, WriteFlags::default())));
-                let mut inner_inner_sink = inner_sink.lock().unwrap().take().unwrap();
-                inner_inner_sink.send_all(&mut st).await?;
-                *inner_sink.lock().unwrap() = Some(inner_inner_sink);
-                Ok(())
-            }
-            .boxed();
-            self_mut.flush = Some(fut);
+        let this = self.get_mut();
+
+        if this.buf.is_some() {
+            this.prepare_flush();
         }
 
-        self_mut.flush.as_mut().unwrap().poll_unpin(cx).map_ok(|_| {
-            self_mut.flush.take();
-        })
+        debug_assert!(this.buf.is_none());
+
+        let flag = WriteFlags::default().buffer_hint(false);
+        while !this.send_buf.is_empty() {
+            ready!(this.inner_sink.poll_ready_unpin(cx))?;
+            let event = this.send_buf.pop_front().unwrap();
+            this.inner_sink.start_send_unpin((event, flag))?;
+        }
+
+        ready!(this.inner_sink.poll_flush_unpin(cx))?;
+        Poll::Ready(Ok(()))
     }
 
+    /// Flushes the buffered data to `inner_sink` and then closes it.
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if let Some(inner_sink) = self.inner_sink.lock().unwrap().as_mut() {
-            return inner_sink.poll_close_unpin(cx);
+        let this = self.get_mut();
+
+        if this.buf.is_some() {
+            this.prepare_flush();
         }
-        Poll::Pending
+        ready!(this.poll_flush_unpin(cx))?;
+        this.inner_sink.poll_close_unpin(cx)
     }
 }
 
@@ -385,8 +427,9 @@ impl ChangeData for Service {
         stream: RequestStream<ChangeDataRequest>,
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
-        // let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
-        let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 8192);
+        // TODO determine the right values
+        // 2048 is likely too low for production.
+        let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 2048);
         let peer = ctx.peer();
         let conn = Conn::new(rate_limiter, peer.clone());
         let conn_id = conn.get_id();
@@ -479,7 +522,11 @@ impl ChangeData for Service {
             // 2) the grpc sink has been closed,
             // 3) an error has occurred in the grpc sink,
             // or 4) the sink has been forced to close due to a congestion.
-            let drain_res = drainer.drain(batched_sink, WriteFlags::default().buffer_hint(false)).await;
+            let drain_res = drainer.drain(
+                batched_sink,
+                // We disable buffering in the grpc library
+                WriteFlags::default().buffer_hint(false)
+            ).await;
             match drain_res {
                 Ok(_) => {
                     info!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id);

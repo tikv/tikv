@@ -46,8 +46,8 @@ use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
-use futures::select;
 use futures::stream::StreamExt;
+use futures::{try_join, TryFutureExt};
 
 pub enum Deregister {
     Downstream {
@@ -299,7 +299,8 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             observer,
             store_meta,
             concurrency_manager,
-            scan_batch_size: 1024,
+            // TODO find an optimal value
+            scan_batch_size: 128,
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
@@ -1121,42 +1122,23 @@ impl Initializer {
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
-    async fn async_do_blocking<F, O>(&self, job: F) -> Option<O>
+    async fn async_do_blocking<F, O>(&self, job: F) -> Result<O>
     where
-        F: FnOnce() -> O + Send + 'static,
+        F: FnOnce() -> Result<O> + Send + 'static,
         O: Send + 'static,
     {
         let runtime_handle = tokio::runtime::Handle::current();
-        Some(runtime_handle.spawn_blocking(job).await.unwrap())
-        /*let mut task_fut = runtime_handle.spawn_blocking(job).fuse();
+        let job_handle = runtime_handle.spawn_blocking(job).map(|res| match res {
+            Ok(res) => res,
+            Err(e) => Err(Error::Other(Box::new(e))),
+        });
 
-        let start_time = std::time::Instant::now();
-        let mut interval_timer = tokio::time::interval(std::time::Duration::from_secs(5)).fuse();
-
-        loop {
-            select! {
-                result = task_fut => {
-                    info!("cdc incremental scan batch done");
-                    return match result {
-                        Ok(result) => Some(result),
-                        Err(e) => {
-                            error!("cdc incremental scan batch failed"; "error" => ?e);
-                            None
-                        }
-                    }
-                },
-                inst = interval_timer.next() => {
-                    if inst.is_none() {
-                        unreachable!();
-                    }
-                    let duration = inst.unwrap().duration_since(start_time.into());
-                    info!("cdc incremental scan batch not done"; "duration" => ?duration);
-                    if duration > std::time::Duration::from_secs(60) {
-                        return None;
-                    }
-                }
-            }
-        } */
+        tokio::time::timeout(std::time::Duration::from_secs(30), job_handle)
+            .map(|res| match res {
+                Ok(res) => res,
+                Err(elapsed) => Err(Error::Other(Box::new(elapsed))),
+            })
+            .await
     }
 
     async fn async_incremental_scan_v2<S: Snapshot + 'static>(&self, snap: S, region: Region) {
@@ -1221,11 +1203,11 @@ impl Initializer {
                 })
                 .await
             {
-                Some(Ok(res)) => {
+                Ok(res) => {
                     info!("got cdc scan entries"; "len" => res.len(), "region_id" => region_id);
                     res
-                },
-                Some(Err(e)) => {
+                }
+                Err(e) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                     // TODO: record in metrics.
                     let deregister = Deregister::Downstream {
@@ -1237,10 +1219,6 @@ impl Initializer {
                     if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                         error!("schedule cdc task failed"; "error" => ?e, "region_id" => region_id);
                     }
-                    return;
-                }
-                None => {
-                    error!("cdc scan entries timed out!");
                     return;
                 }
             };
@@ -1506,6 +1484,7 @@ mod tests {
             .threaded_scheduler()
             .thread_name("test-initializer-worker")
             .core_threads(4)
+            .max_threads(16) // the default value is 512, which is no good for us.
             .build()
             .unwrap();
 
