@@ -1185,10 +1185,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
-        coprocessor_host
-            .registry
-            .register_peer_properties_action(1, BoxPeerPropertyAction::new(RegionSafeTSTracker));
-
         let workers = Workers {
             pd_worker,
             background_worker,
@@ -2599,7 +2595,7 @@ impl PeerPropertyAction for RegionSafeTSTracker {
         if !flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(());
         }
-        let read_ts = decode_u64(&mut req.get_header().get_flag_data().clone())?;
+        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
         let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
         let safe_ts = rrp.safe_ts();
         if read_ts > safe_ts {

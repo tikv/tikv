@@ -259,6 +259,7 @@ impl<E: KvEngine> Registry<E> {
     }
 
     pub fn register_peer_properties_action(&mut self, priority: u32, rio: BoxPeerPropertyAction) {
+        info!("register peer properties action"; "priority" => priority);
         push!(priority, rio, self.peer_properties_actions);
     }
 }
@@ -635,7 +636,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 }
             }
         }
-        Ok(())
+        return Err(box_err!("No peer property found"));
     }
 
     pub fn on_applied_update<T: PeerPropertyAction>(
@@ -652,7 +653,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 }
             }
         }
-        Ok(())
+        return Err(box_err!("No peer property found"));
     }
 
     pub fn on_commit_merge<T: PeerPropertyAction>(
@@ -676,7 +677,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 }
             }
         }
-        Ok(())
+        return Err(box_err!("No peer property found"));
     }
 }
 

@@ -43,16 +43,17 @@ use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
     coprocessor::{
-        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
+        config::SplitCheckConfigManager, dispatcher::BoxPeerPropertyAction,
+        BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
+        RawConsistencyCheckObserver, RegionInfoAccessor,
     },
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_MSG_CAP},
-        AutoSplitController, GlobalReplicationState, LocalReader, SnapManagerBuilder,
-        SplitCheckRunner, SplitConfigManager, StoreMsg,
+        AutoSplitController, GlobalReplicationState, LocalReader, RegionSafeTSTracker,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMsg,
     },
 };
 use security::SecurityManager;
@@ -216,6 +217,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             resolve::new_resolver(Arc::clone(&pd_client), &background_worker, router.clone());
 
         let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+
+        // Register peer property action
+        coprocessor_host
+            .as_mut()
+            .unwrap()
+            .registry
+            .register_peer_properties_action(100, BoxPeerPropertyAction::new(RegionSafeTSTracker));
+
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
