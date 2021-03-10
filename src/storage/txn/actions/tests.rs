@@ -422,7 +422,12 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
     must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
 }
 
-pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+pub fn must_rollback<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    start_ts: impl Into<TimeStamp>,
+    protect_rollback: bool,
+) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
@@ -434,7 +439,7 @@ pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<Time
         &mut reader,
         Key::from_raw(key),
         TimeStamp::zero(),
-        false,
+        protect_rollback,
     )
     .unwrap();
     write(engine, &ctx, txn.into_modifies());
@@ -451,7 +456,7 @@ pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<
         &mut reader,
         Key::from_raw(key),
         TimeStamp::zero(),
-        false
+        false,
     )
     .is_err());
 }

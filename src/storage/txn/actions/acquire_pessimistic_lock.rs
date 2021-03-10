@@ -448,7 +448,7 @@ pub mod tests {
 
         // Rollback
         must_succeed(&engine, k, k, 18, 18);
-        must_rollback(&engine, k, 18);
+        must_rollback(&engine, k, 18, false);
         must_unlocked(&engine, k);
         must_prewrite_put(&engine, k, v, k, 19);
         must_commit(&engine, k, 19, 20);
@@ -463,7 +463,7 @@ pub mod tests {
         must_succeed(&engine, k, k, 24, 24);
         must_pessimistic_locked(&engine, k, 24, 24);
         must_prewrite_put_err(&engine, k, v, k, 24);
-        must_rollback(&engine, k, 24);
+        must_rollback(&engine, k, 24, false);
 
         // Acquire lock on a prewritten key should fail.
         must_succeed(&engine, k, k, 26, 26);
@@ -497,8 +497,8 @@ pub mod tests {
         must_get_commit_ts(&engine, k, 30, 31);
 
         // Rollback collapsed.
-        must_rollback(&engine, k, 32);
-        must_rollback(&engine, k, 33);
+        must_rollback(&engine, k, 32, false);
+        must_rollback(&engine, k, 33, false);
         must_err(&engine, k, k, 32, 32);
         // Currently we cannot avoid this.
         must_succeed(&engine, k, k, 32, 34);
@@ -571,7 +571,7 @@ pub mod tests {
         must_cleanup(&engine, k, 49, 0);
         must_get_rollback_protected(&engine, k, 49, true);
         must_prewrite_put(&engine, k, v, k, 51);
-        must_rollback(&engine, k, 51);
+        must_rollback(&engine, k, 51, false);
         must_err(&engine, k, k, 49, 60);
 
         // Overlapped rollback record will be written when the current start_ts equals to another write
@@ -592,7 +592,7 @@ pub mod tests {
             must_get(&engine, k, commit_ts + 1, v);
         }
 
-        must_rollback(&engine, k, 170);
+        must_rollback(&engine, k, 170, false);
 
         // Now the data should be like: (start_ts -> commit_ts)
         // 140 -> 190
@@ -645,7 +645,7 @@ pub mod tests {
         pessimistic_rollback::tests::must_success(&engine, k, 45, 45);
 
         // Skip Write::Rollback
-        must_rollback(&engine, k, 50);
+        must_rollback(&engine, k, 50, false);
         assert_eq!(
             must_succeed_return_value(&engine, k, k, 55, 55),
             Some(v.to_vec())

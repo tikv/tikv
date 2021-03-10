@@ -208,7 +208,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// correct. Generally, it should be the read_ts of the current transaction, which might be
     /// different from the `ts` passed to this function.
     ///
-    /// Note that this functoin does not check for locks on `key`.
+    /// Note that this function does not check for locks on `key`.
     fn get(
         &mut self,
         key: &Key,

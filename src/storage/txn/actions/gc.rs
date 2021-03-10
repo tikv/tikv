@@ -171,7 +171,7 @@ pub mod tests {
         must_prewrite_lock(&engine, k, k, 45);
         must_commit(&engine, k, 45, 50);
         must_prewrite_put(&engine, k, v4, k, 55);
-        must_rollback(&engine, k, 55);
+        must_rollback(&engine, k, 55, false);
 
         // Transactions:
         // startTS commitTS Command

@@ -188,7 +188,7 @@ pub mod tests {
         must_prewrite_put(&engine, k, v, k, 5);
         // start_ts not match
         must_err(&engine, k, 4, 5);
-        must_rollback(&engine, k, 5);
+        must_rollback(&engine, k, 5, false);
         // commit after rollback
         must_err(&engine, k, 5, 6);
     }

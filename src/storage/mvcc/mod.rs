@@ -350,6 +350,22 @@ pub mod tests {
         assert_eq!(reader.get(key, ts).unwrap().unwrap(), expect);
     }
 
+    pub fn must_get_no_lock_check<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
+        let ts = ts.into();
+        let ctx = SnapContext::default();
+        let snapshot = engine.snapshot(ctx).unwrap();
+        let mut reader = SnapshotReader::new(ts, snapshot, true);
+        assert_eq!(
+            reader.get(&Key::from_raw(key), ts).unwrap().unwrap(),
+            expect
+        );
+    }
+
     /// Checks if there is a lock which blocks reading the key at the given ts.
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(
@@ -371,7 +387,9 @@ pub mod tests {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
-        assert!(reader.get(&Key::from_raw(key), ts).unwrap().is_none());
+        let key = &Key::from_raw(key);
+        check_lock(&mut reader, key, ts).unwrap();
+        assert!(reader.get(key, ts).unwrap().is_none());
     }
 
     pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
@@ -379,7 +397,11 @@ pub mod tests {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
-        assert!(reader.get(&Key::from_raw(key), ts).is_err());
+        let key = &Key::from_raw(key);
+        if check_lock(&mut reader, key, ts).is_err() {
+            return;
+        }
+        assert!(reader.get(key, ts).is_err());
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {

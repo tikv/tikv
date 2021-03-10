@@ -843,13 +843,13 @@ mod tests {
         must_prewrite_delete(&engine, key, key, 30);
         let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
-        must_rollback(&engine, key, 30);
+        must_rollback(&engine, key, 30, false);
 
         // Should not ignore the secondary lock even though reading the latest version
         must_prewrite_delete(&engine, key, b"bar", 40);
         let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_err(&mut getter, key);
-        must_rollback(&engine, key, 40);
+        must_rollback(&engine, key, 40, false);
 
         // Should get the latest committed value if there is a primary lock with a ts less than
         // the latest Write's commit_ts.

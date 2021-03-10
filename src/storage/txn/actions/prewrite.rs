@@ -28,7 +28,7 @@ pub fn prewrite<S: Snapshot>(
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
-   fail_point!(
+    fail_point!(
         if txn_props.is_pessimistic() {
             "pessimistic_prewrite"
         } else {
@@ -631,7 +631,7 @@ pub mod tests {
         // the concurrency manager for max_ts. Its min_commit_ts may be less than or equal to max_ts.
         let mut props = optimistic_async_props(b"k0", 10.into(), 50.into(), 2, false);
         props.min_commit_ts = 11.into();
-        let mut txn = MvccTxn::new(10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
         let mut reader = SnapshotReader::new(10.into(), snapshot.clone(), false);
         let (min_ts, _) = prewrite(
             &mut txn,
@@ -649,7 +649,8 @@ pub mod tests {
         // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
         let mut props = optimistic_txn_props(b"k0", 42.into());
         props.min_commit_ts = 43.into();
-        let mut txn = MvccTxn::new(snapshot.clone(), 42.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(42.into(), cm.clone());
+        let mut reader = SnapshotReader::new(42.into(), snapshot.clone(), false);
         prewrite(
             &mut txn,
             &mut reader,
@@ -662,7 +663,8 @@ pub mod tests {
         assert_eq!(cm.max_ts(), props.start_ts);
 
         // should_write mutations' min_commit_ts must be > max_ts
-        let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot.clone(), false);
         let (min_ts, _) = prewrite(
             &mut txn,
             &mut reader,
@@ -683,9 +685,11 @@ pub mod tests {
             };
 
             // min_commit_ts must be > start_ts
-            let mut txn = MvccTxn::new(snapshot.clone(), 44.into(), false, cm.clone());
+            let mut txn = MvccTxn::new(44.into(), cm.clone());
+            let mut reader = SnapshotReader::new(44.into(), snapshot.clone(), false);
             let (min_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
                 mutation.clone(),
                 &Some(vec![b"k4".to_vec()]),
@@ -702,6 +706,7 @@ pub mod tests {
                 props.kind = TransactionKind::Pessimistic(45.into());
                 let (min_ts, _) = prewrite(
                     &mut txn,
+                    &mut reader,
                     &props,
                     mutation.clone(),
                     &Some(vec![b"k6".to_vec()]),
@@ -718,6 +723,7 @@ pub mod tests {
             props.min_commit_ts = 46.into();
             let (min_ts, _) = prewrite(
                 &mut txn,
+                &mut reader,
                 &props,
                 mutation.clone(),
                 &Some(vec![b"k8".to_vec()]),

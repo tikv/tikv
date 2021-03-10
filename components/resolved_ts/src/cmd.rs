@@ -288,13 +288,13 @@ mod tests {
         must_commit(&engine, b"k1", 1, 2);
 
         must_prewrite_put(&engine, b"k1", b"v2", b"k1", 3);
-        must_rollback(&engine, b"k1", 3);
+        must_rollback(&engine, b"k1", 3, false);
 
         must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
         must_commit(&engine, b"k1", 4, 5);
 
         must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
-        must_rollback(&engine, b"k1", 5);
+        must_rollback(&engine, b"k1", 5, false);
 
         let k1 = Key::from_raw(b"k1");
         let rows: Vec<_> = engine

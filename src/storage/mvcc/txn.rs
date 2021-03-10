@@ -258,13 +258,14 @@ pub(crate) mod tests {
     };
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, WriteType, SHORT_VALUE_MAX_LEN};
+
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_get_none(&engine, k1, 1);
 
         must_prewrite_put(&engine, k1, v, k1, 2);
-        must_rollback(&engine, k1, 2);
+        must_rollback(&engine, k1, 2, false);
         // should ignore rollback
         must_get_none(&engine, k1, 3);
 
@@ -351,14 +352,14 @@ pub(crate) mod tests {
         // Not conflict.
         must_prewrite_lock(&engine, k, k, 12);
         must_locked(&engine, k, 12);
-        must_rollback(&engine, k, 12);
+        must_rollback(&engine, k, 12, false);
         must_unlocked(&engine, k);
         must_written(&engine, k, 12, 12, WriteType::Rollback);
         // Cannot retry Prewrite after rollback.
         must_prewrite_lock_err(&engine, k, k, 12);
         // Can prewrite after rollback.
         must_prewrite_delete(&engine, k, k, 13);
-        must_rollback(&engine, k, 13);
+        must_rollback(&engine, k, 13, false);
         must_unlocked(&engine, k);
     }
 
@@ -392,7 +393,7 @@ pub(crate) mod tests {
 
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 8);
-        must_rollback(&engine, k1, 8);
+        must_rollback(&engine, k1, 8, false);
 
         assert!(matches!(
             try_prewrite_insert(&engine, k1, v3, k1, 9),
@@ -405,7 +406,7 @@ pub(crate) mod tests {
 
         // Rollback again
         must_prewrite_put(&engine, k1, v3, k1, 12);
-        must_rollback(&engine, k1, 12);
+        must_rollback(&engine, k1, 12, false);
 
         // After delete "k1", insert returns ok.
         assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
@@ -434,7 +435,7 @@ pub(crate) mod tests {
 
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 9);
-        must_rollback(&engine, k1, 9);
+        must_rollback(&engine, k1, 9, false);
         assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
 
         // Delete "k1" again
@@ -443,7 +444,7 @@ pub(crate) mod tests {
 
         // Rollback again
         must_prewrite_put(&engine, k1, v3, k1, 13);
-        must_rollback(&engine, k1, 13);
+        must_rollback(&engine, k1, 13, false);
 
         // After delete "k1", check_not_exists returns ok.
         assert!(try_prewrite_check_not_exists(&engine, k1, k1, 14).is_ok());
@@ -469,7 +470,7 @@ pub(crate) mod tests {
         must_locked(&engine, k, 15);
 
         // Rollback lock
-        must_rollback(&engine, k, 15);
+        must_rollback(&engine, k, 15, false);
         // Rollbacks of optimistic transactions needn't be protected
         must_get_rollback_protected(&engine, k, 15, false);
     }
@@ -482,8 +483,8 @@ pub(crate) mod tests {
 
         must_acquire_pessimistic_lock(&engine, k1, k1, 5, 5);
         must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
-        must_rollback(&engine, k1, 5);
-        must_rollback(&engine, k2, 5);
+        must_rollback(&engine, k1, 5, false);
+        must_rollback(&engine, k2, 5, false);
         // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 5, true);
         // The rollback of the secondary key needn't be protected
@@ -493,8 +494,8 @@ pub(crate) mod tests {
         must_acquire_pessimistic_lock(&engine, k2, k1, 15, 17);
         must_pessimistic_prewrite_put(&engine, k1, v, k1, 15, 17, true);
         must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, true);
-        must_rollback(&engine, k1, 15);
-        must_rollback(&engine, k2, 15);
+        must_rollback(&engine, k1, 15, false);
+        must_rollback(&engine, k2, 15, false);
         // The rollback of the primary key should be protected
         must_get_rollback_protected(&engine, k1, 15, true);
         // The rollback of the secondary key needn't be protected
@@ -514,7 +515,7 @@ pub(crate) mod tests {
         must_locked(&engine, k, 15);
 
         // Rollback delete
-        must_rollback(&engine, k, 15);
+        must_rollback(&engine, k, 15, false);
     }
 
     #[test]
@@ -533,7 +534,7 @@ pub(crate) mod tests {
         assert!(!w2.has_overlapped_rollback);
 
         must_cleanup(&engine, k1, 20, 0);
-        must_rollback(&engine, k2, 20);
+        must_rollback(&engine, k2, 20, false);
 
         let w1r = must_written(&engine, k1, 10, 20, WriteType::Put);
         assert!(w1r.has_overlapped_rollback);
@@ -567,9 +568,9 @@ pub(crate) mod tests {
 
         must_prewrite_put(&engine, k, v, k, t1);
 
-        must_rollback(&engine, k, t2);
-        must_rollback(&engine, k, t2);
-        must_rollback(&engine, k, t4);
+        must_rollback(&engine, k, t2, false);
+        must_rollback(&engine, k, t2, false);
+        must_rollback(&engine, k, t4, false);
 
         must_commit(&engine, k, t1, t3);
         // The rollback should be failed since the transaction
@@ -582,13 +583,13 @@ pub(crate) mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&engine, k, v, k, 5);
-        must_rollback(&engine, k, 5);
+        must_rollback(&engine, k, 5, false);
         // Rollback should be idempotent
-        must_rollback(&engine, k, 5);
+        must_rollback(&engine, k, 5, false);
         // Lock should be released after rollback
         must_unlocked(&engine, k);
         must_prewrite_lock(&engine, k, k, 10);
-        must_rollback(&engine, k, 10);
+        must_rollback(&engine, k, 10, false);
         // data should be dropped after rollback
         must_get_none(&engine, k, 20);
 
@@ -600,8 +601,8 @@ pub(crate) mod tests {
 
         // Can't rollback other transaction's lock
         must_prewrite_delete(&engine, k, k, 35);
-        must_rollback(&engine, k, 34);
-        must_rollback(&engine, k, 36);
+        must_rollback(&engine, k, 34, true);
+        must_rollback(&engine, k, 36, true);
         must_written(&engine, k, 34, 34, WriteType::Rollback);
         must_written(&engine, k, 36, 36, WriteType::Rollback);
         must_locked(&engine, k, 35);
@@ -622,7 +623,7 @@ pub(crate) mod tests {
     fn test_mvcc_txn_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let key = b"key";
-        must_rollback(&engine, key, 5);
+        must_rollback(&engine, key, 5, false);
         must_prewrite_lock_err(&engine, key, key, 5);
     }
 
@@ -638,7 +639,7 @@ pub(crate) mod tests {
         must_get_commit_ts(&engine, k, 5, 10);
 
         must_prewrite_delete(&engine, k, k, 15);
-        must_rollback(&engine, k, 15);
+        must_rollback(&engine, k, 15, false);
         must_seek_write(&engine, k, TimeStamp::max(), 15, 15, WriteType::Rollback);
         must_get_commit_ts(&engine, k, 5, 10);
         must_get_commit_ts_none(&engine, k, 15);
@@ -797,8 +798,8 @@ pub(crate) mod tests {
         must_commit(&engine, key, 5, 10);
         must_prewrite_put(&engine, key, v2, key, 15);
         must_get_err(&engine, key, 20);
-        must_get(&engine, key, 12, v1);
-        must_get(&engine, key, 20, v1);
+        must_get_no_lock_check(&engine, key, 12, v1);
+        must_get_no_lock_check(&engine, key, 20, v1);
     }
 
     #[test]
@@ -808,20 +809,20 @@ pub(crate) mod tests {
 
         // Add a Rollback whose start ts is 1.
         must_prewrite_put(&engine, key, value, key, 1);
-        must_rollback(&engine, key, 1);
+        must_rollback(&engine, key, 1, false);
         must_get_rollback_ts(&engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
         must_prewrite_put(&engine, key, value, key, 2);
-        must_rollback(&engine, key, 2);
+        must_rollback(&engine, key, 2, false);
         must_get_none(&engine, key, 2);
         must_get_rollback_ts(&engine, key, 2);
         must_get_rollback_ts_none(&engine, key, 1);
 
         // Rollback arrive before Prewrite, it will collapse the
         // previous rollback whose start ts is 2.
-        must_rollback(&engine, key, 3);
+        must_rollback(&engine, key, 3, false);
         must_get_none(&engine, key, 3);
         must_get_rollback_ts(&engine, key, 3);
         must_get_rollback_ts_none(&engine, key, 2);
@@ -932,7 +933,7 @@ pub(crate) mod tests {
         must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 10, 10, true, 110);
         must_locked_with_ttl(&engine, k, 10, 110);
 
-        must_rollback(&engine, k, 10);
+        must_rollback(&engine, k, 10, false);
 
         // TTL not changed if the pessimistic lock's TTL is larger than that provided in the
         // prewrite request.
@@ -1038,7 +1039,7 @@ pub(crate) mod tests {
 
             // Delete the lock
             if *is_optimistic {
-                must_rollback(&engine, k, expected_lock_info.get_lock_version());
+                must_rollback(&engine, k, expected_lock_info.get_lock_version(), false);
             } else {
                 pessimistic_rollback::tests::must_success(
                     &engine,
@@ -1087,7 +1088,7 @@ pub(crate) mod tests {
         must_pessimistic_prewrite_put(&engine, k2, v2, k1, 10, 20, false);
         // Roll back the primary key due to timeout, but the non-pessimistic lock is not rolled
         // back.
-        must_rollback(&engine, k1, 10);
+        must_rollback(&engine, k1, 10, false);
 
         // Txn-15 acquires pessimistic locks on k1.
         must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
@@ -1471,7 +1472,7 @@ pub(crate) mod tests {
             must_prewrite_put(&engine, b"k1", b"v1", b"k1", 111);
             must_commit(&engine, b"k1", 111, 112);
             must_prewrite_put(&engine, b"k1", b"v1", b"k1", 113);
-            must_rollback(&engine, b"k1", 113);
+            must_rollback(&engine, b"k1", 113, false);
             must_prewrite_lock(&engine, b"k1", b"k1", 115);
             must_commit(&engine, b"k1", 115, 116);
             rollback(&engine, b"k1", 112);
@@ -1481,7 +1482,7 @@ pub(crate) mod tests {
             must_prewrite_put(&engine, b"k1", b"v1", b"k1", 121);
             must_commit(&engine, b"k1", 121, 122);
             must_prewrite_put(&engine, b"k1", b"v1", b"k1", 123);
-            must_rollback(&engine, b"k1", 123);
+            must_rollback(&engine, b"k1", 123, false);
             must_prewrite_lock(&engine, b"k1", b"k1", 125);
             must_commit(&engine, b"k1", 125, 126);
             must_prewrite_put(&engine, b"k1", b"v1", b"k1", 127);

@@ -933,7 +933,7 @@ pub mod tests {
             uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
-        must_rollback(&engine, k, ts(300, 0));
+        must_rollback(&engine, k, ts(300, 0), false);
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(310, 0), 100, 0);
         must_large_txn_locked(&engine, k, ts(310, 0), 100, ts(310, 1), false);

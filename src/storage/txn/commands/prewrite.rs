@@ -946,7 +946,7 @@ mod tests {
             must_locked(&engine, key, 20);
         }
 
-        must_rollback(&engine, key, 20);
+        must_rollback(&engine, key, 20, false);
         let mutations = vec![
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             Mutation::CheckNotExists(Key::from_raw(b"non_exist")),
