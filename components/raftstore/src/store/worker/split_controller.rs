@@ -376,21 +376,19 @@ impl AutoSplitController {
             recorder.record(key_ranges);
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
-                if !key.is_empty() {
-                    let split_info = SplitInfo {
-                        region_id,
-                        split_key: key,
-                        peer: recorder.peer.clone(),
-                    };
-                    split_infos.push(split_info);
-                    info!(
-                        "load base split region";
-                        "region_id"=>region_id,
-                        "size"=>approximate_size,
-                        "keys"=>approximate_keys,
-                        "qps"=>qps
-                    );
-                }
+                let split_info = SplitInfo {
+                    region_id,
+                    split_key: key,
+                    peer: recorder.peer.clone(),
+                };
+                split_infos.push(split_info);
+                info!(
+                    "load base split region";
+                    "region_id"=>region_id,
+                    "size"=>approximate_size,
+                    "keys"=>approximate_keys,
+                    "qps"=>qps
+                );
                 self.recorders.remove(&region_id);
             }
 
