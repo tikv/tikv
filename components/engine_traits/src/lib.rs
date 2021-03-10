@@ -305,6 +305,8 @@ pub use crate::sst_partitioner::*;
 mod range_properties;
 pub use crate::mvcc_properties::*;
 pub use crate::range_properties::*;
+mod ttl_properties;
+pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
 
