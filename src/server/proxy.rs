@@ -83,7 +83,7 @@ impl ClientPool {
                 };
                 let cb = ChannelBuilder::new(env)
                     .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-                    .max_receive_message_len(-1) // 1G.
+                    .max_receive_message_len(-1)
                     .max_send_message_len(-1)
                     // Memory should be limited by incomming connections already.
                     // And maintaining a shared resource quota doesn't seem easy.
