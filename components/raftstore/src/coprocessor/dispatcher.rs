@@ -499,10 +499,9 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn on_apply_cmd(&self, cdc_id: ObserveID, rts_id: ObserveID, region_id: u64, cmd: Cmd) {
-        assert!(
-            !self.registry.cmd_observers.is_empty(),
-            "CmdObserver is not registered"
-        );
+        if self.registry.cmd_observers.is_empty() {
+            return;
+        }
         for i in 0..self.registry.cmd_observers.len() - 1 {
             self.registry
                 .cmd_observers
