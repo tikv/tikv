@@ -463,7 +463,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             is_new_delegate = true;
             d
         });
-
         let downstream_state = downstream.get_state();
         let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
@@ -541,6 +540,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 cmd: change_cmd,
                 region_epoch: request.take_region_epoch(),
                 callback: Callback::Read(Box::new(move |resp| {
+                    info!("cdc init down stream"; "region_id" => region_id);
                     if let Err(e) = scheduler.schedule(Task::InitDownstream {
                         downstream_id,
                         downstream_state,
@@ -1025,6 +1025,7 @@ impl Initializer {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
             // self.async_incremental_scan(region_snapshot, region);
+            info!("cdc incremental scan"; "region_id" => self.region_id);
             self.async_incremental_scan_v2(region_snapshot, region)
                 .await;
         } else {
@@ -1126,7 +1127,8 @@ impl Initializer {
         O: Send + 'static,
     {
         let runtime_handle = tokio::runtime::Handle::current();
-        let mut task_fut = runtime_handle.spawn_blocking(job).fuse();
+        Some(runtime_handle.spawn_blocking(job).await.unwrap())
+        /*let mut task_fut = runtime_handle.spawn_blocking(job).fuse();
 
         let start_time = std::time::Instant::now();
         let mut interval_timer = tokio::time::interval(std::time::Duration::from_secs(5)).fuse();
@@ -1134,7 +1136,7 @@ impl Initializer {
         loop {
             select! {
                 result = task_fut => {
-                    debug!("cdc incremental scan batch done");
+                    info!("cdc incremental scan batch done");
                     return match result {
                         Ok(result) => Some(result),
                         Err(e) => {
@@ -1148,13 +1150,13 @@ impl Initializer {
                         unreachable!();
                     }
                     let duration = inst.unwrap().duration_since(start_time.into());
-                    debug!("cdc incremental scan batch not done"; "duration" => ?duration);
+                    info!("cdc incremental scan batch not done"; "duration" => ?duration);
                     if duration > std::time::Duration::from_secs(60) {
                         return None;
                     }
                 }
             }
-        }
+        } */
     }
 
     async fn async_incremental_scan_v2<S: Snapshot + 'static>(&self, snap: S, region: Region) {
@@ -1190,6 +1192,11 @@ impl Initializer {
 
         let mut done = false;
         while !done {
+            info!("async incremental scan v2";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?self.observe_id);
+
             if self.downstream_state.load() != DownstreamState::Normal {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
@@ -1201,17 +1208,23 @@ impl Initializer {
             let scan_context = scan_context.clone();
             let entries = match self
                 .async_do_blocking(move || {
+                    info!("async incremental scan v2 batch start");
                     let mut context = scan_context.lock().unwrap();
+                    info!("async incremental scan v2 batch lock taken");
                     let res = Self::scan_batch(
                         &mut context.scanner.borrow_mut(),
                         context.batch_size,
                         context.resolver.borrow_mut().as_mut(),
                     );
+                    info!("async incremental scan v2 batch end");
                     res
                 })
                 .await
             {
-                Some(Ok(res)) => res,
+                Some(Ok(res)) => {
+                    info!("got cdc scan entries"; "len" => res.len(), "region_id" => region_id);
+                    res
+                },
                 Some(Err(e)) => {
                     error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                     // TODO: record in metrics.
@@ -1235,7 +1248,7 @@ impl Initializer {
             if let Some(None) = entries.last() {
                 done = true;
             }
-            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+            info!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
 
             let downstream = self.downstream.as_ref().unwrap();
@@ -1243,10 +1256,11 @@ impl Initializer {
                 Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
             let num_entires = events.len();
             for event in events.into_iter() {
+                info!("cdc incremental scan sending data"; "num_entires" => num_entires);
                 if let Some(rate_limiter) = downstream.get_rate_limiter() {
                     match rate_limiter.send_scan_event(CdcEvent::Event(event)).await {
                         Ok(_) => {
-                            debug!("cdc incremental scan sent data"; "num_entires" => num_entires)
+                            info!("cdc incremental scan sent data"; "num_entires" => num_entires)
                         }
                         Err(e) => {
                             error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
@@ -1270,10 +1284,11 @@ impl Initializer {
         }
 
         let takes = start.elapsed();
+        info!("cdc building resolver"; "region_id" => region_id);
         if let Some(resolver) = scan_context.lock().unwrap().resolver.take() {
             self.finish_building_resolver(resolver, region, takes);
         }
-
+        info!("cdc finished building resolver"; "region_id" => region_id);
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
@@ -1374,7 +1389,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
                 downstream_state,
                 cb,
             } => {
-                debug!("downstream was initialized"; "downstream_id" => ?downstream_id);
+                info!("downstream was initialized"; "downstream_id" => ?downstream_id);
                 downstream_state
                     .compare_and_swap(DownstreamState::Uninitialized, DownstreamState::Normal);
                 cb();

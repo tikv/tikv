@@ -201,11 +201,12 @@ impl<E> RateLimiter<E> {
         let threshold = self.state.block_scan_threshold;
 
         let timer = CDC_SCAN_BLOCK_DURATION_HISTOGRAM.start_coarse_timer();
+        info!("cdc send_scan_event blocking"; "queue_size" => sink_clone.len());
         BlockSender::block_sender(self.state.as_ref(), move || {
             sink_clone.len() >= threshold && !state_clone.is_sink_closed.load(Ordering::SeqCst)
         })
         .await;
-
+        info!("cdc send_scan_event block done");
         if self.state.is_sink_closed.load(Ordering::SeqCst) {
             return Err(RateLimiterError::DisconnectedError);
         }
