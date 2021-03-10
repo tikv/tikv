@@ -107,7 +107,7 @@ impl ObserveRegion {
                             commit_ts,
                             write,
                             ..
-                        } => self.resolver.untrack_lock(&key.0),
+                        } => self.resolver.untrack_lock(*commit_ts, &key.0),
                     })
                 }
             }
@@ -138,7 +138,7 @@ impl ObserveRegion {
                                     key,
                                     start_ts,
                                     commit_ts,
-                                } => self.resolver.untrack_lock(&key.0),
+                                } => self.resolver.untrack_lock(commit_ts, &key.0),
                             })
                         }
                         ResolverStatus::Ready => {

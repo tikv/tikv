@@ -17,16 +17,19 @@ pub struct Resolver {
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: Arc<AtomicU64>,
+    resolved_ts: TimeStamp,
+    // The global `resolved_ts` that may updated by multi threads
+    global_resolved_ts: Arc<AtomicU64>,
     // The timestamps that advance the resolved_ts when there is no more write.
     min_ts: TimeStamp,
 }
 
 impl Resolver {
-    pub fn from_resolved_ts(region_id: u64, resolved_ts: Arc<AtomicU64>) -> Resolver {
+    pub fn from_resolved_ts(region_id: u64, global_resolved_ts: Arc<AtomicU64>) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts,
+            resolved_ts: TimeStamp::zero(),
+            global_resolved_ts,
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             min_ts: TimeStamp::zero(),
@@ -38,7 +41,7 @@ impl Resolver {
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        TimeStamp::from(self.resolved_ts.load(Ordering::Relaxed))
+        self.resolved_ts
     }
 
     pub fn locks(&self) -> &BTreeMap<TimeStamp, HashSet<Arc<[u8]>>> {
@@ -57,11 +60,31 @@ impl Resolver {
         self.lock_ts_heap.entry(start_ts).or_default().insert(key);
     }
 
-    pub fn untrack_lock(&mut self, key: &[u8]) {
+    pub fn untrack_lock(&mut self, commit_ts: Option<TimeStamp>, key: &[u8]) {
+        if let Some(commit_ts) = commit_ts {
+            assert!(
+                commit_ts > self.resolved_ts,
+                "{}@{:?}, commit@{} < {:?}, region {}",
+                &log_wrappers::Value::key(key),
+                self.locks_by_key.get(key),
+                commit_ts,
+                self.resolved_ts,
+                self.region_id
+            );
+            assert!(
+                commit_ts > self.min_ts,
+                "{}@{:?}, commit@{} < {:?}, region {}",
+                &log_wrappers::Value::key(key),
+                self.locks_by_key.get(key),
+                commit_ts,
+                self.min_ts,
+                self.region_id
+            );
+        }
         let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
             start_ts
         } else {
-            debug!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
+            info!("untrack a lock that was not tracked before"; "key" => &log_wrappers::Value::key(key));
             return;
         };
         debug!(
@@ -93,15 +116,25 @@ impl Resolver {
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
 
         // Resolved ts never decrease.
-        let prev_ts = self
-            .resolved_ts
-            .fetch_max(new_resolved_ts.into_inner(), Ordering::Relaxed);
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
-        if prev_ts < new_resolved_ts.into_inner() {
-            debug!(
-                "resolved ts by resolver";
+        // Update the global resolved ts
+        let prev_ts = self
+            .global_resolved_ts
+            .fetch_max(self.resolved_ts.into_inner(), Ordering::Relaxed);
+        if prev_ts < self.resolved_ts.into_inner() {
+            info!(
+                "forward resolved ts by resolver";
                 "region id" => self.region_id,
-                "new resolved ts" => new_resolved_ts.into_inner()
+                "new resolved ts" => ?self.resolved_ts,
+            );
+        } else {
+            info!(
+                "faied to forward resolved ts by resolver";
+                "prev ts" => ?prev_ts,
+                "new resolved ts" => ?self.resolved_ts,
+                "min lock" => ?min_lock,
+                "pd ts" => ?min_ts,
             );
         }
 
@@ -116,7 +149,7 @@ impl Resolver {
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        cmp::max(TimeStamp::from(prev_ts), new_resolved_ts)
+        self.resolved_ts
     }
 }
 
@@ -189,7 +222,9 @@ mod tests {
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => resolver.track_lock(start_ts.into(), key.0),
-                    Event::Unlock(start_ts, commit_ts, key) => resolver.untrack_lock(&key.0),
+                    Event::Unlock(start_ts, commit_ts, key) => {
+                        resolver.untrack_lock(commit_ts, &key.0)
+                    }
                     Event::Resolve(min_ts, expect) => {
                         assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
