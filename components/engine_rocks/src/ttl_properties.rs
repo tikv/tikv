@@ -72,10 +72,17 @@ impl TablePropertiesCollector for TtlPropertiesCollector {
             return;
         }
 
-        let expire_ts = get_expire_ts(&value).unwrap_or_else(|_| {
-            error!("unexpected ttl key:{:?}, value:{:?}", key, value);
-            0
-        });
+        let expire_ts = match get_expire_ts(&value) {
+            Ok(ts) => ts,
+            Err(e) => {
+                error!("failed to get expire ts";
+                    "key" => log_wrappers::Value::key(key),
+                    "value" => log_wrappers::Value::value(value),
+                    "err" => %e,
+                );
+                0
+            }
+        };
         if expire_ts == 0 {
             return;
         }
