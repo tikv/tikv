@@ -395,8 +395,8 @@ impl WriteCompactionFilter {
                 let id = ORPHAN_VERSIONS_ID.fetch_add(1, Ordering::Relaxed);
                 let task = GcTask::OrphanVersions { wb, id };
                 warn!(
-                   "compaction filter handles {} fail, dispatch to gc worker", task;
-                   "err" => ?e,
+                   "compaction filter flush fail, dispatch to gc worker";
+                   "task" => %task, "err" => ?e,
                 );
                 self.schedule_gc_task(task, true);
                 return Err(e);
