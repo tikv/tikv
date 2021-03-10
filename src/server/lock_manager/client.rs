@@ -40,7 +40,7 @@ impl Client {
         let cb = ChannelBuilder::new(env)
             .keepalive_time(Duration::from_secs(10))
             .keepalive_timeout(Duration::from_secs(3));
-        let channel = security_mgr.connect(cb, addr);
+        let channel = security_mgr.connect(cb, addr, None);
         let client = DeadlockClient::new(channel);
         Self {
             addr: addr.to_owned(),
