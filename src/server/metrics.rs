@@ -6,7 +6,9 @@ use prometheus_static_metric::*;
 use crate::storage::ErrorHeaderKind;
 use prometheus::exponential_buckets;
 
-pub use crate::storage::kv::metrics::{GcKeysCF, GcKeysDetail, GcKeysCounterVec, GcKeysCounterVecInner};
+pub use crate::storage::kv::metrics::{
+    GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
+};
 
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {

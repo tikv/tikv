@@ -346,4 +346,3 @@ impl EngineIterator for RocksEngineIterator {
         Iterator::value(self)
     }
 }
-

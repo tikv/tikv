@@ -13,10 +13,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
 use engine_traits::CF_DEFAULT;
 use engine_traits::{CfName, KvEngine};
-use engine_traits::{
-    MvccProperties, MvccPropertiesExt,
-    TablePropertiesExt,
-};
+use engine_traits::{MvccProperties, MvccPropertiesExt, TablePropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -29,14 +26,10 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 use super::metrics::*;
 use crate::storage::kv::{
     write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
-    ExtCallback, Modify, SnapContext,
-    WriteData,
+    ExtCallback, Modify, SnapContext, WriteData,
 };
 use crate::storage::{self, kv};
-use raftstore::{
-    coprocessor::dispatcher::BoxReadIndexObserver,
-    store::{RegionSnapshot},
-};
+use raftstore::{coprocessor::dispatcher::BoxReadIndexObserver, store::RegionSnapshot};
 use raftstore::{
     coprocessor::Coprocessor,
     router::{LocalReadRouter, RaftStoreRouter},
