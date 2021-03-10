@@ -41,11 +41,17 @@ impl TimeStamp {
     }
 
     pub fn incr(&mut self) -> &mut TimeStamp {
+        if self.0 == std::u64::MAX {
+            return self;
+        }
         self.0 += 1;
         self
     }
 
     pub fn decr(&mut self) -> &mut TimeStamp {
+        if self.0 == 0 {
+            return self;
+        }
         self.0 -= 1;
         self
     }
