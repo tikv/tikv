@@ -52,7 +52,7 @@ enum PendingLock {
 }
 
 // Records information related to observed region.
-// observe_id is used for avoid ABA problems in incremental scan task, advance resolved ts task,
+// observe_id is used for avoiding ABA problems in incremental scan task, advance resolved ts task,
 // and command observing.
 struct ObserveRegion {
     meta: Region,

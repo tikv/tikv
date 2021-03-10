@@ -137,6 +137,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
         self.worker.spawn(fut);
     }
 
+    // Confirms leadership of region peer before trying to advance resolved ts.
+    // This function sends a raft read command to raftstore to inspect leadership.
     async fn region_resolved_ts_raft(
         regions: Vec<u64>,
         raft_router: T,
@@ -177,6 +179,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
             .collect::<Vec<u64>>()
     }
 
+    // Confirms leadership of region peer before trying to advance resolved ts.
+    // This function broadcasts a special message to all stores, get the leader id of them to confirm whether
+    // current peer has a quorum which accept its leadership.
     async fn region_resolved_ts_store(
         regions: Vec<u64>,
         store_meta: Arc<Mutex<StoreMeta>>,
