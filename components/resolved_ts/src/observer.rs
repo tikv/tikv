@@ -67,6 +67,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
     }
 
     fn on_flush_apply(&self, engine: E) {
+        self.cmd_batches.borrow_mut().retain(|b| !b.is_empty());
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();

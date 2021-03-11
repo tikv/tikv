@@ -4291,6 +4291,9 @@ mod tests {
             if !self.cmd_batches.borrow().is_empty() {
                 let batches = self.cmd_batches.replace(Vec::default());
                 for b in batches {
+                    if b.is_empty() {
+                        continue;
+                    }
                     if let Some(sink) = self.cmd_sink.as_ref() {
                         sink.lock().unwrap().send(b).unwrap();
                     }
@@ -4671,10 +4674,8 @@ mod tests {
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
-        // It must receive nothing because no region registered.
-        cmdbatch_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(cmd_batch.len(), 1);
         let (block_tx, block_rx) = mpsc::channel::<()>();
         router.schedule_task(
             1,
@@ -4749,7 +4750,7 @@ mod tests {
             Msg::apply(apply(peer_id, 1, 2, vec![put_entry1, put_entry2], vec![])),
         );
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert_eq!(2, cmd_batch.len());
+        assert_eq!(1, cmd_batch.len());
 
         // Stop observer regoin 1.
         enabled.store(false, Ordering::SeqCst);

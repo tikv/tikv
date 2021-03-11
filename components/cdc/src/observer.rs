@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, Mutable, ReadOptions, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
@@ -116,6 +116,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 
     fn on_flush_apply(&self, engine: E) {
         fail_point!("before_cdc_flush_apply");
+        self.cmd_batches.borrow_mut().retain(|b| !b.is_empty());
         if !self.cmd_batches.borrow().is_empty() {
             let batches = self.cmd_batches.replace(Vec::default());
             let mut region = Region::default();
