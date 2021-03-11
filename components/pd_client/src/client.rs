@@ -104,7 +104,7 @@ impl RpcClient {
 
                             match client.upgrade() {
                                 Some(cli) => {
-                                    let req = cli.reconnect().await;
+                                    let req = cli.reconnect(false).await;
                                     if req.is_err() {
                                         warn!("update PD information failed");
                                         // will update later anyway
@@ -151,7 +151,7 @@ impl RpcClient {
 
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
-        block_on(self.leader_client.reconnect())
+        block_on(self.leader_client.reconnect(true))
     }
 
     /// Creates a new call option with default request timeout.

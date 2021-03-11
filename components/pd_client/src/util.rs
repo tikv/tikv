@@ -167,7 +167,9 @@ impl LeaderClient {
     }
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
-    pub async fn reconnect(&self) -> Result<()> {
+    ///
+    /// If `force` is false, it will reconnect only when members change.
+    pub async fn reconnect(&self, force: bool) -> Result<()> {
         let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
@@ -178,12 +180,15 @@ impl LeaderClient {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = async move { connector.try_connect_leader(&members).await };
+            let fut = async move { connector.reconnect_leader(&members, force).await };
             slow_log!(start.elapsed(), "PD client try connect leader");
-            (async move { fut.await }, start)
+            (fut, start)
         };
 
-        let (client, members) = future.await?;
+        let (client, members) = match future.await? {
+            Some(pair) => pair,
+            None => return Ok(()),
+        };
         fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
@@ -248,7 +253,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect().await {
+        match self.client.reconnect(true).await {
             Ok(_) => {
                 self.request_sent = 0;
                 true
@@ -322,7 +327,7 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if let Err(e) = block_on(client.reconnect()) {
+                if let Err(e) = block_on(client.reconnect(true)) {
                     error!(?e; "reconnect failed");
                 }
                 err = Some(e);
@@ -386,7 +391,7 @@ impl PdConnector {
 
         match members {
             Some(members) => {
-                let (client, members) = self.try_connect_leader(&members).await?;
+                let (client, members) = self.reconnect_leader(&members, true).await?.unwrap();
                 info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
                 Ok((client, members))
             }
@@ -464,15 +469,24 @@ impl PdConnector {
         None
     }
 
-    pub async fn try_connect_leader(&self, previous: &GetMembersResponse) -> Result<StubPair> {
+    pub async fn reconnect_leader(
+        &self,
+        previous: &GetMembersResponse,
+        force: bool,
+    ) -> Result<Option<StubPair>> {
         let resp = self.load_members(&previous).await;
 
         // Then try to connect the PD cluster leader.
         match resp {
-            Some(resp) => match self.connect_member(resp.get_leader()).await {
-                Some(client) => Ok((client, resp)),
-                None => Err(box_err!("failed to connect to {:?}", resp.get_leader())),
-            },
+            Some(resp) => {
+                if !force && resp == *previous {
+                    return Ok(None);
+                }
+                match self.connect_member(resp.get_leader()).await {
+                    Some(client) => Ok(Some((client, resp))),
+                    None => Err(box_err!("failed to connect to {:?}", resp.get_leader())),
+                }
+            }
             None => Err(box_err!(
                 "failed to connect to {:?}",
                 previous.get_members()
