@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{KvEngine, Mutable, ReadOptions, CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, ReadOptions, CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::coprocessor::*;
