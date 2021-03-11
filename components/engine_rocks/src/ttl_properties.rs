@@ -5,40 +5,39 @@ use std::collections::HashMap;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
 use engine_traits::{
-    DecodeProperties, Range, Result, TTLProperties, TTLPropertiesExt, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt,
+    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, TtlProperties, TtlPropertiesExt,
 };
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 
 const PROP_MAX_EXPIRE_TS: &str = "tikv.max_expire_ts";
 const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";
 
-pub struct RocksTTLProperties;
+pub struct RocksTtlProperties;
 
-impl RocksTTLProperties {
-    pub fn encode(ttl_props: &TTLProperties) -> UserProperties {
+impl RocksTtlProperties {
+    pub fn encode(ttl_props: &TtlProperties) -> UserProperties {
         let mut props = UserProperties::new();
         props.encode_u64(PROP_MAX_EXPIRE_TS, ttl_props.max_expire_ts);
         props.encode_u64(PROP_MIN_EXPIRE_TS, ttl_props.min_expire_ts);
         props
     }
 
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<TTLProperties> {
-        let res = TTLProperties {
-            max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS)?,
-            min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS)?,
-        };
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<TtlProperties> {
+        let mut res = TtlProperties::default();
+        res.max_expire_ts = props.decode_u64(PROP_MAX_EXPIRE_TS)?;
+        res.min_expire_ts = props.decode_u64(PROP_MIN_EXPIRE_TS)?;
         Ok(res)
     }
 }
 
-impl TTLPropertiesExt for RocksEngine {
+impl TtlPropertiesExt for RocksEngine {
     fn get_range_ttl_properties_cf(
         &self,
         cf: &str,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<Vec<(String, TTLProperties)>> {
+    ) -> Result<Vec<(String, TtlProperties)>> {
         let range = Range::new(start_key, end_key);
         let collection = self.get_properties_of_tables_in_range(cf, &[range])?;
         if collection.is_empty() {
@@ -47,7 +46,7 @@ impl TTLPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTTLProperties::decode(&v.user_collected_properties()) {
+            let prop = match RocksTtlProperties::decode(&v.user_collected_properties()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -59,11 +58,11 @@ impl TTLPropertiesExt for RocksEngine {
 
 #[derive(Default)]
 /// Can only be used for default CF.
-pub struct TTLPropertiesCollector {
-    prop: TTLProperties,
+pub struct TtlPropertiesCollector {
+    prop: TtlProperties,
 }
 
-impl TablePropertiesCollector for TTLPropertiesCollector {
+impl TablePropertiesCollector for TtlPropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if entry_type != DBEntryType::Put {
             return;
@@ -100,15 +99,15 @@ impl TablePropertiesCollector for TTLPropertiesCollector {
         if self.prop.max_expire_ts == 0 && self.prop.min_expire_ts == 0 {
             return HashMap::default();
         }
-        RocksTTLProperties::encode(&self.prop).0
+        RocksTtlProperties::encode(&self.prop).0
     }
 }
 
-pub struct TTLPropertiesCollectorFactory {}
+pub struct TtlPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory for TTLPropertiesCollectorFactory {
+impl TablePropertiesCollectorFactory for TtlPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TTLPropertiesCollector::default())
+        Box::new(TtlPropertiesCollector::default())
     }
 }
 
@@ -120,8 +119,8 @@ mod tests {
 
     #[test]
     fn test_ttl_properties() {
-        let get_properties = |case: &[(&'static str, u64)]| -> Result<TTLProperties> {
-            let mut collector = TTLPropertiesCollector::default();
+        let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
+            let mut collector = TtlPropertiesCollector::default();
             for &(k, ts) in case {
                 let mut v = vec![0; 10];
                 append_expire_ts(&mut v, ts);
@@ -132,7 +131,7 @@ mod tests {
                 collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
             }
             let result = UserProperties(collector.finish());
-            RocksTTLProperties::decode(&result)
+            RocksTtlProperties::decode(&result)
         };
 
         let case1 = [

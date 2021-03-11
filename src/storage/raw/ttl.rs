@@ -35,8 +35,8 @@ impl<S: Snapshot> TTLSnapshot<S> {
                 }
                 truncate_expire_ts(&mut v).unwrap();
                 Ok(Some(v))
-            },
-            None => Ok(None)
+            }
+            None => Ok(None),
         }
     }
 
@@ -136,13 +136,17 @@ impl<S: Snapshot> Snapshot for TTLSnapshot<S> {
 pub struct TTLIterator<I: Iterator> {
     i: I,
     current_ts: u64,
-    
+
     skip_ttl: usize,
 }
 
 impl<I: Iterator> TTLIterator<I> {
     fn new(i: I, current_ts: u64) -> Self {
-        TTLIterator { i, current_ts, skip_ttl: 0 }
+        TTLIterator {
+            i,
+            current_ts,
+            skip_ttl: 0,
+        }
     }
 
     fn find_valid_value(&mut self, mut res: Result<bool>, forward: bool) -> Result<bool> {

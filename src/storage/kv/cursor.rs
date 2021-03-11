@@ -72,7 +72,8 @@ impl<'a> StatsWrapper<'a> {
 impl Drop for StatsWrapper<'_> {
     fn drop(&mut self) {
         self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
-        let internal_tombstone = PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
+        let internal_tombstone =
+            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;
@@ -597,11 +598,12 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
         iter_opt.set_key_only(self.key_only);
-        iter_opt = iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
+        iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
 
         // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
         if self.prefix_seek {
-            iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
+            iter_opt.use_prefix_seek();
+            iter_opt.set_prefix_same_as_start(true);
         }
         Ok(Cursor::new(
             self.snapshot.iter_cf(self.cf, iter_opt)?,
@@ -673,11 +675,10 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
         let mut statistics = CfStatistics::default();
-        let it = snap.iter(
-            IterOptions::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true),
-        );
+        let mut iter_opt = IterOptions::default();
+        iter_opt.use_prefix_seek();
+        iter_opt.set_prefix_same_as_start(true);
+        let it = snap.iter(iter_opt);
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
         assert!(!iter

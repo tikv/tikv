@@ -498,7 +498,8 @@ mod tests {
         must_put(&engine, b"foo2", b"bar2");
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let iter_opt = IterOptions::default().set_max_skippable_internal_keys(1);
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_max_skippable_internal_keys(1);
         let mut iter = Cursor::new(snapshot.iter(iter_opt).unwrap(), ScanMode::Forward, false);
 
         let mut statistics = CfStatistics::default();
