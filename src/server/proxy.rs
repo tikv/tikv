@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! A module for proxy connections from client.
+//! A module for forward connections from client.
 //!
 //! Supposing server A is isolated from client, but it can still be accessed
 //! by server B, then client can send the message to server B and let server
-//! B redirect the message to server A. TiKV will use request metadata key
+//! B forward the message to server A. TiKV will use request metadata key
 //! `tikv_receiver_addr` to check where the message should delievered to. If
 //! there is no such metadata, it will handle the message by itself.
 
@@ -19,17 +19,17 @@ use std::str;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-const PROXY_METADATA: &str = "tikv_receiver_addr";
+const FORWARD_METADATA_KEY: &str = "tikv-forwarded-host";
 
 /// Checks if the message is supposed to send to another address.
 pub fn get_target_address<'a>(ctx: &'a RpcContext) -> &'a str {
     let metadata = ctx.request_headers();
-    // In most case, proxy is unnecessary.
+    // In most case, forwarding is unnecessary.
     if metadata.is_empty() {
         return "";
     }
     for (key, value) in metadata {
-        if key == PROXY_METADATA {
+        if key == FORWARD_METADATA_KEY {
             if let Ok(addr) = str::from_utf8(value) {
                 return addr;
             }
@@ -38,13 +38,15 @@ pub fn get_target_address<'a>(ctx: &'a RpcContext) -> &'a str {
     ""
 }
 
-/// Build a call option that will make receiver to redirect the rpc
+/// Build a call option that will make receiver to forward the rpc
 /// to `target_address`.
 ///
 /// `target_address` should be a ascii value.
-pub fn build_proxy_option(target_address: &str) -> CallOption {
+pub fn build_forward_option(target_address: &str) -> CallOption {
     let mut builder = MetadataBuilder::with_capacity(1);
-    builder.add_str(PROXY_METADATA, target_address).unwrap();
+    builder
+        .add_str(FORWARD_METADATA_KEY, target_address)
+        .unwrap();
     let metadata = builder.build();
     CallOption::default().headers(metadata)
 }
@@ -76,7 +78,7 @@ impl ClientPool {
         addr: &str,
     ) -> Option<Client> {
         if self.last_pos == self.pool.len() {
-            if self.last_pos < cfg.proxy_max_connections_per_address {
+            if self.last_pos < cfg.forward_max_connections_per_address {
                 let env = match env.upgrade() {
                     Some(e) => e,
                     None => return None,
@@ -137,7 +139,7 @@ impl Proxy {
         let client = match self.pool.get_mut(addr) {
             Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg, addr),
             None => {
-                let p = ClientPool::with_capacity(self.cfg.proxy_max_connections_per_address);
+                let p = ClientPool::with_capacity(self.cfg.forward_max_connections_per_address);
                 self.pool.insert(addr.to_string(), p);
                 self.pool
                     .get_mut(addr)
@@ -174,7 +176,7 @@ impl Clone for Proxy {
 
 /// Redirect the unary RPC call if necessary.
 #[macro_export]
-macro_rules! redirect_unary {
+macro_rules! forward_unary {
     ($proxy:expr, $func:ident, $ctx:ident, $req:ident, $resp:ident) => {{
         let addr = $crate::server::get_target_address(&$ctx);
         if !addr.is_empty() {
@@ -191,7 +193,7 @@ macro_rules! redirect_unary {
                     match res {
                         Ok(()) => GRPC_PROXY_MSG_COUNTER.$func.success.inc(),
                         Err(e) => {
-                            debug!("redirect kv rpc failed";
+                            debug!("forward kv rpc failed";
                                 "request" => stringify!($func),
                                 "err" => ?e
                             );
@@ -207,26 +209,26 @@ macro_rules! redirect_unary {
 
 /// Redirect the duplex RPC if necessary.
 #[macro_export]
-macro_rules! redirect_duplex {
+macro_rules! forward_duplex {
     ($proxy:expr, $func:ident, $ctx:ident, $req:ident, $resp:ident) => {{
         let addr = $crate::server::get_target_address(&$ctx);
         if !addr.is_empty() {
             $ctx.spawn($proxy.call_on(addr, move |client| {
-                let (mut proxy_req, proxy_resp) = client.$func().unwrap();
+                let (mut forward_req, forward_resp) = client.$func().unwrap();
                 client.spawn(async move {
                     let bridge_req = async move {
-                        proxy_req.send_all(&mut $req.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
-                        proxy_req.close().await
+                        forward_req.send_all(&mut $req.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
+                        forward_req.close().await
                     };
                     let bridge_resp = async move {
-                        $resp.send_all(&mut proxy_resp.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
+                        $resp.send_all(&mut forward_resp.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
                         $resp.close().await
                     };
                     let res = futures::future::join(bridge_req, bridge_resp).await;
                     match res {
                         (Ok(()), Ok(())) => GRPC_PROXY_MSG_COUNTER.$func.success.inc(),
                         (req_res, resp_res) => {
-                            debug!("redirect kv rpc failed"; "request" => stringify!($func), "req_err" => ?req_res, "resp_err" => ?resp_res);
+                            debug!("forward kv rpc failed"; "request" => stringify!($func), "req_err" => ?req_res, "resp_err" => ?resp_res);
                             GRPC_PROXY_MSG_COUNTER.$func.fail.inc();
                         },
                     }

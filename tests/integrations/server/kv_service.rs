@@ -1202,7 +1202,7 @@ macro_rules! test_func {
         let mut req = $init;
         req.set_context($ctx.clone());
 
-        // Not setting proxy should lead to store not match.
+        // Not setting forwarding should lead to store not match.
         let resp = paste::paste! {
             $client.[<$func _opt>](&req, CallOption::default().timeout(Duration::from_secs(3))).unwrap()
         };
@@ -1267,7 +1267,7 @@ fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) 
     let channel = ChannelBuilder::new(env).connect(&follower_addr);
     let client = TikvClient::new(channel);
 
-    // Verify not setting proxy header will result in store not match.
+    // Verify not setting forwarding header will result in store not match.
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     let put_resp = client.raw_put(&put_req).unwrap();
@@ -1278,16 +1278,16 @@ fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) 
     );
     assert!(put_resp.error.is_empty(), "{:?}", put_resp);
 
-    let call_opt = server::build_proxy_option(&leader_addr).timeout(Duration::from_secs(3));
+    let call_opt = server::build_forward_option(&leader_addr).timeout(Duration::from_secs(3));
     (cluster, client, call_opt, ctx)
 }
 
 /// Check all supported requests can go through proxy correctly.
 #[test]
-fn test_tikv_proxy() {
+fn test_tikv_forwarding() {
     let (_cluster, client, call_opt, ctx) = setup_cluster();
 
-    // Verify not setting proxy header will result in store not match.
+    // Verify not setting forwarding header will result in store not match.
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx.clone());
     let put_resp = client.raw_put(&put_req).unwrap();
@@ -1443,9 +1443,9 @@ fn test_tikv_proxy() {
     }
 }
 
-/// Test if proxy works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and restarted.
 #[test]
-fn test_proxy_reconnect() {
+fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
     let leader = cluster.leader_of_region(1).unwrap();
     cluster.stop_node(leader.get_store_id());

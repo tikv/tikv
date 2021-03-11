@@ -97,7 +97,7 @@ fn test_serde_custom_tikv_config() {
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
-        proxy_max_connections_per_address: 5,
+        forward_max_connections_per_address: 5,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {

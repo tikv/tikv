@@ -104,8 +104,8 @@ pub struct Config {
     pub background_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
     pub end_point_slow_log_threshold: ReadableDuration,
-    /// Max connections per address for proxying request.
-    pub proxy_max_connections_per_address: usize,
+    /// Max connections per address for forwarding request.
+    pub forward_max_connections_per_address: usize,
 
     // Test only.
     #[doc(hidden)]
@@ -180,7 +180,7 @@ impl Default for Config {
             raft_client_backoff_step: ReadableDuration::secs(1),
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
-            proxy_max_connections_per_address: 2,
+            forward_max_connections_per_address: 2,
         }
     }
 }
@@ -275,9 +275,9 @@ impl Config {
             validate_label_value(v)?;
         }
 
-        if self.proxy_max_connections_per_address == 0 {
+        if self.forward_max_connections_per_address == 0 {
             return Err(box_err!(
-                "server.proxy-max-connections-per-address can't be 0."
+                "server.forward-max-connections-per-address can't be 0."
             ));
         }
 
