@@ -8,8 +8,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
-use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::{RocksEngine, RocksWriteBatch};
+use engine_traits::{
+    DeleteStrategy, MiscExt, Mutable, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+};
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
@@ -31,7 +34,10 @@ use crate::storage::mvcc::{check_need_gc, Error as MvccError, GcInfo, MvccReader
 use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
-use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
+use super::{
+    Callback, CompactionFilterInitializer, Error, ErrorInner, Result,
+    GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+};
 use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
@@ -66,6 +72,10 @@ pub enum GcTask {
         safe_point: TimeStamp,
         callback: Callback<()>,
     },
+    GcKeys {
+        keys: Vec<Key>,
+        safe_point: TimeStamp,
+    },
     UnsafeDestroyRange {
         ctx: Context,
         start_key: Key,
@@ -79,6 +89,17 @@ pub enum GcTask {
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     },
+    /// If GC in compaction filter is enabled, versions on default CF will be handled with
+    /// `DB::delete` in write CF's compaction filter. However if the compaction filter finds
+    /// the DB is stalled, it will send the task to GC worker to ensure the compaction can be
+    /// continued.
+    ///
+    /// NOTE: It's possible that the TiKV instance fails after a compaction result is installed
+    /// but its orphan versions are not deleted. Those orphan versions will never get cleaned
+    /// until `DefaultCompactionFilter` is introduced.
+    ///
+    /// The tracking issue: https://github.com/tikv/tikv/issues/9719.
+    OrphanVersions { wb: RocksWriteBatch, id: usize },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),
 }
@@ -87,8 +108,10 @@ impl GcTask {
     pub fn get_enum_label(&self) -> GcCommandKind {
         match self {
             GcTask::Gc { .. } => GcCommandKind::gc,
+            GcTask::GcKeys { .. } => GcCommandKind::gc_keys,
             GcTask::UnsafeDestroyRange { .. } => GcCommandKind::unsafe_destroy_range,
             GcTask::PhysicalScanLock { .. } => GcCommandKind::physical_scan_lock,
+            GcTask::OrphanVersions { .. } => GcCommandKind::orphan_versions,
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => GcCommandKind::validate_config,
         }
@@ -104,11 +127,12 @@ impl Display for GcTask {
                 safe_point,
                 ..
             } => f
-                .debug_struct("GC")
+                .debug_struct("Gc")
                 .field("start_key", &log_wrappers::Value::key(&start_key))
                 .field("end_key", &log_wrappers::Value::key(&end_key))
                 .field("safe_point", safe_point)
                 .finish(),
+            GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
             GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
@@ -119,6 +143,11 @@ impl Display for GcTask {
             GcTask::PhysicalScanLock { max_ts, .. } => f
                 .debug_struct("PhysicalScanLock")
                 .field("max_ts", max_ts)
+                .finish(),
+            GcTask::OrphanVersions { id, wb } => f
+                .debug_struct("OrphanVersions")
+                .field("id", id)
+                .field("count", &wb.count())
                 .finish(),
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(_) => write!(f, "Validate gc worker config"),
@@ -246,39 +275,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-
-            let mut keys = keys.into_iter();
-            let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
-            let (mut next_gc_key, mut gc_info) = (keys.next(), GcInfo::default());
-            while let Some(ref key) = next_gc_key {
-                if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn) {
-                    error!(?e; "GC meets failure"; "key" => %key,);
-                    // Switch to the next key if meets failure.
-                    gc_info.is_completed = true;
-                }
-                if gc_info.is_completed {
-                    if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                        debug!(
-                            "GC found plenty versions for a key";
-                            "key" => %key,
-                            "versions" => gc_info.found_versions,
-                        );
-                    }
-                    if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                        debug!(
-                            "GC deleted plenty versions for a key";
-                            "key" => %key,
-                            "versions" => gc_info.deleted_versions,
-                        );
-                    }
-                    next_gc_key = keys.next();
-                    gc_info = GcInfo::default();
-                } else {
-                    Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                    txn = Self::new_txn(self.engine.snapshot_on_kv_engine(start_key, end_key)?);
-                }
-            }
-            Self::flush_txn(txn, &self.limiter, &self.engine)?;
+            self.gc_keys(keys, safe_point)?;
         }
 
         self.stats.add(reader.get_statistics());
@@ -288,6 +285,44 @@ where
             "end_key" => log_wrappers::Value::key(end_key),
             "safe_point" => safe_point
         );
+        Ok(())
+    }
+
+    fn gc_keys(&mut self, keys: Vec<Key>, safe_point: TimeStamp) -> Result<()> {
+        let mut txn = Self::new_txn(self.engine.snapshot_on_kv_engine(b"", b"")?);
+        let mut gc_info = GcInfo::default();
+        let mut keys = keys.into_iter();
+        let mut next_gc_key = keys.next();
+        while let Some(ref key) = next_gc_key {
+            if let Err(e) = self.gc_key(safe_point, &key, &mut gc_info, &mut txn) {
+                error!(?e; "GC meets failure"; "key" => %key,);
+                // Switch to the next key if meets failure.
+                gc_info.is_completed = true;
+            }
+
+            if gc_info.is_completed {
+                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                    debug!(
+                        "GC found plenty versions for a key";
+                        "key" => %key,
+                        "versions" => gc_info.found_versions,
+                    );
+                }
+                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                    debug!(
+                        "GC deleted plenty versions for a key";
+                        "key" => %key,
+                        "versions" => gc_info.deleted_versions,
+                    );
+                }
+                next_gc_key = keys.next();
+                gc_info = GcInfo::default();
+            } else {
+                Self::flush_txn(txn, &self.limiter, &self.engine)?;
+                txn = Self::new_txn(self.engine.snapshot_on_kv_engine(b"", b"")?);
+            }
+        }
+        Self::flush_txn(txn, &self.limiter, &self.engine)?;
         Ok(())
     }
 
@@ -466,6 +501,11 @@ where
                     safe_point
                 );
             }
+            GcTask::GcKeys { keys, safe_point } => {
+                let res = self.gc_keys(keys, safe_point);
+                update_metrics(res.is_err());
+                self.update_statistics_metrics();
+            }
             GcTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
@@ -499,6 +539,21 @@ where
                     max_ts,
                     limit,
                 );
+            }
+            GcTask::OrphanVersions { wb, id } => {
+                info!("handling GcTask::OrphanVersions"; "id" => id);
+                let mut wopts = WriteOptions::default();
+                wopts.set_sync(true);
+                if let Err(e) = wb.write_opt(&wopts) {
+                    error!("write GcTask::OrphanVersions fail"; "id" => id, "err" => ?e);
+                    update_metrics(true);
+                    return;
+                }
+                info!("write GcTask::OrphanVersions success"; "id" => id);
+                GC_COMPACTION_FILTER_ORPHAN_VERSIONS
+                    .with_label_values(&["cleaned"])
+                    .inc_by(wb.count() as i64);
+                update_metrics(false);
             }
             #[cfg(any(test, feature = "testexport"))]
             GcTask::Validate(f) => {
@@ -658,10 +713,13 @@ where
             "AutoGcConfig::self_store_id shouldn't be 0"
         );
 
-        let kvdb = self.engine.kv_engine();
-        let cfg_mgr = self.config_manager.clone();
-        let feature_gate = self.feature_gate.clone();
-        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, feature_gate);
+        info!("initialize compaction filter to perform GC when necessary");
+        self.engine.kv_engine().init_compaction_filter(
+            safe_point.clone(),
+            self.config_manager.clone(),
+            self.feature_gate.clone(),
+            self.scheduler(),
+        );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
