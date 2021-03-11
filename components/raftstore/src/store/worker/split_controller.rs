@@ -18,6 +18,7 @@ use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
+pub const MAX_RETRY_TIME: i32 = 10000;
 
 pub struct SplitInfo {
     pub region_id: u64,
@@ -74,9 +75,9 @@ where
 {
     let mut rng = rand::thread_rng();
     let mut key_ranges = vec![];
-    let high_bound = pre_sum.last().unwrap();
-    for _num in 0..sample_num {
-        let d = rng.gen_range(0, *high_bound) as usize;
+    let high_bound = *pre_sum.last().unwrap();
+    for _ in 0..MAX_RETRY_TIME {
+        let d = rng.gen_range(0, high_bound + 1) as usize;
         let i = match pre_sum.binary_search(&d) {
             Ok(i) => i,
             Err(i) => i,
@@ -87,6 +88,9 @@ where
                 let j = rng.gen_range(0, list.len()) as usize;
                 key_ranges.push(list.remove(j)); // Sampling without replacement
             }
+        }
+        if key_ranges.len() == std::cmp::min(sample_num, high_bound) {
+            break;
         }
     }
     key_ranges
@@ -181,19 +185,24 @@ impl Recorder {
         self.times >= self.detect_num
     }
 
-    fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
-        let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
-        let key_ranges = self.key_ranges.clone();
-        let mut samples: Vec<Sample> = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
+    fn convert(&self, key_ranges: Vec<KeyRange>) -> Vec<Sample> {
+        key_ranges
             .iter()
-            .fold(HashSet::new(), |mut set, key_range| {
-                set.insert(&key_range.start_key);
-                set.insert(&key_range.end_key);
-                set
+            .fold(HashSet::new(), |mut hash_set, key_range| {
+                hash_set.insert(&key_range.start_key);
+                hash_set.insert(&key_range.end_key);
+                hash_set
             })
             .into_iter()
             .map(|key| Sample::new(key))
-            .collect();
+            .collect()
+    }
+
+    fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
+        let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
+        let sampled_key_ranges =
+            sample(config.sample_num, &pre_sum, self.key_ranges.clone(), |x| x);
+        let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
                 Recorder::sample(&mut samples, &key_range);
@@ -599,6 +608,39 @@ mod tests {
             hub.flush(qps_stats_vec);
         }
     }
+    fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
+        for _ in 0..100 {
+            let pre_sum = prefix_sum(key_ranges.iter(), Vec::len);
+            let sampled_key_ranges = sample(sample_num, &pre_sum, key_ranges.clone(), |x| x);
+            assert_eq!(sampled_key_ranges.len(), sample_num);
+        }
+    }
+    #[test]
+    fn test_sample_length() {
+        let sample_num = 20;
+        let mut key_ranges = vec![];
+        for _ in 0..sample_num {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
+        }
+        check_sample_length(sample_num, key_ranges);
+
+        let mut key_ranges = vec![];
+        let num = 100;
+        for _ in 0..num {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
+        }
+        check_sample_length(sample_num, key_ranges);
+
+        let mut key_ranges = vec![];
+        for _ in 0..num {
+            let mut ranges= vec![];
+            for _ in 0..num{
+                ranges.push(build_key_range(b"a", b"b", false));
+            }
+            key_ranges.push(ranges);
+        }
+        check_sample_length(sample_num, key_ranges);
+    }
 
     fn add_region(read_stats: &mut Vec<ReadStats>, id: u64, key: u64, size: u64) {
         let mut region_info = RegionInfo::new(read_stats[0].sample_num);
@@ -641,6 +683,22 @@ mod tests {
         for (id, _) in regions {
             assert_ne!(id, 4);
         }
+    }
+
+    #[test]
+    fn test_recorder_convert() {
+        let r = Recorder::new(1);
+        let key_ranges = vec![];
+        assert_eq!(r.convert(key_ranges).len(), 0);
+
+        let key_ranges = vec![build_key_range(b"a", b"b", false)];
+        assert_eq!(r.convert(key_ranges).len(), 2);
+
+        let key_ranges = vec![
+            build_key_range(b"a", b"a", false),
+            build_key_range(b"b", b"c", false),
+        ];
+        assert_eq!(r.convert(key_ranges).len(), 3);
     }
 
     const REGION_NUM: u64 = 1000;
