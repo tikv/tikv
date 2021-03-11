@@ -139,6 +139,11 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
     pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
     }
@@ -173,6 +178,7 @@ make_auto_flush_static_metric! {
 
     pub struct MessageCounterVec : LocalIntCounter {
         "type" => MessageCounterType,
+        "status" => SendStatus,
     }
 
     pub struct RaftDropedVec : LocalIntCounter {
@@ -252,7 +258,7 @@ lazy_static! {
         register_int_counter_vec!(
             "tikv_raftstore_raft_sent_message_total",
             "Total number of raft ready sent messages.",
-            &["type"]
+            &["type", "status"]
         ).unwrap();
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
         auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
