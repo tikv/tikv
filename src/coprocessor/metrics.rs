@@ -47,6 +47,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
     }
 
     pub label_enum WaitType {
@@ -286,6 +287,7 @@ impl From<GcKeysDetail> for ScanKind {
             GcKeysDetail::prev_tombstone => ScanKind::prev_tombstone,
             GcKeysDetail::seek_tombstone => ScanKind::seek_tombstone,
             GcKeysDetail::seek_for_prev_tombstone => ScanKind::seek_for_prev_tombstone,
+            GcKeysDetail::ttl_tombstone => ScanKind::ttl_tombstone,
         }
     }
 }

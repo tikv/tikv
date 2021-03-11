@@ -178,6 +178,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -248,6 +249,7 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
         }
     }
 }

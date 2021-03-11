@@ -4,4 +4,4 @@ mod store;
 mod ttl;
 
 pub use store::RawStore;
-pub use ttl::TTLSnapshot;
+pub use ttl::{TTL_TOMBSTONE, TTLSnapshot};
