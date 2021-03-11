@@ -71,11 +71,11 @@ const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = SysQuota::new().memory_limit_in_bytes();
     let (ratio, min, max) = match (is_raft_db, cf) {
-        (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
-        (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
-        (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
-        (false, CF_WRITE) => (0.15, 0, usize::MAX),
-        (false, CF_VER_DEFAULT) => (0.25, 0, usize::MAX),
+        (true, CF_DEFAULT) => (0.05, 256 * MB as usize, usize::MAX),
+        (false, CF_DEFAULT) => (0.25, 0, 128 * MB as usize),
+        (false, CF_LOCK) => (0.02, 0, 128 * MB as usize),
+        (false, CF_WRITE) => (0.15, 0, 128 * MB as usize),
+        (false, CF_VER_DEFAULT) => (0.25, 0, 128 * MB as usize),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
