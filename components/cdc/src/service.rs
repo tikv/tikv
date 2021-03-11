@@ -156,9 +156,9 @@ impl EventBatcher {
     }
 }
 
-struct EventBatcherSink<S>
+struct EventBatcherSink<S, E>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
     // buf stores events just received.
     buf: Option<Vec<CdcEvent>>,
@@ -168,9 +168,9 @@ where
     inner_sink: S,
 }
 
-impl<S> EventBatcherSink<S>
+impl<S, E> EventBatcherSink<S, E>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
     fn new(sink: S) -> Self {
         Self {
@@ -198,11 +198,11 @@ where
     }
 }
 
-impl<S> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<S>
+impl<S, E> Sink<(CdcEvent, grpcio::WriteFlags)> for EventBatcherSink<S, E>
 where
-    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = grpcio::Error> + Send + Unpin,
+    S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
-    type Error = grpcio::Error;
+    type Error = E;
 
     /// Will block the task if:
     /// 1) there are ChangeDataEvents not sent out, or buf` has at least 1024 messages,
@@ -238,6 +238,7 @@ where
 
         let (event, _) = item;
         this.buf.as_mut().unwrap().push(event);
+        info!("cdc got data");
         Ok(())
     }
 
@@ -248,6 +249,7 @@ where
     ///
     /// The above process will block and yield if any step is blocked.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        info!("cdc poll flush called");
         let this = self.get_mut();
 
         if this.buf.is_some() {
@@ -261,6 +263,7 @@ where
             ready!(this.inner_sink.poll_ready_unpin(cx))?;
             let event = this.send_buf.pop_front().unwrap();
             this.inner_sink.start_send_unpin((event, flag))?;
+            info!("cdc sank data");
         }
 
         ready!(this.inner_sink.poll_flush_unpin(cx))?;
@@ -554,7 +557,37 @@ mod tests {
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
-    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE};
+    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE, EventBatcherSink};
+    use tikv_util::mpsc::batch::unbounded;
+    use futures::{SinkExt, StreamExt};
+
+    #[tokio::test]
+    async fn test_event_batcher_sink() {
+        let (mut sink, mut rx) = futures::channel::mpsc::unbounded::<(ChangeDataEvent, grpcio::WriteFlags)>();
+        let mut batch_sink = EventBatcherSink::new(sink);
+        let send_task = tokio::spawn(async move {
+            let flag = grpcio::WriteFlags::default().buffer_hint(false);
+            for i in 0..10000000u64 {
+                let mut resolved_ts = ResolvedTs::default();
+                resolved_ts.set_ts(i);
+                batch_sink.send((CdcEvent::ResolvedTs(resolved_ts), flag)).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let mut expected = 0u64;
+        loop {
+            if let Some((e,_)) = rx.next().await {
+                assert_eq!(e.get_resolved_ts().get_ts(), expected);
+                // println!("got {}", expected);
+                expected += 1;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(expected, 10000000);
+        send_task.await.unwrap();
+    }
 
     #[test]
     fn test_event_batcher() {

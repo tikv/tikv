@@ -16,6 +16,7 @@ use tokio::sync::mpsc::{
     channel as async_channel, Receiver as AsyncReceiver, Sender as AsyncSender,
 };
 use tokio::time::interval as tokio_timer_interval;
+use std::time::{Instant, Duration};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RateLimiterError {
@@ -172,6 +173,7 @@ impl<E> RateLimiter<E> {
         }
 
         let queue_size = self.sink.len();
+        info!("cdc send_realtime_event"; "queue_size" => queue_size);
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(queue_size as f64);
         if queue_size >= self.state.close_sink_threshold {
             warn!("cdc send_realtime_event queue length reached threshold"; "queue_size" => queue_size);
@@ -367,6 +369,7 @@ impl<E> Drainer<E> {
     ) -> Result<(), DrainerError<Error>> {
         let mut close_rx = self.close_rx.take().unwrap().fuse();
         let mut unflushed_size: usize = 0;
+        let mut last_flushed_time = std::time::Instant::now();
         loop {
             let drain_one = Fuse::terminated();
             pin_mut!(drain_one);
@@ -410,12 +413,15 @@ impl<E> Drainer<E> {
                                 })?;
 
                             unflushed_size += 1;
-                            if unflushed_size >= 128 {
+                            info!("cdc rpc_sink drain"; "unflushed_size" => unflushed_size);
+                            if unflushed_size >= 128 || std::time::Instant::now().duration_since(last_flushed_time) > Duration::from_millis(150) {
+                                info!("cdc rpc_sink flush");
                                 rpc_sink.flush().await.map_err(|err| {
                                     self.state.wake_up_all_senders();
                                     DrainerError::RpcSinkError(err)
                                 })?;
                                 unflushed_size = 0;
+                                last_flushed_time = std::time::Instant::now();
                             }
                         },
                         None => {
@@ -979,10 +985,24 @@ mod tests {
 
     async fn do_test_multi_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, usize::MAX);
+        let (mut sink, mut rx) = futures::channel::mpsc::unbounded::<(MockCdcEvent, MockWriteFlag)>();
+
         let drain_handle = tokio::spawn(async move {
-            match drainer.drain(sink::drain(), ()).await {
+            match drainer.drain(sink, ()).await {
                 Ok(_) => {}
                 Err(err) => panic!("drainer exited with error {:?}", err),
+            }
+        });
+
+        let verify_handle = tokio::spawn(async move {
+            let mut count = 0u64;
+            loop {
+                if let Some((i, _)) = rx.next().await {
+                    count += 1;
+                } else {
+                    assert_eq!(count, 100 * 100000);
+                    return;
+                }
             }
         });
 
@@ -992,7 +1012,7 @@ mod tests {
         for i in 0..100 {
             let rate_limiter = rate_limiter.clone();
             let handle = tokio::spawn(async move {
-                for j in 0..10000u64 {
+                for j in 0..100000u64 {
                     // println!("sending i = {}, j = {}", i, j);
                     rate_limiter.send_scan_event(j).await.unwrap();
                 }
@@ -1007,6 +1027,7 @@ mod tests {
             handle.await.unwrap();
         }
         drain_handle.await.unwrap();
+        verify_handle.await.unwrap();
 
         Ok(())
     }

@@ -386,6 +386,7 @@ impl Delegate {
                     }
                 }
             }
+            info!("cdc broadcast"; "region_id" => downstream.req_id);
             downstream.sink_event(event);
         }
     }
@@ -418,13 +419,13 @@ impl Delegate {
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return None;
         }
-        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return None,
         };
-        debug!("resolved ts updated";
+        info!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
@@ -893,6 +894,7 @@ mod tests {
     use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
     use crate::rate_limiter::new_pair;
 
+    /*
     #[tokio::test(threaded_scheduler)]
     fn test_error() {
         let region_id = 1;
@@ -1133,4 +1135,6 @@ mod tests {
         resolver.init();
         delegate.on_region_ready(resolver, region);
     }
+
+     */
 }
