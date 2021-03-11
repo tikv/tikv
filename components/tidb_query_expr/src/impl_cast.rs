@@ -1738,7 +1738,6 @@ mod tests {
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
             let r = cast_enum_as_any::<Real>(&mut ctx, Some(input));
-            let r = r.map(|x| x.map(|x| x));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
