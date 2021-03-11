@@ -3448,6 +3448,7 @@ where
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
+            // We use metrics to observe failure on production.
             debug!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
