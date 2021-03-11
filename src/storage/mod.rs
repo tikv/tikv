@@ -40,6 +40,7 @@ pub mod kv;
 pub mod lock_manager;
 pub(crate) mod metrics;
 pub mod mvcc;
+pub mod raw;
 pub mod txn;
 
 mod read_pool;
