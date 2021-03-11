@@ -176,13 +176,11 @@ impl LeaderClient {
             }
 
             let start = Instant::now();
-            let fut = try_connect_leader(
-                Arc::clone(&inner.env),
-                Arc::clone(&inner.security_mgr),
-                inner.members.clone(),
-            );
+            let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
+            let members = inner.members.clone();
+            let fut = async move { connector.try_connect_leader(&members).await };
             slow_log!(start.elapsed(), "PD client try connect leader");
-            (fut, start)
+            (async move { fut.await }, start)
         };
 
         let (client, members) = future.await?;
@@ -335,139 +333,152 @@ where
     Err(err.unwrap_or_else(|| box_err!("fail to request")))
 }
 
-pub async fn validate_endpoints(
-    env: Arc<Environment>,
-    cfg: &Config,
-    security_mgr: Arc<SecurityManager>,
-) -> Result<(PdClientStub, GetMembersResponse)> {
-    let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
-    let mut members = None;
-    let mut cluster_id = None;
-    for ep in &cfg.endpoints {
-        if !endpoints_set.insert(ep) {
-            return Err(box_err!("duplicate PD endpoint {}", ep));
-        }
+pub type StubPair = (PdClientStub, GetMembersResponse);
 
-        let (_, resp) = match connect(Arc::clone(&env), &security_mgr, ep).await {
-            Ok(resp) => resp,
-            // Ignore failed PD node.
-            Err(e) => {
-                info!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
-                continue;
-            }
-        };
-
-        // Check cluster ID.
-        let cid = resp.get_header().get_cluster_id();
-        if let Some(sample) = cluster_id {
-            if sample != cid {
-                return Err(box_err!(
-                    "PD response cluster_id mismatch, want {}, got {}",
-                    sample,
-                    cid
-                ));
-            }
-        } else {
-            cluster_id = Some(cid);
-        }
-        // TODO: check all fields later?
-
-        if members.is_none() {
-            members = Some(resp);
-        }
-    }
-
-    match members {
-        Some(members) => {
-            let (client, members) =
-                try_connect_leader(Arc::clone(&env), security_mgr, members).await?;
-            info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-            Ok((client, members))
-        }
-        _ => Err(box_err!("PD cluster failed to respond")),
-    }
-}
-
-async fn connect(
-    env: Arc<Environment>,
-    security_mgr: &SecurityManager,
-    addr: &str,
-) -> Result<(PdClientStub, GetMembersResponse)> {
-    info!("connecting to PD endpoint"; "endpoints" => addr);
-    let addr = addr
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-    let channel = {
-        let cb = ChannelBuilder::new(env)
-            .keepalive_time(Duration::from_secs(10))
-            .keepalive_timeout(Duration::from_secs(3));
-        security_mgr.connect(cb, addr)
-    };
-    let client = PdClientStub::new(channel);
-    let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
-    let response = client
-        .get_members_async_opt(&GetMembersRequest::default(), option)
-        .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
-        .await;
-    match response {
-        Ok(resp) => Ok((client, resp)),
-        Err(e) => Err(Error::Grpc(e)),
-    }
-}
-
-pub async fn try_connect_leader(
+pub struct PdConnector {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
-    previous: GetMembersResponse,
-) -> Result<(PdClientStub, GetMembersResponse)> {
-    let previous_leader = previous.get_leader();
-    let members = previous.get_members();
-    let cluster_id = previous.get_header().get_cluster_id();
-    let mut resp = None;
-    // Try to connect to other members, then the previous leader.
-    'outer: for m in members
-        .iter()
-        .filter(|m| *m != previous_leader)
-        .chain(&[previous_leader.clone()])
-    {
-        for ep in m.get_client_urls() {
-            match connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
-                Ok((_, r)) => {
-                    let new_cluster_id = r.get_header().get_cluster_id();
-                    if new_cluster_id == cluster_id {
-                        // check whether the response have leader info, otherwise continue to loop the rest members
-                        if r.has_leader() {
-                            resp = Some(r);
-                            break 'outer;
-                        }
-                    } else {
-                        panic!(
-                            "{} no longer belongs to cluster {}, it is in {}",
-                            ep, cluster_id, new_cluster_id
-                        );
-                    }
-                }
+}
+
+impl PdConnector {
+    pub fn new(env: Arc<Environment>, security_mgr: Arc<SecurityManager>) -> PdConnector {
+        PdConnector { env, security_mgr }
+    }
+
+    pub async fn validate_endpoints(&self, cfg: &Config) -> Result<StubPair> {
+        let len = cfg.endpoints.len();
+        let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
+        let mut members = None;
+        let mut cluster_id = None;
+        for ep in &cfg.endpoints {
+            if !endpoints_set.insert(ep) {
+                return Err(box_err!("duplicate PD endpoint {}", ep));
+            }
+
+            let (_, resp) = match self.connect(ep).await {
+                Ok(resp) => resp,
+                // Ignore failed PD node.
                 Err(e) => {
-                    error!(?e; "connect failed"; "endpoints" => ep,);
+                    info!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                     continue;
                 }
+            };
+
+            // Check cluster ID.
+            let cid = resp.get_header().get_cluster_id();
+            if let Some(sample) = cluster_id {
+                if sample != cid {
+                    return Err(box_err!(
+                        "PD response cluster_id mismatch, want {}, got {}",
+                        sample,
+                        cid
+                    ));
+                }
+            } else {
+                cluster_id = Some(cid);
             }
+            // TODO: check all fields later?
+
+            if members.is_none() {
+                members = Some(resp);
+            }
+        }
+
+        match members {
+            Some(members) => {
+                let (client, members) = self.try_connect_leader(&members).await?;
+                info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
+                Ok((client, members))
+            }
+            _ => Err(box_err!("PD cluster failed to respond")),
         }
     }
 
-    // Then try to connect the PD cluster leader.
-    if let Some(resp) = resp {
-        let leader = resp.get_leader().clone();
-        for ep in leader.get_client_urls() {
-            if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
+    pub async fn connect(&self, addr: &str) -> Result<StubPair> {
+        info!("connecting to PD endpoint"; "endpoints" => addr);
+        let addr = addr
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        let channel = {
+            let cb = ChannelBuilder::new(self.env.clone())
+                .keepalive_time(Duration::from_secs(10))
+                .keepalive_timeout(Duration::from_secs(3));
+            self.security_mgr.connect(cb, addr)
+        };
+        let client = PdClientStub::new(channel);
+        let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        let response = client
+            .get_members_async_opt(&GetMembersRequest::default(), option)
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
+            .await;
+        match response {
+            Ok(resp) => Ok((client, resp)),
+            Err(e) => Err(Error::Grpc(e)),
+        }
+    }
+
+    pub async fn load_members(&self, previous: &GetMembersResponse) -> Option<GetMembersResponse> {
+        let previous_leader = previous.get_leader();
+        let members = previous.get_members();
+        let cluster_id = previous.get_header().get_cluster_id();
+
+        // Try to connect to other members, then the previous leader.
+        for m in members
+            .iter()
+            .filter(|m| *m != previous_leader)
+            .chain(&[previous_leader.clone()])
+        {
+            for ep in m.get_client_urls() {
+                match self.connect(ep.as_str()).await {
+                    Ok((_, r)) => {
+                        let new_cluster_id = r.get_header().get_cluster_id();
+                        if new_cluster_id == cluster_id {
+                            // check whether the response have leader info, otherwise continue to loop the rest members
+                            if r.has_leader() {
+                                return Some(r);
+                            }
+                        } else {
+                            panic!(
+                                "{} no longer belongs to cluster {}, it is in {}",
+                                ep, cluster_id, new_cluster_id
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("connect failed"; "endpoints" => ep, "error" => ?e);
+                        continue;
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn connect_member(&self, peer: &Member) -> Option<PdClientStub> {
+        for ep in peer.get_client_urls() {
+            if let Ok((client, _)) = self.connect(ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
-                return Ok((client, resp));
+                return Some(client);
             }
         }
+        None
     }
 
-    Err(box_err!("failed to connect to {:?}", members))
+    pub async fn try_connect_leader(&self, previous: &GetMembersResponse) -> Result<StubPair> {
+        let resp = self.load_members(&previous).await;
+
+        // Then try to connect the PD cluster leader.
+        match resp {
+            Some(resp) => match self.connect_member(resp.get_leader()).await {
+                Some(client) => Ok((client, resp)),
+                None => Err(box_err!("failed to connect to {:?}", resp.get_leader())),
+            },
+            None => Err(box_err!(
+                "failed to connect to {:?}",
+                previous.get_members()
+            )),
+        }
+    }
 }
 
 /// Convert a PD protobuf error to an `Error`.
