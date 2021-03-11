@@ -28,8 +28,9 @@ use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
+use tikv::server;
 use tikv::server::gc_worker::sync_gc;
-use tikv::server::service::batch_commands_request;
+use tikv::server::service::{batch_commands_request, batch_commands_response};
 use tikv_util::worker::{dummy_scheduler, FutureWorker};
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType, TimeStamp};
@@ -1194,4 +1195,276 @@ fn test_kv_scan_memory_lock() {
         assert_eq!(resp.pairs[0].get_error().get_locked(), &lock_info);
         assert_eq!(resp.get_error().get_locked(), &lock_info);
     });
+}
+
+macro_rules! test_func {
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $init:expr) => {{
+        let mut req = $init;
+        req.set_context($ctx.clone());
+
+        // Not setting forwarding should lead to store not match.
+        let resp = paste::paste! {
+            $client.[<$func _opt>](&req, CallOption::default().timeout(Duration::from_secs(3))).unwrap()
+        };
+        let err = resp.get_region_error();
+        assert!(err.has_store_not_match() || err.has_not_leader(), "{:?}", resp);
+
+        // Proxy should redirect the request to the correct store.
+        let resp = paste::paste! {
+            $client.[<$func _opt>](&req, $call_opt.clone()).unwrap()
+        };
+        let err = resp.get_region_error();
+        assert!(!err.has_store_not_match() && !err.has_not_leader(), "{:?}", resp);
+    }};
+}
+
+macro_rules! test_func_init {
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{
+        test_func!($client, $ctx, $call_opt, $func, $req::default())
+    }};
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+        test_func!($client, $ctx, $call_opt, $func, {
+            let mut req = $req::default();
+            req.set_keys(vec![b"key".to_vec()].into());
+            req
+        })
+    }};
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, $op:expr) => {{
+        test_func!($client, $ctx, $call_opt, $func, {
+            let mut req = $req::default();
+            let mut m = Mutation::default();
+            m.set_op($op);
+            m.key = b"key".to_vec();
+            req.mut_mutations().push(m);
+            req
+        })
+    }};
+}
+
+fn setup_cluster() -> (Cluster<ServerCluster>, TikvClient, CallOption, Context) {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    let region_id = 1;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
+    let region = cluster.get_region(b"k1");
+    let follower = region
+        .get_peers()
+        .iter()
+        .filter(|p| **p != leader)
+        .next()
+        .unwrap()
+        .clone();
+    let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&follower_addr);
+    let client = TikvClient::new(channel);
+
+    // Verify not setting forwarding header will result in store not match.
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx.clone());
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        put_resp.get_region_error().has_store_not_match(),
+        "{:?}",
+        put_resp
+    );
+    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
+
+    let call_opt = server::build_forward_option(&leader_addr).timeout(Duration::from_secs(3));
+    (cluster, client, call_opt, ctx)
+}
+
+/// Check all supported requests can go through proxy correctly.
+#[test]
+fn test_tikv_forwarding() {
+    let (_cluster, client, call_opt, ctx) = setup_cluster();
+
+    // Verify not setting forwarding header will result in store not match.
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx.clone());
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        put_resp.get_region_error().has_store_not_match(),
+        "{:?}",
+        put_resp
+    );
+    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
+
+    test_func_init!(client, ctx, call_opt, kv_get, GetRequest);
+    test_func_init!(client, ctx, call_opt, kv_scan, ScanRequest);
+    test_func_init!(client, ctx, call_opt, kv_prewrite, PrewriteRequest, Op::Put);
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        Op::PessimisticLock
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_pessimistic_rollback,
+        PessimisticRollbackRequest,
+        batch
+    );
+    test_func_init!(client, ctx, call_opt, kv_commit, CommitRequest, batch);
+    test_func_init!(client, ctx, call_opt, kv_cleanup, CleanupRequest);
+    test_func_init!(client, ctx, call_opt, kv_batch_get, BatchGetRequest);
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_batch_rollback,
+        BatchRollbackRequest,
+        batch
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_txn_heart_beat,
+        TxnHeartBeatRequest
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_check_txn_status,
+        CheckTxnStatusRequest
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        kv_check_secondary_locks,
+        CheckSecondaryLocksRequest,
+        batch
+    );
+    test_func_init!(client, ctx, call_opt, kv_scan_lock, ScanLockRequest);
+    test_func_init!(client, ctx, call_opt, kv_resolve_lock, ResolveLockRequest);
+    test_func_init!(client, ctx, call_opt, kv_delete_range, DeleteRangeRequest);
+    test_func_init!(client, ctx, call_opt, mvcc_get_by_key, MvccGetByKeyRequest);
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        mvcc_get_by_start_ts,
+        MvccGetByStartTsRequest
+    );
+    test_func_init!(client, ctx, call_opt, raw_get, RawGetRequest);
+    test_func_init!(client, ctx, call_opt, raw_batch_get, RawBatchGetRequest);
+    test_func_init!(client, ctx, call_opt, raw_scan, RawScanRequest);
+    test_func_init!(client, ctx, call_opt, raw_batch_scan, RawBatchScanRequest);
+    test_func_init!(client, ctx, call_opt, raw_put, RawPutRequest);
+    test_func!(client, ctx, call_opt, raw_batch_put, {
+        let mut req = RawBatchPutRequest::default();
+        req.set_pairs(vec![KvPair::default()].into());
+        req
+    });
+    test_func_init!(client, ctx, call_opt, raw_delete, RawDeleteRequest);
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        raw_batch_delete,
+        RawBatchDeleteRequest,
+        batch
+    );
+    test_func_init!(
+        client,
+        ctx,
+        call_opt,
+        raw_delete_range,
+        RawDeleteRangeRequest
+    );
+    test_func!(client, ctx, call_opt, coprocessor, {
+        let mut req = Request::default();
+        req.set_tp(REQ_TYPE_DAG);
+        req
+    });
+    test_func!(client, ctx, call_opt, split_region, {
+        let mut req = SplitRegionRequest::default();
+        req.set_split_key(b"k1".to_vec());
+        req
+    });
+    test_func_init!(client, ctx, call_opt, read_index, ReadIndexRequest);
+
+    // Test if duplex can be redirect correctly.
+    let cases = vec![
+        (CallOption::default().timeout(Duration::from_secs(3)), false),
+        (call_opt.clone(), true),
+    ];
+    for (opt, success) in cases {
+        let (mut sender, receiver) = client.batch_commands_opt(opt).unwrap();
+        for _ in 0..100 {
+            let mut batch_req = BatchCommandsRequest::default();
+            for i in 0..10 {
+                let mut get = GetRequest::default();
+                get.set_context(ctx.clone());
+                let mut req = batch_commands_request::Request::default();
+                req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+                batch_req.mut_requests().push(req);
+                batch_req.mut_request_ids().push(i);
+            }
+            block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+        }
+        block_on(sender.close()).unwrap();
+
+        // We have send 1k requests to the server, so we should get 1k responses.
+        let resps = block_on(
+            receiver
+                .map(move |b| futures::stream::iter(b.unwrap().take_responses().into_vec()))
+                .flatten()
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(resps.len(), 1000);
+        for resp in resps {
+            let resp = match resp.cmd {
+                Some(batch_commands_response::response::Cmd::Get(g)) => g,
+                _ => panic!("unexpected response {:?}", resp),
+            };
+            let error = resp.get_region_error();
+            if success {
+                assert!(!error.has_store_not_match(), "{:?}", resp);
+            } else {
+                assert!(error.has_store_not_match(), "{:?}", resp);
+            }
+        }
+    }
+}
+
+/// Test if forwarding works correctly if the target node is shutdown and restarted.
+#[test]
+fn test_forwarding_reconnect() {
+    let (mut cluster, client, call_opt, ctx) = setup_cluster();
+    let leader = cluster.leader_of_region(1).unwrap();
+    cluster.stop_node(leader.get_store_id());
+
+    let mut req = RawGetRequest::default();
+    req.set_context(ctx.clone());
+    // Large timeout value to ensure the error is from proxy instead of client.
+    let timer = std::time::Instant::now();
+    let timeout = Duration::from_secs(5);
+    let res = client.raw_get_opt(&req, call_opt.clone().timeout(timeout));
+    let elapsed = timer.elapsed();
+    assert!(elapsed < timeout, "{:?}", elapsed);
+    // Because leader server is shutdown, reconnecting has to be timeout.
+    match res {
+        Err(grpcio::Error::RpcFailure(s)) => assert_eq!(s.status, RpcStatusCode::CANCELLED),
+        _ => panic!("unexpected result {:?}", res),
+    }
+
+    cluster.run_node(leader.get_store_id()).unwrap();
+    let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
+    assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
 }
