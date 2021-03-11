@@ -182,7 +182,7 @@ impl LeaderClient {
             let members = inner.members.clone();
             let fut = async move { connector.reconnect_leader(&members, force).await };
             slow_log!(start.elapsed(), "PD client try connect leader");
-            (fut, start)
+            (async move { fut.await }, start)
         };
 
         let (client, members) = match future.await? {
