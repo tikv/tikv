@@ -13,13 +13,7 @@ pub trait ImportExt {
         files: &[&str],
     ) -> Result<()>;
 
-    fn validate_sst_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &str,
-        path: P,
-        expected_size: u64,
-        expected_checksum: u32,
-    ) -> Result<()>;
+    fn reset_global_seq<P: AsRef<Path>>(&self, cf: &str, path: P) -> Result<()>;
 }
 
 pub trait IngestExternalFileOptions {
