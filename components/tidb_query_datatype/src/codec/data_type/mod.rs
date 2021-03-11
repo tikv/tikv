@@ -266,7 +266,7 @@ impl Evaluable for Int {
             ScalarValue::Int(x) => x.as_ref(),
             ScalarValue::Enum(x) => x
                 .as_ref()
-                .map(|x| unsafe { std::mem::transmute::<&u64, &i64>(x.value_ref()) }),
+                .map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) }),
             _ => unimplemented!(),
         }
     }
@@ -276,7 +276,7 @@ impl Evaluable for Int {
         match v {
             ScalarValueRef::Int(x) => x,
             ScalarValueRef::Enum(x) => {
-                x.map(|x| unsafe { std::mem::transmute::<&u64, &i64>(x.value_ref()) })
+                x.map(|x| unsafe { &*(x.value_ref() as *const u64 as *const i64) })
             }
             _ => unimplemented!(),
         }
