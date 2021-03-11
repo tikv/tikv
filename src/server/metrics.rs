@@ -60,9 +60,11 @@ make_auto_flush_static_metric! {
 
     pub label_enum GcCommandKind {
         gc,
+        gc_keys,
         unsafe_destroy_range,
         physical_scan_lock,
         validate_config,
+        orphan_versions,
     }
 
     pub label_enum SnapTask {
