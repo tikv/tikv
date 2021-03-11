@@ -426,7 +426,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
 
