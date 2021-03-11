@@ -515,7 +515,7 @@ impl IndexScanExecutorImpl {
     fn get_index_version(value: &[u8]) -> Result<i64> {
         if value.len() == 3 || value.len() == 4 {
             // For the unique index with null value or non-unique index, the length can be 3 or 4 if <= 9.
-            return Ok(1)
+            return Ok(1);
         }
         if value.len() <= MAX_OLD_ENCODED_VALUE_LEN {
             return Ok(0);
@@ -3036,10 +3036,32 @@ mod tests {
 
     #[test]
     fn test_index_version() {
-        assert_eq!(IndexScanExecutorImpl::get_index_version(&[0x0, 0x7d, 0x1]).unwrap(), 1);
-        assert_eq!(IndexScanExecutorImpl::get_index_version(&[0x1, 0x7d, 0x1, 0x31]).unwrap(), 1);
-        assert_eq!(IndexScanExecutorImpl::get_index_version(&[0x0, 0x7d, 0x1, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x1, 0x2, 0x1, 0x0, 0x2, 0x0, 0x61, 0x31]).unwrap(), 1);
-        assert_eq!(IndexScanExecutorImpl::get_index_version(&[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x31]).unwrap(), 0);
-        assert_eq!(IndexScanExecutorImpl::get_index_version(&[0x30]).unwrap(), 0);
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x0, 0x7d, 0x1]).unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x1, 0x7d, 0x1, 0x31]).unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[
+                0x0, 0x7d, 0x1, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x1, 0x2, 0x1, 0x0, 0x2, 0x0, 0x61,
+                0x31
+            ])
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[
+                0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x31
+            ])
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x30]).unwrap(),
+            0
+        );
     }
 }
