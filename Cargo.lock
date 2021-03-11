@@ -4490,6 +4490,7 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "fail",
+ "file_system",
  "futures 0.3.7",
  "grpcio",
  "hyper",
