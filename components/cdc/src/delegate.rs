@@ -5,6 +5,7 @@ use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::test;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -890,8 +891,9 @@ mod tests {
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
     use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
+    use crate::rate_limiter::new_pair;
 
-    #[test]
+    #[tokio::test(threaded_scheduler)]
     fn test_error() {
         let region_id = 1;
         let mut region = Region::default();
@@ -901,7 +903,8 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(2);
         let region_epoch = region.get_region_epoch().clone();
 
-        // let (sink, rx) = batch::unbounded(1);
+        let (tx, rx) = batch::unbounded(1);
+        let (rate_limiter, drainer) = new_pair::<CdcEvent>(1024, 1024);
 
         let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
         let request_id = 123;

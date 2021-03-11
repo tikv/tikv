@@ -400,7 +400,7 @@ pub struct Service {
     scheduler: Scheduler<Task>,
     // We are using a tokio runtime because there are some futures that require a timer,
     // and the tokio library provides a good implementation for using timers with futures.
-    runtime: Arc<tokio::runtime::Runtime>,
+    // runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl Service {
@@ -408,14 +408,14 @@ impl Service {
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>) -> Service {
-        let tokio_runtime = tokio::runtime::Builder::new()
+        /*let tokio_runtime = tokio::runtime::Builder::new()
             .threaded_scheduler()
             .enable_time()
             .build()
-            .unwrap();
+            .unwrap();*/
         Service {
             scheduler,
-            runtime: Arc::new(tokio_runtime),
+            // runtime: Arc::new(tokio_runtime),
         }
     }
 }
@@ -510,10 +510,7 @@ impl ChangeData for Service {
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
 
-        // We are using a tokio runtime to drive the drainer because internally the drainer periodically
-        // flushes the sink, which requires a runtime that has a timer built in.
-        // The executor that comes with grpcio does not have this feature.
-        let drain_handle = self.runtime.spawn(async move {
+        ctx.spawn(async move {
             // EventBatcherSink is used to pack CdcEvents into ChangeDataEvents.
             // Internally, EventBatcherSink composes a "inverted flat map" in front of the final sink.
             let mut batched_sink = EventBatcherSink::new(&mut sink);
@@ -544,19 +541,6 @@ impl ChangeData for Service {
             info!("cdc send half closed"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
             let _ = sink.close().await;
         });
-
-        ctx.spawn(async move {
-            // await the tokio runtime here
-            // TODO confirm that we do need this.
-            match drain_handle.await {
-                Ok(_) => {
-                    debug!("cdc tokio finished");
-                }
-                Err(e) => {
-                    debug!("cdc tokio error"; "error" => ?e);
-                }
-            }
-        })
     }
 }
 

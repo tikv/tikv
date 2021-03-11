@@ -367,7 +367,6 @@ impl<E> Drainer<E> {
     ) -> Result<(), DrainerError<Error>> {
         let mut close_rx = self.close_rx.take().unwrap().fuse();
         let mut unflushed_size: usize = 0;
-        let mut interval = tokio_timer_interval(std::time::Duration::from_millis(100)).fuse();
         loop {
             let drain_one = Fuse::terminated();
             pin_mut!(drain_one);
@@ -433,14 +432,6 @@ impl<E> Drainer<E> {
                         return Err(DrainerError::RateLimitExceededError);
                     }
                 },
-
-                // handles the timer event that flushes the sink periodically
-                _ = interval.next() => {
-                    rpc_sink.flush().await.map_err(|err| {
-                        self.state.wake_up_all_senders();
-                        DrainerError::RpcSinkError(err)
-                    })?;
-                }
             }
         }
     }
