@@ -633,8 +633,8 @@ mod tests {
 
         let mut key_ranges = vec![];
         for _ in 0..num {
-            let mut ranges= vec![];
-            for _ in 0..num{
+            let mut ranges = vec![];
+            for _ in 0..num {
                 ranges.push(build_key_range(b"a", b"b", false));
             }
             key_ranges.push(ranges);
