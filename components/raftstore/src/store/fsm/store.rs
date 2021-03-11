@@ -2513,7 +2513,7 @@ impl RegionReadProgress {
         }
         self.applied_index.fetch_max(applied, Ordering::Relaxed);
         if ts_to_update > self.safe_ts.fetch_max(ts_to_update, Ordering::Relaxed) {
-            info!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts_to_update);
+            debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts_to_update);
         }
     }
 
@@ -2544,7 +2544,7 @@ impl RegionReadProgress {
             self.push_back(&mut pending_ts, (apply_index, ts));
         } else {
             if ts > self.safe_ts.fetch_max(ts, Ordering::Relaxed) {
-                info!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
+                debug!("safe ts updated"; "tag" => &self.tag, "safe ts" => ts);
             }
         }
     }
@@ -2602,7 +2602,7 @@ impl PeerPropertyAction for RegionSafeTSTracker {
         let rrp = any.downcast_ref::<RegionReadProgress>().unwrap();
         let safe_ts = rrp.safe_ts();
         if read_ts > safe_ts {
-            info!(
+            debug!(
                 "reject stale read by safe ts";
                 "tag" => &rrp.tag,
                 "safe ts" => safe_ts,

@@ -235,7 +235,7 @@ where
                     .get::<RegionSafeTSTracker>()
                     .expect("no peer property found");
                 let rrp = pp.downcast_ref::<RegionReadProgress>().unwrap();
-                info!(
+                debug!(
                     "register observe region";
                     "store id" => ?store_meta.store_id.clone(),
                     "region" => ?region
@@ -297,7 +297,7 @@ where
                 resolver_status,
                 ..
             } = observe_region;
-            info!("deregister observe region"; "store id" => ?self.store_meta.lock().unwrap().store_id, "region" => ?region);
+            debug!("deregister observe region"; "store id" => ?self.store_meta.lock().unwrap().store_id, "region" => ?region);
             let region_id = region.id;
             if let Err(e) = self.raft_router.significant_send(
                 region_id,

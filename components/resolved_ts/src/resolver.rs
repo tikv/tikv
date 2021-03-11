@@ -123,7 +123,7 @@ impl Resolver {
             .global_resolved_ts
             .fetch_max(self.resolved_ts.into_inner(), Ordering::Relaxed);
         if prev_ts < self.resolved_ts.into_inner() {
-            info!(
+            debug!(
                 "forward resolved ts by resolver";
                 "region id" => self.region_id,
                 "new resolved ts" => ?self.resolved_ts,
@@ -131,6 +131,7 @@ impl Resolver {
         } else {
             info!(
                 "faied to forward resolved ts by resolver";
+                "region id" => self.region_id,
                 "prev ts" => ?prev_ts,
                 "new resolved ts" => ?self.resolved_ts,
                 "min lock" => ?min_lock,
