@@ -1756,9 +1756,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f97e021739b917535217829934dc479bd3c4798d85adb5fc4890a985eb04c6e9"
+checksum = "397c5a9f569ba6beabec1e5b0b622d5e182913de45480666ae76849dd7ac01c9"
 dependencies = [
  "bytes 1.0.1",
  "futures 0.3.7",
@@ -2204,7 +2204,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#8099465d6303b181cd591c63196bbc04624b1081"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2223,7 +2223,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#8099465d6303b181cd591c63196bbc04624b1081"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2908,6 +2908,12 @@ dependencies = [
  "paste-impl",
  "proc-macro-hack",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5d65c4d95931acda4498f675e332fcbdc9a06705cd07086c510e9b6009cd1c1"
 
 [[package]]
 name = "paste-impl"
@@ -3941,7 +3947,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#8099465d6303b181cd591c63196bbc04624b1081"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4998,6 +5004,7 @@ dependencies = [
  "log_wrappers",
  "more-asserts",
  "panic_hook",
+ "paste 1.0.4",
  "pd_client",
  "perfcnt",
  "profiler",
@@ -5282,6 +5289,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "parking_lot 0.11.0",
+ "paste 1.0.4",
  "pd_client",
  "pin-project 0.4.8",
  "pnet_datalink",
@@ -5340,7 +5348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f28c80e4338857639f443169a601fafe49866aed8d7a8d565c2f5bfb1a021adf"
 dependencies = [
  "libc 0.2.86",
- "paste",
+ "paste 0.1.18",
  "tikv-jemalloc-sys",
 ]
 

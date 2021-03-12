@@ -181,6 +181,7 @@ sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = "0.16"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
+paste = "1.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
