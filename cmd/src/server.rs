@@ -896,10 +896,11 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -960,10 +961,11 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),

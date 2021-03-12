@@ -818,6 +818,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_encryption_enable_disable() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         // encryption not enabled.
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let mut args = def_data_key_args(&tmp_dir);
@@ -852,6 +853,7 @@ mod tests {
     // When enabling encryption, using insecure master key is not allowed.
     #[test]
     fn test_key_manager_disallow_plaintext_metadata() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager(
             &tmp_dir,
@@ -865,7 +867,7 @@ mod tests {
     // If master_key is the wrong key, fallback to previous_master_key.
     #[test]
     fn test_key_manager_rotate_master_key() {
-        let mut _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
 
         // create initial dictionaries.
         let tmp_dir = tempfile::TempDir::new().unwrap();
@@ -925,6 +927,7 @@ mod tests {
     #[test]
     fn test_key_manager_both_master_key_fail() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -945,6 +948,7 @@ mod tests {
     #[test]
     fn test_key_manager_key_dict_missing() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -958,6 +962,7 @@ mod tests {
     #[test]
     fn test_key_manager_file_dict_missing() {
         // create initial dictionaries.
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         manager.new_file("foo").unwrap();
@@ -970,6 +975,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_create_get_delete() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
@@ -1007,6 +1013,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_link() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let file_foo1 = tmp_dir.path().join("foo1");
         let _ = File::create(&file_foo1).unwrap();
@@ -1033,6 +1040,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rename() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
         let file = manager.new_file("foo").unwrap();
@@ -1053,6 +1061,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
@@ -1095,6 +1104,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_persistence() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, None).unwrap();
 
@@ -1116,6 +1126,7 @@ mod tests {
 
     #[test]
     fn test_key_manager_rotate_on_key_expose() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
@@ -1165,6 +1176,7 @@ mod tests {
 
     #[test]
     fn test_expose_keys_on_insecure_backend() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let file_backend = FileBackend::new(key_path.as_path()).unwrap();
         let master_key_backend = Box::new(file_backend);

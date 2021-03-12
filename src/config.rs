@@ -30,8 +30,8 @@ use engine_rocks::util::{
 };
 use engine_rocks::{
     RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_VER_DEFAULT, CF_WRITE};
@@ -54,6 +54,7 @@ use crate::import::Config as ImportConfig;
 use crate::server::gc_worker::GcConfig;
 use crate::server::gc_worker::WriteCompactionFilterFactory;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
+use crate::server::ttl::TTLCompactionFilterFactory;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR};
@@ -544,6 +545,7 @@ impl DefaultCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = Box::new(RangePropertiesCollectorFactory {
@@ -551,6 +553,18 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        if enable_ttl {
+            cf_opts.add_table_properties_collector_factory(
+                "tikv.ttl-properties-collector",
+                Box::new(TtlPropertiesCollectorFactory {}),
+            );
+            cf_opts
+                .set_compaction_filter_factory(
+                    "ttl_compaction_filter_factory",
+                    Box::new(TTLCompactionFilterFactory {}) as Box<dyn CompactionFilterFactory>,
+                )
+                .unwrap();
+        }
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
@@ -1099,11 +1113,13 @@ impl DbConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        enable_ttl: bool,
     ) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(
                 CF_DEFAULT,
-                self.defaultcf.build_opt(cache, region_info_accessor),
+                self.defaultcf
+                    .build_opt(cache, region_info_accessor, enable_ttl),
             ),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(
@@ -2653,6 +2669,11 @@ impl TiKvConfig {
         if last_cfg.raft_engine.enable && !self.raft_engine.enable {
             return Err("raft engine can't be disabled after switched on.".to_owned());
         }
+        if last_cfg.storage.enable_ttl && !self.storage.enable_ttl {
+            return Err("can't disable ttl on a ttl instance".to_owned());
+        } else if !last_cfg.storage.enable_ttl && self.storage.enable_ttl {
+            return Err("can't enable ttl on a non-ttl instance".to_owned());
+        }
 
         Ok(())
     }
@@ -3323,8 +3344,11 @@ mod tests {
             new_engine_opt(
                 &cfg.storage.data_dir,
                 cfg.rocksdb.build_opt(),
-                cfg.rocksdb
-                    .build_cf_opts(&cfg.storage.block_cache.build_shared_cache(), None),
+                cfg.rocksdb.build_cf_opts(
+                    &cfg.storage.block_cache.build_shared_cache(),
+                    None,
+                    cfg.storage.enable_ttl,
+                ),
             )
             .unwrap(),
         ));

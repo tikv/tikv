@@ -10,6 +10,7 @@ use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
+use crate::server::Proxy;
 use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
@@ -20,6 +21,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::{forward_duplex, forward_unary};
 use engine_rocks::RocksEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -33,6 +35,7 @@ use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use raftstore::router::RaftStoreRouter;
@@ -64,6 +67,8 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     grpc_thread_load: Arc<ThreadLoad>,
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
+
+    proxy: Proxy,
 }
 
 impl<
@@ -82,6 +87,7 @@ impl<
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
+            proxy: self.proxy.clone(),
         }
     }
 }
@@ -97,6 +103,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         grpc_thread_load: Arc<ThreadLoad>,
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
+        proxy: Proxy,
     ) -> Self {
         Service {
             gc_worker,
@@ -107,6 +114,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             grpc_thread_load,
             readpool_normal_thread_load,
             enable_req_batch,
+            proxy,
         }
     }
 }
@@ -114,6 +122,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+            forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now_coarse();
 
             let resp = $future_name(&self.storage, req);
@@ -263,6 +272,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    handle_request!(
+        raw_get_key_ttl,
+        future_raw_get_key_ttl,
+        RawGetKeyTtlRequest,
+        RawGetKeyTtlResponse
+    );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
@@ -277,6 +292,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
@@ -640,6 +656,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
+        forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -725,18 +742,93 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
+        forward_unary!(self.proxy, read_index, ctx, req, sink);
+        let begin_instant = Instant::now_coarse();
+
         let region_id = req.get_context().get_region_id();
-        let mut resp = ReadIndexResponse::default();
-        resp.set_region_error(RaftStoreError::RegionNotFound(region_id).into());
-        ctx.spawn(
-            async move {
-                sink.success(resp).await?;
-                ServerResult::Ok(())
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        let mut inner_req = RaftRequest::default();
+        inner_req.set_cmd_type(CmdType::ReadIndex);
+        inner_req.mut_read_index().set_start_ts(req.get_start_ts());
+        for r in req.get_ranges() {
+            let mut range = kvproto::kvrpcpb::KeyRange::default();
+            range.set_start_key(Key::from_raw(r.get_start_key()).into_encoded());
+            range.set_end_key(Key::from_raw(r.get_end_key()).into_encoded());
+            inner_req.mut_read_index().mut_key_ranges().push(range);
+        }
+        header.set_region_id(req.get_context().get_region_id());
+        header.set_peer(req.get_context().get_peer().clone());
+        header.set_region_epoch(req.get_context().get_region_epoch().clone());
+        if req.get_context().get_term() != 0 {
+            header.set_term(req.get_context().get_term());
+        }
+        header.set_sync_log(req.get_context().get_sync_log());
+        header.set_read_quorum(true);
+        cmd.set_header(header);
+        cmd.set_requests(vec![inner_req].into());
+
+        let (cb, f) = paired_future_callback();
+
+        // We must deal with all requests which acquire read-quorum in raftstore-thread,
+        // so just send it as an command.
+        if let Err(e) = self.ch.send_command(cmd, Callback::Read(cb)) {
+            // Retrun region error instead a gRPC error.
+            let mut resp = ReadIndexResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
+            return;
+        }
+
+        let task = async move {
+            let mut res = f.await?;
+            let mut resp = ReadIndexResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let mut raft_resps = res.response.take_responses();
+                if raft_resps.len() != 1 {
+                    error!(
+                        "invalid read index response";
+                        "region_id" => region_id,
+                        "response" => ?raft_resps
+                    );
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        raft_resps
+                    ));
+                } else {
+                    let mut read_index_resp = raft_resps[0].take_read_index();
+                    if read_index_resp.has_locked() {
+                        resp.set_locked(read_index_resp.take_locked());
+                    } else {
+                        resp.set_read_index(read_index_resp.get_read_index());
+                    }
+                }
             }
-            .map_err(|_| ())
-            .map(|_| ()),
-        );
-        return;
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .read_index
+                .observe(begin_instant.elapsed_secs());
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "read_index",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.read_index.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 
     fn batch_commands(
@@ -745,6 +837,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchCommandsRequest>,
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
+        forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
@@ -894,18 +987,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         _sink: ServerStreamingSink<MppDataPacket>,
     ) {
         unimplemented!()
-    }
-
-    fn raw_get_key_ttl(
-        &mut self,
-        ctx: grpcio::RpcContext<'_>,
-        _: kvproto::kvrpcpb::RawGetKeyTtlRequest,
-        sink: grpcio::UnarySink<kvproto::kvrpcpb::RawGetKeyTtlResponse>,
-    ) {
-        ctx.spawn(
-            sink.fail(RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None))
-                .unwrap_or_else(|_| ()),
-        );
     }
 
     fn check_leader(
@@ -1306,6 +1387,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
         req.take_cf(),
         req.take_key(),
         req.take_value(),
+        req.get_ttl(),
         cb,
     );
 
@@ -1336,7 +1418,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb);
 
     async move {
         let v = match res {
@@ -1478,6 +1560,28 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawGetKeyTtlRequest,
+) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
+    let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetKeyTtlResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(ttl)) => resp.set_ttl(ttl),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
         }
         Ok(resp)
     }

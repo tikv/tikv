@@ -6,5 +6,6 @@ define_error_codes!(
     IO => ("Io", "", ""),
     BAD_PADDING => ("BadPadding", "", ""),
     KEY_LENGTH => ("KeyLength", "", ""),
-    KEY_NOT_FOUND => ("KeyNotFound", "", "")
+    KEY_NOT_FOUND => ("KeyNotFound", "", ""),
+    VALUE_LENGTH => ("ValueLength", "", "")
 );

@@ -11,6 +11,7 @@ define_error_codes!(
     GC_WORKER_TOO_BUSY => ("GcWorkerTooBusy", "", ""),
     KEY_TOO_LARGE => ("KeyTooLarge", "", ""),
     INVALID_CF => ("InvalidCF", "", ""),
+    TTL_NOT_ENABLED => ("TTLNotEnabled", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     INVALID_TXN_TSO => ("INVALIDTXNTSO", "", ""),
     INVALID_REQ_RANGE => ("InvalidReqRange", "", ""),

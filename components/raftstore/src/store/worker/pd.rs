@@ -889,9 +889,6 @@ where
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
             self.store_stat.engine_total_keys_read += region_info.flow.read_keys as u64;
-
-            region_info.approximate_key = peer_stat.approximate_keys;
-            region_info.approximate_size = peer_stat.approximate_size;
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_sender() {
