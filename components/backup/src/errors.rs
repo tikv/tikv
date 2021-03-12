@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
 
 use engine_traits::Error as EngineTraitError;
@@ -18,6 +18,15 @@ impl From<Error> for ErrorPb {
     fn from(e: Error) -> ErrorPb {
         let mut err = ErrorPb::default();
         match e {
+            Error::Io(io_err) => {
+                if io_err.kind() == ErrorKind::TimedOut {
+                    err.set_msg(format!("(this error can be retried){:?}", io_err));
+                    err.mut_storage_error().set_retryable(true);
+                } else {
+                    err.set_msg(format!("{:?}", io_err));
+                    err.mut_storage_error().set_retryable(false);
+                }
+            }
             Error::ClusterID { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["cluster_mismatch"])

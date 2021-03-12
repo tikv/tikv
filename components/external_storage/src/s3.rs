@@ -2,8 +2,7 @@
 
 use rusoto_core::request::HttpClient;
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
-use std::io;
-use std::marker::PhantomData;
+use std::{error::Error, io, marker::PhantomData};
 
 use futures_util::{
     future::FutureExt,
@@ -19,7 +18,47 @@ use rusoto_s3::*;
 
 use super::ExternalStorage;
 use kvproto::backup::S3 as Config;
-use tikv_util::stream::{block_on_external_io, error_stream, retry};
+use tikv_util::stream::{block_on_external_io, error_stream, retry, RetryError};
+
+/// HttpDispatchError is a wrapper for RusotoError<_>::HttpDispatch variant.
+#[derive(Debug)]
+enum S3UploadError {
+    // FIXME: We cannot use Rusoto(RusotoError<T>) here, if we did so,
+    //   out concrete method have to return different instance of S3Errors too.
+    Rusoto { can_retry: bool, message: String },
+    Io(io::Error),
+}
+
+impl<E: Error + 'static> From<RusotoError<E>> for S3UploadError {
+    fn from(err: RusotoError<E>) -> Self {
+        Self::Rusoto {
+            can_retry: err.is_retryable(),
+            message: format!("failed to put object: {}", err),
+        }
+    }
+}
+
+impl From<io::Error> for S3UploadError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<S3UploadError> for io::Error {
+    fn from(err: S3UploadError) -> Self {
+        match err {
+            S3UploadError::Rusoto { can_retry, message } => {
+                if can_retry {
+                    // Can we get more semantic here?
+                    Self::new(io::ErrorKind::TimedOut, message)
+                } else {
+                    Self::new(io::ErrorKind::Other, message)
+                }
+            }
+            S3UploadError::Io(io_err) => io_err,
+        }
+    }
+}
 
 /// S3 compatible storage
 #[derive(Clone)]
@@ -147,7 +186,7 @@ impl<'client> S3Uploader<'client> {
         mut self,
         reader: &mut (dyn AsyncRead + Unpin),
         est_len: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), S3UploadError> {
         if est_len <= MINIMUM_PART_SIZE as u64 {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
@@ -289,9 +328,8 @@ impl ExternalStorage for S3Storage {
         debug!("save file to s3 storage"; "key" => %key);
 
         let uploader = S3Uploader::new(&self.client, &self.config, key);
-        block_on_external_io(uploader.run(&mut *reader, content_length)).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("failed to put object {}", e))
-        })
+        block_on_external_io(uploader.run(&mut *reader, content_length))?;
+        Ok(())
     }
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
@@ -314,10 +352,13 @@ impl ExternalStorage for S3Storage {
                             format!("no key {} at bucket {}", key, bucket),
                         )))
                     }
-                    Err(e) => ByteStream::new(error_stream(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("failed to get object {}", e),
-                    ))),
+                    Err(e) => {
+                        warn!("failed to get object because other error"; "error" => %e);
+                        ByteStream::new(error_stream(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("failed to get object {}", e),
+                        )))
+                    }
                 })
                 .flatten_stream()
                 .into_async_read(),
@@ -387,6 +428,26 @@ mod tests {
         let ret = block_on_external_io(reader.read_to_end(&mut buf));
         assert!(ret.unwrap() == 0);
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_failure_can_retry() {
+        let config = Config {
+            region: "ap-southeast-2".to_string(),
+            bucket: "mybucket".to_string(),
+            prefix: "myprefix".to_string(),
+            ..Default::default()
+        };
+        let failure_dispatcher = MockRequestDispatcher::with_status(502);
+        let credentials_provider =
+            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
+        let failure_storage =
+            S3Storage::new_creds_dispatcher(&config, failure_dispatcher, credentials_provider)
+                .unwrap();
+        let result = failure_storage.write("mykey", Box::new("".as_bytes()), 0);
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]

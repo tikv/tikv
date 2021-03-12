@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryInto, fmt::Display, io, sync::Arc};
+use std::{
+    convert::TryInto,
+    fmt::{self, Display},
+    io,
+    sync::Arc,
+};
 
 use super::ExternalStorage;
 use futures_util::{
@@ -93,26 +98,28 @@ impl From<StatusCode> for RequestError {
     }
 }
 
+impl Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RequestError::Hyper(e) => write!(f, "invalid HTTP request: {}", e),
+            RequestError::OAuth(e) => write!(f, "authorization failed: {}", e),
+            RequestError::Gcs(e) => write!(f, "invalid GCS request: {}", e),
+            RequestError::InvalidEndpoint(e) => write!(f, "invalid GCS endpoint: {}", e),
+        }?;
+        Ok(())
+    }
+}
+
 impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
-            RequestError::Hyper(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid HTTP request: {}", e),
+            _ if err.is_retryable() => Self::new(
+                // FIXME: for each condition, using a more semantic error kind.
+                io::ErrorKind::TimedOut,
+                format!("retryable error: {}", err),
             ),
             RequestError::OAuth(tame_oauth::Error::Io(e)) => e,
-            RequestError::OAuth(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("authorization failed: {}", e),
-            ),
-            RequestError::Gcs(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid GCS request: {}", e),
-            ),
-            RequestError::InvalidEndpoint(e) => Self::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid GCS endpoint: {}", e),
-            ),
+            _ => Self::new(io::ErrorKind::InvalidInput, format!("{}", err)),
         }
     }
 }
