@@ -619,13 +619,13 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                     }
                 }
             } else {
-                debug!("stale region ready";
+                info!("stale region ready";
                     "region_id" => region.get_id(),
                     "observe_id" => ?observe_id,
                     "current_id" => ?delegate.id);
             }
         } else {
-            debug!("region not found on region ready (finish building resolver)";
+            info!("region not found on region ready (finish building resolver)";
                 "region_id" => region.get_id());
         }
     }

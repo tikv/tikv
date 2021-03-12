@@ -5,7 +5,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use crossbeam::queue::SegQueue as Queue;
 use futures::select;
 use futures::task::{noop_waker_ref, AtomicWaker};
-use futures::{future::Fuse, pin_mut, FutureExt, Sink, SinkExt, StreamExt};
+use futures::{future::Fuse, future::poll_fn, pin_mut, FutureExt, Sink, SinkExt, StreamExt};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -371,34 +371,22 @@ impl<E> Drainer<E> {
         let mut unflushed_size: usize = 0;
         let mut last_flushed_time = std::time::Instant::now();
         loop {
-            let drain_one = Fuse::terminated();
-            pin_mut!(drain_one);
-            let sink_ready = Fuse::terminated();
-            pin_mut!(sink_ready);
-
-            // We try to poll the rpc_sink to determine if it is ready to accept new data.
-            let mut noop_context = Context::from_waker(noop_waker_ref());
-            if let Poll::Ready(_) = rpc_sink.poll_ready_unpin(&mut noop_context) {
-                drain_one.set(DrainOne::wrap(&self.receiver, self.state.as_ref()).fuse());
-            } else {
-                sink_ready.set(
-                    RpcSinkReady {
-                        sink: &mut rpc_sink,
-                        _phantom: Default::default(),
-                    }
-                    .fuse(),
-                );
-            }
+            let mut sink_ready = poll_fn(|cx| {
+                rpc_sink.poll_ready_unpin(cx)
+            }).fuse();
 
             select! {
-                // handles the event where the downstream sink becomes ready
-                sink_ready_status = sink_ready => {
-                    sink_ready_status.map_err(|err| {
+                _ = sink_ready => {},
+                item = close_rx.next() => {
+                    if item.is_some() {
                         self.state.wake_up_all_senders();
-                        DrainerError::RpcSinkError(err)
-                    })?;
+                        return Err(DrainerError::RateLimitExceededError);
+                    }
                 },
+            }
 
+            let mut drain_one = DrainOne::wrap(&self.receiver, self.state.as_ref()).fuse();
+            select! {
                 // handles the event where one event is successfully consumed from the upstream queue
                 next_event = drain_one => {
                     match next_event {

@@ -386,7 +386,7 @@ impl Delegate {
                     }
                 }
             }
-            info!("cdc broadcast"; "region_id" => downstream.req_id);
+            info!("cdc broadcast"; "request_id" => downstream.req_id, "region_id" => self.region_id);
             downstream.sink_event(event);
         }
     }

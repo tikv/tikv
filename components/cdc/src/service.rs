@@ -32,6 +32,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch::Ref;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::Event as Event_oneof_event;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::Event_oneof_event;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -138,6 +142,15 @@ impl EventBatcher {
                     self.buffer.push(ChangeDataEvent::default());
                 }
                 self.last_size += size;
+
+                let event = e.event.as_ref().unwrap();
+                match event {
+                    Event_oneof_event::Error(err) => {
+                        info!("sending error"; "error" => ?err);
+                    },
+                    other => {},
+                }
+
                 self.buffer.last_mut().unwrap().mut_events().push(e);
             }
             CdcEvent::ResolvedTs(r) => {
@@ -209,6 +222,7 @@ where
     /// and 2) they cannot be successfully flushed down the `inner_sink` immediately.
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
+        info!("cdc poll ready called");
 
         if !this.send_buf.is_empty() {
             ready!(this.poll_flush_unpin(cx))?;
@@ -216,18 +230,22 @@ where
 
         if this.buf.is_none() {
             this.buf = Some(vec![]);
+            info!("poll_ready called 1");
             return Poll::Ready(Ok(()));
         }
 
         if this.buf.as_ref().unwrap().len() >= 1024 {
             this.prepare_flush();
+            info!("poll_ready called 2");
             ready!(this.inner_sink.poll_flush_unpin(cx))?;
+            info!("poll_ready called 3");
 
             debug_assert!(this.buf.is_none());
             this.buf = Some(vec![]);
             return Poll::Ready(Ok(()));
         }
 
+        info!("poll_ready called 4");
         Poll::Ready(Ok(()))
     }
 
@@ -237,8 +255,20 @@ where
         debug_assert!(this.buf.is_some());
 
         let (event, _) = item;
+
+        match &event {
+            CdcEvent::Event(event) => {
+                match event.event {
+                    Some(Event_oneof_event::Error(ref err)) =>
+                        info!("sending error"; "error" => ?err),
+                    _ => {}
+                }
+            },
+            other => {},
+        }
+
         this.buf.as_mut().unwrap().push(event);
-        info!("cdc got data");
+        info!("cdc got data"; "len" => this.buf.as_ref().unwrap().len());
         Ok(())
     }
 
@@ -272,6 +302,7 @@ where
 
     /// Flushes the buffered data to `inner_sink` and then closes it.
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        info!("cdc poll close called");
         let this = self.get_mut();
 
         if this.buf.is_some() {
