@@ -11,6 +11,9 @@ use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::time::{Instant, UnixSecs};
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
+const COMPACT_FILES_SLEEP_TIME: u64 = 2; // 2s
+const WAIT_METRICS_PULLED_TIME: u64 = 40; // 40s
+
 #[derive(Debug)]
 pub enum Task {
     UpdatePollInterval(Duration),
@@ -104,7 +107,7 @@ impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> 
                 Ok(Some((start_key, end_key))) => {
                     let start = keys::data_key(&start_key);
                     let end = keys::data_end_key(&end_key);
-                    check_ttl_for_range(&self.engine, &start, &end, true);
+                    check_ttl_and_compact_files(&self.engine, &start, &end, true);
                     if !end_key.is_empty() {
                         key = end_key;
                         continue;
@@ -129,7 +132,7 @@ impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> 
             self.poll_interval.as_secs()
         );
         // make sure the data point of metrics is pulled
-        thread::sleep(Duration::from_secs(40));
+        thread::sleep(Duration::from_secs(WAIT_METRICS_PULLED_TIME));
         TTL_CHECKER_PROCESSED_REGIONS_GAUGE.set(0);
     }
 
@@ -138,7 +141,7 @@ impl<E: KvEngine, R: RegionInfoProvider> RunnableWithTimer for TTLChecker<E, R> 
     }
 }
 
-fn check_ttl_for_range<E: KvEngine>(
+fn check_ttl_and_compact_files<E: KvEngine>(
     engine: &E,
     start_key: &[u8],
     end_key: &[u8],
@@ -199,10 +202,10 @@ fn check_ttl_for_range<E: KvEngine>(
         TTL_CHECKER_ACTIONS_COUNTER_VEC
             .with_label_values(&["compact"])
             .inc();
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(COMPACT_FILES_SLEEP_TIME));
     }
 
-    info!(
+    debug!(
         "compact files finished";
         "files_count" => files_count,
         "time_takes" => ?timer.elapsed(),
@@ -259,14 +262,14 @@ mod tests {
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = check_ttl_for_range(&kvdb, b"zkey1", b"zkey25", false);
+        let _ = check_ttl_and_compact_files(&kvdb, b"zkey1", b"zkey25", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-        let _ = check_ttl_for_range(&kvdb, b"zkey2", b"zkey6", false);
+        let _ = check_ttl_and_compact_files(&kvdb, b"zkey2", b"zkey6", false);
         assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
         assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
