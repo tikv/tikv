@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use crate::{RocksEngine, UserProperties};
 use engine_traits::util::get_expire_ts;
 use engine_traits::{
-    DecodeProperties, Range, Result, TtlProperties, TtlPropertiesExt, TableProperties,
-    TablePropertiesCollection, TablePropertiesExt,
+    DecodeProperties, Range, Result, TableProperties, TablePropertiesCollection,
+    TablePropertiesExt, TtlProperties, TtlPropertiesExt,
 };
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 
@@ -24,9 +24,10 @@ impl RocksTtlProperties {
     }
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<TtlProperties> {
-        let mut res = TtlProperties::default();
-        res.max_expire_ts = props.decode_u64(PROP_MAX_EXPIRE_TS)?;
-        res.min_expire_ts = props.decode_u64(PROP_MIN_EXPIRE_TS)?;
+        let res = TtlProperties {
+            max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS)?,
+            min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS)?,
+        };
         Ok(res)
     }
 }

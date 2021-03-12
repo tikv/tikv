@@ -640,6 +640,8 @@ fn test_serde_custom_tikv_config() {
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        enable_ttl: true,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
