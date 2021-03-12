@@ -24,7 +24,7 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{check_resp_header, sync_request, validate_endpoints, LeaderClient};
+use super::util::{check_resp_header, sync_request, LeaderClient, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -70,8 +70,9 @@ impl RpcClient {
                 .max_thread_count(1)
                 .build_future_pool(),
         );
+        let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
-            match validate_endpoints(Arc::clone(&env), cfg, security_mgr.clone()).await {
+            match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
@@ -102,7 +103,7 @@ impl RpcClient {
 
                             match client.upgrade() {
                                 Some(cli) => {
-                                    let req = cli.reconnect().await;
+                                    let req = cli.reconnect(false).await;
                                     if req.is_err() {
                                         warn!("update PD information failed");
                                         // will update later anyway
@@ -149,7 +150,7 @@ impl RpcClient {
 
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
-        block_on(self.leader_client.reconnect())
+        block_on(self.leader_client.reconnect(true))
     }
 
     /// Creates a new call option with default request timeout.
