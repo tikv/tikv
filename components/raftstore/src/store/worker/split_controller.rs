@@ -356,7 +356,7 @@ impl AutoSplitController {
                 self.recorders.remove_entry(&region_id);
                 continue;
             }
-            LOAD_BASE_SPLIT_EVENT.with_label_values(&["qps_fit"]).inc();
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
             let approximate_keys = region_infos[0].approximate_key;
             let approximate_size = region_infos[0].approximate_size;
 
