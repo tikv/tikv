@@ -1322,6 +1322,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_traits_tests"
+version = "0.0.1"
+dependencies = [
+ "engine_test",
+ "engine_traits",
+ "tempfile",
+ "tikv_alloc",
+]
+
+[[package]]
 name = "error-chain"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5246,6 +5256,7 @@ dependencies = [
  "engine_rocks",
  "engine_test",
  "engine_traits",
+ "engine_traits_tests",
  "error_code",
  "fail",
  "failure",

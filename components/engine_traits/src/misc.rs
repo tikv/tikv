@@ -55,6 +55,7 @@ pub trait MiscExt: CFNamesExt {
     /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
     fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
+    /// The path to the directory on the filesystem where the database is stored
     fn path(&self) -> &str;
 
     fn sync_wal(&self) -> Result<()>;
