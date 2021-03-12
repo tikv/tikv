@@ -652,6 +652,7 @@ mod tests {
             hub.flush(qps_stats_vec);
         }
     }
+
     fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
         for _ in 0..100 {
             let pre_sum = prefix_sum(key_ranges.iter(), Vec::len);
@@ -659,6 +660,7 @@ mod tests {
             assert_eq!(sampled_key_ranges.len(), sample_num);
         }
     }
+
     #[test]
     fn test_sample_length() {
         let sample_num = 20;
