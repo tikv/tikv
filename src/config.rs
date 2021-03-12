@@ -3533,7 +3533,7 @@ mod tests {
             .update_config("storage.ttl_check_poll_interval", "10s")
             .unwrap();
         match rx.recv() {
-            None => assert!(false),
+            None => unreachable!(),
             Some(TTLCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
     }
