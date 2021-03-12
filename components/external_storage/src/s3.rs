@@ -20,7 +20,7 @@ use super::ExternalStorage;
 use kvproto::backup::S3 as Config;
 use tikv_util::stream::{block_on_external_io, error_stream, retry, RetryError};
 
-/// HttpDispatchError is a wrapper for RusotoError<_>::HttpDispatch variant.
+/// S3UploadError is a wrapper type for errors happening during putting object.
 #[derive(Debug)]
 enum S3UploadError {
     // FIXME: We cannot use Rusoto(RusotoError<T>) here, if we did so,
