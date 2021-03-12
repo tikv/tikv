@@ -53,6 +53,9 @@ make_auto_flush_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
+        raw_get_key_ttl,
+        check_leader,
+        batch_commands,
     }
 
     pub label_enum GcCommandKind {
@@ -97,6 +100,16 @@ make_auto_flush_static_metric! {
         seek_for_prev_tombstone,
     }
 
+    pub label_enum ReplicaReadLockCheckResult {
+        unlocked,
+        locked,
+    }
+
+    pub label_enum WhetherSuccess {
+        success,
+        fail,
+    }
+
     pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
@@ -121,6 +134,11 @@ make_auto_flush_static_metric! {
         "type" => GrpcTypeKind,
     }
 
+    pub struct GrpcProxyMsgCounterVec: LocalIntCounter {
+        "type" => GrpcTypeKind,
+        "success" => WhetherSuccess,
+    }
+
     pub struct GcKeysCounterVec: LocalIntCounter {
         "cf" => GcKeysCF,
         "tag" => GcKeysDetail,
@@ -128,6 +146,10 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+    }
+
+    pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
+        "result" => ReplicaReadLockCheckResult,
     }
 }
 
@@ -192,6 +214,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_proxy_msg_total",
+        "Total number of handle grpc proxy message",
+        &["type", "success"]
+    )
+    .unwrap();
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
@@ -211,6 +239,14 @@ lazy_static! {
         &["version", "hash"]
     )
     .unwrap();
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC: HistogramVec =
+        register_histogram_vec!(
+            "tikv_replica_read_lock_check_duration_seconds",
+            "Duration of memory lock checking for replica read",
+            &["result"],
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+        )
+        .unwrap();
 }
 
 lazy_static! {
@@ -230,8 +266,14 @@ lazy_static! {
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref GRPC_PROXY_MSG_COUNTER: GrpcProxyMsgCounterVec =
+        auto_flush_from!(GRPC_PROXY_MSG_COUNTER_VEC, GrpcProxyMsgCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
         auto_flush_from!(GC_KEYS_COUNTER_VEC, GcKeysCounterVec);
+    pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC: ReplicaReadLockCheckHistogramVec = auto_flush_from!(
+        REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC,
+        ReplicaReadLockCheckHistogramVec
+    );
 }
 
 lazy_static! {
