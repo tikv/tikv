@@ -9726,7 +9726,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TopN qps",
+          "title": "TopN QPS exceeds threshold",
           "tooltip": {
             "msResolution": false,
             "shared": true,
