@@ -27,7 +27,12 @@ pub mod errors;
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+<<<<<<< HEAD
 pub use self::util::validate_endpoints;
+=======
+pub use self::feature_gate::{Feature, FeatureGate};
+pub use self::util::PdConnector;
+>>>>>>> c4003abeb... pd_client: reconnect leader only when members change (#9788)
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
