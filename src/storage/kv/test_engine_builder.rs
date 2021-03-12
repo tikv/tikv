@@ -17,6 +17,7 @@ const TEMP_DIR: &str = "";
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
+    enable_ttl: bool,
 }
 
 impl TestEngineBuilder {
@@ -24,6 +25,7 @@ impl TestEngineBuilder {
         Self {
             path: None,
             cfs: None,
+            enable_ttl: false,
         }
     }
 
@@ -43,6 +45,11 @@ impl TestEngineBuilder {
         self
     }
 
+    pub fn ttl(mut self, b: bool) -> Self {
+        self.enable_ttl = b;
+        self
+    }
+
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -54,14 +61,16 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
+        let enable_ttl = self.enable_ttl;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => {
-                    CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache, None))
-                }
+                CF_DEFAULT => CFOptions::new(
+                    CF_DEFAULT,
+                    cfg_rocksdb.defaultcf.build_opt(&cache, None, enable_ttl),
+                ),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),

@@ -11,7 +11,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use tokio::runtime::Builder;
 
-use pd_client::{validate_endpoints, Error as PdError, Feature, PdClient, RegionStat, RpcClient};
+use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
@@ -215,7 +215,8 @@ fn test_validate_endpoints() {
     let eps = server.bind_addrs();
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
 }
 
 #[test]
@@ -233,7 +234,8 @@ fn test_validate_endpoints_retry() {
     eps.insert(0, ("127.0.0.1".to_string(), mock_port));
     eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    assert!(block_on(validate_endpoints(env, &new_config(eps), mgr)).is_err());
+    let connector = PdConnector::new(env, mgr);
+    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
 }
 
 fn test_retry<F: Fn(&RpcClient)>(func: F) {

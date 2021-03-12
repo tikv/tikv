@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::collections::HashSet;
 use std::slice::Iter;
 use std::time::{Duration, SystemTime};
 
@@ -13,10 +14,12 @@ use rand::Rng;
 use collections::HashMap;
 use tikv_util::config::Tracker;
 
+use crate::store::metrics::*;
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
+pub const MAX_RETRY_TIME: i32 = 1000;
 
 pub struct SplitInfo {
     pub region_id: u64,
@@ -73,9 +76,9 @@ where
 {
     let mut rng = rand::thread_rng();
     let mut key_ranges = vec![];
-    let high_bound = pre_sum.last().unwrap();
-    for _num in 0..sample_num {
-        let d = rng.gen_range(0, *high_bound) as usize;
+    let high_bound = *pre_sum.last().unwrap();
+    for _ in 0..MAX_RETRY_TIME {
+        let d = rng.gen_range(0, high_bound + 1) as usize;
         let i = match pre_sum.binary_search(&d) {
             Ok(i) => i,
             Err(i) => i,
@@ -86,6 +89,9 @@ where
                 let j = rng.gen_range(0, list.len()) as usize;
                 key_ranges.push(list.remove(j)); // Sampling without replacement
             }
+        }
+        if key_ranges.len() >= std::cmp::min(sample_num, high_bound) {
+            break;
         }
     }
     key_ranges
@@ -99,8 +105,6 @@ pub struct RegionInfo {
     pub qps: usize,
     pub peer: Peer,
     pub key_ranges: Vec<KeyRange>,
-    pub approximate_size: u64,
-    pub approximate_key: u64,
     pub flow: FlowStatistics,
 }
 
@@ -111,8 +115,6 @@ impl RegionInfo {
             qps: 0,
             key_ranges: Vec::with_capacity(sample_num),
             peer: Peer::default(),
-            approximate_size: 0,
-            approximate_key: 0,
             flow: FlowStatistics::default(),
         }
     }
@@ -180,13 +182,24 @@ impl Recorder {
         self.times >= self.detect_num
     }
 
+    fn convert(&self, key_ranges: Vec<KeyRange>) -> Vec<Sample> {
+        key_ranges
+            .iter()
+            .fold(HashSet::new(), |mut hash_set, key_range| {
+                hash_set.insert(&key_range.start_key);
+                hash_set.insert(&key_range.end_key);
+                hash_set
+            })
+            .into_iter()
+            .map(|key| Sample::new(key))
+            .collect()
+    }
+
     fn collect(&mut self, config: &SplitConfig) -> Vec<u8> {
         let pre_sum = prefix_sum(self.key_ranges.iter(), Vec::len);
-        let key_ranges = self.key_ranges.clone();
-        let mut samples = sample(config.sample_num, &pre_sum, key_ranges, |x| x)
-            .iter()
-            .map(|key_range| Sample::new(&key_range.start_key))
-            .collect();
+        let sampled_key_ranges =
+            sample(config.sample_num, &pre_sum, self.key_ranges.clone(), |x| x);
+        let mut samples: Vec<Sample> = self.convert(sampled_key_ranges);
         for key_ranges in &self.key_ranges {
             for key_range in key_ranges {
                 Recorder::sample(&mut samples, &key_range);
@@ -196,7 +209,7 @@ impl Recorder {
             samples,
             config.split_balance_score,
             config.split_contained_score,
-            config.sample_threshold,
+            config.sample_threshold as i32,
         )
     }
 
@@ -329,11 +342,6 @@ impl AutoSplitController {
         let capacity = read_stats_vec.len();
         for read_stats in read_stats_vec {
             for (region_id, region_info) in read_stats.region_infos {
-                if region_info.approximate_size < self.cfg.size_threshold
-                    && region_info.approximate_key < self.cfg.key_threshold
-                {
-                    continue;
-                }
                 let region_infos = region_infos_map
                     .entry(region_id)
                     .or_insert_with(|| Vec::with_capacity(capacity));
@@ -351,13 +359,17 @@ impl AutoSplitController {
         for (region_id, region_infos) in region_infos_map {
             let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_qps);
             let qps = *pre_sum.last().unwrap(); // region_infos is not empty
-            if qps < self.cfg.qps_threshold {
+            let byte = region_infos
+                .iter()
+                .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
+            debug!("load base split params";"region_id"=>region_id,"qps"=>qps,"qps_threshold"=>self.cfg.qps_threshold,"byte"=>byte,"byte_threshold"=>self.cfg.byte_threshold);
+
+            if qps < self.cfg.qps_threshold && byte < self.cfg.byte_threshold {
                 self.recorders.remove_entry(&region_id);
                 continue;
             }
 
-            let approximate_keys = region_infos[0].approximate_key;
-            let approximate_size = region_infos[0].approximate_size;
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
 
             let num = self.cfg.detect_times;
             let recorder = self
@@ -383,15 +395,20 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
+                    LOAD_BASE_SPLIT_EVENT
+                        .with_label_values(&["prepare_to_split"])
+                        .inc();
                     info!(
                         "load base split region";
                         "region_id"=>region_id,
-                        "size"=>approximate_size,
-                        "keys"=>approximate_keys,
-                        "qps"=>qps
+                        "qps"=>qps,
                     );
                 }
                 self.recorders.remove(&region_id);
+            } else {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_fit_key"])
+                    .inc();
             }
 
             top.push(qps);
@@ -537,18 +554,73 @@ mod tests {
             ],
             vec![b"b", key_b.as_encoded()],
         );
+
+        // test distribution with contained key
+        for _i in 0..100 {
+            let key_ranges = vec![
+                build_key_range(b"a", b"k", false),
+                build_key_range(b"b", b"j", false),
+                build_key_range(b"c", b"i", false),
+                build_key_range(b"d", b"h", false),
+                build_key_range(b"e", b"g", false),
+                build_key_range(b"f", b"f", false),
+            ];
+            check_split(
+                b"isosceles triangle",
+                vec![gen_read_stats(1, key_ranges)],
+                vec![],
+            );
+
+            let key_ranges = vec![
+                build_key_range(b"a", b"f", false),
+                build_key_range(b"b", b"g", false),
+                build_key_range(b"c", b"h", false),
+                build_key_range(b"d", b"i", false),
+                build_key_range(b"e", b"j", false),
+                build_key_range(b"f", b"k", false),
+            ];
+            check_split(
+                b"parallelogram",
+                vec![gen_read_stats(1, key_ranges)],
+                vec![],
+            );
+
+            let key_ranges = vec![
+                build_key_range(b"a", b"l", false),
+                build_key_range(b"a", b"m", false),
+            ];
+            check_split(
+                b"right-angle trapezoid",
+                vec![gen_read_stats(1, key_ranges)],
+                vec![],
+            );
+
+            let key_ranges = vec![
+                build_key_range(b"a", b"l", false),
+                build_key_range(b"b", b"l", false),
+            ];
+            check_split(
+                b"right-angle trapezoid",
+                vec![gen_read_stats(1, key_ranges)],
+                vec![],
+            );
+        }
     }
 
     fn check_split(mode: &[u8], qps_stats: Vec<ReadStats>, split_keys: Vec<&[u8]>) {
         let mut hub = AutoSplitController::new(SplitConfigManager::default());
         hub.cfg.qps_threshold = 1;
         hub.cfg.sample_threshold = 0;
-        hub.cfg.key_threshold = 0;
-        hub.cfg.size_threshold = 0;
 
         for i in 0..10 {
             let (_, split_infos) = hub.flush(qps_stats.clone());
             if (i + 1) % hub.cfg.detect_times == 0 {
+                assert_eq!(
+                    split_infos.len(),
+                    split_keys.len(),
+                    "mode: {:?}",
+                    String::from_utf8(Vec::from(mode)).unwrap()
+                );
                 for obtain in &split_infos {
                     let mut equal = false;
                     for expect in &split_keys {
@@ -573,8 +645,6 @@ mod tests {
         hub.cfg.qps_threshold = 2000;
         hub.cfg.sample_num = 2000;
         hub.cfg.sample_threshold = 0;
-        hub.cfg.key_threshold = 0;
-        hub.cfg.size_threshold = 0;
 
         for _ in 0..100 {
             // qps_stats_vec contains 2000 qps and a readStats with a key range;
@@ -593,47 +663,55 @@ mod tests {
         }
     }
 
-    fn add_region(read_stats: &mut Vec<ReadStats>, id: u64, key: u64, size: u64) {
-        let mut region_info = RegionInfo::new(read_stats[0].sample_num);
-        region_info.approximate_key = key;
-        region_info.approximate_size = size;
-        read_stats[0].region_infos.entry(id).or_insert(region_info);
+    fn check_sample_length(sample_num: usize, key_ranges: Vec<Vec<KeyRange>>) {
+        for _ in 0..100 {
+            let pre_sum = prefix_sum(key_ranges.iter(), Vec::len);
+            let sampled_key_ranges = sample(sample_num, &pre_sum, key_ranges.clone(), |x| x);
+            assert_eq!(sampled_key_ranges.len(), sample_num);
+        }
     }
 
     #[test]
-    fn test_threshold() {
-        let hub = AutoSplitController::new(SplitConfigManager::default());
-        let mut read_stats = vec![ReadStats::default()];
-        add_region(
-            &mut read_stats,
-            1,
-            hub.cfg.key_threshold,
-            hub.cfg.size_threshold,
-        );
-        add_region(
-            &mut read_stats,
-            2,
-            hub.cfg.key_threshold,
-            hub.cfg.size_threshold - 1,
-        );
-        add_region(
-            &mut read_stats,
-            3,
-            hub.cfg.key_threshold - 1,
-            hub.cfg.size_threshold,
-        );
-        add_region(
-            &mut read_stats,
-            4,
-            hub.cfg.key_threshold - 1,
-            hub.cfg.size_threshold - 1,
-        );
-
-        let regions = hub.collect_read_stats(read_stats);
-        assert_eq!(regions.len(), 3);
-        for (id, _) in regions {
-            assert_ne!(id, 4);
+    fn test_sample_length() {
+        let sample_num = 20;
+        let mut key_ranges = vec![];
+        for _ in 0..sample_num {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
         }
+        check_sample_length(sample_num, key_ranges);
+
+        let mut key_ranges = vec![];
+        let num = 100;
+        for _ in 0..num {
+            key_ranges.push(vec![build_key_range(b"a", b"b", false)]);
+        }
+        check_sample_length(sample_num, key_ranges);
+
+        let mut key_ranges = vec![];
+        for _ in 0..num {
+            let mut ranges = vec![];
+            for _ in 0..num {
+                ranges.push(build_key_range(b"a", b"b", false));
+            }
+            key_ranges.push(ranges);
+        }
+        check_sample_length(sample_num, key_ranges);
+    }
+
+    #[test]
+    fn test_recorder_convert() {
+        let r = Recorder::new(1);
+        let key_ranges = vec![];
+        assert_eq!(r.convert(key_ranges).len(), 0);
+
+        let key_ranges = vec![build_key_range(b"a", b"b", false)];
+        assert_eq!(r.convert(key_ranges).len(), 2);
+
+        let key_ranges = vec![
+            build_key_range(b"a", b"a", false),
+            build_key_range(b"b", b"c", false),
+        ];
+        assert_eq!(r.convert(key_ranges).len(), 3);
     }
 
     const REGION_NUM: u64 = 1000;
