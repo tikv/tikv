@@ -56,7 +56,7 @@ pub use self::{
     },
     raw::{RawStore, TTLSnapshot},
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, Store, SnapshotStore},
+    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
