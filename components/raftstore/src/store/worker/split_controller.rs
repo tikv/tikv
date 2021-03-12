@@ -13,6 +13,7 @@ use rand::Rng;
 use collections::HashMap;
 use tikv_util::config::Tracker;
 
+use crate::store::metrics::*;
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
@@ -355,7 +356,7 @@ impl AutoSplitController {
                 self.recorders.remove_entry(&region_id);
                 continue;
             }
-
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&["qps_fit"]).inc();
             let approximate_keys = region_infos[0].approximate_key;
             let approximate_size = region_infos[0].approximate_size;
 
@@ -383,6 +384,9 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
+                    LOAD_BASE_SPLIT_EVENT
+                        .with_label_values(&["prepare_to_split"])
+                        .inc();
                     info!(
                         "load base split region";
                         "region_id"=>region_id,
@@ -392,6 +396,10 @@ impl AutoSplitController {
                     );
                 }
                 self.recorders.remove(&region_id);
+            } else {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_fit_key"])
+                    .inc();
             }
 
             top.push(qps);
