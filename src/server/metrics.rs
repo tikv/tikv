@@ -54,7 +54,6 @@ make_auto_flush_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
-        raw_get_key_ttl,
         check_leader,
         batch_commands,
     }

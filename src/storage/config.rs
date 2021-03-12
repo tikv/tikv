@@ -74,7 +74,7 @@ impl Default for Config {
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
             enable_async_apply_prewrite: false,
             enable_ttl: false,
-            ttl_check_poll_interval: ReadableDuration::hours(24),
+            ttl_check_poll_interval: ReadableDuration::hours(12),
             block_cache: BlockCacheConfig::default(),
         }
     }
