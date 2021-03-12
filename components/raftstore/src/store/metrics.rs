@@ -498,4 +498,11 @@ lazy_static! {
         ).unwrap();
     pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
         auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
+
+    pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
+    register_histogram!(
+        "tikv_raftstore_peer_pending_duration_seconds",
+        "Bucketed histogram of region peer pending duration.",
+        exponential_buckets(0.005, 2.0, 20).unwrap()
+    ).unwrap();
 }

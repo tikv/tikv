@@ -1239,6 +1239,10 @@ where
                             "peer_id" => self.peer.get_id(),
                             "time" => ?now,
                         );
+                    } else if self.peers_start_pending_time.len() > 0 {
+                        let (_, pending_after) = self.peers_start_pending_time[0];
+                        let elapsed = duration_to_sec(pending_after.elapsed());
+                        RAFT_PEER_PENDING_DURATION.observe(elapsed);
                     }
                 } else {
                     if ctx.cfg.dev_assert {
@@ -1275,9 +1279,11 @@ where
             }
             let truncated_idx = self.raft_group.store().truncated_index();
             if let Some(progress) = self.raft_group.raft.prs().get(peer_id) {
+                let (_, pending_after) = self.peers_start_pending_time[i];
+                let elapsed = duration_to_sec(pending_after.elapsed());
+                RAFT_PEER_PENDING_DURATION.observe(elapsed);
                 if progress.matched >= truncated_idx {
-                    let (_, pending_after) = self.peers_start_pending_time.swap_remove(i);
-                    let elapsed = duration_to_sec(pending_after.elapsed());
+                    self.peers_start_pending_time.swap_remove(i);
                     debug!(
                         "peer has caught up logs";
                         "region_id" => self.region_id,
