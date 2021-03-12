@@ -36,6 +36,7 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        raw_get_key_ttl,
         ver_get,
         ver_batch_get,
         ver_mut,
@@ -53,7 +54,6 @@ make_auto_flush_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
-        raw_get_key_ttl,
         check_leader,
         batch_commands,
     }
@@ -332,6 +332,28 @@ lazy_static! {
         "tikv_gcworker_autogc_processed_regions",
         "Processed regions by auto gc",
         &["type"]
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_PROCESSED_REGIONS_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_ttl_checker_processed_regions",
+        "Processed regions by ttl checker"
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_ACTIONS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_ttl_checker_actions",
+        "Actions of ttl checker",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_COMPACT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_ttl_checker_compact_duration",
+        "Duration of ttl checker compact files execution",
+        exponential_buckets(0.0005, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref TTL_CHECKER_POLL_INTERVAL_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_ttl_checker_poll_interval",
+        "Interval of ttl checker poll"
     )
     .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
