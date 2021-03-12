@@ -334,14 +334,6 @@ impl AutoSplitController {
         region_infos_map
     }
 
-    fn read_flow(&self, region_infos: &[RegionInfo]) -> usize {
-        let mut flow = 0;
-        for region_info in region_infos {
-            flow += region_info.flow.read_bytes;
-        }
-        flow / self.cfg.detect_times as usize
-    }
-
     pub fn flush(&mut self, read_stats_vec: Vec<ReadStats>) -> (Vec<usize>, Vec<SplitInfo>) {
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(TOP_N as usize);
@@ -350,9 +342,12 @@ impl AutoSplitController {
         for (region_id, region_infos) in region_infos_map {
             let pre_sum = prefix_sum(region_infos.iter(), RegionInfo::get_qps);
             let qps = *pre_sum.last().unwrap(); // region_infos is not empty
-            if qps < self.cfg.qps_threshold
-                && self.read_flow(&region_infos) < self.cfg.byte_threshold
-            {
+            let byte = region_infos
+                .iter()
+                .fold(0, |flow, region_info| flow + region_info.flow.read_bytes);
+            debug!("load base split params";"region_id"=>region_id,"qps"=>qps,"qps_threshold"=>self.cfg.qps_threshold,"byte"=>byte,"byte_threshold"=>self.cfg.byte_threshold);
+
+            if qps < self.cfg.qps_threshold && byte < self.cfg.byte_threshold {
                 self.recorders.remove_entry(&region_id);
                 continue;
             }
