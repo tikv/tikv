@@ -181,6 +181,11 @@ make_auto_flush_static_metric! {
         ttl_tombstone,
     }
 
+    pub label_enum CheckMemLockResult {
+        locked,
+        unlocked,
+    }
+
     pub struct CommandScanDetails: LocalIntCounter {
         "req" => CommandKind,
         "cf" => GcKeysCF,
@@ -222,6 +227,11 @@ make_auto_flush_static_metric! {
 
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
+    }
+
+    pub struct CheckMemLockHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+        "result" => CheckMemLockResult,
     }
 }
 
@@ -364,4 +374,13 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_check_mem_lock_duration_seconds",
+        "Histogram of the duration of checking memory locks",
+        &["type", "result"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
+        auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 }
