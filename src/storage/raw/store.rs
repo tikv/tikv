@@ -2,8 +2,9 @@
 
 use super::ttl::TTLSnapshot;
 
-use crate::storage::kv::{Cursor, Result, ScanMode, Snapshot};
+use crate::storage::kv::{Cursor, ScanMode, Snapshot};
 use crate::storage::Statistics;
+use crate::storage::{Error, Result};
 
 use engine_traits::{CfName, IterOptions, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, KvPair};
@@ -49,7 +50,10 @@ impl<'a, S: Snapshot> RawStore<S> {
     ) -> Result<Option<u64>> {
         match self {
             RawStore::Vanilla(_) => panic!("get ttl on non-ttl store"),
-            RawStore::TTL(inner) => inner.snapshot.get_key_ttl_cf(cf, key, stats),
+            RawStore::TTL(inner) => inner
+                .snapshot
+                .get_key_ttl_cf(cf, key, stats)
+                .map_err(Error::from),
         }
     }
 
@@ -131,12 +135,15 @@ impl<'a, S: Snapshot> RawStoreInner<S> {
     ) -> Result<Option<Vec<u8>>> {
         // no scan_count for this kind of op.
         let key_len = key.as_encoded().len();
-        self.snapshot.get_cf(cf, key).map(|value| {
-            stats.data.flow_stats.read_keys = 1;
-            stats.data.flow_stats.read_bytes =
-                key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
-            value
-        })
+        self.snapshot
+            .get_cf(cf, key)
+            .map(|value| {
+                stats.data.flow_stats.read_keys = 1;
+                stats.data.flow_stats.read_bytes =
+                    key_len + value.as_ref().map(|v| v.len()).unwrap_or(0);
+                value
+            })
+            .map_err(Error::from)
     }
 
     /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is

@@ -947,9 +947,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let r = store
-                        .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
-                        .map_err(Error::from);
+                    let r = store.raw_get_key_value(cf, &Key::from_encoded(key), &mut stats);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -1021,11 +1019,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let mut stats = Statistics::default();
                             let store = RawStore::new(snapshot, enable_ttl);
                             let cf = Self::rawkv_cf(&cf)?;
-                            results.push(
-                                store
-                                    .raw_get_key_value(cf, &Key::from_encoded(key), &mut stats)
-                                    .map_err(Error::from),
-                            );
+                            results.push(store.raw_get_key_value(
+                                cf,
+                                &Key::from_encoded(key),
+                                &mut stats,
+                            ));
                             tls_collect_read_flow(ctx.get_region_id(), &stats);
                         }
                         Err(e) => {
@@ -1093,9 +1091,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let result: Vec<Result<KvPair>> = keys
                         .into_iter()
                         .map(|k| {
-                            let v = store
-                                .raw_get_key_value(cf, &k, &mut stats)
-                                .map_err(Error::from);
+                            let v = store.raw_get_key_value(cf, &k, &mut stats);
                             (k, v)
                         })
                         .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
@@ -1362,13 +1358,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             )
                             .await
                     }
-                    .map_err(Error::from)
-                    .map(|results| {
-                        results
-                            .into_iter()
-                            .map(|x| x.map_err(Error::from))
-                            .collect()
-                    });
+                    .map_err(Error::from);
 
                     metrics::tls_collect_read_flow(ctx.get_region_id(), &statistics);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -1467,14 +1457,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                     key_only,
                                 )
                                 .await
-                        }
-                        .map(|results| {
-                            results
-                                .into_iter()
-                                .map(|x| x.map_err(Error::from))
-                                .collect()
-                        })
-                        .map_err(Error::from)?;
+                        }?;
                         result.extend(pairs.into_iter());
                     }
                     let mut key_ranges = vec![];
@@ -1543,9 +1526,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
                     let mut stats = Statistics::default();
-                    let r = store
-                        .raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats)
-                        .map_err(Error::from);
+                    let r = store.raw_get_key_ttl(cf, &Key::from_encoded(key), &mut stats);
                     KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
                     tls_collect_read_flow(ctx.get_region_id(), &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
