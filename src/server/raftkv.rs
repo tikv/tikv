@@ -28,9 +28,9 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, Value};
 
 use super::metrics::*;
 use crate::storage::kv::{
-    write_modifies, Callback, CbContext, Cursor, Engine, Error as KvError,
-    ErrorInner as KvErrorInner, ExtCallback, Iterator as EngineIterator, Modify, ScanMode,
-    SnapContext, Snapshot as EngineSnapshot, WriteData,
+    write_modifies, Callback, CbContext, Engine, Error as KvError, ErrorInner as KvErrorInner,
+    ExtCallback, Iterator as EngineIterator, Modify, SnapContext, Snapshot as EngineSnapshot,
+    WriteData,
 };
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::{self, kv};
@@ -395,42 +395,7 @@ where
             return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
-        let mut reqs = Vec::with_capacity(batch.modifies.len());
-        for m in batch.modifies {
-            let mut req = Request::default();
-            match m {
-                Modify::Delete(cf, k) => {
-                    let mut delete = DeleteRequest::default();
-                    delete.set_key(k.into_encoded());
-                    if cf != CF_DEFAULT {
-                        delete.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Delete);
-                    req.set_delete(delete);
-                }
-                Modify::Put(cf, k, v) => {
-                    let mut put = PutRequest::default();
-                    put.set_key(k.into_encoded());
-                    put.set_value(v);
-                    if cf != CF_DEFAULT {
-                        put.set_cf(cf.to_string());
-                    }
-                    req.set_cmd_type(CmdType::Put);
-                    req.set_put(put);
-                }
-                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
-                    let mut delete_range = DeleteRangeRequest::default();
-                    delete_range.set_cf(cf.to_string());
-                    delete_range.set_start_key(start_key.into_encoded());
-                    delete_range.set_end_key(end_key.into_encoded());
-                    delete_range.set_notify_only(notify_only);
-                    req.set_cmd_type(CmdType::DeleteRange);
-                    req.set_delete_range(delete_range);
-                }
-            }
-            reqs.push(req);
-        }
-
+        let reqs = modifies_to_requests(batch.modifies);
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 
@@ -577,33 +542,18 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter(self, iter_opt),
-            mode,
-            prefix_seek,
-        ))
+        Ok(RegionSnapshot::iter(self, iter_opt))
     }
 
-    fn iter_cf(
-        &self,
-        cf: CfName,
-        iter_opt: IterOptions,
-        mode: ScanMode,
-    ) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
-        let prefix_seek = iter_opt.prefix_seek_used();
-        Ok(Cursor::new(
-            RegionSnapshot::iter_cf(self, cf, iter_opt)?,
-            mode,
-            prefix_seek,
-        ))
+        RegionSnapshot::iter_cf(self, cf, iter_opt).map_err(kv::Error::from)
     }
 
     #[inline]
@@ -746,6 +696,45 @@ bitflags! {
         /// It helps CDC recognize 1PC transactions and handle them correctly.
         const ONE_PC = 0b00000001;
     }
+}
+
+pub fn modifies_to_requests(modifies: Vec<Modify>) -> Vec<Request> {
+    let mut reqs = Vec::with_capacity(modifies.len());
+    for m in modifies {
+        let mut req = Request::default();
+        match m {
+            Modify::Delete(cf, k) => {
+                let mut delete = DeleteRequest::default();
+                delete.set_key(k.into_encoded());
+                if cf != CF_DEFAULT {
+                    delete.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Delete);
+                req.set_delete(delete);
+            }
+            Modify::Put(cf, k, v) => {
+                let mut put = PutRequest::default();
+                put.set_key(k.into_encoded());
+                put.set_value(v);
+                if cf != CF_DEFAULT {
+                    put.set_cf(cf.to_string());
+                }
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                let mut delete_range = DeleteRangeRequest::default();
+                delete_range.set_cf(cf.to_string());
+                delete_range.set_start_key(start_key.into_encoded());
+                delete_range.set_end_key(end_key.into_encoded());
+                delete_range.set_notify_only(notify_only);
+                req.set_cmd_type(CmdType::DeleteRange);
+                req.set_delete_range(delete_range);
+            }
+        }
+        reqs.push(req);
+    }
+    reqs
 }
 
 #[cfg(test)]

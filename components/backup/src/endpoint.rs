@@ -11,8 +11,9 @@ use std::{borrow::Cow, time::*};
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
+use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage::*;
+use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
@@ -21,12 +22,13 @@ use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
-use tikv::storage::kv::{Engine, ScanMode, SnapContext, Snapshot};
+use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
@@ -64,11 +66,7 @@ pub struct Task {
     pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Task);
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -265,7 +263,7 @@ impl BackupRange {
                         files.append(&mut split_files);
                     }
                     Err(e) => {
-                        error!(?e; "backup save file failed");
+                        error_unknown!(?e; "backup save file failed");
                         return Err(e);
                     }
                 }
@@ -274,7 +272,7 @@ impl BackupRange {
                         writer = w;
                     }
                     Err(e) => {
-                        error!(?e; "backup writer failed");
+                        error_unknown!(?e; "backup writer failed");
                         return Err(e);
                     }
                 }
@@ -282,7 +280,7 @@ impl BackupRange {
 
             // Build sst files.
             if let Err(e) = writer.write(entries, true) {
-                error!(?e; "backup build sst failed");
+                error_unknown!(?e; "backup build sst failed");
                 return Err(e);
             }
         }
@@ -304,7 +302,7 @@ impl BackupRange {
                     files.append(&mut split_files);
                 }
                 Err(e) => {
-                    error!(?e; "backup save file failed");
+                    error_unknown!(?e; "backup save file failed");
                     return Err(e);
                 }
             }
@@ -339,11 +337,10 @@ impl BackupRange {
         let start = Instant::now();
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
-        let mut option = IterOptions::default();
-        if let Some(end) = self.end_key.clone() {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        let mut cursor = snapshot.iter_cf(self.cf, option, ScanMode::Forward)?;
+        let mut cursor = CursorBuilder::new(&snapshot, self.cf)
+            .range(None, self.end_key.clone())
+            .scan_mode(ScanMode::Forward)
+            .build()?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
@@ -366,7 +363,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!(?e; "backup raw kv build sst failed");
+                error_unknown!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -396,7 +393,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error!(?e; "backup writer failed");
+                error_unknown!(?e; "backup writer failed");
                 return Err(e);
             }
         };
@@ -408,7 +405,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!(?e; "backup save file failed");
+                error_unknown!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -663,6 +660,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         // TODO: make it async.
         self.pool.borrow_mut().spawn(move || {
             tikv_alloc::add_thread_memory_accessor();
+            let _with_io_type = WithIOType::new(IOType::Export);
             defer!({
                 tikv_alloc::remove_thread_memory_accessor();
             });
@@ -671,11 +669,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let backend = match create_storage(&request.backend) {
                 Ok(backend) => backend,
                 Err(err) => {
-                    error!(?err; "backup create storage failed");
+                    error_unknown!(?err; "backup create storage failed");
                     let mut response = BackupResponse::default();
                     response.set_error(crate::Error::Io(err).into());
                     if let Err(err) = tx.unbounded_send(response) {
-                        error!(?err; "backup failed to send response");
+                        error_unknown!(?err; "backup failed to send response");
                     }
                     return;
                 }
@@ -762,7 +760,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     let mut response = BackupResponse::default();
                     match res {
                         Err(e) => {
-                            error!(?e; "backup region failed";
+                            error_unknown!(?e; "backup region failed";
                                 "region" => ?brange.region,
                                 "start_key" => &log_wrappers::Value::key(&start_key),
                                 "end_key" => &log_wrappers::Value::key(&end_key),
@@ -791,7 +789,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     response.set_end_key(end_key);
 
                     if let Err(e) = tx.unbounded_send(response) {
-                        error!(?e; "backup failed to send response");
+                        error_unknown!(?e; "backup failed to send response");
                         return;
                     }
                 }
@@ -943,7 +941,9 @@ pub mod tests {
     use std::path::{Path, PathBuf};
     use std::{fs, thread};
 
+    use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
+    use file_system::{IOOp, WithIORateLimit};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -955,11 +955,11 @@ pub mod tests {
     use tempfile::TempDir;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv::storage::{RocksEngine, TestEngineBuilder};
+    use tikv_util::config::ReadableSize;
     use tikv_util::worker::Worker;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
-    use tikv_util::config::ReadableSize;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -1230,6 +1230,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
+        let (_guard, stats) = WithIORateLimit::new(0);
         let (tmp, endpoint) = new_endpoint();
         let engine = endpoint.engine.clone();
 
@@ -1257,10 +1258,20 @@ pub mod tests {
                 backup_tss.push((alloc_ts(), len));
             }
         }
+        // flush to disk so that read requests can be traced by TiKV limiter.
+        engine
+            .get_rocksdb()
+            .flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+            .unwrap();
+        engine
+            .get_rocksdb()
+            .flush_cf(engine_traits::CF_WRITE, true /*sync*/)
+            .unwrap();
 
         // TODO: check key number for each snapshot.
         let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
         for (ts, len) in backup_tss {
+            stats.reset();
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
@@ -1295,6 +1306,8 @@ pub mod tests {
             );
             let (none, _rx) = block_on(rx.into_future());
             assert!(none.is_none(), "{:?}", none);
+            assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
+            assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
         }
     }
 

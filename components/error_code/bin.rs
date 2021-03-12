@@ -4,6 +4,7 @@ use error_code::*;
 
 fn main() {
     let err_codes = vec![
+        cloud::ALL_ERROR_CODES.iter(),
         codec::ALL_ERROR_CODES.iter(),
         coprocessor::ALL_ERROR_CODES.iter(),
         encryption::ALL_ERROR_CODES.iter(),

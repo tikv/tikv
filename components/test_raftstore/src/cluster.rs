@@ -18,7 +18,7 @@ use raft::eraftpb::ConfChangeType;
 use tempfile::TempDir;
 
 use collections::{HashMap, HashSet};
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::raw::DB;
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
