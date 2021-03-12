@@ -18,7 +18,7 @@ use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
 pub const TOP_N: usize = 10;
-pub const MAX_RETRY_TIME: i32 = 10000;
+pub const MAX_RETRY_TIME: i32 = 1000;
 
 pub struct SplitInfo {
     pub region_id: u64,
