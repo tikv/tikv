@@ -1152,7 +1152,7 @@ impl Initializer {
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
 
-        let mut resolver = if self.build_resolver {
+        let resolver = if self.build_resolver {
             Some(Resolver::new(region_id))
         } else {
             None
@@ -1163,7 +1163,7 @@ impl Initializer {
         let start = Instant::now_coarse();
         // Time range: (checkpoint_ts, current]
         let current = TimeStamp::max();
-        let mut scanner = ScannerBuilder::new(snap, current, false)
+        let scanner = ScannerBuilder::new(snap, current, false)
             .range(None, None)
             .build_delta_scanner(self.checkpoint_ts, self.txn_extra_op)
             .unwrap();
@@ -1176,11 +1176,6 @@ impl Initializer {
 
         let mut done = false;
         while !done {
-            info!("async incremental scan v2";
-                "region_id" => region_id,
-                "downstream_id" => ?downstream_id,
-                "observe_id" => ?self.observe_id);
-
             if self.downstream_state.load() != DownstreamState::Normal {
                 info!("async incremental scan canceled";
                     "region_id" => region_id,
@@ -1188,29 +1183,25 @@ impl Initializer {
                     "observe_id" => ?self.observe_id);
                 return;
             }
-            let batch_size = self.batch_size;
             let scan_context = scan_context.clone();
             let entries = match self
                 .async_do_blocking(move || {
-                    info!("async incremental scan v2 batch start");
-                    let mut context = scan_context.lock().unwrap();
-                    info!("async incremental scan v2 batch lock taken");
-                    let res = Self::scan_batch(
+                    let context = scan_context.lock().unwrap();
+                    let result = Self::scan_batch(
                         &mut context.scanner.borrow_mut(),
                         context.batch_size,
                         context.resolver.borrow_mut().as_mut(),
                     );
-                    info!("async incremental scan v2 batch end");
-                    res
+                    result
                 })
                 .await
             {
                 Ok(res) => {
-                    info!("got cdc scan entries"; "len" => res.len(), "region_id" => region_id);
+                    debug!("cdc async incremental scan batch completed"; "len" => res.len(), "region_id" => region_id);
                     res
                 }
                 Err(e) => {
-                    error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
+                    error!("cdc async incremental scan batch failed"; "error" => ?e, "region_id" => region_id);
                     // TODO: record in metrics.
                     let deregister = Deregister::Downstream {
                         region_id,
@@ -1228,7 +1219,7 @@ impl Initializer {
             if let Some(None) = entries.last() {
                 done = true;
             }
-            info!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+
             fail_point!("before_schedule_incremental_scan");
 
             let downstream = self.downstream.as_ref().unwrap();
@@ -1236,11 +1227,11 @@ impl Initializer {
                 Delegate::convert_to_grpc_events(region_id, downstream.get_req_id(), entries);
             let num_entires = events.len();
             for event in events.into_iter() {
-                info!("cdc incremental scan sending data"; "num_entires" => num_entires);
+                debug!("cdc incremental scan sending data"; "num_entires" => num_entires);
                 if let Some(rate_limiter) = downstream.get_rate_limiter() {
                     match rate_limiter.send_scan_event(CdcEvent::Event(event)).await {
                         Ok(_) => {
-                            info!("cdc incremental scan sent data"; "num_entires" => num_entires)
+                            debug!("cdc incremental scan sent data"; "num_entires" => num_entires)
                         }
                         Err(e) => {
                             error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
@@ -1264,11 +1255,9 @@ impl Initializer {
         }
 
         let takes = start.elapsed();
-        info!("cdc building resolver"; "region_id" => region_id);
         if let Some(resolver) = scan_context.lock().unwrap().resolver.take() {
             self.finish_building_resolver(resolver, region, takes);
         }
-        info!("cdc finished building resolver"; "region_id" => region_id);
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 

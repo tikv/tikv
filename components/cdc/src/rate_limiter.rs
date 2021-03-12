@@ -4,10 +4,9 @@ use crate::metrics::*;
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use crossbeam::queue::SegQueue as Queue;
 use futures::select;
-use futures::task::{noop_waker_ref, AtomicWaker};
-use futures::{future::Fuse, future::poll_fn, pin_mut, FutureExt, Sink, SinkExt, StreamExt};
+use futures::task::AtomicWaker;
+use futures::{future::poll_fn, FutureExt, Sink, SinkExt, StreamExt};
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -15,8 +14,7 @@ use std::task::{Context, Poll, Waker};
 use tokio::sync::mpsc::{
     channel as async_channel, Receiver as AsyncReceiver, Sender as AsyncSender,
 };
-use tokio::time::interval as tokio_timer_interval;
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RateLimiterError {
@@ -60,6 +58,11 @@ struct State {
     wait_queue: RwLock<Queue<Arc<Mutex<Option<Waker>>>>>,
     // used to store the waker of the drainer's task
     recv_task: AtomicWaker,
+    // used to indicate that upon seeing a true value, the drainer
+    // tries flush down as many events as possible.
+    // Note that it is NOT a barrier, since a strict barrier
+    // would hinder performance.
+    force_flush_flag: AtomicBool,
 
     #[cfg(test)]
     blocked_sender_count: AtomicUsize,
@@ -141,6 +144,8 @@ pub fn new_pair<E>(
         ref_count: AtomicUsize::new(0),
         wait_queue: RwLock::new(Queue::new()),
         recv_task: AtomicWaker::new(),
+        force_flush_flag: AtomicBool::new(false),
+
         #[cfg(test)]
         blocked_sender_count: AtomicUsize::new(0),
     });
@@ -173,7 +178,7 @@ impl<E> RateLimiter<E> {
         }
 
         let queue_size = self.sink.len();
-        info!("cdc send_realtime_event"; "queue_size" => queue_size);
+        debug!("cdc send_realtime_event"; "queue_size" => queue_size);
         CDC_SINK_QUEUE_SIZE_HISTOGRAM.observe(queue_size as f64);
         if queue_size >= self.state.close_sink_threshold {
             warn!("cdc send_realtime_event queue length reached threshold"; "queue_size" => queue_size);
@@ -196,19 +201,18 @@ impl<E> RateLimiter<E> {
         Ok(())
     }
 
-    /// send_scan_event
+    /// send_scan_event is used to send an event from incremental scan.
+    /// Note that this function is async and may block.
     pub async fn send_scan_event(&self, event: E) -> Result<(), RateLimiterError> {
         let sink_clone = self.sink.clone();
         let state_clone = self.state.clone();
         let threshold = self.state.block_scan_threshold;
 
         let timer = CDC_SCAN_BLOCK_DURATION_HISTOGRAM.start_coarse_timer();
-        info!("cdc send_scan_event blocking"; "queue_size" => sink_clone.len());
         BlockSender::block_sender(self.state.as_ref(), move || {
             sink_clone.len() >= threshold && !state_clone.is_sink_closed.load(Ordering::SeqCst)
         })
         .await;
-        info!("cdc send_scan_event block done");
         if self.state.is_sink_closed.load(Ordering::SeqCst) {
             return Err(RateLimiterError::DisconnectedError);
         }
@@ -226,6 +230,18 @@ impl<E> RateLimiter<E> {
                 return Err(RateLimiterError::DisconnectedError);
             }
         }
+    }
+
+    /// tells the drainer to flush the underlying sink.
+    /// It is NOT guaranteed that the drainer will consume all data
+    /// inside the RateLimiter, but only that the underlying rpc sink 
+    /// will be flushed at least once after the call.
+    /// 
+    /// Since we do not use a timer in the drainer, make sure that
+    /// for any rpc connection, this function is called periodically.
+    pub fn start_flush(&self) {
+        self.state.force_flush_flag.store(true, Ordering::SeqCst);
+        self.state.wake_up_drainer();
     }
 
     #[cfg(test)]
@@ -249,7 +265,10 @@ impl<E> Clone for RateLimiter<E> {
 
 impl<E> Drop for RateLimiter<E> {
     fn drop(&mut self) {
-        self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
+        let prev = self.state.ref_count.fetch_sub(1, Ordering::SeqCst);
+        if prev == 0 {
+            self.state.wake_up_drainer();
+        }
     }
 }
 
@@ -390,7 +409,7 @@ impl<E> Drainer<E> {
                 // handles the event where one event is successfully consumed from the upstream queue
                 next_event = drain_one => {
                     match next_event {
-                        Some(v) => {
+                        DrainOneResult::Value(v) => {
                             // One event has been successfully taken out of the queue,
                             // so one sender (who has been blocking) can now proceed.
                             self.state.wake_up_one_sender();
@@ -401,9 +420,8 @@ impl<E> Drainer<E> {
                                 })?;
 
                             unflushed_size += 1;
-                            info!("cdc rpc_sink drain"; "unflushed_size" => unflushed_size);
-                            if unflushed_size >= 128 || std::time::Instant::now().duration_since(last_flushed_time) > Duration::from_millis(150) {
-                                info!("cdc rpc_sink flush");
+                            if unflushed_size >= 128 
+                                || std::time::Instant::now().duration_since(last_flushed_time) > Duration::from_millis(200) {
                                 rpc_sink.flush().await.map_err(|err| {
                                     self.state.wake_up_all_senders();
                                     DrainerError::RpcSinkError(err)
@@ -412,8 +430,20 @@ impl<E> Drainer<E> {
                                 last_flushed_time = std::time::Instant::now();
                             }
                         },
-                        None => {
+                        DrainOneResult::FlushRequest => {
+                            rpc_sink.flush().await.map_err(|err| {
+                                self.state.wake_up_all_senders();
+                                DrainerError::RpcSinkError(err)
+                            })?;
+                            unflushed_size = 0;
+                            last_flushed_time = std::time::Instant::now();
+                        },
+                        DrainOneResult::Disconnected => {
+                            info!("cdc rate_limiter closing");
                             // The upstream queue has closed.
+                            rpc_sink.flush().await.map_err(|err| {
+                                DrainerError::RpcSinkError(err)
+                            })?;
                             return Ok(())
                         },
                     }
@@ -443,6 +473,12 @@ struct DrainOne<'a, E> {
     state: &'a State,
 }
 
+enum DrainOneResult<E> {
+    Value(E),
+    FlushRequest,
+    Disconnected,
+}
+
 impl<'a, E> DrainOne<'a, E> {
     #[inline]
     fn wrap(receiver: &'a Receiver<E>, state: &'a State) -> Self {
@@ -450,43 +486,34 @@ impl<'a, E> DrainOne<'a, E> {
     }
 }
 
-struct RpcSinkReady<'a, I, S: Sink<I> + Unpin> {
-    sink: &'a mut S,
-    _phantom: PhantomData<&'a I>,
-}
-
-impl<'a, I, S> Future for RpcSinkReady<'a, I, S>
-where
-    S: Sink<I> + Unpin,
-{
-    type Output = Result<(), <S as Sink<I>>::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().sink.poll_ready_unpin(cx)
-    }
-}
-
 impl<'a, E> Future for DrainOne<'a, E> {
     // TODO returns a Result to provide details on errors.
-    type Output = Option<E>;
+    type Output = DrainOneResult<E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
+            if self.state.force_flush_flag.swap(false, Ordering::SeqCst) {
+                return Poll::Ready(DrainOneResult::FlushRequest);
+            }
             if self.receiver.is_empty() && self.state.ref_count.load(Ordering::SeqCst) == 0 {
-                return Poll::Ready(None);
+                return Poll::Ready(DrainOneResult::Disconnected);
             }
             return match self.receiver.try_recv() {
-                Ok(v) => Poll::Ready(Some(v)),
+                Ok(v) => Poll::Ready(DrainOneResult::Value(v)),
                 Err(TryRecvError::Empty) => {
                     self.state.yield_drainer(cx);
-                    if !self.receiver.is_empty() || self.state.ref_count.load(Ordering::SeqCst) == 0
+                    if self.state.ref_count.load(Ordering::SeqCst) == 0 {
+                        self.state.unyield_drainer();
+                        return Poll::Ready(DrainOneResult::Disconnected);
+                    }
+                    if !self.receiver.is_empty()
                     {
                         self.state.unyield_drainer();
                         continue;
                     }
                     Poll::Pending
                 }
-                Err(TryRecvError::Disconnected) => Poll::Ready(None),
+                Err(TryRecvError::Disconnected) => Poll::Ready(DrainOneResult::Disconnected),
             };
         }
     }
@@ -495,7 +522,6 @@ impl<'a, E> Future for DrainOne<'a, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::sink;
     use std::sync::Mutex;
 
     type MockCdcEvent = u64;

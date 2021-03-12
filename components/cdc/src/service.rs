@@ -264,7 +264,7 @@ where
                     _ => {}
                 }
             },
-            other => {},
+            _ => {},
         }
 
         this.buf.as_mut().unwrap().push(event);
@@ -415,14 +415,7 @@ impl Conn {
     }
 
     pub fn flush(&self) {
-        /*
-        if !self.sink.is_empty() {
-            if let Some(notifier) = self.sink.get_notifier() {
-                notifier.notify();
-            }
-        }
-         */
-        // no-op for now
+       self.sink.start_flush();
     }
 }
 
