@@ -122,12 +122,12 @@ fn hijack_unary<F, R, C: PdMocker>(
         .as_ref()
         .and_then(|case| f(case.as_ref()))
         .or_else(|| f(mock.default_handler.as_ref()));
-
     match resp {
         Some(Ok(resp)) => ctx.spawn(
             sink.success(resp)
                 .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
         ),
+
         Some(Err(err)) => {
             let status = RpcStatus::new(RpcStatusCode::UNKNOWN, Some(format!("{:?}", err)));
             ctx.spawn(
@@ -136,10 +136,7 @@ fn hijack_unary<F, R, C: PdMocker>(
             );
         }
         _ => {
-            let status = RpcStatus::new(
-                RpcStatusCode::UNIMPLEMENTED,
-                Some("Unimplemented".to_owned()),
-            );
+            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some("Unavailable".to_owned()));
             ctx.spawn(
                 sink.fail(status)
                     .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),

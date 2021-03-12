@@ -113,6 +113,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 

@@ -22,7 +22,7 @@ use collections::HashSet;
 use fail::fail_point;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    MetadataBuilder, Result as GrpcResult,
+    Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatus, RpcStatusCode,
 };
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
@@ -34,7 +34,6 @@ use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-const MAX_RETRY_TIMES: usize = 5;
 const RETRY_INTERVAL_SEC: u64 = 1; // 1s
 
 pub struct Inner {
@@ -127,34 +126,25 @@ impl Client {
         }
     }
 
-    pub fn change_client_stub(
+    pub fn update_client(
         &self,
         client_stub: PdClientStub,
-        previous: Option<GetMembersResponse>,
-        members_resp: Option<GetMembersResponse>,
         address: String,
+        members_resp: Option<GetMembersResponse>,
     ) {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
-        if inner.address == address
-            && previous.is_some()
-            && members_resp.is_some()
-            && previous.unwrap() == members_resp.clone().unwrap()
-        {
-            return;
-        }
 
-        info!("change pd client stub"; "from"=> &inner.address, "to" => &address);
         let members = if let Some(members) = members_resp {
             members
         } else {
             inner.members.clone()
         };
 
-        let receiver_addr = get_random_member_addr(members.get_leader());
+        let target_addr = get_random_member_addr(members.get_leader());
 
         let mut builder = MetadataBuilder::with_capacity(1);
-        builder.add_str("receiver", &receiver_addr).unwrap();
+        builder.add_str("pd-forwarded-host", &target_addr).unwrap();
         let metadata = builder.build();
         let call_option = CallOption::default().headers(metadata);
 
@@ -171,12 +161,13 @@ impl Client {
         let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
-        inner.address = address;
+        inner.address = address.clone();
         inner.members = members;
         inner.last_update = Instant::now();
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
+        info!("change pd client stub"; "from"=> &inner.address, "to" => address);
         slow_log!(
             start_refresh.elapsed(),
             "PD client refresh region heartbeat",
@@ -236,7 +227,7 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
-    pub async fn reconnect(&self, force: bool) -> Result<()> {
+    pub async fn reconnect(&self, force: bool, try_follower: bool) -> Result<()> {
         let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
@@ -247,20 +238,49 @@ impl Client {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = async move { connector.try_connect_pd(&members, force).await };
-            slow_log!(start.elapsed(), "PD client try connect leader");
-            (fut, start, inner.members.clone())
+            let fut = self.reconnect_pd(connector, members, force, try_follower);
+            slow_log!(start.elapsed(), "try reconnect pd");
+            (fut, start)
         };
 
-        let (client, members) = match future.await? {
-            Some(pair) => pair,
+        let (client, address, members) = match future.await? {
+            Some(tuple) => tuple,
             None => return Ok(()),
         };
-        fail_point!("leader_client_reconnect", |_| Ok(()));
+        fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.change_client_stub(client, Some(previous_members), Some(members), address);
+        self.update_client(client, address, Some(members));
         info!("tring to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
+    }
+
+    async fn reconnect_pd(
+        &self,
+        connector: PdConnector,
+        members_resp: GetMembersResponse,
+        force: bool,
+        try_follower: bool,
+    ) -> Result<Option<StubTuple>> {
+        let resp = connector.load_members(&members_resp).await?;
+        if !force && resp == members_resp {
+            return Ok(None);
+        }
+        let leader = resp.get_leader();
+        let members = resp.get_members();
+        if let Ok(Some((client, address))) = connector.reconnect_leader(leader).await {
+            return Ok(Some((client, address, resp)));
+        }
+        if try_follower {
+            if let Ok(Some((client, address))) =
+                connector.reconnect_followers(members, leader).await
+            {
+                return Ok(Some((client, address, resp)));
+            }
+        }
+        Err(box_err!(
+            "failed to connect to {:?}",
+            members_resp.get_members()
+        ))
     }
 }
 
@@ -282,7 +302,7 @@ where
     Req: Clone + Send + 'static,
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    async fn reconnect_if_needed(&mut self) -> bool {
+    async fn reconnect_if_needed(&mut self, try_follower: bool) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
@@ -294,7 +314,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect(true).await {
+        match self.client.reconnect(true, try_follower).await {
             Ok(_) => {
                 self.request_sent = 0;
                 true
@@ -318,14 +338,24 @@ where
         (self.func)(&self.client, r).await
     }
 
-    fn should_not_retry(resp: &Result<Resp>) -> bool {
+    fn should_not_retry(resp: &Result<Resp>) -> (bool, bool) {
         match resp {
-            Ok(_) => true,
+            Ok(_) => (true, false),
             // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
+            Err(Error::Incompatible) => (true, false),
+            Err(Error::Grpc(err)) => match err {
+                RpcFailure(RpcStatus { status, details: _ }) => {
+                    if *status == RpcStatusCode::UNAVAILABLE {
+                        (false, true)
+                    } else {
+                        (false, false)
+                    }
+                }
+                _ => (false, false),
+            },
             Err(err) => {
                 error!(?*err; "request failed, retry");
-                false
+                (false, false)
             }
         }
     }
@@ -334,11 +364,16 @@ where
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(mut self) -> PdFuture<Resp> {
         Box::pin(async move {
+            let mut try_follower = false;
             while self.reconnect_count != 0 {
-                if self.reconnect_if_needed().await {
+                if self.reconnect_if_needed(try_follower).await {
                     let resp = self.send_and_receive().await;
-                    if Self::should_not_retry(&resp) {
+                    let (not_retry, network_err) = Self::should_not_retry(&resp);
+                    if not_retry {
                         return resp;
+                    }
+                    if network_err {
+                        try_follower = true
                     }
                 }
             }
@@ -367,7 +402,7 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if let Err(e) = block_on(client.reconnect(true)) {
+                if let Err(e) = block_on(client.reconnect(true, false)) {
                     error!(?e; "reconnect failed");
                 }
                 err = Some(e);
@@ -378,7 +413,7 @@ where
     Err(err.unwrap_or_else(|| box_err!("fail to request")))
 }
 
-pub type StubPair = (PdClientStub, GetMembersResponse);
+pub type StubTuple = (PdClientStub, String, GetMembersResponse);
 
 pub struct PdConnector {
     env: Arc<Environment>,
@@ -390,7 +425,7 @@ impl PdConnector {
         PdConnector { env, security_mgr }
     }
 
-    pub async fn validate_endpoints(&self, cfg: &Config) -> Result<StubPair> {
+    pub async fn validate_endpoints(&self, cfg: &Config) -> Result<StubTuple> {
         let len = cfg.endpoints.len();
         let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
         let mut members = None;
@@ -400,7 +435,7 @@ impl PdConnector {
                 return Err(box_err!("duplicate PD endpoint {}", ep));
             }
 
-            let (_, resp) = match self.connect(ep).await {
+            let (_, _, resp) = match self.connect(ep).await {
                 Ok(resp) => resp,
                 // Ignore failed PD node.
                 Err(e) => {
@@ -423,7 +458,6 @@ impl PdConnector {
                 cluster_id = Some(cid);
             }
             // TODO: check all fields later?
-
             if members.is_none() {
                 members = Some(resp);
             }
@@ -431,24 +465,25 @@ impl PdConnector {
 
         match members {
             Some(members) => {
-                let (client, members) = self.reconnect_leader(&members, true).await?.unwrap();
+                let resp = self.load_members(&members).await?;
+                let (client, address) = self.reconnect_leader(resp.get_leader()).await?.unwrap();
                 info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-                Ok((client, members))
+                Ok((client, address, resp))
             }
             _ => Err(box_err!("PD cluster failed to respond")),
         }
     }
 
-    pub async fn connect(&self, addr: &str) -> Result<StubPair> {
+    pub async fn connect(&self, addr: &str) -> Result<StubTuple> {
         info!("connecting to PD endpoint"; "endpoints" => addr);
-        let addr = addr
+        let addr_trim = addr
             .trim_start_matches("http://")
             .trim_start_matches("https://");
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
-            self.security_mgr.connect(cb, addr)
+            self.security_mgr.connect(cb, addr_trim)
         };
         let client = PdClientStub::new(channel);
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
@@ -457,12 +492,12 @@ impl PdConnector {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
         match response {
-            Ok(resp) => Ok((client, resp)),
+            Ok(resp) => Ok((client, addr.to_string(), resp)),
             Err(e) => Err(Error::Grpc(e)),
         }
     }
 
-    pub async fn load_members(&self, previous: &GetMembersResponse) -> Option<GetMembersResponse> {
+    pub async fn load_members(&self, previous: &GetMembersResponse) -> Result<GetMembersResponse> {
         let previous_leader = previous.get_leader();
         let members = previous.get_members();
         let cluster_id = previous.get_header().get_cluster_id();
@@ -475,12 +510,12 @@ impl PdConnector {
         {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
-                    Ok((_, r)) => {
+                    Ok((_, _, r)) => {
                         let new_cluster_id = r.get_header().get_cluster_id();
                         if new_cluster_id == cluster_id {
                             // check whether the response have leader info, otherwise continue to loop the rest members
                             if r.has_leader() {
-                                return Some(r);
+                                return Ok(r);
                             }
                         } else {
                             panic!(
@@ -496,48 +531,59 @@ impl PdConnector {
                 }
             }
         }
-        None
+        Err(box_err!(
+            "failed to connect to {:?}",
+            previous.get_members()
+        ))
     }
 
-    pub async fn connect_member(&self, peer: &Member) -> Option<PdClientStub> {
+    pub async fn connect_member(
+        &self,
+        peer: &Member,
+        retry: bool,
+    ) -> Option<(PdClientStub, String)> {
         for ep in peer.get_client_urls() {
-            if let Ok((client, _)) = self.connect(ep.as_str()).await {
-                info!("connected to PD leader"; "endpoints" => ep);
-                return Some(client);
+            if let Ok((client, address, _)) = self.connect(ep.as_str()).await {
+                info!("connected to PD member"; "endpoints" => ep);
+                return Some((client, address));
             }
-            let _ = GLOBAL_TIMER_HANDLE
-                .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
-                .compat()
-                .await;
+            if retry {
+                let _ = GLOBAL_TIMER_HANDLE
+                    .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
+                    .compat()
+                    .await;
+            }
         }
         None
     }
-    Err(box_err!("failed to connect to leader"))
-}
 
     pub async fn reconnect_leader(
         &self,
-        previous: &GetMembersResponse,
-        force: bool,
-    ) -> Result<Option<StubPair>> {
-        let resp = self.load_members(&previous).await;
-
-        // Then try to connect the PD cluster leader.
-        match resp {
-            Some(resp) => {
-                if !force && resp == *previous {
-                    return Ok(None);
-                }
-                match self.connect_member(resp.get_leader()).await {
-                    Some(client) => Ok(Some((client, resp))),
-                    None => Err(box_err!("failed to connect to {:?}", resp.get_leader())),
-                }
-            }
-            None => Err(box_err!(
-                "failed to connect to {:?}",
-                previous.get_members()
-            )),
+        leader: &Member,
+    ) -> Result<Option<(PdClientStub, String)>> {
+        fail_point!("connect_leader", |_| Err(box_err!(
+            "failed to connect to leader"
+        )));
+        // Try to connect the PD cluster leader.
+        match self.connect_member(leader, true).await {
+            Some((client, address)) => Ok(Some((client, address))),
+            None => Err(box_err!("failed to connect to {:?}", leader)),
         }
+    }
+
+    pub async fn reconnect_followers(
+        &self,
+        members: &[Member],
+        leader: &Member,
+    ) -> Result<Option<(PdClientStub, String)>> {
+        // Try to connect the PD cluster follower.
+        for m in members.iter().filter(|m| *m != leader) {
+            match self.connect_member(m, false).await {
+                Some((client, address)) => return Ok(Some((client, address))),
+                None => continue,
+            }
+        }
+        Err(box_err!("failed to connect to followers"))
     }
 }
 

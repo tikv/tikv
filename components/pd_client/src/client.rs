@@ -27,9 +27,7 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{
-    check_resp_header, get_random_member_addr, sync_request, validate_endpoints, Client, PdConnector,
-};
+use super::util::{check_resp_header, get_random_member_addr, sync_request, Client, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -78,7 +76,7 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
-                Ok((client, members)) => {
+                Ok((client, address, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
@@ -86,6 +84,7 @@ impl RpcClient {
                             security_mgr,
                             client,
                             members,
+                            address,
                         )),
                         monitor: monitor.clone(),
                     };
@@ -108,7 +107,7 @@ impl RpcClient {
 
                             match client.upgrade() {
                                 Some(cli) => {
-                                    let req = cli.reconnect(false).await;
+                                    let req = cli.reconnect(false, false).await;
                                     if req.is_err() {
                                         warn!("update PD information failed");
                                         // will update later anyway
@@ -155,14 +154,14 @@ impl RpcClient {
 
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
-        block_on(self.pd_client.reconnect(true))
+        block_on(self.pd_client.reconnect(true, false))
     }
 
     /// Creates a new call option with default request timeout.
     #[inline]
-    fn call_option(receiver_addr: &str) -> CallOption {
+    fn call_option(target_addr: &str) -> CallOption {
         let mut builder = MetadataBuilder::with_capacity(1);
-        builder.add_str("receiver", receiver_addr).unwrap();
+        builder.add_str("pd-forwarded-host", target_addr).unwrap();
         let metadata = builder.build();
         CallOption::default()
             .headers(metadata)
@@ -181,14 +180,14 @@ impl RpcClient {
         let mut req = pdpb::GetRegionRequest::default();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::GetRegionRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_async_opt(&req, Self::call_option(&receiver_addr))
+                .get_region_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
                 });
@@ -221,14 +220,14 @@ impl RpcClient {
         let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::GetStoreRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_store_async_opt(&req, Self::call_option(&receiver_addr))
+                .get_store_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_store_async", e));
 
             Box::pin(async move {
@@ -287,10 +286,10 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(stores);
         req.set_region(region);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.bootstrap_opt(&req, Self::call_option(&receiver_addr))
+            client.bootstrap_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
         Ok(resp.replication_status.take())
@@ -303,10 +302,10 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.is_bootstrapped_opt(&req, Self::call_option(&receiver_addr))
+            client.is_bootstrapped_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -320,10 +319,10 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.alloc_id_opt(&req, Self::call_option(&receiver_addr))
+            client.alloc_id_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -338,10 +337,10 @@ impl PdClient for RpcClient {
         let mut req = pdpb::PutStoreRequest::default();
         req.set_header(self.header());
         req.set_store(store);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.put_store_opt(&req, Self::call_option(&receiver_addr))
+            client.put_store_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -356,10 +355,10 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_store_opt(&req, Self::call_option(&receiver_addr))
+            client.get_store_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -383,10 +382,10 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetAllStoresRequest::default();
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_all_stores_opt(&req, Self::call_option(&receiver_addr))
+            client.get_all_stores_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -400,10 +399,10 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_cluster_config_opt(&req, Self::call_option(&receiver_addr))
+            client.get_cluster_config_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -434,14 +433,14 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(&receiver_addr))
+                .get_region_by_id_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
@@ -473,14 +472,14 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(&receiver_addr))
+                .get_region_by_id_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
@@ -587,14 +586,14 @@ impl PdClient for RpcClient {
         let mut req = pdpb::AskSplitRequest::default();
         req.set_header(self.header());
         req.set_region(region);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::AskSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .ask_split_async_opt(&req, Self::call_option(&receiver_addr))
+                .ask_split_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
 
             Box::pin(async move {
@@ -623,14 +622,14 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .ask_batch_split_async_opt(&req, Self::call_option(&receiver_addr))
+                .ask_batch_split_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
 
             Box::pin(async move {
@@ -660,14 +659,14 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .store_heartbeat_async_opt(&req, Self::call_option(&receiver_addr))
+                .store_heartbeat_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
             Box::pin(async move {
                 let resp = handler.await?;
@@ -695,14 +694,14 @@ impl PdClient for RpcClient {
         let mut req = pdpb::ReportBatchSplitRequest::default();
         req.set_header(self.header());
         req.set_regions(regions.into());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::ReportBatchSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .report_batch_split_async_opt(&req, Self::call_option(&receiver_addr))
+                .report_batch_split_async_opt(&req, Self::call_option(&target_addr))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "report_batch_split", e)
                 });
@@ -733,10 +732,10 @@ impl PdClient for RpcClient {
             req.set_leader(leader);
         }
         req.set_region(region.region);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.scatter_region_opt(&req, Self::call_option(&receiver_addr))
+            client.scatter_region_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())
     }
@@ -750,10 +749,10 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetGcSafePointRequest::default();
         req.set_header(self.header());
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let executor = move |client: &Client, req: pdpb::GetGcSafePointRequest| {
-            let option = Self::call_option(&receiver_addr);
+            let option = Self::call_option(&target_addr);
             let handler = client
                 .inner
                 .rl()
@@ -789,10 +788,10 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetOperatorRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_operator_opt(&req, Self::call_option(&receiver_addr))
+            client.get_operator_opt(&req, Self::call_option(&target_addr))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -803,7 +802,7 @@ impl PdClient for RpcClient {
     //       we could use one RPC for many `PdFuture<TimeStamp>`.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         let timer = Instant::now();
-        let receiver_addr = get_random_member_addr(&self.get_leader());
+        let target_addr = get_random_member_addr(&self.get_leader());
         let mut req = pdpb::TsoRequest::default();
         req.set_count(1);
         req.set_header(self.header());
@@ -811,7 +810,7 @@ impl PdClient for RpcClient {
             let cli = client.inner.rl();
             let (mut req_sink, mut resp_stream) = cli
                 .client_stub
-                .tso_opt(Self::call_option(&receiver_addr))
+                .tso_opt(Self::call_option(&target_addr))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
             let send_once = async move {
                 req_sink.send((req, WriteFlags::default())).await?;
