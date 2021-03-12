@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_traits::{IterOptions, MvccProperties};
+use engine_traits::MvccProperties;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
@@ -440,9 +440,10 @@ impl<S: Snapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOptions::new(None, None, self.fill_cache);
-        let scan_mode = self.get_scan_mode(false);
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
+        let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .scan_mode(self.get_scan_mode(false))
+            .build()?;
         let mut keys = vec![];
         loop {
             let ok = match start {
@@ -531,7 +532,7 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
+    use engine_traits::{IterOptions, Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
