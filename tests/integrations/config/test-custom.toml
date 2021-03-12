@@ -613,3 +613,12 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+
+[split]
+detect-times = 10
+qps-threshold = 3000
+sample-num = 20
+sample-threshold = 100
+byte-threshold = 31457280
+split.split-balance-score = 0.25
+split.split-contained-score = 0.5
