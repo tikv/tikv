@@ -53,13 +53,18 @@ make_auto_flush_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
+        raw_get_key_ttl,
+        check_leader,
+        batch_commands,
     }
 
     pub label_enum GcCommandKind {
         gc,
+        gc_keys,
         unsafe_destroy_range,
         physical_scan_lock,
         validate_config,
+        orphan_versions,
     }
 
     pub label_enum SnapTask {
@@ -100,6 +105,11 @@ make_auto_flush_static_metric! {
         locked,
     }
 
+    pub label_enum WhetherSuccess {
+        success,
+        fail,
+    }
+
     pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
@@ -122,6 +132,11 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgFailCounterVec: LocalIntCounter {
         "type" => GrpcTypeKind,
+    }
+
+    pub struct GrpcProxyMsgCounterVec: LocalIntCounter {
+        "type" => GrpcTypeKind,
+        "success" => WhetherSuccess,
     }
 
     pub struct GcKeysCounterVec: LocalIntCounter {
@@ -199,6 +214,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_grpc_proxy_msg_total",
+        "Total number of handle grpc proxy message",
+        &["type", "success"]
+    )
+    .unwrap();
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
@@ -245,6 +266,8 @@ lazy_static! {
         auto_flush_from!(RESOLVE_STORE_COUNTER, ResolveStoreCounterVec);
     pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec =
         auto_flush_from!(GRPC_MSG_FAIL_COUNTER_VEC, GrpcMsgFailCounterVec);
+    pub static ref GRPC_PROXY_MSG_COUNTER: GrpcProxyMsgCounterVec =
+        auto_flush_from!(GRPC_PROXY_MSG_COUNTER_VEC, GrpcProxyMsgCounterVec);
     pub static ref GC_KEYS_COUNTER_STATIC: GcKeysCounterVec =
         auto_flush_from!(GC_KEYS_COUNTER_VEC, GcKeysCounterVec);
     pub static ref REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC: ReplicaReadLockCheckHistogramVec = auto_flush_from!(

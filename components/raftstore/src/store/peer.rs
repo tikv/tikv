@@ -57,7 +57,7 @@ use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -98,13 +98,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
-        let key = (term, index);
-        let map = |p: &Proposal<_>| (p.term, p.index);
-        let (front, back) = self.queue.as_slices();
-        let idx = front
-            .binary_search_by_key(&key, map)
-            .or_else(|_| back.binary_search_by_key(&key, map));
-        idx.ok().map(|i| self.queue[i].renew_lease_time).flatten()
+        self.queue
+            .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
+            .ok()
+            .map(|i| self.queue[i].renew_lease_time)
+            .flatten()
     }
 
     // Find proposal in front or at the given term and index
@@ -1032,31 +1030,33 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
+            let snapshot_index = msg.get_request_snapshot();
+            let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
-                MessageType::MsgAppend => metrics.append += 1,
+                MessageType::MsgAppend => metrics.append[i] += 1,
                 MessageType::MsgAppendResponse => {
-                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
-                        metrics.request_snapshot += 1;
+                    if snapshot_index != raft::INVALID_INDEX {
+                        metrics.request_snapshot[i] += 1;
                     }
-                    metrics.append_resp += 1;
+                    metrics.append_resp[i] += 1;
                 }
-                MessageType::MsgRequestPreVote => metrics.prevote += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
-                MessageType::MsgRequestVote => metrics.vote += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
-                MessageType::MsgSnapshot => metrics.snapshot += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
-                MessageType::MsgReadIndex => metrics.read_index += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
+                MessageType::MsgRequestVote => metrics.vote[i] += 1,
+                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
+                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
+                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
+                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
+                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
+                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
+                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
                 MessageType::MsgTimeoutNow => {
                     // After a leader transfer procedure is triggered, the lease for
                     // the old leader may be expired earlier than usual, since a new leader
@@ -1066,7 +1066,7 @@ where
                     // to suspect.
                     self.leader_lease.suspect(monotonic_raw_now());
 
-                    metrics.timeout_now += 1;
+                    metrics.timeout_now[i] += 1;
                 }
                 // We do not care about these message types for metrics.
                 // Explicitly declare them so when we add new message types we are forced to
@@ -1078,7 +1078,6 @@ where
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum => {}
             }
-            self.send_raft_message(msg, trans);
         }
     }
 
@@ -1714,7 +1713,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -1920,7 +1919,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -3401,7 +3400,7 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) -> bool {
         let mut send_msg = self.prepare_raft_message();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
@@ -3413,7 +3412,7 @@ where
                     "peer_id" => self.peer.get_id(),
                     "to_peer" => msg.get_to(),
                 );
-                return;
+                return false;
             }
         };
 
@@ -3447,7 +3446,8 @@ where
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
-            warn!(
+            // We use metrics to observe failure on production.
+            debug!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -3465,7 +3465,9 @@ where
                 self.raft_group
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
+            return false;
         }
+        true
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
@@ -3764,6 +3766,7 @@ pub trait AbstractPeer {
 mod tests {
     use super::*;
     use crate::store::msg::ExtCallback;
+    use crate::store::util::u64_to_timespec;
     use kvproto::raft_cmdpb;
     #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
@@ -3953,22 +3956,34 @@ mod tests {
     fn test_propose_queue_find_proposal() {
         let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
             ProposalQueue::new("tag".to_owned());
-        let t = monotonic_raw_now();
         let gen_term = |index: u64| (index / 10) + 1;
-        for index in 1..=100 {
-            let renew_lease_time = if index % 3 == 1 { None } else { Some(t) };
+        let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
             pq.push(Proposal {
                 is_conf_change: false,
                 index,
                 term: gen_term(index),
                 cb: Callback::write(Box::new(|_| {})),
-                renew_lease_time,
+                renew_lease_time: Some(u64_to_timespec(index)),
                 must_pass_epoch_check: false,
             });
+        };
+        for index in 1..=100 {
+            push_proposal(&mut pq, index);
         }
         let mut pre_remove = 0;
-        for remove_i in &[0, 1, 65, 98, 100] {
-            let remove_i = *remove_i;
+        for remove_i in 1..=100 {
+            let index = remove_i + 100;
+            // Push more proposal
+            push_proposal(&mut pq, index);
+            // Find propose time
+            for i in 1..=index {
+                let pt = pq.find_propose_time(gen_term(i), i);
+                if i <= pre_remove {
+                    assert!(pt.is_none())
+                } else {
+                    assert_eq!(pt.unwrap(), u64_to_timespec(i))
+                };
+            }
             // Find a proposal and remove all previous proposals
             for i in 1..=remove_i {
                 let p = pq.find_proposal(gen_term(i), i, 0);
@@ -3977,14 +3992,7 @@ mod tests {
                 assert!(must_found_proposal || proposal_removed_previous);
                 // `find_proposal` will remove proposal so `pop` must return None
                 assert!(pq.pop(gen_term(i), i).is_none());
-            }
-            for i in 1..=100 {
-                let pt = pq.find_propose_time(gen_term(i), i);
-                if i <= remove_i || i % 3 == 1 {
-                    assert!(pt.is_none())
-                } else {
-                    assert!(pt.is_some())
-                };
+                assert!(pq.find_propose_time(gen_term(i), i).is_none());
             }
             pre_remove = remove_i;
         }
