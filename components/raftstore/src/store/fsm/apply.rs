@@ -1353,6 +1353,11 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
+            (|| {
+                fail_point!("dont_delete_ingested_sst", |_| {
+                    ssts.clear();
+                })
+            })();
             ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
