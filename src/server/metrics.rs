@@ -244,7 +244,7 @@ lazy_static! {
             "tikv_replica_read_lock_check_duration_seconds",
             "Duration of memory lock checking for replica read",
             &["result"],
-            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 1s
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
         )
         .unwrap();
 }

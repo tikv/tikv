@@ -238,7 +238,7 @@ lazy_static! {
             "tikv_coprocessor_mem_lock_check_duration_seconds",
             "Duration of memory lock checking for coprocessor",
             &["result"],
-            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 1s
+            exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
         )
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =

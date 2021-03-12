@@ -375,7 +375,7 @@ lazy_static! {
         "tikv_storage_check_mem_lock_duration_seconds",
         "Histogram of the duration of checking memory locks",
         &["type", "result"],
-        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 1s
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
     )
     .unwrap();
     pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
