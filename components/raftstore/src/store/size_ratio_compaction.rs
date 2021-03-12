@@ -4,8 +4,8 @@ use std::{cell::Cell, ffi::CString};
 
 use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use engine_traits::{
-    LevelRegionAccessor, LevelRegionAccessorContext, LevelRegionAccessorRequest,
-    LevelRegionAccessorResult,
+    LevelRegionAccessor, LevelRegionBoundaries,
+    LevelRegionAccessorRequest, LevelRegionAccessorResult,
 };
 use keys::data_end_key;
 
@@ -32,19 +32,25 @@ impl SizeRatioCompaction {
 impl LevelRegionAccessor for SizeRatioCompaction {
 
     fn name(&self) -> &CString {
-        &COMPACTION_GUARD
+        &SIZE_RATIO_COMPACTION
     }
 
-    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResults {
+    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResult {
         match self
             .accessor
-            .get_regions_in_range(req.smallest_key, req.largest_key)
+            .get_regions_in_range(req.smallest_user_key, req.largest_user_key)
         {
             Ok(regions) => {
-
+                let mut boundaries = regions
+                    .iter()
+                    .map(|region| LevelRegionBoundaries{start_key: &region.start_key,
+                        end_key: &region.end_key}).collect();
+                LevelRegionAccessorResult{
+                    regions: boundaries,
+                }
             }
             Err(e) => {
-                warn!("failed to create compaction guard generator"; "err" => ?e);
+                warn!("failed to get region boundaries"; "err" => ?e);
                 None
             }
         }

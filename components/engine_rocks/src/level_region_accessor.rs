@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::convert::TryInto;
 
 pub struct RocksLevelRegionAccessor<F: engine_traits::LevelRegionAccessor>(pub F);
 
@@ -11,8 +12,16 @@ for RocksLevelRegionAccessor<F>
 
     fn level_regions(
         &self,
-        req: &rocksdb::LevelRegionAccessorRequest,
-    ) -> rocksdb::LevelRegionAccessorResults {
-        
+        request: &rocksdb::LevelRegionAccessorRequest,
+    ) -> rocksdb::LevelRegionAccessorResult {
+        let req = engine_traits::LevelRegionAccessorRequest {
+            smallest_user_key: request.smallest_user_key,
+            largest_user_key: request.largest_user_key,
+        };
+        let regions = self.0.level_regions(&req).regions;
+        rocksdb::LevelRegionAccessorResult {
+            regions: regions.as_ptr(),
+            region_count: regions.len() as i32,
+        }
     }
 }
