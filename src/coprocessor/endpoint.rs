@@ -22,7 +22,7 @@ use crate::server::Config;
 use crate::storage::kv::PerfStatisticsInstant;
 use crate::storage::kv::{self, with_tls_engine};
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, need_check_locks_in_replica_read, Engine, Snapshot, TxnStore};
 use crate::{read_pool::ReadPoolHandle, storage::kv::SnapContext};
 
 use crate::coprocessor::cache::CachedRequestHandler;
@@ -246,7 +246,7 @@ impl<E: Engine> Endpoint<E> {
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.get_data_version();
-                    let store = SnapshotStore::new(
+                    let store = TxnStore::new(
                         snap,
                         start_ts.into(),
                         req_ctx.context.get_isolation_level(),

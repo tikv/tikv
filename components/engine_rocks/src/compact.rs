@@ -56,24 +56,18 @@ impl CompactExt for RocksEngine {
 
     fn compact_files_in_range_cf(
         &self,
-        cf_name: &str,
+        cf: &str,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
         let db = self.as_inner();
-        let cf = util::get_cf_handle(db, cf_name)?;
-        let cf_opts = db.get_options_cf(cf);
+        let handle = util::get_cf_handle(db, cf)?;
+        let cf_opts = db.get_options_cf(handle);
         let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
-        let output_compression = cf_opts
-            .get_compression_per_level()
-            .get(output_level as usize)
-            .cloned()
-            .unwrap_or(DBCompressionType::No);
-        let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
 
         let mut input_files = Vec::new();
-        let cf_meta = db.get_column_family_meta_data(cf);
+        let cf_meta = db.get_column_family_meta_data(handle);
         for (i, level) in cf_meta.get_levels().iter().enumerate() {
             if i as i32 >= output_level {
                 break;
@@ -92,14 +86,53 @@ impl CompactExt for RocksEngine {
             return Ok(());
         }
 
+        self.compact_files_cf(
+            cf,
+            input_files,
+            Some(output_level),
+            cmp::min(num_cpus::get(), 32) as u32,
+            false,
+        )
+    }
+
+    fn compact_files_cf(
+        &self,
+        cf: &str,
+        mut files: Vec<String>,
+        output_level: Option<i32>,
+        max_subcompactions: u32,
+        without_l0: bool,
+    ) -> Result<()> {
+        let db = self.as_inner();
+        let handle = util::get_cf_handle(db, cf)?;
+        let cf_opts = db.get_options_cf(handle);
+        let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
+        let output_compression = cf_opts
+            .get_compression_per_level()
+            .get(output_level as usize)
+            .cloned()
+            .unwrap_or(DBCompressionType::No);
+        let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
+
+        if without_l0 {
+            let cf_meta = db.get_column_family_meta_data(handle);
+            let mut l0_files = vec![];
+            for f in cf_meta.get_levels()[0].get_files() {
+                l0_files.push(f.get_name());
+            }
+            files.retain(|f| !l0_files.iter().any(|n| f.ends_with(n)));
+        }
+
+        if files.is_empty() {
+            return Ok(());
+        }
+
         let mut opts = CompactionOptions::new();
         opts.set_compression(output_compression);
-        let max_subcompactions = num_cpus::get();
-        let max_subcompactions = cmp::min(max_subcompactions, 32);
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
-        db.compact_files_cf(cf, &opts, &input_files, output_level)?;
 
+        db.compact_files_cf(handle, &opts, &files, output_level)?;
         Ok(())
     }
 }

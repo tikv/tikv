@@ -131,6 +131,8 @@ make_auto_flush_static_metric! {
         raw_delete_range,
         raw_batch_delete,
         raw_get_key_ttl,
+        raw_compare_and_set,
+        raw_atomic_store,
     }
 
     pub label_enum CommandStageKind {
@@ -178,6 +180,7 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
     }
 
     pub label_enum CheckMemLockResult {
@@ -258,6 +261,7 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
         }
     }
 }

@@ -56,13 +56,15 @@ pub use self::{
     },
     raw::{RawStore, TTLSnapshot},
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, Store, TxnStore},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
+use crate::storage::txn::commands::{AtomicCompareAndSet, AtomicStore};
+
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -73,6 +75,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
+use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
@@ -86,7 +89,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -338,7 +341,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -547,7 +550,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -694,7 +697,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let snap_store = SnapshotStore::new(
+                    let snap_store = TxnStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -1574,6 +1577,70 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+
+    pub fn raw_compare_and_set_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+        ttl: u64,
+        cb: Callback<Option<Value>>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let cmd = AtomicCompareAndSet::new(
+            cf,
+            Key::from_encoded(key),
+            previous_value,
+            value,
+            self.enable_ttl,
+            ttl,
+            ctx,
+        );
+        self.sched_txn_command(cmd, cb)
+    }
+
+    pub fn raw_batch_put_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        pairs: Vec<KvPair>,
+        ttl: u64,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let mut muations = vec![];
+        let expire_ts = if ttl == 0 {
+            0
+        } else {
+            ttl + TTLSnapshot::<E::Snap>::current_ts()
+        };
+        for (k, mut v) in pairs {
+            if self.enable_ttl {
+                append_expire_ts(&mut v, expire_ts);
+            }
+            muations.push(Mutation::Put((Key::from_encoded(k), v)));
+        }
+        let cmd = AtomicStore::new(cf, muations, ctx);
+        self.sched_txn_command(cmd, callback)
+    }
+
+    pub fn raw_batch_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let mut muations = vec![];
+        for k in keys {
+            muations.push(Mutation::Delete(Key::from_encoded(k)));
+        }
+        let cmd = AtomicStore::new(cf, muations, ctx);
+        self.sched_txn_command(cmd, callback)
     }
 }
 

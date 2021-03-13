@@ -13,7 +13,7 @@ use tidb_query_datatype::expr::EvalContext;
 use tikv::storage::{
     kv::{Engine, RocksEngine, TestEngineBuilder},
     txn::FixtureStore,
-    SnapshotStore,
+    TxnStore,
 };
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -199,10 +199,10 @@ impl<E: Engine> Store<E> {
             .collect()
     }
 
-    /// Directly creates a `SnapshotStore` over current committed data.
-    pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
+    /// Directly creates a `TxnStore` over current committed data.
+    pub fn to_snapshot_store(&self) -> TxnStore<E::Snap> {
         let snapshot = self.get_engine().snapshot(Default::default()).unwrap();
-        SnapshotStore::new(
+        TxnStore::new(
             snapshot,
             self.last_committed_ts,
             IsolationLevel::Si,
@@ -235,8 +235,8 @@ impl<E: Engine, S: tikv::storage::Store> ToTxnStore<S> for Store<E> {
     }
 }
 
-impl<E: Engine> ToTxnStore<SnapshotStore<E::Snap>> for Store<E> {
-    fn to_store(&self) -> SnapshotStore<<E as Engine>::Snap> {
+impl<E: Engine> ToTxnStore<TxnStore<E::Snap>> for Store<E> {
+    fn to_store(&self) -> TxnStore<<E as Engine>::Snap> {
         self.to_snapshot_store()
     }
 }

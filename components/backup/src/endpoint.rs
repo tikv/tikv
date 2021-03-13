@@ -24,9 +24,7 @@ use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
 use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
 use tikv::storage::mvcc::Error as MvccError;
-use tikv::storage::txn::{
-    EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
-};
+use tikv::storage::txn::{EntryBatch, Error as TxnError, TxnEntryScanner, TxnEntryStore, TxnStore};
 use tikv::storage::Statistics;
 use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
@@ -198,7 +196,7 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.elapsed().as_secs_f64());
-        let snap_store = SnapshotStore::new(
+        let snap_store = TxnStore::new(
             snapshot,
             backup_ts,
             IsolationLevel::Si,

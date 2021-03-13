@@ -365,3 +365,50 @@ fn test_auto_gc() {
         .recv_timeout(Duration::from_millis(300))
         .unwrap_err();
 }
+
+#[test]
+fn test_atomic_basic() {
+    let (_cluster, storage, ctx) = new_raft_storage();
+    storage
+        .raw_batch_put_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            vec![(b"k1".to_vec(), b"v1".to_vec())],
+            0,
+        )
+        .unwrap();
+    let ret = storage
+        .raw_compare_and_set_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v2".to_vec()),
+            b"v3".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(ret.is_some());
+    assert_eq!(b"v1".to_vec(), ret.unwrap());
+    let ret = storage
+        .raw_compare_and_set_atomic(
+            ctx.clone(),
+            "default".to_string(),
+            b"k1".to_vec(),
+            Some(b"v1".to_vec()),
+            b"v2".to_vec(),
+            0,
+        )
+        .unwrap();
+    assert!(ret.is_none());
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert_eq!(b"v2".to_vec(), value.unwrap());
+    storage
+        .raw_batch_delete_atomic(ctx.clone(), "default".to_string(), vec![b"k1".to_vec()])
+        .unwrap();
+    let value = storage
+        .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
+        .unwrap();
+    assert!(value.is_none());
+}

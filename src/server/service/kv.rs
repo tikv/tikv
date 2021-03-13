@@ -279,6 +279,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawGetKeyTtlResponse
     );
 
+    handle_request!(
+        raw_compare_and_set,
+        future_raw_compare_and_set,
+        RawCasRequest,
+        RawCasResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -1382,14 +1389,25 @@ fn future_raw_put<E: Engine, L: LockManager>(
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_put(
-        req.take_context(),
-        req.take_cf(),
-        req.take_key(),
-        req.take_value(),
-        req.get_ttl(),
-        cb,
-    );
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(
+            req.take_context(),
+            req.take_cf(),
+            vec![(req.take_key(), req.take_value())],
+            req.get_ttl(),
+            cb,
+        )
+    } else {
+        storage.raw_put(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            req.get_ttl(),
+            cb,
+        )
+    };
 
     async move {
         let v = match res {
@@ -1418,7 +1436,12 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    } else {
+        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1440,7 +1463,12 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), req.take_cf(), vec![req.take_key()], cb)
+    } else {
+        storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1464,7 +1492,12 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), cf, keys, cb)
+    } else {
+        storage.raw_batch_delete(req.take_context(), cf, keys, cb)
+    };
 
     async move {
         let v = match res {
@@ -1581,6 +1614,47 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
                 Ok(Some(ttl)) => resp.set_ttl(ttl),
                 Ok(None) => resp.set_not_found(true),
                 Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_compare_and_set<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawCasRequest,
+) -> impl Future<Output = ServerResult<RawCasResponse>> {
+    let (cb, f) = paired_future_callback();
+    let previous_value = if req.get_previous_not_exist() {
+        None
+    } else {
+        Some(req.take_previous_value())
+    };
+    let res = storage.raw_compare_and_set_atomic(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        previous_value,
+        req.take_value(),
+        req.get_ttl(),
+        cb,
+    );
+    async move {
+        let v = match res {
+            Ok(()) => f.await?,
+            Err(e) => Err(e),
+        };
+        let mut resp = RawCasResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(val)) => {
+                    resp.set_not_equal(true);
+                    resp.set_value(val);
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+                _ => (),
             }
         }
         Ok(resp)

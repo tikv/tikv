@@ -25,7 +25,7 @@ use tidb_query_common::storage::{IntervalRange, Range};
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
-use tikv::storage::SnapshotStore;
+use tikv::storage::TxnStore;
 use tikv::{config::BackupConfig, storage::kv::SnapContext};
 use tikv_util::config::ReadableSize;
 use tikv_util::worker::{LazyWorker, Worker};
@@ -279,7 +279,7 @@ impl TestSuite {
             ..Default::default()
         };
         let snapshot = engine.snapshot(snap_ctx).unwrap();
-        let snap_store = SnapshotStore::new(
+        let snap_store = TxnStore::new(
             snapshot,
             backup_ts,
             IsolationLevel::Si,
