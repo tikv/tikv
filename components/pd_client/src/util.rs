@@ -345,7 +345,9 @@ where
             Err(Error::Incompatible) => (true, false),
             Err(Error::Grpc(err)) => match err {
                 RpcFailure(RpcStatus { status, details: _ }) => {
-                    if *status == RpcStatusCode::UNAVAILABLE {
+                    if *status == RpcStatusCode::UNAVAILABLE
+                        || *status == RpcStatusCode::DEADLINE_EXCEEDED
+                    {
                         (false, true)
                     } else {
                         (false, false)
