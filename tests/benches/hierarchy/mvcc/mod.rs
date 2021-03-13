@@ -6,7 +6,9 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::{Engine, WriteData};
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
-use tikv::storage::txn::{commit, prewrite};
+use tikv::storage::txn::{
+    cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties,
+};
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
@@ -21,7 +23,7 @@ where
     F: EngineFactory<E>,
 {
     let ctx = Context::default();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
     let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
@@ -33,28 +35,34 @@ where
     )
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
+        let txn_props = TransactionProperties {
+            start_ts: TimeStamp::default(),
+            kind: TransactionKind::Optimistic(false),
+            commit_kind: CommitKind::TwoPc,
+            primary: &k.clone(),
+            txn_size: 0,
+            lock_ttl: 0,
+            min_commit_ts: TimeStamp::default(),
+            need_old_value: false,
+        };
         prewrite(
             &mut txn,
+            &txn_props,
             Mutation::Put((Key::from_raw(&k), v.clone())),
-            &k.clone(),
             &None,
             false,
-            0,
-            0,
-            TimeStamp::default(),
         )
         .unwrap();
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
     let _ = engine.async_write(&ctx, write_data, Box::new(move |(_, _)| {}));
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
-    let snapshot = engine.snapshot(&ctx).unwrap();
+    let snapshot = engine.snapshot(Default::default()).unwrap();
     (snapshot, keys)
 }
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
@@ -67,23 +75,23 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
             .iter()
             .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
             .collect();
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             (mutations, snapshot)
         },
         |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                prewrite(
-                    &mut txn,
-                    mutation,
-                    &primary,
-                    &None,
-                    false,
-                    0,
-                    0,
-                    TimeStamp::default(),
-                )
-                .unwrap();
+                let txn_props = TransactionProperties {
+                    start_ts: TimeStamp::default(),
+                    kind: TransactionKind::Optimistic(false),
+                    commit_kind: CommitKind::TwoPc,
+                    primary: &primary,
+                    txn_size: 0,
+                    lock_ttl: 0,
+                    min_commit_ts: TimeStamp::default(),
+                    need_old_value: false,
+                };
+                prewrite(&mut txn, &txn_props, mutation, &None, false).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -116,7 +124,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -134,7 +142,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -146,7 +154,6 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let engine = config.engine_factory.build();
-    let ctx = Context::default();
     let cm = ConcurrencyManager::new(1.into());
     b.iter_batched(
         || {
@@ -157,13 +164,13 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
             )
             .generate(DEFAULT_ITERATIONS);
             let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(&k)).collect();
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             (snapshot, keys)
         },
         |(snapshot, keys)| {
             for key in keys {
                 let mut txn = mvcc::MvccTxn::new(snapshot.clone(), 1.into(), true, cm.clone());
-                black_box(txn.rollback(key)).unwrap();
+                black_box(cleanup(&mut txn, key, TimeStamp::zero(), false)).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -185,7 +192,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
 
     b.iter_batched(
         || {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             (snapshot, &test_keys)
         },
         |(snapshot, test_kvs)| {
@@ -207,7 +214,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
     let ctx = Context::default();
     b.iter_batched(
         || {
-            let snapshot = engine.snapshot(&ctx).unwrap();
+            let snapshot = engine.snapshot(Default::default()).unwrap();
             let test_keys: Vec<Key> = KvGenerator::with_seed(
                 config.key_length,
                 config.value_length,

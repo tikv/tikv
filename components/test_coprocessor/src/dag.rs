@@ -1,5 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+// {Limit, Selection, Aggregation, TopN} are passed into Executor as Box<T> in Prost,
+// but plain T in Protobuf. We used .into() to support both types,
+// but T -> T in Protobuf generates this clippy warning. We just allow it here.
+#![cfg_attr(feature = "protobuf-codec", allow(clippy::useless_conversion))]
+
 use super::*;
 
 use protobuf::Message;
@@ -170,7 +175,7 @@ impl DAGSelect {
         exec.set_tp(ExecType::TypeSelection);
         let mut selection = Selection::default();
         selection.mut_conditions().push(expr);
-        exec.set_selection(selection);
+        exec.set_selection(selection.into());
         self.execs.push(exec);
         self
     }
@@ -191,7 +196,7 @@ impl DAGSelect {
             if !self.group_by.is_empty() {
                 aggr.set_group_by(self.group_by.into());
             }
-            exec.set_aggregation(aggr);
+            exec.set_aggregation(aggr.into());
             self.execs.push(exec);
         }
 
@@ -203,7 +208,7 @@ impl DAGSelect {
             if let Some(limit) = self.limit.take() {
                 topn.set_limit(limit);
             }
-            exec.set_top_n(topn);
+            exec.set_top_n(topn.into());
             self.execs.push(exec);
         }
 
@@ -212,7 +217,7 @@ impl DAGSelect {
             exec.set_tp(ExecType::TypeLimit);
             let mut limit = Limit::default();
             limit.set_limit(l);
-            exec.set_limit(limit);
+            exec.set_limit(limit.into());
             self.execs.push(exec);
         }
 

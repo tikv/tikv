@@ -323,6 +323,10 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
 
+            if !write.check_gc_fence_as_latest_version(self.cfg.ts) {
+                return Ok(None);
+            }
+
             match write.write_type {
                 WriteType::Put => {
                     let write = write.to_owned();
@@ -348,11 +352,16 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     ) -> Result<Option<Value>> {
         match some_write {
             None => Ok(None),
-            Some(write) => match write.write_type {
-                WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
-                WriteType::Delete => Ok(None),
-                _ => unreachable!(),
-            },
+            Some(write) => {
+                if !write.as_ref().check_gc_fence_as_latest_version(self.cfg.ts) {
+                    return Ok(None);
+                }
+                match write.write_type {
+                    WriteType::Put => Ok(Some(self.reverse_load_data_by_write(write, user_key)?)),
+                    WriteType::Delete => Ok(None),
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
@@ -430,13 +439,14 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_util::prepare_test_data_for_check_gc_fence;
     use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::kv::{Engine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
+    use crate::storage::txn::tests::{
+        must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+    };
     use crate::storage::Scanner;
-    use kvproto::kvrpcpb::Context;
 
     #[test]
     fn test_basic() {
@@ -509,7 +519,7 @@ mod tests {
         // Assume REVERSE_SEEK_BOUND == 4, we have keys:
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND.into(), true)
             .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
@@ -704,7 +714,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
@@ -774,7 +784,7 @@ mod tests {
             REVERSE_SEEK_BOUND * 2,
         );
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND * 2).into(), true)
             .range(None, None)
             .build()
@@ -841,7 +851,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
@@ -912,7 +922,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 1.into(), true)
             .range(None, None)
             .build()
@@ -991,7 +1001,7 @@ mod tests {
             must_commit(&engine, b"b", ts, ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (REVERSE_SEEK_BOUND + 1).into(), true)
             .range(None, None)
             .build()
@@ -1076,7 +1086,7 @@ mod tests {
             must_commit(&engine, &[i], 14, 14);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), true)
@@ -1181,7 +1191,7 @@ mod tests {
             must_prewrite_put(&engine, pk, b"", pk, start_ts);
         }
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let row = &[15 as u8];
         let k = Key::from_raw(row);
 
@@ -1195,5 +1205,30 @@ mod tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 15);
         assert_eq!(statistics.write.prev, 1);
+    }
+
+    #[test]
+    fn test_backward_scanner_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let expected_result: Vec<_> = expected_result
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| (key, v)))
+            .rev()
+            .collect();
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, read_ts, true)
+            .range(None, None)
+            .build()
+            .unwrap();
+        let result: Vec<_> = scanner
+            .scan(100, 0)
+            .unwrap()
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect();
+        assert_eq!(result, expected_result);
     }
 }

@@ -190,7 +190,7 @@ impl QueryObserver for LockObserver {
                 Err(e) => {
                     error!(?e;
                         "cannot parse lock";
-                        "value" => hex::encode_upper(put_request.get_value()),
+                        "value" => log_wrappers::Value::value(put_request.get_value()),
                     );
                     self.state.mark_dirty();
                     return;
@@ -380,7 +380,7 @@ impl Runnable for LockCollectorRunner {
 }
 
 pub struct AppliedLockCollector {
-    worker: Mutex<Worker<LockCollectorTask>>,
+    worker: Mutex<Worker>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 
@@ -388,30 +388,20 @@ impl AppliedLockCollector {
     pub fn new(coprocessor_host: &mut CoprocessorHost<RocksEngine>) -> Result<Self> {
         let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
-        let scheduler = worker.lock().unwrap().scheduler();
-
         let state = Arc::new(LockObserverState::default());
         let runner = LockCollectorRunner::new(Arc::clone(&state));
+        let scheduler = worker.lock().unwrap().start("lock-collector", runner);
         let observer = LockObserver::new(state, scheduler.clone());
 
         observer.register(coprocessor_host);
 
         // Start the worker
-        worker.lock().unwrap().start(runner)?;
 
         Ok(Self { worker, scheduler })
     }
 
-    pub fn stop(&self) -> Result<()> {
-        if let Some(h) = self.worker.lock().unwrap().stop() {
-            if let Err(e) = h.join() {
-                return Err(box_err!(
-                    "failed to join applied_lock_collector handle, err: {:?}",
-                    e
-                ));
-            }
-        }
-        Ok(())
+    pub fn stop(&self) {
+        self.worker.lock().unwrap().stop();
     }
 
     /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
@@ -448,10 +438,7 @@ impl AppliedLockCollector {
 
 impl Drop for AppliedLockCollector {
     fn drop(&mut self) {
-        let r = self.stop();
-        if let Err(e) = r {
-            error!(?e; "Failed to stop applied_lock_collector");
-        }
+        self.stop();
     }
 }
 

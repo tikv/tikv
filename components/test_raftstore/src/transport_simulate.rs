@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
 
+use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -19,7 +20,6 @@ use raftstore::store::{
 };
 use raftstore::Result as RaftStoreResult;
 use raftstore::{DiscardReason, Error, Result};
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::time::ThreadReadId;
 use tikv_util::{Either, HandyRwLock};
 
@@ -79,10 +79,24 @@ impl Filter for MessageTypeNotifier {
     }
 
     fn after(&self, _: Result<()>) -> Result<()> {
-        while self.pending_notify.load(Ordering::SeqCst) > 0 {
-            debug!("notify {:?}", self.message_type);
-            self.pending_notify.fetch_sub(1, Ordering::SeqCst);
-            let _ = self.notifier.lock().unwrap().send(());
+        let mut n = self.pending_notify.load(Ordering::SeqCst);
+        loop {
+            if n == 0 {
+                break;
+            }
+
+            match self.pending_notify.compare_exchange_weak(
+                n,
+                n - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    let _ = self.notifier.lock().unwrap().send(());
+                    n -= 1;
+                }
+                Err(v) => n = v,
+            }
         }
         Ok(())
     }
@@ -184,6 +198,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
+    }
+
+    fn need_flush(&self) -> bool {
+        self.ch.need_flush()
     }
 
     fn flush(&mut self) {

@@ -9,12 +9,13 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, RpcContext,
-    ServerBuilder, ServerCredentialsBuilder, ServerCredentialsFetcher,
+    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
+    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
+    ServerCredentialsFetcher,
 };
-use tikv_util::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -152,10 +153,16 @@ impl SecurityManager {
         }
     }
 
-    pub fn bind(&self, sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
+    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
         if self.cfg.ca_path.is_empty() {
             sb.bind(addr, port)
         } else {
+            if !self.cfg.cert_allowed_cn.is_empty() {
+                let cn_checker = CNChecker {
+                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
+                };
+                sb = sb.add_checker(cn_checker);
+            }
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
@@ -168,9 +175,29 @@ impl SecurityManager {
             )
         }
     }
+}
 
-    pub fn cert_allowed_cn(&self) -> &HashSet<String> {
-        &self.cfg.cert_allowed_cn
+#[derive(Clone)]
+struct CNChecker {
+    allowed_cn: Arc<HashSet<String>>,
+}
+
+impl ServerChecker for CNChecker {
+    fn check(&mut self, ctx: &RpcContext) -> CheckResult {
+        match check_common_name(&self.allowed_cn, ctx) {
+            Ok(()) => CheckResult::Continue,
+            Err(reason) => CheckResult::Abort(RpcStatus::new(
+                RpcStatusCode::UNAUTHENTICATED,
+                Some(format!(
+                    "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
+                    reason, self.allowed_cn
+                )),
+            )),
+        }
+    }
+
+    fn box_clone(&self) -> Box<dyn ServerChecker> {
+        Box::new(self.clone())
     }
 }
 
@@ -206,23 +233,24 @@ impl ServerCredentialsFetcher for Fetcher {
 
 /// Check peer CN with cert-allowed-cn field.
 /// Return true when the match is successful (support wildcard pattern).
-/// Skip the check when cert-allowed-cn is not set or the secure channel is not used.
-pub fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> bool {
-    if cert_allowed_cn.is_empty() {
-        return true;
-    }
+/// Skip the check when the secure channel is not used.
+fn check_common_name(cert_allowed_cn: &HashSet<String>, ctx: &RpcContext) -> Result<(), String> {
     if let Some(auth_ctx) = ctx.auth_context() {
         if let Some(auth_property) = auth_ctx
             .into_iter()
             .find(|x| x.name() == "x509_common_name")
         {
             let peer_cn = auth_property.value_str().unwrap();
-            match_peer_names(cert_allowed_cn, peer_cn)
+            if match_peer_names(cert_allowed_cn, peer_cn) {
+                Ok(())
+            } else {
+                Err(format!("x509_common_name from peer is {}", peer_cn))
+            }
         } else {
-            false
+            Err("x509_common_name doesn't exist".to_owned())
         }
     } else {
-        true
+        Ok(())
     }
 }
 

@@ -400,6 +400,7 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
+/// Can only be used for write CF.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -506,6 +507,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
+/// Can only be used for write CF.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
@@ -517,7 +519,7 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
 
 pub fn get_range_entries_and_versions<E>(
     engine: &E,
-    cf: &E::CFHandle,
+    cf: &str,
     start: &[u8],
     end: &[u8],
 ) -> Option<(u64, u64)>
@@ -562,8 +564,6 @@ mod tests {
 
     use crate::compat::Compat;
     use crate::raw_util::CFOptions;
-    use crate::RocksMvccProperties;
-    use engine_traits::CFHandleExt;
     use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
@@ -764,9 +764,8 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let cf = db.c().cf_handle(CF_WRITE).unwrap();
         let (entries, versions) =
-            get_range_entries_and_versions(db.c(), cf, &start_keys, &end_keys).unwrap();
+            get_range_entries_and_versions(db.c(), CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
     }

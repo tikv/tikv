@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(min_specialization)]
 
+#[macro_use(fail_point)]
+extern crate fail;
 #[macro_use]
 extern crate failure;
 #[macro_use]
@@ -14,6 +16,7 @@ mod config;
 mod crypter;
 mod encrypted_file;
 mod errors;
+mod file_dict_file;
 mod io;
 mod manager;
 mod master_key;
@@ -26,5 +29,5 @@ pub use self::crypter::{
 pub use self::encrypted_file::EncryptedFile;
 pub use self::errors::{Error, Result};
 pub use self::io::{create_aes_ctr_crypter, DecrypterReader, EncrypterReader, EncrypterWriter};
-pub use self::manager::DataKeyManager;
-pub use self::master_key::{Backend, FileBackend, KmsBackend};
+pub use self::manager::{DataKeyManager, DataKeyManagerArgs};
+pub use self::master_key::{create_backend, AwsKms, Backend, FileBackend, KmsBackend};

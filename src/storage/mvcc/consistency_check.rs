@@ -146,7 +146,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         let to = to.unwrap_or(keys::DATA_MAX_KEY);
         let key_builder = |key: &[u8]| -> Result<Option<KeyBuilder>> {
             if !keys::validate_data_key(key) && key != keys::DATA_MAX_KEY {
-                return Err(box_err!("non-mvcc area {}", hex::encode_upper(key)));
+                return Err(box_err!("non-mvcc area {}", log_wrappers::Value::key(key)));
             }
             Ok(Some(KeyBuilder::from_vec(key.to_vec(), 0, 0)))
         };
@@ -401,7 +401,7 @@ impl MvccInfoObserver for MvccChecksum {
         }
 
         if !self.committed_txns_sorted {
-            self.committed_txns.sort();
+            self.committed_txns.sort_unstable();
             self.committed_txns_sorted = true;
         }
 
@@ -418,7 +418,7 @@ impl MvccInfoObserver for MvccChecksum {
 mod tests {
     use super::*;
     use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::mvcc::tests::must_rollback;
+    use crate::storage::txn::tests::must_rollback;
     use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_rocks::RocksEngine;
 

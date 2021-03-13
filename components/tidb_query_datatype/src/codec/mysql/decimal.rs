@@ -40,24 +40,15 @@ impl<T> Res<T> {
     }
 
     pub fn is_ok(&self) -> bool {
-        match *self {
-            Res::Ok(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Ok(_))
     }
 
     pub fn is_overflow(&self) -> bool {
-        match *self {
-            Res::Overflow(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Overflow(_))
     }
 
     pub fn is_truncated(&self) -> bool {
-        match *self {
-            Res::Truncated(_) => true,
-            _ => false,
-        }
+        matches!(*self, Res::Truncated(_))
     }
 
     /// Convert `Res` into `Result` with an `EvalContext` that handling the errors
@@ -1880,9 +1871,8 @@ impl ToString for Decimal {
         if self.negative {
             buf.push(b'-');
         }
-        for _ in 0..int_len - cmp::max(int_cnt, 1) {
-            buf.push(b'0');
-        }
+        let padding = int_len - cmp::max(int_cnt, 1);
+        buf.resize(padding as usize + buf.len(), b'0');
         if int_cnt > 0 {
             let base_idx = buf.len();
             let mut idx = base_idx + int_cnt as usize;
@@ -1932,7 +1922,7 @@ impl Display for Decimal {
 
 impl crate::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> tidb_query_common::error::Result<bool> {
+    fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
     }
 }

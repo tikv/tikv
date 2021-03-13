@@ -6,6 +6,8 @@ use configuration::{ConfigChange, ConfigManager, Configuration};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
@@ -32,7 +34,7 @@ where
         Value::String(s) => ReadableDuration::deserialize(s.into_deserializer()),
         Value::Number(n) => n
             .as_u64()
-            .map(|n| ReadableDuration::millis(n))
+            .map(ReadableDuration::millis)
             .ok_or_else(|| serde::de::Error::custom(format!("expect unsigned integer: {}", n))),
         other => Err(serde::de::Error::custom(format!(
             "expect ReadableDuration or unsigned integer: {}",
@@ -63,16 +65,19 @@ impl Config {
 pub struct LockManagerConfigManager {
     pub waiter_mgr_scheduler: WaiterMgrScheduler,
     pub detector_scheduler: DeadlockScheduler,
+    pub pipelined: Arc<AtomicBool>,
 }
 
 impl LockManagerConfigManager {
     pub fn new(
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
+        pipelined: Arc<AtomicBool>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
+            pipelined,
         }
     }
 }
@@ -90,6 +95,9 @@ impl ConfigManager for LockManagerConfigManager {
             (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
             (None, None) => {}
         };
+        if let Some(p) = change.remove("pipelined").map(Into::into) {
+            self.pipelined.store(p, Ordering::Relaxed);
+        }
         Ok(())
     }
 }

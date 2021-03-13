@@ -25,8 +25,6 @@ use std::{
 };
 use txn_types::{Key, Lock, TimeStamp};
 
-// TODO: Currently we are using a Mutex<BTreeMap> to implement the handle table.
-// In the future we should replace it with a concurrent ordered map.
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
 #[derive(Clone)]
@@ -74,7 +72,7 @@ impl ConcurrencyManager {
         // To prevent deadlock, we sort the keys and lock them one by one.
         keys_with_index.sort_by_key(|(_, key)| *key);
         let mut result: Vec<MaybeUninit<KeyHandleGuard>> = Vec::new();
-        result.resize_with(keys_with_index.len(), || MaybeUninit::uninit());
+        result.resize_with(keys_with_index.len(), MaybeUninit::uninit);
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
@@ -155,16 +153,7 @@ mod tests {
 
     fn new_lock(ts: impl Into<TimeStamp>, primary: &[u8], lock_type: LockType) -> Lock {
         let ts = ts.into();
-        Lock::new(
-            lock_type,
-            primary.to_vec(),
-            ts.into(),
-            0,
-            None,
-            0.into(),
-            1,
-            ts.into(),
-        )
+        Lock::new(lock_type, primary.to_vec(), ts, 0, None, 0.into(), 1, ts)
     }
 
     #[tokio::test]

@@ -7,7 +7,6 @@
 #![feature(test)]
 #![feature(decl_macro)]
 #![feature(str_internals)]
-#![feature(ptr_offset_from)]
 
 #[macro_use]
 extern crate failure;

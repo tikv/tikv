@@ -207,6 +207,38 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
         .collect()
 }
 
+pub fn to_raw_perf_level(level: engine_traits::PerfLevel) -> rocksdb::PerfLevel {
+    match level {
+        engine_traits::PerfLevel::Uninitialized => rocksdb::PerfLevel::Uninitialized,
+        engine_traits::PerfLevel::Disable => rocksdb::PerfLevel::Disable,
+        engine_traits::PerfLevel::EnableCount => rocksdb::PerfLevel::EnableCount,
+        engine_traits::PerfLevel::EnableTimeExceptForMutex => {
+            rocksdb::PerfLevel::EnableTimeExceptForMutex
+        }
+        engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+            rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+        }
+        engine_traits::PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
+        engine_traits::PerfLevel::OutOfBounds => rocksdb::PerfLevel::OutOfBounds,
+    }
+}
+
+pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLevel {
+    match level {
+        rocksdb::PerfLevel::Uninitialized => engine_traits::PerfLevel::Uninitialized,
+        rocksdb::PerfLevel::Disable => engine_traits::PerfLevel::Disable,
+        rocksdb::PerfLevel::EnableCount => engine_traits::PerfLevel::EnableCount,
+        rocksdb::PerfLevel::EnableTimeExceptForMutex => {
+            engine_traits::PerfLevel::EnableTimeExceptForMutex
+        }
+        rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+            engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+        }
+        rocksdb::PerfLevel::EnableTime => engine_traits::PerfLevel::EnableTime,
+        rocksdb::PerfLevel::OutOfBounds => engine_traits::PerfLevel::OutOfBounds,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,8 +316,8 @@ mod tests {
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
         let mut cfs_excepted: Vec<&str> = excepted.clone();
-        cfs_existed.sort();
-        cfs_excepted.sort();
+        cfs_existed.sort_unstable();
+        cfs_excepted.sort_unstable();
         assert_eq!(cfs_existed, cfs_excepted);
     }
 

@@ -79,11 +79,22 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
+ifeq ($(BCC_IOSNOOP),1)
+ENABLE_FEATURES += bcc-iosnoop
+endif
+
 # Use Prost instead of rust-protobuf to encode and decode protocol buffers.
 ifeq ($(PROST),1)
 ENABLE_FEATURES += prost-codec
 else
 ENABLE_FEATURES += protobuf-codec
+endif
+
+# Set the storage engines used for testing
+ifneq ($(NO_DEFAULT_TEST_ENGINES),1)
+ENABLE_FEATURES += test-engines-rocksdb
+else
+# Caller is responsible for setting up test engine features
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -95,7 +106,6 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -260,8 +270,8 @@ pre-format: unset-override
 	@rustup component add rustfmt
 
 format: pre-format
-	@cargo fmt --all -- --check >/dev/null || \
-	cargo fmt --all
+	@cargo fmt -- --check >/dev/null || \
+	cargo fmt
 
 doc:
 	@cargo doc --workspace --document-private-items \
@@ -272,6 +282,7 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
+	@./scripts/check-redact-log
 	@./scripts/clippy-all
 
 pre-audit:
@@ -313,12 +324,12 @@ error-code: etc/error_code.toml
 
 # A special target for building TiKV docker image.
 docker:
-	bash ./scripts/gen-dockerfile.sh | docker build \
+	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		-f - . \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH}
+		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
+		.
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

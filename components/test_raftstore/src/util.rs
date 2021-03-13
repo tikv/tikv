@@ -26,11 +26,13 @@ use raft::eraftpb::ConfChangeType;
 
 use encryption::{DataKeyManager, FileConfig, MasterKeyConfig};
 use engine_rocks::config::BlobRunMode;
-use engine_rocks::encryption::get_env;
 use engine_rocks::raw::DB;
+use engine_rocks::{
+    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+};
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-use engine_traits::{Engines, Iterable, Peekable};
+use engine_traits::{EngineFileSystemInspector, Engines, Iterable, Peekable};
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -56,7 +58,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    debug!("last try to get {}", hex::encode_upper(key));
+    debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
@@ -66,7 +68,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     panic!(
         "can't get value {:?} for key {}",
         value.map(escape),
-        hex::encode_upper(key)
+        log_wrappers::hex_encode_upper(key)
     )
 }
 
@@ -386,6 +388,19 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, mpsc::Receiver
     (cb, rx)
 }
 
+pub fn make_cb_ext(
+    cmd: &RaftCmdRequest,
+    proposed: Option<ExtCallback>,
+    committed: Option<ExtCallback>,
+) -> (Callback<RocksSnapshot>, mpsc::Receiver<RaftCmdResponse>) {
+    let (cb, receiver) = make_cb(cmd);
+    if let Callback::Write { cb, .. } = cb {
+        (Callback::write_ext(cb, proposed, committed), receiver)
+    } else {
+        (cb, receiver)
+    }
+}
+
 // Issue a read request on the specified peer.
 pub fn read_on_peer<T: Simulator>(
     cluster: &mut Cluster<T>,
@@ -501,7 +516,7 @@ pub fn must_read_on_peer<T: Simulator>(
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
             "read key {}, expect value {:?}, got {:?}",
-            hex::encode_upper(key),
+            log_wrappers::hex_encode_upper(key),
             value,
             other
         ),
@@ -520,7 +535,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
             let value = resp.mut_responses()[0].mut_get().take_value();
             panic!(
                 "key {}, expect error but got {}",
-                hex::encode_upper(key),
+                log_wrappers::hex_encode_upper(key),
                 escape(&value)
             );
         }
@@ -551,9 +566,11 @@ pub fn create_test_engine(
     let key_manager =
         DataKeyManager::from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
-            .map(|key_manager| Arc::new(key_manager));
+            .map(Arc::new);
 
-    let env = get_env(key_manager.clone(), None).unwrap();
+    let env = get_encrypted_env(key_manager.clone(), None).unwrap();
+    let env =
+        get_inspected_env(Some(Arc::new(EngineFileSystemInspector::new())), Some(env)).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
@@ -564,7 +581,7 @@ pub fn create_test_engine(
 
     if let Some(router) = router {
         let router = Mutex::new(router);
-        let cmpacted_handler = Box::new(move |event| {
+        let compacted_handler = Box::new(move |event| {
             router
                 .lock()
                 .unwrap()
@@ -572,7 +589,7 @@ pub fn create_test_engine(
                 .unwrap();
         });
         kv_db_opt.add_event_listener(CompactionListener::new(
-            cmpacted_handler,
+            compacted_handler,
             Some(dummpy_filter),
         ));
     }
@@ -589,7 +606,7 @@ pub fn create_test_engine(
     let mut raft_db_opt = cfg.raftdb.build_opt();
     raft_db_opt.set_env(env);
 
-    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache, None);
+    let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
     let raft_engine = Arc::new(
         engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
     );

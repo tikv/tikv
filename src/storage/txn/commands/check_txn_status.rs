@@ -4,15 +4,15 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC;
 use crate::storage::mvcc::txn::MissingLockAction;
 use crate::storage::mvcc::MvccTxn;
+use crate::storage::txn::actions::check_txn_status::*;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
 use crate::storage::txn::Result;
 use crate::storage::{ProcessResult, Snapshot, TxnStatus};
-use std::mem;
 
 command! {
     /// Check the status of a transaction. This is usually invoked by a transaction that meets
@@ -38,6 +38,13 @@ command! {
             /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
             /// rollbacks that transaction; otherwise returns an error.
             rollback_if_not_exist: bool,
+            // This field is set to true only if the transaction is known to fall back from async commit.
+            // CheckTxnStatus treats the transaction as non-async-commit if this field is true.
+            force_sync_commit: bool,
+            // If the check request is used to resolve or decide the transaction status for a input pessimistic
+            // lock, the transaction status could not be decided if the primary lock is pessimistic too and
+            // it's still uncertain.
+            resolving_pessimistic_lock: bool,
         }
 }
 
@@ -55,9 +62,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
     /// in the primary lock.
     /// When transaction T1 meets T2's lock, it may invoke this on T2's primary key. In this
     /// situation, `self.start_ts` is T2's `start_ts`, `caller_start_ts` is T1's `start_ts`, and
-    /// the `current_ts` is literally the timestamp when this function is invoked. It may not be
+    /// the `current_ts` is literally the timestamp when this function is invoked; it may not be
     /// accurate.
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut new_max_ts = self.lock_ts;
         if !self.current_ts.is_max() && self.current_ts > new_max_ts {
             new_max_ts = self.current_ts;
@@ -74,8 +81,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             context.concurrency_manager,
         );
 
-        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
-        let ctx = mem::take(&mut self.ctx);
         fail_point!("check_txn_status", |err| Err(
             crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
                 err,
@@ -85,75 +90,31 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             .into()
         ));
 
-        let result = match txn.reader.load_lock(&self.primary_key)? {
-            Some(mut lock) if lock.ts == self.lock_ts => {
-                if lock.use_async_commit
-                    && (!self.caller_start_ts.is_zero() || !self.current_ts.is_zero())
-                {
-                    warn!(
-                        "check async commit txn status with non-zero caller_start_ts or current_ts";
-                        "caller_start_ts" => self.caller_start_ts,
-                        "current_ts" => self.current_ts
-                    );
-                    self.caller_start_ts = TimeStamp::zero();
-                    self.current_ts = TimeStamp::zero();
-                }
-
-                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
-
-                if lock.ts.physical() + lock.ttl < self.current_ts.physical() {
-                    // If the lock is expired, clean it up.
-                    let released = txn.check_write_and_rollback_lock(
-                        self.primary_key,
-                        &lock,
-                        is_pessimistic_txn,
-                    )?;
-                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-                    Ok((TxnStatus::TtlExpire, released))
-                } else {
-                    // Although we won't really push forward min_commit_ts when caller_start_ts is max,
-                    // we should return MinCommitTsPushed result to the client to keep backward
-                    // compatibility.
-                    let mut min_commit_ts_pushed = self.caller_start_ts.is_max();
-
-                    // If lock.min_commit_ts is 0, it's not a large transaction and we can't push forward
-                    // its min_commit_ts otherwise the transaction can't be committed by old version TiDB
-                    // during rolling update.
-                    if !lock.min_commit_ts.is_zero()
-                        // If the caller_start_ts is max, it's a point get in the autocommit transaction.
-                        // We don't push forward lock's min_commit_ts and the point get can ignore the lock
-                        // next time because it's not committed.
-                        && !self.caller_start_ts.is_max()
-                        // Push forward the min_commit_ts so that reading won't be blocked by locks.
-                        && self.caller_start_ts >= lock.min_commit_ts
-                    {
-                        assert!(!lock.use_async_commit);
-                        lock.min_commit_ts = self.caller_start_ts.next();
-
-                        if lock.min_commit_ts < self.current_ts {
-                            lock.min_commit_ts = self.current_ts;
-                        }
-
-                        txn.put_lock(self.primary_key, &lock);
-                        min_commit_ts_pushed = true;
-                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
-                    }
-
-                    Ok((TxnStatus::uncommitted(lock, min_commit_ts_pushed), None))
-                }
-            }
+        let (txn_status, released) = match txn.reader.load_lock(&self.primary_key)? {
+            Some(lock) if lock.ts == self.lock_ts => check_txn_status_lock_exists(
+                &mut txn,
+                self.primary_key,
+                lock,
+                self.current_ts,
+                self.caller_start_ts,
+                self.force_sync_commit,
+                self.resolving_pessimistic_lock,
+            )?,
             // The rollback must be protected, see more on
             // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-            l => txn
-                .check_txn_status_missing_lock(
+            l => (
+                check_txn_status_missing_lock(
+                    &mut txn,
                     self.primary_key,
                     l,
                     MissingLockAction::rollback(self.rollback_if_not_exist),
-                )
-                .map(|s| (s, None)),
+                    self.resolving_pessimistic_lock,
+                )?,
+                None,
+            ),
         };
-        let (txn_status, released) = result?;
 
+        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
         released_locks.push(released);
         // The lock is released here only when the `check_txn_status` returns `TtlExpire`.
         if let TxnStatus::TtlExpire = txn_status {
@@ -164,12 +125,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         let pr = ProcessResult::TxnStatus { txn_status };
         let write_data = WriteData::from_modifies(txn.into_modifies());
         Ok(WriteResult {
-            ctx,
+            ctx: self.ctx,
             to_be_write: write_data,
             rows: 1,
             pr,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
@@ -196,10 +158,12 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
+        force_sync_commit: bool,
+        resolving_pessimistic_lock: bool,
         status_pred: impl FnOnce(TxnStatus) -> bool,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
@@ -210,6 +174,8 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
+            force_sync_commit,
+            resolving_pessimistic_lock,
         };
         let result = command
             .process_write(
@@ -219,7 +185,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .unwrap();
@@ -238,9 +204,11 @@ pub mod tests {
         caller_start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
         rollback_if_not_exist: bool,
+        force_sync_commit: bool,
+        resolving_pessimistic_lock: bool,
     ) {
         let ctx = Context::default();
-        let snapshot = engine.snapshot(&ctx).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
         let cm = ConcurrencyManager::new(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
@@ -251,6 +219,8 @@ pub mod tests {
             caller_start_ts: caller_start_ts.into(),
             current_ts,
             rollback_if_not_exist,
+            force_sync_commit,
+            resolving_pessimistic_lock,
         };
         assert!(command
             .process_write(
@@ -260,7 +230,7 @@ pub mod tests {
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
-                    pipelined_pessimistic_lock: false,
+                    async_apply_prewrite: false,
                 },
             )
             .is_err());
@@ -304,13 +274,53 @@ pub mod tests {
             must_prewrite_put_async_commit(&engine, b"k1", b"v", b"k1", &Some(vec![]), 1, 2);
             // All following check_txn_status should return the unchanged lock information
             // caller_start_ts == current_ts == 0
-            must_success(&engine, b"k1", 1, 0, 0, r, uncommitted(100, 2, false));
+            must_success(
+                &engine,
+                b"k1",
+                1,
+                0,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 2, false),
+            );
             // caller_start_ts != 0
-            must_success(&engine, b"k1", 1, 5, 0, r, uncommitted(100, 2, false));
+            must_success(
+                &engine,
+                b"k1",
+                1,
+                5,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 2, false),
+            );
             // current_ts != 0
-            must_success(&engine, b"k1", 1, 0, 8, r, uncommitted(100, 2, false));
+            must_success(
+                &engine,
+                b"k1",
+                1,
+                0,
+                8,
+                r,
+                false,
+                false,
+                uncommitted(100, 2, false),
+            );
             // caller_start_ts != 0 && current_ts != 0
-            must_success(&engine, b"k1", 1, 10, 12, r, uncommitted(100, 2, false));
+            must_success(
+                &engine,
+                b"k1",
+                1,
+                10,
+                12,
+                r,
+                false,
+                false,
+                uncommitted(100, 2, false),
+            );
             // caller_start_ts == u64::MAX
             must_success(
                 &engine,
@@ -319,6 +329,8 @@ pub mod tests {
                 TimeStamp::max(),
                 12,
                 r,
+                false,
+                false,
                 uncommitted(100, 2, false),
             );
             // current_ts == u64::MAX
@@ -329,8 +341,24 @@ pub mod tests {
                 12,
                 TimeStamp::max(),
                 r,
+                false,
+                false,
                 uncommitted(100, 2, false),
             );
+            // force_sync_commit = true
+            must_success(
+                &engine,
+                b"k1",
+                1,
+                12,
+                TimeStamp::max(),
+                r,
+                true,
+                false,
+                |s| s == TtlExpire,
+            );
+            must_unlocked(&engine, b"k1");
+            must_get_rollback_protected(&engine, b"k1", 1, false);
 
             // case 2: primary is prewritten (pessimistic)
             must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 15, 15);
@@ -347,13 +375,53 @@ pub mod tests {
             );
             // All following check_txn_status should return the unchanged lock information
             // caller_start_ts == current_ts == 0
-            must_success(&engine, b"k2", 15, 0, 0, r, uncommitted(100, 17, false));
+            must_success(
+                &engine,
+                b"k2",
+                15,
+                0,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 17, false),
+            );
             // caller_start_ts != 0
-            must_success(&engine, b"k2", 15, 18, 0, r, uncommitted(100, 17, false));
+            must_success(
+                &engine,
+                b"k2",
+                15,
+                18,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 17, false),
+            );
             // current_ts != 0
-            must_success(&engine, b"k2", 15, 0, 18, r, uncommitted(100, 17, false));
+            must_success(
+                &engine,
+                b"k2",
+                15,
+                0,
+                18,
+                r,
+                false,
+                false,
+                uncommitted(100, 17, false),
+            );
             // caller_start_ts != 0 && current_ts != 0
-            must_success(&engine, b"k2", 15, 19, 20, r, uncommitted(100, 17, false));
+            must_success(
+                &engine,
+                b"k2",
+                15,
+                19,
+                20,
+                r,
+                false,
+                false,
+                uncommitted(100, 17, false),
+            );
             // caller_start_ts == u64::MAX
             must_success(
                 &engine,
@@ -362,6 +430,8 @@ pub mod tests {
                 TimeStamp::max(),
                 20,
                 r,
+                false,
+                false,
                 uncommitted(100, 17, false),
             );
             // current_ts == u64::MAX
@@ -372,8 +442,24 @@ pub mod tests {
                 20,
                 TimeStamp::max(),
                 r,
+                false,
+                false,
                 uncommitted(100, 17, false),
             );
+            // force_sync_commit = true
+            must_success(
+                &engine,
+                b"k2",
+                15,
+                20,
+                TimeStamp::max(),
+                r,
+                true,
+                false,
+                |s| s == TtlExpire,
+            );
+            must_unlocked(&engine, b"k2");
+            must_get_rollback_protected(&engine, b"k2", 15, true);
 
             // case 3: pessimistic transaction with two keys (large txn), secondary is prewritten first
             must_acquire_pessimistic_lock_for_large_txn(&engine, b"k3", b"k3", 20, 20, 100);
@@ -390,7 +476,17 @@ pub mod tests {
                 28,
             );
             // the client must call check_txn_status with caller_start_ts == current_ts == 0, should not push
-            must_success(&engine, b"k3", 20, 0, 0, r, uncommitted(100, 21, false));
+            must_success(
+                &engine,
+                b"k3",
+                20,
+                0,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 21, false),
+            );
 
             // case 4: pessimistic transaction with two keys (not large txn), secondary is prewritten first
             must_acquire_pessimistic_lock_with_ttl(&engine, b"k5", b"k5", 30, 30, 100);
@@ -407,7 +503,17 @@ pub mod tests {
                 36,
             );
             // the client must call check_txn_status with caller_start_ts == current_ts == 0, should not push
-            must_success(&engine, b"k5", 30, 0, 0, r, uncommitted(100, 0, false));
+            must_success(
+                &engine,
+                b"k5",
+                30,
+                0,
+                0,
+                r,
+                false,
+                false,
+                uncommitted(100, 0, false),
+            );
         };
 
         do_test(true);
@@ -425,13 +531,21 @@ pub mod tests {
 
         // Try to check a not exist thing.
         if r {
-            must_success(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, |s| {
-                s == LockNotExist
-            });
+            must_success(
+                &engine,
+                k,
+                ts(3, 0),
+                ts(3, 1),
+                ts(3, 2),
+                r,
+                false,
+                false,
+                |s| s == LockNotExist,
+            );
             // A protected rollback record will be written.
             must_get_rollback_protected(&engine, k, ts(3, 0), true);
         } else {
-            must_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r);
+            must_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
         }
 
         // Lock the key with TTL=100.
@@ -448,6 +562,8 @@ pub mod tests {
             0,
             0,
             r,
+            false,
+            false,
             uncommitted(100, ts(5, 1), false),
         );
 
@@ -459,6 +575,8 @@ pub mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(7, 0), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
@@ -472,12 +590,15 @@ pub mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(9, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // caller_start_ts < lock.min_commit_ts < current_ts
-        // When caller_start_ts < lock.min_commit_ts, no need to update it.
+        // When caller_start_ts < lock.min_commit_ts, no need to update it, but pushed should be
+        // true.
         must_success(
             &engine,
             k,
@@ -485,7 +606,9 @@ pub mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100, ts(9, 1), false),
+            false,
+            false,
+            uncommitted(100, ts(9, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -497,6 +620,8 @@ pub mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(11, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
@@ -509,6 +634,8 @@ pub mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(12, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
@@ -521,6 +648,8 @@ pub mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
+            false,
+            false,
             uncommitted(100, ts(13, 3), true),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
@@ -536,6 +665,8 @@ pub mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
+            false,
+            false,
             committed(ts(15, 0)),
         );
         must_unlocked(&engine, k);
@@ -550,15 +681,25 @@ pub mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
+            false,
+            false,
             committed(ts(15, 0)),
         );
 
         // Check a not existing transaction, the result depends on whether `rollback_if_not_exist`
         // is set.
         if r {
-            must_success(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, |s| {
-                s == LockNotExist
-            });
+            must_success(
+                &engine,
+                k,
+                ts(6, 0),
+                ts(12, 0),
+                ts(12, 0),
+                r,
+                false,
+                false,
+                |s| s == LockNotExist,
+            );
             // And a rollback record will be written.
             must_seek_write(
                 &engine,
@@ -569,7 +710,7 @@ pub mod tests {
                 WriteType::Rollback,
             );
         } else {
-            must_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r);
+            must_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
         }
 
         // TTL check is based on physical time (in ms). When logical time's difference is larger
@@ -581,14 +722,24 @@ pub mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
+            false,
+            false,
             uncommitted(100, ts(21, 106), true),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
         // If physical time's difference exceeds TTL, lock will be resolved.
-        must_success(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, |s| {
-            s == TtlExpire
-        });
+        must_success(
+            &engine,
+            k,
+            ts(20, 0),
+            ts(121, 0),
+            ts(121, 0),
+            r,
+            false,
+            false,
+            |s| s == TtlExpire,
+        );
         must_unlocked(&engine, k);
         must_seek_write(
             &engine,
@@ -609,6 +760,8 @@ pub mod tests {
             ts(135, 0),
             ts(135, 0),
             r,
+            false,
+            false,
             uncommitted(200, ts(135, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
@@ -630,6 +783,8 @@ pub mod tests {
             ts(10, 0),
             ts(10, 0),
             r,
+            false,
+            false,
             committed(ts(140, 0)),
         );
         must_success(
@@ -639,11 +794,21 @@ pub mod tests {
             ts(10, 0),
             ts(10, 0),
             r,
+            false,
+            false,
             committed(ts(15, 0)),
         );
-        must_success(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, |s| {
-            s == RolledBack
-        });
+        must_success(
+            &engine,
+            k,
+            ts(20, 0),
+            ts(10, 0),
+            ts(10, 0),
+            r,
+            false,
+            false,
+            |s| s == RolledBack,
+        );
 
         // Rollback expired pessimistic lock.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(150, 0), ts(150, 0), 100);
@@ -654,12 +819,22 @@ pub mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(160, 1), true),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, ts(160, 1), true);
-        must_success(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, |s| {
-            s == TtlExpire
-        });
+        must_success(
+            &engine,
+            k,
+            ts(150, 0),
+            ts(160, 0),
+            ts(260, 0),
+            r,
+            false,
+            false,
+            |s| s == TtlExpire,
+        );
         must_unlocked(&engine, k);
         // Rolling back a pessimistic lock should leave Rollback mark.
         must_seek_write(
@@ -681,6 +856,8 @@ pub mod tests {
             ts(271, 0),
             TimeStamp::max(),
             r,
+            false,
+            false,
             |s| s == TtlExpire,
         );
         must_unlocked(&engine, k);
@@ -702,6 +879,8 @@ pub mod tests {
             ts(281, 0),
             TimeStamp::max(),
             r,
+            false,
+            false,
             |s| s == TtlExpire,
         );
         must_unlocked(&engine, k);
@@ -723,6 +902,8 @@ pub mod tests {
             ts(300, 0),
             ts(300, 0),
             r,
+            false,
+            false,
             uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
@@ -740,7 +921,7 @@ pub mod tests {
             TimeStamp::zero(),
             1,
             /* min_commit_ts */ TimeStamp::zero(),
-            false,
+            /* max_commit_ts */ TimeStamp::zero(),
         );
         must_success(
             &engine,
@@ -749,6 +930,8 @@ pub mod tests {
             ts(310, 0),
             ts(310, 0),
             r,
+            false,
+            false,
             uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&engine, k, ts(300, 0), 100, TimeStamp::zero(), false);
@@ -764,6 +947,8 @@ pub mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
+            false,
+            false,
             uncommitted(100, ts(310, 1), true),
         );
         must_commit(&engine, k, ts(310, 0), ts(315, 0));
@@ -774,6 +959,8 @@ pub mod tests {
             TimeStamp::max(),
             ts(320, 0),
             r,
+            false,
+            false,
             committed(ts(315, 0)),
         );
     }
@@ -782,5 +969,125 @@ pub mod tests {
     fn test_check_txn_status() {
         test_check_txn_status_impl(false);
         test_check_txn_status_impl(true);
+    }
+
+    #[test]
+    fn test_check_txn_status_resolving_pessimistic_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"k1";
+        let v = b"v1";
+        let ts = TimeStamp::compose;
+
+        // Check with resolving_pessimistic_lock flag.
+        // Path: there is no commit or rollback record, no rollback record should be written.
+        must_success(
+            &engine,
+            k,
+            ts(3, 0),
+            ts(3, 0),
+            ts(4, 0),
+            true,
+            false,
+            true,
+            |s| s == LockNotExistDoNothing,
+        );
+        must_get_rollback_ts_none(&engine, k, ts(5, 0));
+
+        // Path: there is no commit or rollback record, error should be reported if
+        // rollback_if_not_exist is set to false.
+        must_err(&engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
+
+        // Path: the pessimistic primary key lock does exist, and it's not expired yet.
+        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(10, 0), ts(10, 0), 10);
+        must_pessimistic_locked(&engine, k, ts(10, 0), ts(10, 0));
+        must_success(
+            &engine,
+            k,
+            ts(10, 0),
+            ts(11, 0),
+            ts(11, 0),
+            true,
+            false,
+            true,
+            uncommitted(10, TimeStamp::zero(), false),
+        );
+
+        // Path: the pessimistic primary key lock does exist, and it's expired, the primary lock will
+        // be pessimistically rolled back but there will not be a rollback record.
+        must_success(
+            &engine,
+            k,
+            ts(10, 0),
+            ts(21, 0),
+            ts(21, 0),
+            true,
+            false,
+            true,
+            |s| s == PessimisticRollBack,
+        );
+        must_unlocked(&engine, k);
+        must_get_rollback_ts_none(&engine, k, ts(22, 0));
+
+        // Path: the prewrite primary key lock does exist, and it's not expired yet.
+        // Should return locked status.
+        must_prewrite_put_impl(
+            &engine,
+            k,
+            v,
+            k,
+            &None,
+            ts(30, 0),
+            false,
+            10,
+            TimeStamp::zero(),
+            1,
+            /* min_commit_ts */ TimeStamp::zero(),
+            /* max_commit_ts */ TimeStamp::zero(),
+        );
+        must_success(
+            &engine,
+            k,
+            ts(30, 0),
+            ts(31, 0),
+            ts(31, 0),
+            true,
+            false,
+            true,
+            uncommitted(10, TimeStamp::zero(), false),
+        );
+
+        // Path: the prewrite primary key expired and the solving key is a pessimistic lock,
+        // rollback record should be written and the transaction status is certain.
+        must_success(
+            &engine,
+            k,
+            ts(30, 0),
+            ts(41, 0),
+            ts(41, 0),
+            true,
+            false,
+            true,
+            |s| s == TtlExpire,
+        );
+        must_unlocked(&engine, k);
+        must_get_rollback_ts(&engine, k, ts(30, 0));
+
+        // Path: the resolving_pessimistic_lock is false and the primary key lock is pessimistic
+        // lock, the transaction is in commit phase and the rollback record should be written.
+        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(50, 0), ts(50, 0), 10);
+        must_pessimistic_locked(&engine, k, ts(50, 0), ts(50, 0));
+        must_success(
+            &engine,
+            k,
+            ts(50, 0),
+            ts(61, 0),
+            ts(61, 0),
+            true,
+            false,
+            /* resolving_pessimistic_lock */ false,
+            |s| s == TtlExpire,
+        );
+        must_unlocked(&engine, k);
+        must_get_rollback_ts(&engine, k, ts(50, 0));
     }
 }

@@ -6,10 +6,14 @@ use std::{cmp, u64, usize};
 use crate::store::fsm::apply;
 use crate::store::metrics::*;
 use crate::store::{Callback, Config};
+use crate::Result;
 
+use collections::HashMap;
 use engine_traits::Snapshot;
-use kvproto::raft_cmdpb::RaftCmdRequest;
-use tikv_util::collections::HashMap;
+use kvproto::kvrpcpb::LockInfo;
+use kvproto::raft_cmdpb::{self, RaftCmdRequest};
+use protobuf::Message;
+use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::MustConsumeVec;
 use time::Timespec;
@@ -25,6 +29,8 @@ where
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
     pub renew_lease_time: Timespec,
     pub read_index: Option<u64>,
+    pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
+    pub locked: Option<Box<LockInfo>>,
     // `true` means it's in `ReadIndexQueue::reads`.
     in_contexts: bool,
 }
@@ -52,6 +58,8 @@ where
             cmds,
             renew_lease_time,
             read_index: None,
+            addition_request: None,
+            locked: None,
             in_contexts: false,
         }
     }
@@ -186,9 +194,9 @@ where
 
     pub fn advance_leader_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
-        for (uuid, index) in states {
+        for (uuid, _, index) in states {
             assert_eq!(uuid, self.reads[self.ready_cnt].id);
             self.reads[self.ready_cnt].read_index = Some(index);
             self.ready_cnt += 1;
@@ -198,10 +206,10 @@ where
     /// update the read index of the requests that before the specified id.
     pub fn advance_replica_reads<T>(&mut self, states: T)
     where
-        T: IntoIterator<Item = (Uuid, u64)>,
+        T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
-        for (uuid, index) in states {
+        for (uuid, locked, index) in states {
             if let Some(raw_offset) = self.contexts.remove(&uuid) {
                 let offset = match raw_offset.checked_sub(self.handled_cnt) {
                     Some(offset) => offset,
@@ -216,6 +224,9 @@ where
                     raw_offset, self.reads[offset].id, uuid
                 );
                 self.reads[offset].in_contexts = false;
+                // clear addition_request to indicate lock checking has finished
+                self.reads[offset].addition_request = None;
+                self.reads[offset].locked = locked.map(Box::new);
                 if let Some(occur_index) = self.reads[offset].read_index {
                     if occur_index < index {
                         continue;
@@ -294,14 +305,135 @@ where
     }
 }
 
+const UUID_LEN: usize = 16;
+const REQUEST_FLAG: u8 = b'r';
+const LOCKED_FLAG: u8 = b'l';
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadIndexContext {
+    pub id: Uuid,
+    pub request: Option<raft_cmdpb::ReadIndexRequest>,
+    pub locked: Option<LockInfo>,
+}
+
+impl ReadIndexContext {
+    pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
+        use tikv_util::codec::number::*;
+
+        if bytes.len() < UUID_LEN {
+            return Err(box_err!(
+                "read index context must contain a {} byte long UUID",
+                UUID_LEN
+            ));
+        }
+        let mut res = ReadIndexContext {
+            id: Uuid::from_slice(&bytes[..UUID_LEN]).unwrap(),
+            request: None,
+            locked: None,
+        };
+        let mut bytes = &bytes[UUID_LEN..];
+        while !bytes.is_empty() {
+            match read_u8(&mut bytes).unwrap() {
+                REQUEST_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut request = raft_cmdpb::ReadIndexRequest::default();
+                    request.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.request = Some(request);
+                }
+                LOCKED_FLAG => {
+                    let len = decode_var_u64(&mut bytes)? as usize;
+                    let mut locked = LockInfo::default();
+                    locked.merge_from_bytes(&bytes[..len])?;
+                    bytes = &bytes[len..];
+                    res.locked = Some(locked);
+                }
+                // just break for forward compatibility
+                _ => break,
+            }
+        }
+        Ok(res)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        Self::fields_to_bytes(self.id, self.request.as_ref(), self.locked.as_ref())
+    }
+
+    pub fn fields_to_bytes(
+        id: Uuid,
+        request: Option<&raft_cmdpb::ReadIndexRequest>,
+        locked: Option<&LockInfo>,
+    ) -> Vec<u8> {
+        let request_size = request.map(Message::compute_size);
+        let locked_size = locked.map(Message::compute_size);
+        let field_size = |s: Option<u32>| s.map(|s| 1 + MAX_VAR_U64_LEN + s as usize).unwrap_or(0);
+        let cap = UUID_LEN + field_size(request_size) + field_size(locked_size);
+        let mut b = Vec::with_capacity(cap);
+        b.extend_from_slice(id.as_bytes());
+        if let Some(request) = request {
+            b.push(REQUEST_FLAG);
+            b.encode_var_u64(request_size.unwrap() as u64).unwrap();
+            request.write_to_vec(&mut b).unwrap();
+        }
+        if let Some(locked) = locked {
+            b.push(LOCKED_FLAG);
+            b.encode_var_u64(locked_size.unwrap() as u64).unwrap();
+            locked.write_to_vec(&mut b).unwrap();
+        }
+        b
+    }
+}
+
+#[cfg(test)]
+mod read_index_ctx_tests {
+    use super::*;
+
+    // Test backward compatibility
+    #[test]
+    fn test_single_uuid() {
+        let id = Uuid::new_v4();
+        // We should be able to parse old version context (a single UUID).
+        let ctx = ReadIndexContext::parse(id.as_bytes()).unwrap();
+        assert_eq!(
+            ctx,
+            ReadIndexContext {
+                id,
+                request: None,
+                locked: None,
+            }
+        );
+
+        // Old version TiKV should be able to parse context without lock checking fields.
+        let bytes = ctx.to_bytes();
+        assert_eq!(bytes, id.as_bytes());
+    }
+
+    #[test]
+    fn test_serde_request() {
+        let id = Uuid::new_v4();
+        let mut request = raft_cmdpb::ReadIndexRequest::default();
+        request.set_start_ts(10);
+        let mut locked = LockInfo::default();
+        locked.set_lock_version(5);
+        let ctx = ReadIndexContext {
+            id,
+            request: Some(request),
+            locked: Some(locked),
+        };
+        let bytes = ctx.to_bytes();
+        let parsed_ctx = ReadIndexContext::parse(&bytes).unwrap();
+        assert_eq!(ctx, parsed_ctx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_rocks::RocksSnapshot;
+    use engine_test::kv::KvTestSnapshot;
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
         queue.handled_cnt = 125;
         for _ in 0..100 {
             let id = Uuid::new_v4();
@@ -316,30 +448,30 @@ mod tests {
             queue.contexts.insert(id, offset);
         }
 
-        queue.advance_replica_reads(Vec::<(Uuid, u64)>::default());
+        queue.advance_replica_reads(Vec::<(Uuid, Option<LockInfo>, u64)>::default());
         assert_eq!(queue.ready_cnt, 0);
 
-        queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 1);
 
-        queue.advance_replica_reads(vec![(queue.reads[1].id, 100)]);
+        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[80].id, 80),
-            (queue.reads[84].id, 100),
-            (queue.reads[82].id, 70),
-            (queue.reads[78].id, 120),
-            (queue.reads[77].id, 40),
+            (queue.reads[80].id, None, 80),
+            (queue.reads[84].id, None, 100),
+            (queue.reads[82].id, None, 70),
+            (queue.reads[78].id, None, 120),
+            (queue.reads[77].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
         queue.advance_replica_reads(vec![
-            (queue.reads[20].id, 80),
-            (queue.reads[24].id, 100),
-            (queue.reads[22].id, 70),
-            (queue.reads[18].id, 120),
-            (queue.reads[17].id, 40),
+            (queue.reads[20].id, None, 80),
+            (queue.reads[24].id, None, 100),
+            (queue.reads[22].id, None, 70),
+            (queue.reads[18].id, None, 120),
+            (queue.reads[17].id, None, 40),
         ]);
         assert_eq!(queue.ready_cnt, 85);
 
@@ -358,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_become_leader_then_become_follower() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
         queue.handled_cnt = 100;
 
         // Push a pending comand when the peer is follower.
@@ -373,7 +505,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -388,19 +520,19 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads(vec![(last_id, 10)]);
+        queue.advance_leader_reads(vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
         // Shouldn't panic when call `advance_replica_reads` with `id` again.
-        queue.advance_replica_reads(vec![(id, 10)]);
+        queue.advance_replica_reads(vec![(id, None, 10)]);
     }
 
     #[test]
     fn test_retake_leadership() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
         queue.handled_cnt = 100;
 
         // Push a pending read comand when the peer is leader.
@@ -414,7 +546,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
-        queue.advance_leader_reads(vec![(id, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -431,7 +563,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads(vec![(id_1, 10)]);
+        queue.advance_leader_reads(vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -439,14 +571,14 @@ mod tests {
 
     #[test]
     fn test_advance_replica_reads_out_of_order() {
-        let mut queue = ReadIndexQueue::<RocksSnapshot>::default();
+        let mut queue = ReadIndexQueue::<KvTestSnapshot>::default();
         queue.handled_cnt = 100;
 
         let ids: [Uuid; 2] = [Uuid::new_v4(), Uuid::new_v4()];
-        for i in 0..2 {
+        for id in &ids {
             // Push a pending read comand when the peer is follower.
             let req = ReadIndexRequest::with_command(
-                ids[i],
+                *id,
                 RaftCmdRequest::default(),
                 Callback::None,
                 Timespec::new(0, 0),
@@ -454,12 +586,12 @@ mod tests {
             queue.push_back(req, false);
         }
 
-        queue.advance_replica_reads(vec![(ids[1], 100)]);
+        queue.advance_replica_reads(vec![(ids[1], None, 100)]);
         assert_eq!(queue.ready_cnt, 2);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
 
-        queue.advance_replica_reads(vec![(ids[0], 100)]);
+        queue.advance_replica_reads(vec![(ids[0], None, 100)]);
     }
 }

@@ -100,8 +100,16 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                         resp.set_region_error(err);
                     } else {
                         match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
+                            Ok((val, statistics, perf_statistics_delta)) => {
+                                let scan_detail_v2 =
+                                    resp.mut_exec_details_v2().mut_scan_detail_v2();
+                                statistics.write_scan_detail(scan_detail_v2);
+                                perf_statistics_delta.write_scan_detail(scan_detail_v2);
+                                match val {
+                                    Some(val) => resp.set_value(val),
+                                    None => resp.set_not_found(true),
+                                }
+                            }
                             Err(e) => resp.set_error(extract_key_error(&e)),
                         }
                     }

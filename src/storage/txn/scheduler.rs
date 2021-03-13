@@ -22,18 +22,19 @@
 
 use crossbeam::utils::CachePadded;
 use parking_lot::{Mutex, MutexGuard};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use kvproto::kvrpcpb::{CommandPri, ExtraOp};
-use tikv_util::{callback::must_call, collections::HashMap, time::Instant};
+use tikv_util::{callback::must_call, time::Instant};
 use txn_types::TimeStamp;
 
 use crate::storage::kv::{
     drop_snapshot_callback, with_tls_engine, Engine, ExtCallback, Result as EngineResult,
-    Statistics,
+    SnapContext, Statistics,
 };
 use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
@@ -41,7 +42,7 @@ use crate::storage::metrics::{
     SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC,
     SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
 };
-use crate::storage::txn::commands::{WriteContext, WriteResult};
+use crate::storage::txn::commands::{ResponsePolicy, WriteContext, WriteResult};
 use crate::storage::txn::{
     commands::Command,
     latch::{Latches, Lock},
@@ -92,6 +93,7 @@ struct TaskContext {
 
     lock: Lock,
     cb: Option<StorageCallback>,
+    pr: Option<ProcessResult>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -119,6 +121,7 @@ impl TaskContext {
             task: Some(task),
             lock,
             cb: Some(cb),
+            pr: None,
             write_bytes,
             tag,
             latch_timer: Instant::now_coarse(),
@@ -161,7 +164,9 @@ struct SchedulerInner<L: LockManager> {
 
     concurrency_manager: ConcurrencyManager,
 
-    pipelined_pessimistic_lock: bool,
+    pipelined_pessimistic_lock: Arc<AtomicBool>,
+
+    enable_async_apply_prewrite: bool,
 }
 
 #[inline]
@@ -204,10 +209,15 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
-    fn take_task_cb(&self, cid: u64) -> Option<StorageCallback> {
+    fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
-            .and_then(|tctx| tctx.cb.take())
+            .map(|tctx| (tctx.cb.take(), tctx.pr.take()))
+            .unwrap_or((None, None))
+    }
+
+    fn store_pr(&self, cid: u64, pr: ProcessResult) {
+        self.get_task_slot(cid).get_mut(&cid).unwrap().pr = Some(pr);
     }
 
     fn too_busy(&self) -> bool {
@@ -248,7 +258,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-        pipelined_pessimistic_lock: bool,
+        pipelined_pessimistic_lock: Arc<AtomicBool>,
+        enable_async_apply_prewrite: bool,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -271,6 +282,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_mgr,
             concurrency_manager,
             pipelined_pessimistic_lock,
+            enable_async_apply_prewrite,
         });
 
         slow_log!(t.elapsed(), "initialized the transaction scheduler");
@@ -388,7 +400,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
 
         let f = |engine: &E| {
-            if let Err(e) = engine.async_snapshot(&ctx, None, cb) {
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            if let Err(e) = engine.async_snapshot(snap_ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
@@ -445,29 +461,39 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn on_write_finished(
         &self,
         cid: u64,
-        pr: ProcessResult,
+        pr: Option<ProcessResult>,
         result: EngineResult<()>,
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
+        async_apply_prewrite: bool,
         tag: metrics::CommandKind,
     ) {
-        if !pipelined {
-            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
-        } else {
+        // TODO: Does async apply prewrite worth a special metric here?
+        if pipelined {
             SCHED_STAGE_COUNTER_VEC
                 .get(tag)
                 .pipelined_write_finish
                 .inc();
+        } else if async_apply_prewrite {
+            SCHED_STAGE_COUNTER_VEC
+                .get(tag)
+                .async_apply_prewrite_finish
+                .inc();
+        } else {
+            SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished"; "cid" => cid, "pipelined" => pipelined);
+        debug!("write command finished";
+            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
+        // If pipelined pessimistic lock or async apply prewrite takes effect, it's not guaranteed
+        // that the proposed or committed callback is surely invoked, which takes and invokes
+        // `tctx.cb(tctx.pr)`.
         if let Some(cb) = tctx.cb {
             let pr = match result {
-                Ok(()) => pr,
+                Ok(()) => pr.or(tctx.pr).unwrap(),
                 Err(e) => ProcessResult::Failed {
                     err: StorageError::from(e),
                 },
@@ -479,7 +505,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 cb.execute(pr);
             }
         } else {
-            assert!(pipelined);
+            assert!(pipelined || async_apply_prewrite);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -509,14 +535,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    fn on_pipelined_write(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
-        debug!("pipelined write"; "cid" => cid);
-        SCHED_STAGE_COUNTER_VEC.get(tag).pipelined_write.inc();
-        // It's possible we receive a Msg::WriteFinished before Msg::PipelinedWrite.
-        // The task ctx has been dequeued.
-        if let Some(cb) = self.inner.take_task_cb(cid) {
-            cb.execute(pr);
-        }
+    fn early_response(
+        cid: u64,
+        cb: StorageCallback,
+        pr: ProcessResult,
+        tag: metrics::CommandKind,
+        stage: metrics::CommandStageKind,
+    ) {
+        debug!("early return response"; "cid" => cid);
+        SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        cb.execute(pr);
         // It won't release locks here until write finished.
     }
 
@@ -586,14 +614,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
         let scheduler = self.clone();
-        let pipelined = self.inner.pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
+        let pipelined_pessimistic_lock = self
+            .inner
+            .pipelined_pessimistic_lock
+            .load(Ordering::Relaxed);
+        let pipelined = pipelined_pessimistic_lock && task.cmd.can_be_pipelined();
 
         let context = WriteContext {
             lock_mgr: &self.inner.lock_mgr,
             concurrency_manager: self.inner.concurrency_manager.clone(),
             extra_op: task.extra_op,
             statistics,
-            pipelined_pessimistic_lock: self.inner.pipelined_pessimistic_lock,
+            async_apply_prewrite: self.inner.enable_async_apply_prewrite,
         };
 
         match task.cmd.process_write(snapshot, context) {
@@ -606,38 +638,83 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 pr,
                 lock_info,
                 lock_guards,
+                response_policy,
             }) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some((lock, is_first_lock, wait_timeout)) = lock_info {
                     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout);
                 } else if to_be_write.modifies.is_empty() {
-                    scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, tag);
+                    scheduler.on_write_finished(
+                        cid,
+                        Some(pr),
+                        Ok(()),
+                        lock_guards,
+                        false,
+                        false,
+                        tag,
+                    );
                 } else {
-                    let proposed_cb: Option<ExtCallback> = if pipelined {
-                        // The normal write process is respond to clients and release latches
-                        // after async write finished. If pipelined pessimistic locking is enabled,
-                        // the process becomes parallel and there are two msgs for one command:
-                        //   1. Msg::PipelinedWrite: respond to clients
-                        //   2. Msg::WriteFinished: deque context and release latches
-                        // The order between these two msgs is uncertain due to thread scheduling
-                        // so we clone the result for each msg.
-                        let pipelined_write_pr = pr.maybe_clone().unwrap();
-                        let sched = scheduler.clone();
-                        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
-                        Some(Box::new(move || {
-                            sched_pool
-                                .spawn(async move {
-                                    fail_point!("scheduler_pipelined_write_finish");
-                                    // The write task is proposed to the raftstore successfully.
-                                    // Respond to client early.
-                                    sched.on_pipelined_write(cid, pipelined_write_pr, tag);
-                                })
-                                .unwrap()
-                        }))
-                    } else {
-                        None
-                    };
+                    let mut pr = Some(pr);
+                    let mut is_async_apply_prewrite = false;
+
+                    let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
+                        match response_policy {
+                            ResponsePolicy::OnApplied => (None, None),
+                            ResponsePolicy::OnCommitted => {
+                                self.inner.store_pr(cid, pr.take().unwrap());
+                                let sched = scheduler.clone();
+                                // Currently, the only case that response is returned after finishing
+                                // commit is async applying prewrites for async commit transactions.
+                                // The committed callback is not guaranteed to be invoked. So store
+                                // the `pr` to the tctx instead of capturing it to the closure.
+                                let committed_cb = Box::new(move || {
+                                    fail_point!("before_async_apply_prewrite_finish", |_| {});
+                                    let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                                    Self::early_response(
+                                        cid,
+                                        cb.unwrap(),
+                                        pr.unwrap(),
+                                        tag,
+                                        metrics::CommandStageKind::async_apply_prewrite,
+                                    );
+                                });
+                                is_async_apply_prewrite = true;
+                                (None, Some(committed_cb))
+                            }
+                            ResponsePolicy::OnProposed => {
+                                if pipelined {
+                                    // The normal write process is respond to clients and release
+                                    // latches after async write finished. If pipelined pessimistic
+                                    // locking is enabled, the process becomes parallel and there are
+                                    // two msgs for one command:
+                                    //   1. Msg::PipelinedWrite: respond to clients
+                                    //   2. Msg::WriteFinished: deque context and release latches
+                                    // The proposed callback is not guaranteed to be invoked. So store
+                                    // the `pr` to the tctx instead of capturing it to the closure.
+                                    self.inner.store_pr(cid, pr.take().unwrap());
+                                    let sched = scheduler.clone();
+                                    // Currently, the only case that response is returned after finishing
+                                    // proposed phase is pipelined pessimistic lock.
+                                    // TODO: Unify the code structure of pipelined pessimistic lock and
+                                    // async apply prewrite.
+                                    let proposed_cb = Box::new(move || {
+                                        fail_point!("before_pipelined_write_finish", |_| {});
+                                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
+                                        Self::early_response(
+                                            cid,
+                                            cb.unwrap(),
+                                            pr.unwrap(),
+                                            tag,
+                                            metrics::CommandStageKind::pipelined_write,
+                                        );
+                                    });
+                                    (Some(proposed_cb), None)
+                                } else {
+                                    (None, None)
+                                }
+                            }
+                        };
 
                     let sched = scheduler.clone();
                     let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
@@ -653,6 +730,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                     result,
                                     lock_guards,
                                     pipelined,
+                                    is_async_apply_prewrite,
                                     tag,
                                 );
                                 KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -662,9 +740,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .unwrap()
                     });
 
-                    if let Err(e) =
-                        engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb)
-                    {
+                    if let Err(e) = engine.async_write_ext(
+                        &ctx,
+                        to_be_write,
+                        engine_cb,
+                        proposed_cb,
+                        committed_cb,
+                    ) {
                         SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         info!("engine async_write failed"; "cid" => cid, "err" => ?e);
@@ -676,8 +758,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-
-                debug!("write command failed at prewrite"; "cid" => cid);
+                debug!("write command failed at prewrite"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
             }
         }

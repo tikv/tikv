@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
+
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -97,7 +99,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         // If we only want to get single value, we can use prefix seek.
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
-            .prefix_seek(!self.multi)
+            .prefix_seek(true)
             .scan_mode(if self.multi {
                 ScanMode::Mixed
             } else {
@@ -246,8 +248,16 @@ impl<S: Snapshot> PointGetter<S> {
 
         seek_key = seek_key.append_ts(self.ts);
         let data_found = if use_near_seek {
-            self.write_cursor
-                .near_seek(&seek_key, &mut self.statistics.write)?
+            if self.write_cursor.key(&mut self.statistics.write) >= seek_key.as_encoded().as_slice()
+            {
+                // we call near_seek with ScanMode::Mixed set, if the key() > seek_key,
+                // it will call prev() several times, whereas we just want to seek forward here
+                // so cmp them in advance
+                true
+            } else {
+                self.write_cursor
+                    .near_seek(&seek_key, &mut self.statistics.write)?
+            }
         } else {
             self.write_cursor
                 .seek(&seek_key, &mut self.statistics.write)?
@@ -266,6 +276,10 @@ impl<S: Snapshot> PointGetter<S> {
             }
 
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+
+            if !write.check_gc_fence_as_latest_version(self.ts) {
+                return Ok(None);
+            }
 
             match write.write_type {
                 WriteType::Put => {
@@ -332,18 +346,19 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
-    use kvproto::kvrpcpb::Context;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
-    use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
-    use crate::storage::mvcc::tests::*;
+    use crate::storage::kv::{
+        CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
+    };
     use crate::storage::txn::tests::{
-        must_commit, must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put,
+        must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
+        must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
+        must_prewrite_put, must_rollback,
     };
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .build()
@@ -351,7 +366,7 @@ mod tests {
     }
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
@@ -375,7 +390,7 @@ mod tests {
         value: &[u8],
         expected_met_newer_ts_data: bool,
     ) {
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = getter_ts.into();
         let mut point_getter = PointGetterBuilder::new(snapshot.clone(), ts)
             .isolation_level(IsolationLevel::Si)
@@ -575,6 +590,76 @@ mod tests {
         assert_seek_next_prev(&s.write, 1, 0, 0);
     }
 
+    #[test]
+    fn test_multi_tombstone() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"foo", b"bar", b"foo", 10);
+        must_prewrite_put(&engine, b"foo1", b"bar1", b"foo", 10);
+        must_prewrite_put(&engine, b"foo2", b"bar2", b"foo", 10);
+        must_prewrite_put(&engine, b"foo3", b"bar3", b"foo", 10);
+        must_commit(&engine, b"foo", 10, 20);
+        must_commit(&engine, b"foo1", 10, 20);
+        must_commit(&engine, b"foo2", 10, 20);
+        must_commit(&engine, b"foo3", 10, 20);
+        must_prewrite_delete(&engine, b"foo1", b"foo1", 30);
+        must_prewrite_delete(&engine, b"foo2", b"foo1", 30);
+        must_commit(&engine, b"foo1", 30, 40);
+        must_commit(&engine, b"foo2", 30, 40);
+
+        must_gc(&engine, b"foo", 50);
+        must_gc(&engine, b"foo1", 50);
+        must_gc(&engine, b"foo2", 50);
+        must_gc(&engine, b"foo3", 50);
+
+        let mut getter = new_multi_point_getter(&engine, TimeStamp::max());
+        let perf_statistics = PerfStatisticsInstant::new();
+        must_get_value(&mut getter, b"foo", b"bar");
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        must_get_none(&mut getter, b"foo1");
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        must_get_none(&mut getter, b"foo2");
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+
+        let perf_statistics = PerfStatisticsInstant::new();
+        must_get_value(&mut getter, b"foo3", b"bar3");
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+    }
+
+    #[test]
+    fn test_multi_with_iter_lower_bound() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&engine, b"foo", b"bar", b"foo", 10);
+        must_commit(&engine, b"foo", 10, 20);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let write_cursor = CursorBuilder::new(&snapshot, CF_WRITE)
+            .prefix_seek(true)
+            .scan_mode(ScanMode::Mixed)
+            .range(Some(Key::from_raw(b"a")), None)
+            .build()
+            .unwrap();
+        let mut getter = PointGetter {
+            snapshot,
+            multi: true,
+            omit_value: false,
+            isolation_level: IsolationLevel::Si,
+            ts: TimeStamp::new(30),
+            bypass_locks: Default::default(),
+            met_newer_ts_data: NewerTsCheckState::NotMetYet,
+            statistics: Statistics::default(),
+            write_cursor,
+            drained: false,
+        };
+        must_get_value(&mut getter, b"foo", b"bar");
+        let s = getter.take_statistics();
+        assert_seek_next_prev(&s.write, 1, 0, 0);
+    }
+
     /// Some ts larger than get ts
     #[test]
     fn test_multi_basic_2() {
@@ -647,7 +732,7 @@ mod tests {
         must_get_none(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
-        assert_seek_next_prev(&s.write, 3, 0, 0);
+        assert_seek_next_prev(&s.write, 4, 0, 0);
 
         let mut getter = new_multi_point_getter(&engine, 3.into());
         must_get_none(&mut getter, b"a");
@@ -658,7 +743,7 @@ mod tests {
         must_get_none(&mut getter, b"foo2");
         must_get_none(&mut getter, b"foo2");
         let s = getter.take_statistics();
-        assert_seek_next_prev(&s.write, 6, 0, 0);
+        assert_seek_next_prev(&s.write, 7, 0, 0);
 
         let mut getter = new_multi_point_getter(&engine, 4.into());
         must_get_none(&mut getter, b"a");
@@ -707,7 +792,7 @@ mod tests {
     fn test_omit_value() {
         let engine = new_sample_engine_2();
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
 
         let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
@@ -787,7 +872,7 @@ mod tests {
 
         must_prewrite_delete(&engine, key, key, 30);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
@@ -795,7 +880,7 @@ mod tests {
             .unwrap();
         must_get_value(&mut getter, key, val);
 
-        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))
@@ -825,5 +910,104 @@ mod tests {
 
         must_met_newer_ts_data(&engine, 50, key, val2, true);
         must_met_newer_ts_data(&engine, 60, key, val2, true);
+    }
+
+    #[test]
+    fn test_point_get_check_gc_fence() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // PUT,      Read
+        //  `--------------^
+        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&engine, b"k1", 10, 20);
+        must_cleanup_with_gc_fence(&engine, b"k1", 20, 0, 50, true);
+
+        // PUT,      Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_commit(&engine, b"k2", 11, 20);
+        must_cleanup_with_gc_fence(&engine, b"k2", 20, 0, 40, true);
+
+        // PUT,      Read
+        //  `-----^
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_commit(&engine, b"k3", 12, 20);
+        must_cleanup_with_gc_fence(&engine, b"k3", 20, 0, 30, true);
+
+        // PUT,   PUT,       Read
+        //  `-----^ `----^
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_commit(&engine, b"k4", 13, 14);
+        must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
+        must_commit(&engine, b"k4", 15, 20);
+        must_cleanup_with_gc_fence(&engine, b"k4", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&engine, b"k4", 20, 0, 30, true);
+
+        // PUT,   DEL,       Read
+        //  `-----^ `----^
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
+        must_commit(&engine, b"k5", 13, 14);
+        must_prewrite_delete(&engine, b"k5", b"v5", 15);
+        must_commit(&engine, b"k5", 15, 20);
+        must_cleanup_with_gc_fence(&engine, b"k5", 14, 0, 20, false);
+        must_cleanup_with_gc_fence(&engine, b"k5", 20, 0, 30, true);
+
+        // PUT, LOCK, LOCK,   Read
+        //  `------------------------^
+        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
+        must_commit(&engine, b"k6", 16, 20);
+        must_prewrite_lock(&engine, b"k6", b"k6", 25);
+        must_commit(&engine, b"k6", 25, 26);
+        must_prewrite_lock(&engine, b"k6", b"k6", 28);
+        must_commit(&engine, b"k6", 28, 29);
+        must_cleanup_with_gc_fence(&engine, b"k6", 20, 0, 50, true);
+
+        // PUT, LOCK,   LOCK,   Read
+        //  `---------^
+        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_commit(&engine, b"k7", 16, 20);
+        must_prewrite_lock(&engine, b"k7", b"k7", 25);
+        must_commit(&engine, b"k7", 25, 26);
+        must_cleanup_with_gc_fence(&engine, b"k7", 20, 0, 27, true);
+        must_prewrite_lock(&engine, b"k7", b"k7", 28);
+        must_commit(&engine, b"k7", 28, 29);
+
+        // PUT,  Read
+        //  * (GC fence ts is 0)
+        must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
+        must_commit(&engine, b"k8", 17, 30);
+        must_cleanup_with_gc_fence(&engine, b"k8", 30, 0, 0, true);
+
+        // PUT, LOCK,     Read
+        // `-----------^
+        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
+        must_commit(&engine, b"k9", 18, 20);
+        must_prewrite_lock(&engine, b"k9", b"k9", 25);
+        must_commit(&engine, b"k9", 25, 26);
+        must_cleanup_with_gc_fence(&engine, b"k9", 20, 0, 27, true);
+
+        let expected_results = vec![
+            (b"k1", Some(b"v1")),
+            (b"k2", None),
+            (b"k3", None),
+            (b"k4", None),
+            (b"k5", None),
+            (b"k6", Some(b"v6")),
+            (b"k7", None),
+            (b"k8", Some(b"v8")),
+            (b"k9", None),
+        ];
+
+        for (k, v) in &expected_results {
+            let mut single_getter = new_single_point_getter(&engine, 40.into());
+            let value = single_getter.get(&Key::from_raw(*k)).unwrap();
+            assert_eq!(value, v.map(|v| v.to_vec()));
+        }
+
+        let mut multi_getter = new_multi_point_getter(&engine, 40.into());
+        for (k, v) in &expected_results {
+            let value = multi_getter.get(&Key::from_raw(*k)).unwrap();
+            assert_eq!(value, v.map(|v| v.to_vec()));
+        }
     }
 }

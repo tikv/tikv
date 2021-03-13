@@ -49,3 +49,10 @@ fn bench_slice_compare_greater_64(b: &mut Bencher) {
 fn bench_slice_compare_greater_128(b: &mut Bencher) {
     bench_slice_compare_greater(b, 128)
 }
+
+#[bench]
+fn bench_slice_compare_equal_128(b: &mut Bencher) {
+    let s1 = gen_rand_str(128);
+    let s2 = s1.clone();
+    b.iter(|| s1 == s2);
+}

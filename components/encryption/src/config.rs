@@ -3,11 +3,6 @@
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::config::ReadableDuration;
 
-#[cfg(test)]
-use crate::master_key::Backend;
-#[cfg(test)]
-use std::sync::Arc;
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -19,6 +14,10 @@ pub struct EncryptionConfig {
     #[config(skip)]
     pub data_key_rotation_period: ReadableDuration,
     #[config(skip)]
+    pub enable_file_dictionary_log: bool,
+    #[config(skip)]
+    pub file_dictionary_rewrite_threshold: u64,
+    #[config(skip)]
     pub master_key: MasterKeyConfig,
     #[config(skip)]
     pub previous_master_key: MasterKeyConfig,
@@ -29,6 +28,9 @@ impl Default for EncryptionConfig {
         EncryptionConfig {
             data_encryption_method: EncryptionMethod::Plaintext,
             data_key_rotation_period: ReadableDuration::days(7),
+            // The option is available since TiKV 4.0.9.
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 1000000,
             master_key: MasterKeyConfig::default(),
             previous_master_key: MasterKeyConfig::default(),
         }
@@ -47,35 +49,9 @@ pub struct FileConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
     pub key_id: String,
-
-    // Providing access_key and secret_access_key is recommended as it has
-    // security risk.
-    #[doc(hidden)]
-    // We don's want to write access_key and secret_access_key to config file
-    // accidentally.
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub access_key: String,
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[config(skip)]
-    pub secret_access_key: String,
-
     pub region: String,
     pub endpoint: String,
 }
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub struct Mock(pub Arc<dyn Backend>);
-#[cfg(test)]
-impl PartialEq for Mock {
-    fn eq(&self, _: &Self) -> bool {
-        false
-    }
-}
-#[cfg(test)]
-impl Eq for Mock {}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
@@ -97,10 +73,6 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
-
-    #[cfg(test)]
-    #[serde(skip)]
-    Mock(Mock),
 }
 
 impl Default for MasterKeyConfig {
@@ -180,24 +152,24 @@ mod tests {
             master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
                     key_id: "key_id".to_owned(),
-                    access_key: "access_key".to_owned(),
-                    secret_access_key: "secret_access_key".to_owned(),
                     region: "region".to_owned(),
                     endpoint: "endpoint".to_owned(),
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
+            enable_file_dictionary_log: true,
+            file_dictionary_rewrite_threshold: 1000000,
         };
         let kms_str = r#"
         data-encryption-method = "aes128-ctr"
         data-key-rotation-period = "14d"
+        enable-file-dictionary-log = true
+        file-dictionary-rewrite-threshold = 1000000
         [previous-master-key]
         type = "plaintext"
         [master-key]
         type = "kms"
         key-id = "key_id"
-        access-key = "access_key"
-        secret-access-key = "secret_access_key"
         region = "region"
         endpoint = "endpoint"
         "#;

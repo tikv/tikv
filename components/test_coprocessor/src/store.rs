@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
+use collections::HashMap;
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query_datatype::codec::{datum, table, Datum};
 use tidb_query_datatype::expr::EvalContext;
@@ -14,7 +15,6 @@ use tikv::storage::{
     txn::FixtureStore,
     SnapshotStore,
 };
-use tikv_util::collections::HashMap;
 use txn_types::{Key, Mutation, TimeStamp};
 
 pub struct Insert<'a, E: Engine> {
@@ -203,7 +203,7 @@ impl<E: Engine> Store<E> {
 
     /// Directly creates a `SnapshotStore` over current committed data.
     pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
-        let snapshot = self.get_engine().snapshot(&Context::default()).unwrap();
+        let snapshot = self.get_engine().snapshot(Default::default()).unwrap();
         SnapshotStore::new(
             snapshot,
             self.last_committed_ts,

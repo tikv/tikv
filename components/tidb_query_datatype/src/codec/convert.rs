@@ -496,7 +496,9 @@ impl<'a> ToInt for JsonRef<'a> {
         // TiDB:  5
         // MySQL: 4
         let val = match self.get_type() {
-            JsonType::Object | JsonType::Array => Ok(0),
+            JsonType::Object | JsonType::Array => Ok(ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as i64)),
             JsonType::I64 => Ok(self.get_i64()),
             JsonType::U64 => Ok(self.get_u64() as i64),
@@ -510,7 +512,9 @@ impl<'a> ToInt for JsonRef<'a> {
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match self.get_type() {
-            JsonType::Object | JsonType::Array => Ok(0),
+            JsonType::Object | JsonType::Array => Ok(ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as u64)),
             JsonType::I64 => Ok(self.get_i64() as u64),
             JsonType::U64 => Ok(self.get_u64()),
@@ -1071,12 +1075,10 @@ fn no_exp_float_str_to_int_str(valid_float: &str, mut dot_idx: usize) -> Result<
             // so we need valid_float[..(dot_idx+1)] here.
             &valid_float[..=dot_idx]
         }
+    } else if dot_idx == 0 {
+        "0"
     } else {
-        if dot_idx == 0 {
-            "0"
-        } else {
-            &digits[..dot_idx]
-        }
+        &digits[..dot_idx]
     };
 
     let res = if digits.len() > dot_idx + 1 {
@@ -1475,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_int() {
+    fn test_json_to_int() {
         let test_cases = vec![
             ("{}", 0),
             ("[]", 0),
@@ -1495,6 +1497,28 @@ mod tests {
             let json: Json = jstr.parse().unwrap();
             let get = json.to_int(&mut ctx, FieldTypeTp::LongLong).unwrap();
             assert_eq!(get, exp, "json.as_i64 get: {}, exp: {}", get, exp);
+        }
+    }
+
+    #[test]
+    fn test_cast_err_when_json_array_or_object_to_int() {
+        let test_cases = vec![
+            ("{}", ERR_TRUNCATE_WRONG_VALUE),
+            ("[]", ERR_TRUNCATE_WRONG_VALUE),
+        ];
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let result: Result<i64> = json.to_int(&mut ctx, FieldTypeTp::LongLong);
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.code(),
+                exp,
+                "json.as_f64 get: {}, exp: {}",
+                err.code(),
+                exp
+            );
         }
     }
 
@@ -1788,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_uint() {
+    fn test_json_to_uint() {
         let test_cases = vec![
             ("{}", 0u64),
             ("[]", 0u64),
@@ -1807,6 +1831,28 @@ mod tests {
             let json: Json = jstr.parse().unwrap();
             let get = json.to_uint(&mut ctx, FieldTypeTp::LongLong).unwrap();
             assert_eq!(get, exp, "json.as_u64 get: {}, exp: {}", get, exp);
+        }
+    }
+
+    #[test]
+    fn test_cast_err_when_json_array_or_object_to_uint() {
+        let test_cases = vec![
+            ("{}", ERR_TRUNCATE_WRONG_VALUE),
+            ("[]", ERR_TRUNCATE_WRONG_VALUE),
+        ];
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
+        for (jstr, exp) in test_cases {
+            let json: Json = jstr.parse().unwrap();
+            let result: Result<u64> = json.to_uint(&mut ctx, FieldTypeTp::LongLong);
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.code(),
+                exp,
+                "json.as_f64 get: {}, exp: {}",
+                err.code(),
+                exp
+            );
         }
     }
 

@@ -12,7 +12,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{DeleteStrategy, MiscExt, Range, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
-use pd_client::{ClusterVersion, PdClient};
+use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -31,6 +31,7 @@ use super::applied_lock_collector::{AppliedLockCollector, Callback as LockCollec
 use super::config::{GcConfig, GcWorkerConfigManager};
 use super::gc_manager::{AutoGcConfig, GcManager, GcManagerHandle};
 use super::{Callback, CompactionFilterInitializer, Error, ErrorInner, Result};
+use crate::storage::txn::gc;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -103,8 +104,8 @@ impl Display for GcTask {
                 ..
             } => f
                 .debug_struct("GC")
-                .field("start_key", &hex::encode_upper(&start_key))
-                .field("end_key", &hex::encode_upper(&end_key))
+                .field("start_key", &log_wrappers::Value::key(&start_key))
+                .field("end_key", &log_wrappers::Value::key(&end_key))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::UnsafeDestroyRange {
@@ -180,7 +181,7 @@ where
             Some(c) => c,
             None => return true,
         };
-        check_need_gc(safe_point, self.cfg.ratio_threshold, props)
+        check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
     }
 
     /// Cleans up outdated data.
@@ -191,7 +192,7 @@ where
         gc_info: &mut GcInfo,
         txn: &mut MvccTxn<E::Snap>,
     ) -> Result<()> {
-        let next_gc_info = txn.gc(key.clone(), safe_point)?;
+        let next_gc_info = gc(txn, key.clone(), safe_point)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
@@ -282,8 +283,8 @@ where
         self.stats.add(reader.get_statistics());
         debug!(
             "gc has finished";
-            "start_key" => hex::encode_upper(start_key),
-            "end_key" => hex::encode_upper(end_key),
+            "start_key" => log_wrappers::Value::key(start_key),
+            "end_key" => log_wrappers::Value::key(end_key),
             "safe_point" => safe_point
         );
         Ok(())
@@ -458,8 +459,8 @@ where
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
+                    log_wrappers::Value::key(&start_key),
+                    log_wrappers::Value::key(&end_key),
                     safe_point
                 );
             }
@@ -571,7 +572,7 @@ where
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
-    cluster_version: ClusterVersion,
+    feature_gate: FeatureGate,
 }
 
 impl<E, RR> Clone for GcWorker<E, RR>
@@ -593,7 +594,7 @@ where
             worker_scheduler: self.worker_scheduler.clone(),
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
-            cluster_version: self.cluster_version.clone(),
+            feature_gate: self.feature_gate.clone(),
         }
     }
 }
@@ -627,7 +628,7 @@ where
         engine: E,
         raft_store_router: RR,
         cfg: GcConfig,
-        cluster_version: ClusterVersion,
+        feature_gate: FeatureGate,
     ) -> GcWorker<E, RR> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
@@ -641,33 +642,37 @@ where
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
-            cluster_version,
+            feature_gate,
         }
     }
 
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGcConfig<S, R>,
-    ) -> Result<Arc<AtomicU64>> {
-        let safe_point = Arc::new(AtomicU64::new(0));
+        safe_point: Arc<AtomicU64>, // Store safe point here.
+    ) -> Result<()> {
+        assert!(
+            cfg.self_store_id > 0,
+            "AutoGcConfig::self_store_id shouldn't be 0"
+        );
 
         let kvdb = self.engine.kv_engine();
         let cfg_mgr = self.config_manager.clone();
-        let cluster_version = self.cluster_version.clone();
-        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, cluster_version);
+        let feature_gate = self.feature_gate.clone();
+        kvdb.init_compaction_filter(safe_point.clone(), cfg_mgr, feature_gate);
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
         let new_handle = GcManager::new(
             cfg,
-            safe_point.clone(),
+            safe_point,
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
-            self.cluster_version.clone(),
+            self.feature_gate.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
-        Ok(safe_point)
+        Ok(())
     }
 
     pub fn start(&mut self) -> Result<()> {
@@ -843,12 +848,11 @@ mod tests {
     use raftstore::store::RegionSnapshot;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::future::paired_future_callback;
-    use tikv_util::time::ThreadReadId;
     use txn_types::Mutation;
 
     use crate::storage::kv::{
         self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
-        TestEngineBuilder, WriteData,
+        SnapContext, TestEngineBuilder, WriteData,
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{txn::commands, Engine, Storage, TestStorageBuilder};
@@ -933,13 +937,11 @@ mod tests {
 
         fn async_snapshot(
             &self,
-            ctx: &Context,
-            _read_id: Option<ThreadReadId>,
+            ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             self.0.async_snapshot(
                 ctx,
-                None,
                 Box::new(move |(cb_ctx, r)| {
                     callback((
                         cb_ctx,
@@ -995,12 +997,9 @@ mod tests {
             TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
                 .build()
                 .unwrap();
-        let mut gc_worker = GcWorker::new(
-            engine,
-            RaftStoreBlackHole,
-            GcConfig::default(),
-            ClusterVersion::new(semver::Version::new(5, 0, 0)),
-        );
+        let gate = FeatureGate::default();
+        gate.set_version("5.0.0").unwrap();
+        let mut gc_worker = GcWorker::new(engine, RaftStoreBlackHole, GcConfig::default(), gate);
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1164,7 +1163,7 @@ mod tests {
             prefixed_engine,
             RaftStoreBlackHole,
             GcConfig::default(),
-            ClusterVersion::default(),
+            FeatureGate::default(),
         );
         gc_worker.start().unwrap();
 

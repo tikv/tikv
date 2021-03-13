@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV-SSTImporter-",
+    "KV:SSTImporter:",
 
     IO => ("Io", "", ""),
     GRPC => ("gRPC", "", ""),
@@ -16,5 +16,6 @@ define_error_codes!(
     ENGINE => ("Engine", "", ""),
     CANNOT_READ_EXTERNAL_STORAGE => ("CannotReadExternalStorage", "", ""),
     WRONG_KEY_PREFIX => ("WrongKeyPrefix", "", ""),
-    BAD_FORMAT => ("BadFormat", "", "")
+    BAD_FORMAT => ("BadFormat", "", ""),
+    FILE_CONFLICT => ("FileConflict", "", "")
 );

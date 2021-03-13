@@ -4,9 +4,10 @@ use crate::storage::kv::WriteData;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::MvccTxn;
 use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, TypedCommand, WriteCommand, WriteContext, WriteResult,
+    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
+    WriteResult,
 };
-use crate::storage::txn::Result;
+use crate::storage::txn::{cleanup, Result};
 use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
 
@@ -44,7 +45,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         for k in self.keys {
-            released_locks.push(txn.rollback(k)?);
+            // Rollback is called only if the transaction is known to fail. Under the circumstances,
+            // the rollback record needn't be protected.
+            let released_lock = cleanup(&mut txn, k, TimeStamp::zero(), false)?;
+            released_locks.push(released_lock);
         }
         released_locks.wake_up(context.lock_mgr);
 
@@ -57,6 +61,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             pr: ProcessResult::Res,
             lock_info: None,
             lock_guards: vec![],
+            response_policy: ResponsePolicy::OnApplied,
         })
     }
 }

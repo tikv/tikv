@@ -5,7 +5,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::collections::HashMap;
+use collections::HashMap;
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
@@ -226,7 +226,7 @@ pub fn get_thread_ids(pid: pid_t) -> Result<Vec<pid_t>> {
             }
         })
         .collect();
-    tids.sort();
+    tids.sort_unstable();
     Ok(tids)
 }
 

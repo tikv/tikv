@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::server::Error;
@@ -23,7 +22,6 @@ use kvproto::diagnosticspb::search_log_request::Target as SearchLogRequestTarget
 #[cfg(not(feature = "prost-codec"))]
 use kvproto::diagnosticspb::SearchLogRequestTarget;
 
-use security::{check_common_name, SecurityManager};
 use tikv_util::{
     sys::{SystemExt, SYS_INFO},
     timer::GLOBAL_TIMER_HANDLE,
@@ -39,21 +37,14 @@ pub struct Service {
     pool: Handle,
     log_file: String,
     slow_log_file: String,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
-    pub fn new(
-        pool: Handle,
-        log_file: String,
-        slow_log_file: String,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Self {
+    pub fn new(pool: Handle, log_file: String, slow_log_file: String) -> Self {
         Service {
             pool,
             log_file,
             slow_log_file,
-            security_mgr,
         }
     }
 }
@@ -65,9 +56,6 @@ impl Diagnostics for Service {
         req: SearchLogRequest,
         mut sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
             self.log_file.to_owned()
         } else {
@@ -91,7 +79,7 @@ impl Diagnostics for Service {
                 match stream.await.unwrap() {
                     Ok(s) => {
                         let res = async move {
-                            sink.send_all(&mut s.map(|item| Ok(item))).await?;
+                            sink.send_all(&mut s.map(Ok)).await?;
                             sink.close().await?;
                             GrpcResult::Ok(())
                         }
@@ -116,9 +104,6 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let tp = req.get_tp();
 
         let collect = async move {
