@@ -672,7 +672,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             } else {
                 // Fallback to previous non-batch resolved ts event.
                 for region_id in &resolved_ts.regions {
-                    info!("cdc send ts"; "region_id" => *region_id, "ts" => resolved_ts.ts);
                     self.broadcast_resolved_ts_compact(*region_id, resolved_ts.ts, conn);
                 }
             }

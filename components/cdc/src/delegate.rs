@@ -441,13 +441,13 @@ impl Delegate {
                 "region_id" => self.region_id, "min_ts" => min_ts);
             return None;
         }
-        info!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
+        debug!("try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = match resolver.resolve(min_ts) {
             Some(rts) => rts,
             None => return None,
         };
-        info!("resolved ts updated";
+        debug!("resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
             .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
