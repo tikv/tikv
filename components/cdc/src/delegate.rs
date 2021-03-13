@@ -132,6 +132,16 @@ impl Downstream {
         }
     }
 
+    pub fn sink_error(&self, event: Event) {
+        if let Some(rate_limiter) = self.sink.as_ref() {
+            if let Err(e) = rate_limiter.close_with_error(CdcEvent::Event(event)) {
+                info!("cdc sink error failed"; "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+            }
+        } else {
+            warn!("cdc sink error failed, no rate_limiter found"; "conn_id" => ?self.conn_id, "downstream_id" => ?self.id)
+        }
+    }
+
     pub fn set_sink(&mut self, sink: RateLimiter<CdcEvent>) {
         self.sink = Some(sink.clone());
     }
@@ -373,7 +383,7 @@ impl Delegate {
     }
 
     fn broadcast(&self, change_data_event: Event, normal_only: bool) {
-        let downstreams = self.downstreams();
+        let mut downstreams = self.downstreams();
         assert!(
             !downstreams.is_empty(),
             "region {} miss downstream, event: {:?}",
@@ -393,7 +403,11 @@ impl Delegate {
                 }
             }
             info!("cdc broadcast"; "request_id" => downstream.req_id, "region_id" => self.region_id);
-            downstream.sink_event(event);
+            if normal_only {
+                downstream.sink_event(event);
+            } else {
+                downstream.sink_error(event);
+            }
         }
     }
 

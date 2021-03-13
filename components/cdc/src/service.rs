@@ -222,7 +222,6 @@ where
     /// and 2) they cannot be successfully flushed down the `inner_sink` immediately.
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
-        info!("cdc poll ready called");
 
         if !this.send_buf.is_empty() {
             ready!(this.poll_flush_unpin(cx))?;
@@ -230,22 +229,18 @@ where
 
         if this.buf.is_none() {
             this.buf = Some(vec![]);
-            info!("poll_ready called 1");
             return Poll::Ready(Ok(()));
         }
 
-        if this.buf.as_ref().unwrap().len() >= 1024 {
+        if this.buf.as_ref().unwrap().len() >= 32 {
             this.prepare_flush();
-            info!("poll_ready called 2");
             ready!(this.inner_sink.poll_flush_unpin(cx))?;
-            info!("poll_ready called 3");
 
             debug_assert!(this.buf.is_none());
             this.buf = Some(vec![]);
             return Poll::Ready(Ok(()));
         }
 
-        info!("poll_ready called 4");
         Poll::Ready(Ok(()))
     }
 
@@ -268,7 +263,6 @@ where
         }
 
         this.buf.as_mut().unwrap().push(event);
-        info!("cdc got data"; "len" => this.buf.as_ref().unwrap().len());
         Ok(())
     }
 
@@ -279,7 +273,6 @@ where
     ///
     /// The above process will block and yield if any step is blocked.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        info!("cdc poll flush called");
         let this = self.get_mut();
 
         if this.buf.is_some() {
@@ -293,7 +286,6 @@ where
             ready!(this.inner_sink.poll_ready_unpin(cx))?;
             let event = this.send_buf.pop_front().unwrap();
             this.inner_sink.start_send_unpin((event, flag))?;
-            info!("cdc sank data");
         }
 
         ready!(this.inner_sink.poll_flush_unpin(cx))?;
@@ -302,7 +294,6 @@ where
 
     /// Flushes the buffered data to `inner_sink` and then closes it.
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        info!("cdc poll close called");
         let this = self.get_mut();
 
         if this.buf.is_some() {
@@ -456,7 +447,7 @@ impl ChangeData for Service {
     ) {
         // TODO determine the right values
         // 2048 is likely too low for production.
-        let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 2048);
+        let (rate_limiter, drainer) = new_pair::<CdcEvent>(64, 2048);
         let peer = ctx.peer();
         let conn = Conn::new(rate_limiter, peer.clone());
         let conn_id = conn.get_id();

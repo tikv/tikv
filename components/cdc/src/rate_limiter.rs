@@ -22,6 +22,7 @@ pub enum RateLimiterError {
     CongestedError(
         usize, /* queue length when the congestion is detected */
     ),
+    DownstreamClosed(u64 /* region id */)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub struct RateLimiter<E> {
     sink: Sender<E>,
     close_tx: AsyncSender<()>,
     state: Arc<State>,
+    per_downstream_state: Option<Arc<PerDownstreamState>>,
 }
 
 pub struct Drainer<E> {
@@ -66,6 +68,11 @@ struct State {
 
     #[cfg(test)]
     blocked_sender_count: AtomicUsize,
+}
+
+struct PerDownstreamState {
+    region_id: u64,
+    is_downstream_closed: AtomicBool,
 }
 
 impl State {
@@ -166,6 +173,7 @@ impl<E> RateLimiter<E> {
             sink,
             close_tx,
             state,
+            per_downstream_state: None,
         };
     }
 
@@ -219,6 +227,12 @@ impl<E> RateLimiter<E> {
 
         timer.observe_duration();
 
+        if let Some(per_downstream_state) = self.per_downstream_state.as_ref() {
+            if per_downstream_state.is_downstream_closed.load(Ordering::SeqCst) {
+                return Err(RateLimiterError::DownstreamClosed(per_downstream_state.region_id));
+            }
+        }
+
         match self.sink.try_send(event) {
             Ok(_) => {
                 self.state.wake_up_drainer();
@@ -244,6 +258,23 @@ impl<E> RateLimiter<E> {
         self.state.wake_up_drainer();
     }
 
+    pub fn with_region_id(self, region_id: u64) -> RateLimiter<E> {
+        let mut ret = self.clone();
+        ret.per_downstream_state = Some(Arc::new(PerDownstreamState {
+            is_downstream_closed: AtomicBool::new(false),
+            region_id,
+        }));
+        ret
+    }
+
+    pub fn close_with_error(&self, event: E) -> Result<(), RateLimiterError> {
+        if self.per_downstream_state.is_some() {
+            self.per_downstream_state.as_ref().unwrap().is_downstream_closed.store(true, Ordering::SeqCst);
+        }
+
+        self.send_realtime_event(event)
+    }
+
     #[cfg(test)]
     fn inject_instant_drainer_exit(&self) {
         let _ = self.close_tx.clone().try_send(());
@@ -259,6 +290,7 @@ impl<E> Clone for RateLimiter<E> {
             sink: self.sink.clone(),
             close_tx: self.close_tx.clone(),
             state: self.state.clone(),
+            per_downstream_state: self.per_downstream_state.clone(),
         }
     }
 }

@@ -300,7 +300,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             store_meta,
             concurrency_manager,
             // TODO find an optimal value
-            scan_batch_size: 128,
+            scan_batch_size: 16,
             min_ts_interval: cfg.min_ts_interval.0,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
@@ -435,7 +435,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 return;
             }
         };
-        downstream.set_sink(conn.get_sink());
+        downstream.set_sink(conn.get_sink().clone().with_region_id(region_id));
 
         // TODO: Add a new task to close incompatible features.
         if let Some(e) = conn.check_version_and_set_feature(version) {
@@ -767,7 +767,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
         };
         self.tso_worker.spawn(fut);
-        self.flush_all();
+        
     }
 
     async fn region_resolved_ts_raft(
