@@ -132,7 +132,9 @@ impl Downstream {
         }
     }
 
-    pub fn sink_error(&self, event: Event) {
+    pub fn sink_error(&self, mut event: Event) {
+        event.set_request_id(self.req_id);
+
         if let Some(rate_limiter) = self.sink.as_ref() {
             if let Err(e) = rate_limiter.close_with_error(CdcEvent::Event(event)) {
                 info!("cdc sink error failed"; "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
