@@ -353,6 +353,12 @@ impl Delegate {
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
+        if self.has_failed() {
+            // the region has failed. No need to send more errors
+            info!("region met error, not sending error because the region had failed already";
+            "region_id" => self.region_id, "error" => ?err);
+            return;
+        }
         self.mark_failed();
         // Stop observe further events.
         self.enabled.store(false, Ordering::SeqCst);
