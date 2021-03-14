@@ -43,8 +43,9 @@ pub enum StorageError {
 ///
 /// Batch operations should be preferred due to their better performance.
 /// TODO: in the RFC, some methods took `&mut self`. Why?
+/// TODO: in the RFC, this trait was sync. But with `async_trait(?Send)` we don't need this. Is this okay?
 #[async_trait(?Send)]
-pub trait RawStorage: Send {
+pub trait RawStorage {
     /// Retrieves the value for a given key from the storage on the current node.
     /// Returns [`Option::None`] if the key is not present in the database.
     async fn get(&self, key: Key) -> StorageResult<Option<Value>>;
