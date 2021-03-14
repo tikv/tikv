@@ -5,7 +5,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
 use crate::coprocessor::Endpoint;
-use crate::coprv2;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -58,7 +58,7 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling corprocessor v2 requests.
-    coprv2: coprv2::Endpoint<E>,
+    coprv2: coprocessor_v2::Endpoint<E>,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -98,7 +98,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
-        coprv2: coprv2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
@@ -1083,7 +1083,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
-    coprv2: &coprv2::Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint<E>,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1669,7 +1669,7 @@ fn future_cop<E: Engine>(
 }
 
 fn future_coprv2<E: Engine>(
-    coprv2: &coprv2::Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint<E>,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = coprv2.handle_request(req);
