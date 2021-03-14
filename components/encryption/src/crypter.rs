@@ -5,7 +5,7 @@ use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
-use tikv_util::impl_display_as_debug;
+use tikv_util::{impl_display_as_debug, box_err};
 
 use crate::{Error, Result};
 

@@ -4,6 +4,7 @@ use std::io::Write;
 
 use crate::Result;
 use byteorder::{BigEndian, ByteOrder};
+use tikv_util::box_err;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {

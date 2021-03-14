@@ -11,6 +11,7 @@ use tokio::runtime::{Builder, Runtime};
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::crypter::{Iv, PlainKey};
 use crate::{Error, Result};
+use tikv_util::{box_err, error};
 use tikv_util::stream::{retry, with_timeout};
 
 #[async_trait]

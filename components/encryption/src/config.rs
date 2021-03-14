@@ -2,6 +2,8 @@
 
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use tikv_util::config::ReadableDuration;
+use serde_derive::{Deserialize, Serialize};
+use configuration::Configuration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
