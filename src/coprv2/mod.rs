@@ -27,4 +27,4 @@
 
 mod endpoint;
 
-pub use self::endpoint::CoprV2Endpoint;
+pub use self::endpoint::Endpoint;

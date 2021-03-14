@@ -8,13 +8,13 @@ use kvproto::coprocessor_v2 as coprv2pb;
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
-pub struct CoprV2Endpoint<E: Engine> {
+pub struct Endpoint<E: Engine> {
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine> tikv_util::AssertSend for CoprV2Endpoint<E> {}
+impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
-impl<E: Engine> CoprV2Endpoint<E> {
+impl<E: Engine> Endpoint<E> {
     pub fn new() -> Self {
         Self {
             _phantom: Default::default(),

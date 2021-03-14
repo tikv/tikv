@@ -621,7 +621,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprv2::CoprV2Endpoint::new(),
+            coprv2::Endpoint::new(),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
