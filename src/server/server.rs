@@ -14,7 +14,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
-use crate::coprv2;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
@@ -76,7 +76,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
-        coprv2: coprv2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint<E>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -465,7 +465,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
-        let coprv2 = coprv2::Endpoint::new();
+        let coprv2 = coprocessor_v2::Endpoint::new();
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
                 .threaded_scheduler()

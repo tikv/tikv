@@ -58,7 +58,7 @@ use raftstore::{
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DBConfigManger, DBType, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR},
-    coprocessor, coprv2,
+    coprocessor, coprocessor_v2,
     import::{ImportSSTService, SSTImporter},
     read_pool::{build_yatp_read_pool, ReadPool},
     server::raftkv::ReplicaReadLockChecker,
@@ -621,7 +621,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.concurrency_manager.clone(),
                 engine_rocks::raw_util::to_raw_perf_level(self.config.coprocessor.perf_level),
             ),
-            coprv2::Endpoint::new(),
+            coprocessor_v2::Endpoint::new(),
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
