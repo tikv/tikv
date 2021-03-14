@@ -7,7 +7,7 @@ use engine_traits::KvEngine;
 use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, IsolationLevel};
 use kvproto::metapb::Region;
 use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::{ChangeCmd, ObserveID};
+use raftstore::store::fsm::{ChangeObserver, ObserveID};
 use raftstore::store::msg::{Callback, SignificantMsg};
 use raftstore::store::RegionSnapshot;
 use tikv::storage::kv::{ScanMode as MvccScanMode, Snapshot};
@@ -175,7 +175,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
     ) -> Result<RegionSnapshot<E::Snapshot>> {
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let before_start = task.before_start.take();
-        let change_cmd = ChangeCmd::Snapshot {
+        let change_cmd = ChangeObserver {
             observe_id: task.id,
             region_id: task.region.id,
         };
