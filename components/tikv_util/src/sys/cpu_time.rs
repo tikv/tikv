@@ -2,8 +2,8 @@
 // Modified from https://github.com/rust-lang/cargo/blob/426fae51f39ebf6c545a2c12f78bc09fbfdb7aa9/src/cargo/util/cpu.rs
 // TODO: Maybe use https://github.com/heim-rs/heim is better after https://github.com/heim-rs/heim/issues/233 is fixed.
 
-use std::io;
 use derive_more::{Add, Sub};
+use std::io;
 
 #[derive(Debug, Clone, Copy, Add, Sub)]
 pub struct LiunxStyleCpuTime {
