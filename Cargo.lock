@@ -786,6 +786,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "995a44c877f9212528ccc74b21a232f66ad69001e40ede5bcee2ac9ef2657120"
 
 [[package]]
+name = "coprv2_plugin_api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "kvproto",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5230,6 +5238,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "configuration",
+ "coprv2_plugin_api",
  "crc32fast",
  "crc64fast",
  "crossbeam",

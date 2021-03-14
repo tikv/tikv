@@ -1,0 +1,13 @@
+[package]
+name = "coprv2_plugin_api"
+version = "0.1.0"
+description = "Types and trait for custom coprocessor plugins for TiKV."
+edition = "2018"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+
+[patch."https://github.com/pingcap/kvproto.git"]
+kvproto = {git = "https://github.com/Jibbow/kvproto.git", branch = "coprv2/protobuf"}
