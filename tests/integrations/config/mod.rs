@@ -97,6 +97,7 @@ fn test_serde_custom_tikv_config() {
         background_thread_count: 999,
         raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
+        forward_max_connections_per_address: 5,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {
@@ -639,6 +640,8 @@ fn test_serde_custom_tikv_config() {
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
         enable_async_apply_prewrite: true,
+        enable_ttl: true,
+        ttl_check_poll_interval: ReadableDuration::hours(0),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
