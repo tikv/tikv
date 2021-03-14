@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
-use tikv_util::config::ReadableDuration;
-use serde_derive::{Deserialize, Serialize};
 use configuration::Configuration;
+use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
+use serde_derive::{Deserialize, Serialize};
+use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
