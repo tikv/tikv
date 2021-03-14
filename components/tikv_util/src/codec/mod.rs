@@ -4,6 +4,7 @@ pub mod bytes;
 pub mod number;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use quick_error::quick_error;
 use std::io::{self, ErrorKind};
 
 pub type BytesSlice<'a> = &'a [u8];

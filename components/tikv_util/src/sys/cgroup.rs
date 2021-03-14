@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
+use quick_error::quick_error;
+
 const CGROUP_PATH: &str = "/proc/self/cgroup";
 const CGROUP_MOUNTINFO: &str = "/proc/self/mountinfo";
 const CGROUP_FSTYPE: &str = "cgroup";

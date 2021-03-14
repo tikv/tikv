@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use lazy_static::lazy_static;
 
 lazy_static! {
     pub static ref WORKER_PENDING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(

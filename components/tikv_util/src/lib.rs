@@ -5,16 +5,6 @@
 #![feature(box_patterns)]
 #![feature(str_split_once)]
 
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use(slog_o)]
-extern crate slog;
-#[macro_use]
-extern crate derive_more;
 #[cfg(test)]
 extern crate test;
 

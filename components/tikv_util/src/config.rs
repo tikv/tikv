@@ -17,6 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
+use quick_error::quick_error;
 
 quick_error! {
     #[derive(Debug)]
@@ -644,6 +645,8 @@ mod check_data_dir {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 

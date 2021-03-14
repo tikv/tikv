@@ -3,6 +3,7 @@
 // TODO: Maybe use https://github.com/heim-rs/heim is better after https://github.com/heim-rs/heim/issues/233 is fixed.
 
 use std::io;
+use derive_more::{Add, Sub};
 
 #[derive(Debug, Clone, Copy, Add, Sub)]
 pub struct LiunxStyleCpuTime {
