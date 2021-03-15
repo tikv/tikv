@@ -1179,6 +1179,12 @@ impl TomlWriter {
     }
 }
 
+impl Default for TomlWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;

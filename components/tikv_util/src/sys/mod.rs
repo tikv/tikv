@@ -102,6 +102,12 @@ pub mod sys_quota {
             );
         }
     }
+
+    impl Default for SysQuota {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
 }
 
 pub const HIGH_PRI: i32 = -1;
