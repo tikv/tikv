@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::storage_api::*;
-use std::any::Any;
 
 /// Raw bytes of the request payload from the client to the coprocessor.
 pub type RawRequest = [u8];
@@ -12,7 +11,7 @@ pub type RawResponse = Vec<u8>;
 ///
 /// If you want to implement a custom coprocessor plugin for TiKV, your plugin needs to implement
 /// the [`CoprocessorPlugin`] trait.
-pub trait CoprocessorPlugin: Any + Send + Sync {
+pub trait CoprocessorPlugin: Send + Sync {
     /// Returns the name of the plugin.
     /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
     fn name(&self) -> &'static str;
