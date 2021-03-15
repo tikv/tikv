@@ -11,7 +11,7 @@ use std::{borrow::Cow, time::*};
 use concurrency_manager::ConcurrencyManager;
 use configuration::Configuration;
 use engine_rocks::raw::DB;
-use engine_traits::{name_to_cf, CfName, IterOptions, SstCompressionType, DATA_KEY_PREFIX_LEN};
+use engine_traits::{name_to_cf, CfName, SstCompressionType};
 use external_storage::*;
 use file_system::{IOType, WithIOType};
 use futures::channel::mpsc::*;
@@ -22,12 +22,13 @@ use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use raftstore::store::util::find_peer;
 use tikv::config::BackupConfig;
-use tikv::storage::kv::{Engine, ScanMode, SnapContext, Snapshot};
+use tikv::storage::kv::{CursorBuilder, Engine, ScanMode, SnapContext};
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::{
     EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore,
 };
 use tikv::storage::Statistics;
+use tikv_util::impl_display_as_debug;
 use tikv_util::time::Limiter;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use txn_types::{Key, Lock, TimeStamp};
@@ -65,11 +66,7 @@ pub struct Task {
     pub(crate) resp: UnboundedSender<BackupResponse>,
 }
 
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(Task);
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -266,7 +263,7 @@ impl BackupRange {
                         files.append(&mut split_files);
                     }
                     Err(e) => {
-                        error!(?e; "backup save file failed");
+                        error_unknown!(?e; "backup save file failed");
                         return Err(e);
                     }
                 }
@@ -275,7 +272,7 @@ impl BackupRange {
                         writer = w;
                     }
                     Err(e) => {
-                        error!(?e; "backup writer failed");
+                        error_unknown!(?e; "backup writer failed");
                         return Err(e);
                     }
                 }
@@ -283,7 +280,7 @@ impl BackupRange {
 
             // Build sst files.
             if let Err(e) = writer.write(entries, true) {
-                error!(?e; "backup build sst failed");
+                error_unknown!(?e; "backup build sst failed");
                 return Err(e);
             }
         }
@@ -305,7 +302,7 @@ impl BackupRange {
                     files.append(&mut split_files);
                 }
                 Err(e) => {
-                    error!(?e; "backup save file failed");
+                    error_unknown!(?e; "backup save file failed");
                     return Err(e);
                 }
             }
@@ -340,11 +337,10 @@ impl BackupRange {
         let start = Instant::now();
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
-        let mut option = IterOptions::default();
-        if let Some(end) = self.end_key.clone() {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
-        }
-        let mut cursor = snapshot.iter_cf(self.cf, option, ScanMode::Forward)?;
+        let mut cursor = CursorBuilder::new(&snapshot, self.cf)
+            .range(None, self.end_key.clone())
+            .scan_mode(ScanMode::Forward)
+            .build()?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
@@ -367,7 +363,7 @@ impl BackupRange {
             debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
             if let Err(e) = writer.write(batch.drain(..), false) {
-                error!(?e; "backup raw kv build sst failed");
+                error_unknown!(?e; "backup raw kv build sst failed");
                 return Err(e);
             }
         }
@@ -397,7 +393,7 @@ impl BackupRange {
         ) {
             Ok(w) => w,
             Err(e) => {
-                error!(?e; "backup writer failed");
+                error_unknown!(?e; "backup writer failed");
                 return Err(e);
             }
         };
@@ -409,7 +405,7 @@ impl BackupRange {
         match writer.save(&storage.storage) {
             Ok(files) => Ok((files, stat)),
             Err(e) => {
-                error!(?e; "backup save file failed");
+                error_unknown!(?e; "backup save file failed");
                 Err(e)
             }
         }
@@ -673,11 +669,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let backend = match create_storage(&request.backend) {
                 Ok(backend) => backend,
                 Err(err) => {
-                    error!(?err; "backup create storage failed");
+                    error_unknown!(?err; "backup create storage failed");
                     let mut response = BackupResponse::default();
                     response.set_error(crate::Error::Io(err).into());
                     if let Err(err) = tx.unbounded_send(response) {
-                        error!(?err; "backup failed to send response");
+                        error_unknown!(?err; "backup failed to send response");
                     }
                     return;
                 }
@@ -764,7 +760,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     let mut response = BackupResponse::default();
                     match res {
                         Err(e) => {
-                            error!(?e; "backup region failed";
+                            error_unknown!(?e; "backup region failed";
                                 "region" => ?brange.region,
                                 "start_key" => &log_wrappers::Value::key(&start_key),
                                 "end_key" => &log_wrappers::Value::key(&end_key),
@@ -793,7 +789,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     response.set_end_key(end_key);
 
                     if let Err(e) = tx.unbounded_send(response) {
-                        error!(?e; "backup failed to send response");
+                        error_unknown!(?e; "backup failed to send response");
                         return;
                     }
                 }

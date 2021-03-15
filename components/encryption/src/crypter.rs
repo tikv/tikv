@@ -1,9 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
+use tikv_util::impl_display_as_debug;
 
 use crate::{Error, Result};
 
@@ -199,6 +201,7 @@ pub fn verify_encryption_config(method: EncryptionMethod, key: &[u8]) -> Result<
 
 // PlainKey is a newtype used to mark a vector a plaintext key.
 // It requires the vec to be a valid AesGcmCrypter key.
+#[derive(Deref)]
 pub struct PlainKey(Vec<u8>);
 
 impl PlainKey {
@@ -214,13 +217,6 @@ impl PlainKey {
     }
 }
 
-impl std::ops::Deref for PlainKey {
-    type Target = Vec<u8>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 // Don't expose the key in a debug print
 impl std::fmt::Debug for PlainKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -231,11 +227,7 @@ impl std::fmt::Debug for PlainKey {
 }
 
 // Don't expose the key in a display print
-impl std::fmt::Display for PlainKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
+impl_display_as_debug!(PlainKey);
 
 #[cfg(test)]
 mod tests {

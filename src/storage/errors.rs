@@ -60,6 +60,9 @@ quick_error! {
         InvalidCf (cf_name: String) {
             display("invalid cf name: {}", cf_name)
         }
+        TTLNotEnabled {
+            display("ttl is not enabled, but get put request with ttl")
+        }
     }
 }
 
@@ -112,6 +115,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::GcWorkerTooBusy => error_code::storage::GC_WORKER_TOO_BUSY,
             ErrorInner::KeyTooLarge(_, _) => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
+            ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
         }
     }
 }
@@ -231,7 +235,7 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
 pub fn extract_committed(err: &Error) -> Option<TimeStamp> {
     match *err {
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Committed { commit_ts },
+            box MvccErrorInner::Committed { commit_ts, .. },
         ))))) => Some(commit_ts),
         _ => None,
     }
@@ -333,7 +337,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_commit_ts_too_large(commit_ts_too_large);
         }
         _ => {
-            error!(?err; "txn aborts");
+            error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));
         }
     }

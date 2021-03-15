@@ -20,12 +20,13 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksEngine,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
+use error_code::ErrorCodeExt;
 use file_system::{
     set_io_rate_limiter, start_io_rate_limiter_daemon, BytesFetcher,
     MetricsManager as IOMetricsManager,
@@ -396,11 +397,18 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     }
 
     fn init_encryption(&mut self) {
-        self.encryption_key_manager = DataKeyManager::from_config(
+        self.encryption_key_manager = data_key_manager_from_config(
             &self.config.security.encryption,
             &self.config.storage.data_dir,
         )
-        .expect("Encryption failed to initialize")
+        .map_err(|e| {
+            panic!(
+                "Encryption failed to initialize: {}. code: {}",
+                e,
+                e.error_code()
+            )
+        })
+        .unwrap()
         .map(Arc::new);
     }
 
@@ -426,7 +434,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 let ch = ch.lock().unwrap();
                 let event = StoreMsg::CompactedEvent(compacted_event);
                 if let Err(e) = ch.send_control(event) {
-                    error!(?e; "send compaction finished event to raftstore failed");
+                    error_unknown!(?e; "send compaction finished event to raftstore failed");
                 }
             });
         engine_rocks::CompactionListener::new(compacted_handler, Some(size_change_filter))
@@ -843,7 +851,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
     fn init_io_utility(&mut self) -> BytesFetcher {
         let io_snooper_on = self.config.enable_io_snoop
             && file_system::init_io_snooper()
-                .map_err(|e| error!(%e; "failed to init io snooper"))
+                .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
         let limiter = self.config.storage.io_rate_limit.build();
         let fetcher = if io_snooper_on {
@@ -895,7 +903,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
-                    error!(%e; "failed to start runtime for status service");
+                    error_unknown!(%e; "failed to start runtime for status service");
                     return;
                 }
             };
@@ -904,7 +912,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
                 self.config.server.status_addr.clone(),
                 self.config.server.advertise_status_addr.clone(),
             ) {
-                error!(%e; "failed to bind addr for status service");
+                error_unknown!(%e; "failed to bind addr for status service");
             } else {
                 self.to_stop.push(status_server);
             }
@@ -951,10 +959,11 @@ impl TiKVServer<RocksEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),
@@ -1015,10 +1024,11 @@ impl TiKVServer<RaftLogEngine> {
         let mut kv_db_opts = self.config.rocksdb.build_opt();
         kv_db_opts.set_env(env);
         kv_db_opts.add_event_listener(self.create_raftstore_compaction_listener());
-        let kv_cfs_opts = self
-            .config
-            .rocksdb
-            .build_cf_opts(&block_cache, Some(&self.region_info_accessor));
+        let kv_cfs_opts = self.config.rocksdb.build_cf_opts(
+            &block_cache,
+            Some(&self.region_info_accessor),
+            self.config.storage.enable_ttl,
+        );
         let db_path = self.store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
         let kv_engine = engine_rocks::raw_util::new_engine_opt(
             db_path.to_str().unwrap(),

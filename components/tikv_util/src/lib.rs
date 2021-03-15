@@ -2,7 +2,6 @@
 
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
-#![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(str_split_once)]
 
@@ -46,6 +45,7 @@ pub mod logger;
 pub mod lru;
 pub mod metrics;
 pub mod mpsc;
+pub mod stream;
 pub mod sys;
 pub mod time;
 pub mod timer;
@@ -535,6 +535,11 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 
 pub fn empty_shared_slice<T>() -> Arc<[T]> {
     Vec::new().into()
+}
+
+/// A useful hook to check if master branch is being built.
+pub fn build_on_master_branch() -> bool {
+    option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
 }
 
 #[cfg(test)]

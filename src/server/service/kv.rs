@@ -10,6 +10,7 @@ use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
+use crate::server::Proxy;
 use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
@@ -20,6 +21,7 @@ use crate::storage::{
     lock_manager::LockManager,
     SecondaryLocksStatus, Storage, TxnStatus,
 };
+use crate::{forward_duplex, forward_unary};
 use engine_rocks::RocksEngine;
 use futures::compat::Future01CompatExt;
 use futures::future::{self, Future, FutureExt, TryFutureExt};
@@ -65,6 +67,8 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     grpc_thread_load: Arc<ThreadLoad>,
 
     readpool_normal_thread_load: Arc<ThreadLoad>,
+
+    proxy: Proxy,
 }
 
 impl<
@@ -83,6 +87,7 @@ impl<
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             readpool_normal_thread_load: self.readpool_normal_thread_load.clone(),
+            proxy: self.proxy.clone(),
         }
     }
 }
@@ -98,6 +103,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         grpc_thread_load: Arc<ThreadLoad>,
         readpool_normal_thread_load: Arc<ThreadLoad>,
         enable_req_batch: bool,
+        proxy: Proxy,
     ) -> Self {
         Service {
             gc_worker,
@@ -108,6 +114,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             grpc_thread_load,
             readpool_normal_thread_load,
             enable_req_batch,
+            proxy,
         }
     }
 }
@@ -115,6 +122,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+            forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now_coarse();
 
             let resp = $future_name(&self.storage, req);
@@ -264,6 +272,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawDeleteRangeRequest,
         RawDeleteRangeResponse
     );
+    handle_request!(
+        raw_get_key_ttl,
+        future_raw_get_key_ttl,
+        RawGetKeyTtlRequest,
+        RawGetKeyTtlResponse
+    );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
@@ -278,6 +292,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
         let future = future_cop(&self.cop, Some(ctx.peer()), req);
         let task = async move {
@@ -641,6 +656,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
+        forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -726,6 +742,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
+        forward_unary!(self.proxy, read_index, ctx, req, sink);
         let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
@@ -820,6 +837,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         stream: RequestStream<BatchCommandsRequest>,
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
+        forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
 
         let ctx = Arc::new(ctx);
@@ -1369,6 +1387,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
         req.take_cf(),
         req.take_key(),
         req.take_value(),
+        req.get_ttl(),
         cb,
     );
 
@@ -1399,7 +1418,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb);
 
     async move {
         let v = match res {
@@ -1541,6 +1560,28 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawGetKeyTtlRequest,
+) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
+    let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetKeyTtlResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(ttl)) => resp.set_ttl(ttl),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
         }
         Ok(resp)
     }

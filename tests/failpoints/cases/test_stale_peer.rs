@@ -18,7 +18,8 @@ fn test_one_node_leader_missing() {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
     let election_timeout = base_tick_interval * 5;
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(election_timeout);
+    cluster.cfg.raft_store.raft_store_max_leader_lease =
+        ReadableDuration(election_timeout - base_tick_interval);
     // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
     // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);

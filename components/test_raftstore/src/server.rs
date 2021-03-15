@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
@@ -555,8 +555,17 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
 }
 
 pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster(|_| ())
+}
+
+pub fn must_new_and_configure_cluster(
+    mut configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, metapb::Peer, Context)
+where
+{
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
+    configure(&mut cluster);
     cluster.run();
 
     let region_id = 1;

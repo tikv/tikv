@@ -2,13 +2,11 @@
 
 use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine_traits::{IterOptions, MvccProperties};
+use engine_traits::MvccProperties;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::borrow::Cow;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
-
-const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
 /// The result of `get_txn_commit_record`, which is used to get the status of a specified
 /// transaction from write cf.
@@ -442,9 +440,10 @@ impl<S: Snapshot> MvccReader<S> {
         mut start: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
-        let iter_opt = IterOptions::new(None, None, self.fill_cache);
-        let scan_mode = self.get_scan_mode(false);
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
+        let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+            .fill_cache(self.fill_cache)
+            .scan_mode(self.get_scan_mode(false))
+            .build()?;
         let mut keys = vec![];
         loop {
             let ok = match start {
@@ -513,8 +512,7 @@ pub fn check_need_gc(safe_point: TimeStamp, ratio_threshold: f64, props: &MvccPr
         return true;
     }
 
-    // A lot of MVCC versions of a single row to GC.
-    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+    false
 }
 
 #[cfg(test)]
@@ -534,7 +532,7 @@ mod tests {
     use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
     use engine_rocks::raw_util::CFOptions;
     use engine_rocks::{Compat, RocksSnapshot};
-    use engine_traits::{Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
+    use engine_traits::{IterOptions, Mutable, MvccPropertiesExt, WriteBatch, WriteBatchExt};
     use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};

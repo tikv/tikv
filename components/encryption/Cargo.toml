@@ -21,11 +21,13 @@ prost-codec = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+async-trait = "0.1"
 byteorder = "1.2"
 bytes = "0.5"
 crossbeam = "0.7"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
+derive_more = "0.99.3"
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
@@ -40,10 +42,6 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = f
 openssl = "0.10"
 protobuf = "2.8"
 rand = "0.7"
-rusoto_core = "0.45.0"
-rusoto_credential = "0.45.0"
-rusoto_kms = { version = "0.45.0", features = ["serialize_structs"] }
-rusoto_util = { path = "../rusoto_util" }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -57,6 +55,3 @@ tokio = { version = "0.2", features = ["time", "rt-core"] }
 matches = "0.1.8"
 tempfile = "3.1"
 toml = "0.5"
-rusoto_mock = "0.45.0"
-rust-ini = "0.14.0"
-structopt = "0.3"
