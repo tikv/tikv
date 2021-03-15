@@ -1589,7 +1589,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cb: Callback<Option<Value>>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        let ttl = if self.enable_ttl { Some(ttl) } else { None };
+        let ttl = if self.enable_ttl {
+            Some(ttl)
+        } else {
+            if ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
+            }
+            None
+        };
         let cmd =
             AtomicCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
         self.sched_txn_command(cmd, cb)
@@ -1608,7 +1615,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .into_iter()
             .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
             .collect();
-        let ttl = if self.enable_ttl { Some(ttl) } else { None };
+        let ttl = if self.enable_ttl {
+            Some(ttl)
+        } else {
+            if ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
+            }
+            None
+        };
         let cmd = AtomicStore::new(cf, muations, ttl, ctx);
         self.sched_txn_command(cmd, callback)
     }
