@@ -48,11 +48,6 @@ impl PluginManager {
 }
 
 /// A wrapper around a loaded raw coprocessor plugin library.
-///
-/// Can be dereferenced to [`CoprocessorPlugin`].
-///
-/// Takes care of calling [`on_plugin_load()`] and [`on_plugin_unload()`];
-/// [`on_plugin_unload()`] is called when `LoadedPlugin` is dropped.
 struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
@@ -66,7 +61,7 @@ impl LoadedPlugin {
     /// Creates a new `LoadedPlugin` by loading a `cdylib` from a file into memory.
     ///
     /// The function instantiates the plugin by calling `_plugin_create()` to obtain a
-    /// [`CoprocessorPlugin`]. It also calls [`on_plugin_load()`] on before the function returns.
+    /// [`CoprocessorPlugin`].
     ///
     /// # Safety
     ///
@@ -81,8 +76,6 @@ impl LoadedPlugin {
         let boxed_raw_plugin = constructor();
         let plugin = Box::from_raw(boxed_raw_plugin);
 
-        plugin.on_plugin_load();
-
         Ok(LoadedPlugin {
             plugin,
             lib,
@@ -92,11 +85,5 @@ impl LoadedPlugin {
 
     pub fn plugin(&self) -> &dyn CoprocessorPlugin {
         self.plugin.as_ref()
-    }
-}
-
-impl Drop for LoadedPlugin {
-    fn drop(&mut self) {
-        self.plugin.on_plugin_unload();
     }
 }
