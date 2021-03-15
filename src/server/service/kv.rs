@@ -5,6 +5,7 @@ use tikv_util::time::{duration_to_sec, Instant};
 
 use super::batch::ReqBatcher;
 use crate::coprocessor::Endpoint;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -32,6 +33,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
+use kvproto::coprocessor_v2::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
@@ -57,6 +59,8 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     storage: Storage<E, L>,
     // For handling coprocessor requests.
     cop: Endpoint<E>,
+    // For handling corprocessor v2 requests.
+    coprv2: coprocessor_v2::Endpoint<E>,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -82,6 +86,7 @@ impl<
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
             cop: self.cop.clone(),
+            coprv2: self.coprv2.clone(),
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
@@ -98,6 +103,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
@@ -109,6 +115,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             gc_worker,
             storage,
             cop,
+            coprv2,
             ch,
             snap_scheduler,
             grpc_thread_load,
@@ -279,6 +286,13 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawGetKeyTtlResponse
     );
 
+    handle_request!(
+        raw_compare_and_set,
+        future_raw_compare_and_set,
+        RawCasRequest,
+        RawCasResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -309,6 +323,34 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 "err" => ?e
             );
             GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
+    fn coprocessor_v2(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RawCoprocessorRequest,
+        sink: UnarySink<RawCoprocessorResponse>,
+    ) {
+        let begin_instant = Instant::now_coarse();
+        let future = future_coprv2(&self.coprv2, req);
+        let task = async move {
+            let resp = future.await?;
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .coprocessor_v2
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "coprocessor_v2",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.coprocessor_v2.inc();
         })
         .map(|_| ());
 
@@ -844,6 +886,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let cop = self.cop.clone();
+        let coprv2 = self.coprv2.clone();
         let enable_req_batch = self.enable_req_batch;
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
@@ -855,7 +898,16 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
             };
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(&mut batcher, &storage, &cop, &peer, id, req, &tx);
+                handle_batch_commands_request(
+                    &mut batcher,
+                    &storage,
+                    &cop,
+                    &coprv2,
+                    &peer,
+                    id,
+                    req,
+                    &tx,
+                );
             }
             if let Some(mut batch) = batcher {
                 batch.commit(&storage, &tx);
@@ -1044,6 +1096,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint<E>,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1137,6 +1190,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         VerScan, future_ver_scan(storage), ver_scan;
         VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
+        CoprocessorV2, future_coprv2(coprv2), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
@@ -1382,14 +1436,25 @@ fn future_raw_put<E: Engine, L: LockManager>(
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_put(
-        req.take_context(),
-        req.take_cf(),
-        req.take_key(),
-        req.take_value(),
-        req.get_ttl(),
-        cb,
-    );
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(
+            req.take_context(),
+            req.take_cf(),
+            vec![(req.take_key(), req.take_value())],
+            req.get_ttl(),
+            cb,
+        )
+    } else {
+        storage.raw_put(
+            req.take_context(),
+            req.take_cf(),
+            req.take_key(),
+            req.take_value(),
+            req.get_ttl(),
+            cb,
+        )
+    };
 
     async move {
         let v = match res {
@@ -1418,7 +1483,12 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_put_atomic(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    } else {
+        storage.raw_batch_put(req.take_context(), cf, pairs, req.get_ttl(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1440,7 +1510,12 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), req.take_cf(), vec![req.take_key()], cb)
+    } else {
+        storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb)
+    };
 
     async move {
         let v = match res {
@@ -1464,7 +1539,12 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
-    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
+    let for_atomic = req.get_for_cas();
+    let res = if for_atomic {
+        storage.raw_batch_delete_atomic(req.take_context(), cf, keys, cb)
+    } else {
+        storage.raw_batch_delete(req.take_context(), cf, keys, cb)
+    };
 
     async move {
         let v = match res {
@@ -1587,6 +1667,50 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
     }
 }
 
+fn future_raw_compare_and_set<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawCasRequest,
+) -> impl Future<Output = ServerResult<RawCasResponse>> {
+    let (cb, f) = paired_future_callback();
+    let previous_value = if req.get_previous_not_exist() {
+        None
+    } else {
+        Some(req.take_previous_value())
+    };
+    let res = storage.raw_compare_and_set_atomic(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        previous_value,
+        req.take_value(),
+        req.get_ttl(),
+        cb,
+    );
+    async move {
+        let v = match res {
+            Ok(()) => f.await?,
+            Err(e) => Err(e),
+        };
+        let mut resp = RawCasResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((val, not_equal)) => {
+                    if not_equal {
+                        resp.set_not_equal(true);
+                        if let Some(val) = val {
+                            resp.set_value(val);
+                        }
+                    }
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
 // unimplemented
 fn future_ver_get<E: Engine, L: LockManager>(
     _storage: &Storage<E, L>,
@@ -1647,6 +1771,14 @@ fn future_cop<E: Engine>(
     req: Request,
 ) -> impl Future<Output = ServerResult<Response>> {
     let ret = cop.parse_and_handle_unary_request(req, peer);
+    async move { Ok(ret.await) }
+}
+
+fn future_coprv2<E: Engine>(
+    coprv2: &coprocessor_v2::Endpoint<E>,
+    req: RawCoprocessorRequest,
+) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
+    let ret = coprv2.handle_request(req);
     async move { Ok(ret.await) }
 }
 

@@ -396,21 +396,6 @@ where
                     "output_level" => ?output_level,
                 ),
             }
-            let res = engine.compact_files_in_range(start, end, output_level);
-            match res {
-                Ok(_) => info!(
-                    "compact files in range";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
-                ),
-                Err(ref e) => error!(
-                    "compact files in range failed";
-                    "start" => start.map(log_wrappers::Value::key),
-                    "end" => end.map(log_wrappers::Value::key),
-                    "output_level" => ?output_level, "err" => %e
-                ),
-            }
             let res = res
                 .map_err(|e| Error::Engine(box_err!(e)))
                 .map(|_| CompactResponse::default());

@@ -200,6 +200,7 @@ storage_callback! {
     Prewrite(PrewriteResult) ProcessResult::PrewriteResult { result } => result,
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
+    RawCompareAndSet((Option<Value>, bool)) ProcessResult::RawCompareAndSetRes { previous_value, not_equal } => (previous_value, not_equal),
 }
 
 pub trait StorageCallbackType: Sized {
