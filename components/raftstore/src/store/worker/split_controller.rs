@@ -14,6 +14,7 @@ use rand::Rng;
 use collections::HashMap;
 use tikv_util::config::Tracker;
 
+use crate::store::metrics::*;
 use crate::store::worker::split_config::DEFAULT_SAMPLE_NUM;
 use crate::store::worker::{FlowStatistics, SplitConfig, SplitConfigManager};
 
@@ -368,6 +369,8 @@ impl AutoSplitController {
                 continue;
             }
 
+            LOAD_BASE_SPLIT_EVENT.with_label_values(&["load_fit"]).inc();
+
             let num = self.cfg.detect_times;
             let recorder = self
                 .recorders
@@ -392,6 +395,9 @@ impl AutoSplitController {
                         peer: recorder.peer.clone(),
                     };
                     split_infos.push(split_info);
+                    LOAD_BASE_SPLIT_EVENT
+                        .with_label_values(&["prepare_to_split"])
+                        .inc();
                     info!(
                         "load base split region";
                         "region_id"=>region_id,
@@ -399,6 +405,10 @@ impl AutoSplitController {
                     );
                 }
                 self.recorders.remove(&region_id);
+            } else {
+                LOAD_BASE_SPLIT_EVENT
+                    .with_label_values(&["no_fit_key"])
+                    .inc();
             }
 
             top.push(qps);
