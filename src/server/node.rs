@@ -90,6 +90,9 @@ where
         } else {
             store.set_address(cfg.advertise_addr.clone())
         }
+        if !cfg.peer_addr.is_empty() {
+            store.set_peer_address(cfg.peer_addr.clone());
+        }
         if cfg.advertise_status_addr.is_empty() {
             store.set_status_address(cfg.status_addr.clone());
         } else {

@@ -64,6 +64,7 @@ fn test_serde_custom_tikv_config() {
         addr: "example.com:443".to_owned(),
         labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
+        peer_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         advertise_status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,

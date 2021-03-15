@@ -17,6 +17,7 @@ pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
+const DEFAULT_PEER_ADDR: &str = "";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
@@ -70,6 +71,8 @@ pub struct Config {
     // Status server's advertise listening address for outer communication.
     // If not set, the status server's listening address will be used.
     pub advertise_status_addr: String,
+
+    pub peer_addr: String,
 
     pub status_thread_pool_size: usize,
 
@@ -142,6 +145,7 @@ impl Default for Config {
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
+            peer_addr: DEFAULT_PEER_ADDR.to_owned(),
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             grpc_compression_type: GrpcCompressionType::None,
