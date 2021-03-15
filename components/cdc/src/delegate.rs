@@ -901,6 +901,7 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rate_limiter::new_pair;
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
@@ -908,7 +909,6 @@ mod tests {
     use std::cell::Cell;
     use tikv::storage::mvcc::test_util::*;
     use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
-    use crate::rate_limiter::new_pair;
 
     /*
     #[tokio::test(threaded_scheduler)]

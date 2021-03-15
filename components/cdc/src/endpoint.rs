@@ -766,7 +766,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
         };
         self.tso_worker.spawn(fut);
-        
     }
 
     async fn region_resolved_ts_raft(
@@ -1135,11 +1134,11 @@ impl Initializer {
         });
 
         /*tokio::time::timeout(std::time::Duration::from_secs(30), job_handle)
-            .map(|res| match res {
-                Ok(res) => res,
-                Err(elapsed) => Err(Error::Other(Box::new(elapsed))),
-            })
-            .await*/
+        .map(|res| match res {
+            Ok(res) => res,
+            Err(elapsed) => Err(Error::Other(Box::new(elapsed))),
+        })
+        .await*/
         job_handle.await
     }
 

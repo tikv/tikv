@@ -26,16 +26,16 @@ use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
 use crate::rate_limiter::{new_pair, RateLimiter};
 use futures::ready;
+#[cfg(feature = "prost-codec")]
+use kvproto::cdcpb::event::Event as Event_oneof_event;
+#[cfg(not(feature = "prost-codec"))]
+use kvproto::cdcpb::Event_oneof_event;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch::Ref;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::Event as Event_oneof_event;
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::Event_oneof_event;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -147,8 +147,8 @@ impl EventBatcher {
                 match event {
                     Event_oneof_event::Error(err) => {
                         info!("sending error"; "error" => ?err);
-                    },
-                    other => {},
+                    }
+                    other => {}
                 }
 
                 self.buffer.last_mut().unwrap().mut_events().push(e);
@@ -179,6 +179,8 @@ where
     send_buf: VecDeque<ChangeDataEvent>,
     // the final downstream sink
     inner_sink: S,
+    //
+    is_closed: bool,
 }
 
 impl<S, E> EventBatcherSink<S, E>
@@ -190,6 +192,7 @@ where
             buf: None,
             send_buf: VecDeque::new(),
             inner_sink: sink,
+            is_closed: false,
         }
     }
 
@@ -252,14 +255,11 @@ where
         let (event, _) = item;
 
         match &event {
-            CdcEvent::Event(event) => {
-                match event.event {
-                    Some(Event_oneof_event::Error(ref err)) =>
-                        info!("sending error"; "error" => ?err),
-                    _ => {}
-                }
+            CdcEvent::Event(event) => match event.event {
+                Some(Event_oneof_event::Error(ref err)) => info!("sending error"; "error" => ?err),
+                _ => {}
             },
-            _ => {},
+            _ => {}
         }
 
         this.buf.as_mut().unwrap().push(event);
@@ -295,11 +295,12 @@ where
     /// Flushes the buffered data to `inner_sink` and then closes it.
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
-
+        /*
         if this.buf.is_some() {
             this.prepare_flush();
         }
         ready!(this.poll_flush_unpin(cx))?;
+        */
         this.inner_sink.poll_close_unpin(cx)
     }
 }
@@ -406,7 +407,7 @@ impl Conn {
     }
 
     pub fn flush(&self) {
-       self.sink.start_flush();
+        self.sink.start_flush();
     }
 }
 
@@ -427,10 +428,10 @@ impl Service {
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
     pub fn new(scheduler: Scheduler<Task>) -> Service {
         /*let tokio_runtime = tokio::runtime::Builder::new()
-            .threaded_scheduler()
-            .enable_time()
-            .build()
-            .unwrap();*/
+        .threaded_scheduler()
+        .enable_time()
+        .build()
+        .unwrap();*/
         Service {
             scheduler,
             // runtime: Arc::new(tokio_runtime),
@@ -572,27 +573,33 @@ mod tests {
     #[cfg(not(feature = "prost-codec"))]
     use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
 
-    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE, EventBatcherSink};
-    use tikv_util::mpsc::batch::unbounded;
+    use crate::service::{
+        CdcEvent, EventBatcher, EventBatcherSink, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE,
+    };
     use futures::{SinkExt, StreamExt};
+    use tikv_util::mpsc::batch::unbounded;
 
     #[tokio::test]
     async fn test_event_batcher_sink() {
-        let (mut sink, mut rx) = futures::channel::mpsc::unbounded::<(ChangeDataEvent, grpcio::WriteFlags)>();
+        let (mut sink, mut rx) =
+            futures::channel::mpsc::unbounded::<(ChangeDataEvent, grpcio::WriteFlags)>();
         let mut batch_sink = EventBatcherSink::new(sink);
         let send_task = tokio::spawn(async move {
             let flag = grpcio::WriteFlags::default().buffer_hint(false);
             for i in 0..10000000u64 {
                 let mut resolved_ts = ResolvedTs::default();
                 resolved_ts.set_ts(i);
-                batch_sink.send((CdcEvent::ResolvedTs(resolved_ts), flag)).await.unwrap();
+                batch_sink
+                    .send((CdcEvent::ResolvedTs(resolved_ts), flag))
+                    .await
+                    .unwrap();
                 tokio::task::yield_now().await;
             }
         });
 
         let mut expected = 0u64;
         loop {
-            if let Some((e,_)) = rx.next().await {
+            if let Some((e, _)) = rx.next().await {
                 assert_eq!(e.get_resolved_ts().get_ts(), expected);
                 // println!("got {}", expected);
                 expected += 1;

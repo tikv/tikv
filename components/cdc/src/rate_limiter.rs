@@ -11,10 +11,10 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 use tokio::sync::mpsc::{
     channel as async_channel, Receiver as AsyncReceiver, Sender as AsyncSender,
 };
-use std::time::Duration;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RateLimiterError {
@@ -22,7 +22,7 @@ pub enum RateLimiterError {
     CongestedError(
         usize, /* queue length when the congestion is detected */
     ),
-    DownstreamClosed(u64 /* region id */)
+    DownstreamClosed(u64 /* region id */),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -228,8 +228,13 @@ impl<E> RateLimiter<E> {
         timer.observe_duration();
 
         if let Some(per_downstream_state) = self.per_downstream_state.as_ref() {
-            if per_downstream_state.is_downstream_closed.load(Ordering::SeqCst) {
-                return Err(RateLimiterError::DownstreamClosed(per_downstream_state.region_id));
+            if per_downstream_state
+                .is_downstream_closed
+                .load(Ordering::SeqCst)
+            {
+                return Err(RateLimiterError::DownstreamClosed(
+                    per_downstream_state.region_id,
+                ));
             }
         }
 
@@ -248,9 +253,9 @@ impl<E> RateLimiter<E> {
 
     /// tells the drainer to flush the underlying sink.
     /// It is NOT guaranteed that the drainer will consume all data
-    /// inside the RateLimiter, but only that the underlying rpc sink 
+    /// inside the RateLimiter, but only that the underlying rpc sink
     /// will be flushed at least once after the call.
-    /// 
+    ///
     /// Since we do not use a timer in the drainer, make sure that
     /// for any rpc connection, this function is called periodically.
     pub fn start_flush(&self) {
@@ -269,7 +274,11 @@ impl<E> RateLimiter<E> {
 
     pub fn close_with_error(&self, event: E) -> Result<(), RateLimiterError> {
         if self.per_downstream_state.is_some() {
-            self.per_downstream_state.as_ref().unwrap().is_downstream_closed.store(true, Ordering::SeqCst);
+            self.per_downstream_state
+                .as_ref()
+                .unwrap()
+                .is_downstream_closed
+                .store(true, Ordering::SeqCst);
         }
 
         self.send_realtime_event(event)
@@ -422,9 +431,7 @@ impl<E> Drainer<E> {
         let mut unflushed_size: usize = 0;
         let mut last_flushed_time = std::time::Instant::now();
         loop {
-            let mut sink_ready = poll_fn(|cx| {
-                rpc_sink.poll_ready_unpin(cx)
-            }).fuse();
+            let mut sink_ready = poll_fn(|cx| rpc_sink.poll_ready_unpin(cx)).fuse();
 
             select! {
                 _ = sink_ready => {},
@@ -452,7 +459,7 @@ impl<E> Drainer<E> {
                                 })?;
 
                             unflushed_size += 1;
-                            if unflushed_size >= 128 
+                            if unflushed_size >= 128
                                 || std::time::Instant::now().duration_since(last_flushed_time) > Duration::from_millis(200) {
                                 rpc_sink.flush().await.map_err(|err| {
                                     self.state.wake_up_all_senders();
@@ -538,8 +545,7 @@ impl<'a, E> Future for DrainOne<'a, E> {
                         self.state.unyield_drainer();
                         return Poll::Ready(DrainOneResult::Disconnected);
                     }
-                    if !self.receiver.is_empty()
-                    {
+                    if !self.receiver.is_empty() {
                         self.state.unyield_drainer();
                         continue;
                     }
@@ -1031,7 +1037,8 @@ mod tests {
 
     async fn do_test_multi_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, usize::MAX);
-        let (mut sink, mut rx) = futures::channel::mpsc::unbounded::<(MockCdcEvent, MockWriteFlag)>();
+        let (mut sink, mut rx) =
+            futures::channel::mpsc::unbounded::<(MockCdcEvent, MockWriteFlag)>();
 
         let drain_handle = tokio::spawn(async move {
             match drainer.drain(sink, ()).await {
