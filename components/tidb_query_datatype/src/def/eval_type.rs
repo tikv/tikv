@@ -79,8 +79,6 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
         Ok(eval_type)
     }
 }
-<<<<<<< HEAD
-=======
 
 #[cfg(test)]
 mod tests {
@@ -136,4 +134,4 @@ mod tests {
         }
     }
 }
->>>>>>> 26664139d... copr: use EvalType::Bytes as the eval type for Null type. (#9632)
+
