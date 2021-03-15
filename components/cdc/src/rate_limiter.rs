@@ -434,7 +434,12 @@ impl<E> Drainer<E> {
             let mut sink_ready = poll_fn(|cx| rpc_sink.poll_ready_unpin(cx)).fuse();
 
             select! {
-                _ = sink_ready => {},
+                ready = sink_ready => {
+                    ready.map_err(|err| {
+                        self.state.wake_up_all_senders();
+                        DrainerError::RpcSinkError(err)
+                    })?;
+                },
                 item = close_rx.next() => {
                     if item.is_some() {
                         self.state.wake_up_all_senders();
