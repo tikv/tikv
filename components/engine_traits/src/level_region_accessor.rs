@@ -18,7 +18,7 @@ pub struct LevelRegionAccessorResult<'a> {
     pub region_count: i32
 }
 
-pub trait LevelRegionAccessor<'a> {
+pub trait LevelRegionAccessor {
     fn name(&self) -> &CString;
-    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> *const LevelRegionAccessorResult;
+    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResult;
 }
