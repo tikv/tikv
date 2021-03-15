@@ -74,6 +74,7 @@ pub enum ProcessResult {
     },
     RawCompareAndSetRes {
         previous_value: Option<Value>,
+        not_equal: bool,
     },
 }
 

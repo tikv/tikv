@@ -341,7 +341,7 @@ impl<E: Engine> SyncTestStorage<E> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<(Option<Vec<u8>>, bool)> {
         wait_op!(|cb| self.store.raw_compare_and_set_atomic(
             ctx,
             cf,

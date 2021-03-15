@@ -1586,7 +1586,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
-        cb: Callback<Option<Value>>,
+        cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
         let ttl = if self.enable_ttl {

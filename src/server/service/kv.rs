@@ -1649,12 +1649,15 @@ fn future_raw_compare_and_set<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(Some(val)) => {
-                    resp.set_not_equal(true);
-                    resp.set_value(val);
+                Ok((val, not_equal)) => {
+                    if not_equal {
+                        resp.set_not_equal(true);
+                        if let Some(val) = val {
+                            resp.set_value(val);
+                        }
+                    }
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
-                Ok(None) => (),
             }
         }
         Ok(resp)

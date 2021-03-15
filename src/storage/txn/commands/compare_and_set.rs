@@ -15,7 +15,7 @@ command! {
     /// CompareAndSet to check whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value, otherwise return the previous value.
     RawCompareAndSet:
-        cmd_ty => Option<Value>,
+        cmd_ty => (Option<Value>, bool),
         display => "kv::command::raw_compare_and_set {:?}", (ctx),
         content => {
             cf: CfName,
@@ -62,10 +62,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSet {
             data.push(m);
             ProcessResult::RawCompareAndSetRes {
                 previous_value: None,
+                not_equal: false,
             }
         } else {
             ProcessResult::RawCompareAndSetRes {
                 previous_value: old_value,
+                not_equal: true,
             }
         };
         fail_point!("txn_commands_compare_and_set");

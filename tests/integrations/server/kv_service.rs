@@ -123,7 +123,18 @@ fn test_rawkv_ttl() {
     cas_req.set_context(ctx.clone());
     cas_req.key = k.clone();
     cas_req.value = v0.clone();
+    cas_req.previous_not_exist = false;
+    cas_req.previous_value = v1.clone();
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_not_equal());
+
+    let mut cas_req = RawCasRequest::default();
+    cas_req.set_context(ctx.clone());
+    cas_req.key = k.clone();
+    cas_req.value = v0.clone();
     cas_req.previous_not_exist = true;
+    cas_req.previous_value = vec![];
     cas_req.ttl = 100;
     let resp = client.raw_compare_and_set(&cas_req).unwrap();
     assert!(!resp.has_region_error());
