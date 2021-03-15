@@ -7,12 +7,11 @@ use crossbeam_utils::CachePadded;
 use parking_lot::{Mutex, RwLock};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::{self, Sender},
     Arc,
 };
-use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use tikv_util::time::Instant;
+use tikv_util::worker::Worker;
 
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
@@ -227,61 +226,22 @@ impl RawIORateLimiter {
     }
 }
 
-#[derive(Debug)]
-struct Refiller {
-    sender: Option<Mutex<Sender<()>>>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl Refiller {
-    pub fn new() -> Self {
-        Refiller {
-            sender: None,
-            handle: None,
-        }
-    }
-
-    pub fn must_start(&mut self, limiter: Arc<RawIORateLimiter>) {
-        let (tx, rx) = mpsc::channel();
-        let h = ThreadBuilder::new()
-            .name("refiller".to_owned())
-            .spawn(move || {
-                tikv_alloc::add_thread_memory_accessor();
-                while let Err(mpsc::RecvTimeoutError::Timeout) =
-                    rx.recv_timeout(DEFAULT_REFILL_PERIOD)
-                {
-                    limiter.refill();
-                }
-                tikv_alloc::remove_thread_memory_accessor();
-            })
-            .unwrap();
-        self.handle = Some(h);
-        self.sender = Some(Mutex::new(tx));
-    }
-}
-
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::VARIANT_COUNT],
-    bytes: Arc<RawIORateLimiter>,
-    // TODO: 1) move this to background pool. 2) pause it when limit is toggled off.
-    refiller: Refiller,
+    throughput_limiter: Arc<RawIORateLimiter>,
     enable_statistics: CachePadded<AtomicBool>,
     stats: Arc<IORateLimiterStatistics>,
 }
 
 impl IORateLimiter {
     pub fn new() -> IORateLimiter {
-        let limiter = Arc::new(RawIORateLimiter::new());
-        let mut refiller = Refiller::new();
-        refiller.must_start(limiter.clone());
         IORateLimiter {
             priority_map: [IOPriority::High; IOType::VARIANT_COUNT],
-            bytes: limiter,
+            throughput_limiter: Arc::new(RawIORateLimiter::new()),
             enable_statistics: CachePadded::new(AtomicBool::new(true)),
             stats: Arc::new(IORateLimiterStatistics::new()),
-            refiller,
         }
     }
 
@@ -299,7 +259,11 @@ impl IORateLimiter {
 
     #[allow(dead_code)]
     pub fn set_io_rate_limit(&self, rate: usize) {
-        self.bytes.set_ios_per_sec(rate);
+        self.throughput_limiter.set_ios_per_sec(rate);
+    }
+
+    pub fn refill(&self) {
+        self.throughput_limiter.refill();
     }
 
     /// Requests for token for bytes and potentially update statistics. If this
@@ -308,7 +272,7 @@ impl IORateLimiter {
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if io_op == IOOp::Write || io_type == IOType::Export {
             let priority = self.priority_map[io_type as usize];
-            bytes = self.bytes.request(priority, bytes);
+            bytes = self.throughput_limiter.request(priority, bytes);
         }
         if self.enable_statistics.load(Ordering::Relaxed) {
             self.stats.record(io_type, io_op, bytes);
@@ -323,7 +287,7 @@ impl IORateLimiter {
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if io_op == IOOp::Write || io_type == IOType::Export {
             let priority = self.priority_map[io_type as usize];
-            bytes = self.bytes.async_request(priority, bytes).await;
+            bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
         if self.enable_statistics.load(Ordering::Relaxed) {
             self.stats.record(io_type, io_op, bytes);
@@ -347,6 +311,14 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     } else {
         None
     }
+}
+
+pub fn start_io_rate_limiter_daemon(worker: &Worker) {
+    worker.spawn_interval_task(DEFAULT_REFILL_PERIOD, move || {
+        if let Some(limiter) = get_io_rate_limiter() {
+            limiter.refill();
+        }
+    });
 }
 
 /// Set a global rate limiter with unlimited quotas that can be used to trace IOs.

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::compat::Future01CompatExt;
+use futures::compat::Stream01CompatExt;
 use futures::future::{self, FutureExt};
 use futures::stream::StreamExt;
 
@@ -340,8 +341,19 @@ impl Worker {
         )
     }
 
-    pub fn clone_raw_handle(&self) -> Remote<yatp::task::future::TaskCell> {
-        self.remote.clone()
+    pub fn spawn_interval_task<F>(&self, interval: Duration, mut func: F)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        let handle = self.remote.clone();
+        let mut interval = GLOBAL_TIMER_HANDLE
+            .interval(std::time::Instant::now(), interval)
+            .compat();
+        handle.spawn(async move {
+            while let Some(Ok(_)) = interval.next().await {
+                func();
+            }
+        });
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {

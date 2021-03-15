@@ -26,11 +26,12 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
-use file_system::{set_io_rate_limiter, BytesFetcher, MetricsManager as IOMetricsManager};
+use file_system::{
+    set_io_rate_limiter, start_io_rate_limiter_daemon, BytesFetcher,
+    MetricsManager as IOMetricsManager,
+};
 use fs2::FileExt;
-use futures::compat::Stream01CompatExt;
 use futures::executor::block_on;
-use futures::stream::StreamExt;
 use grpcio::{EnvBuilder, Environment};
 use kvproto::{
     backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -80,7 +81,6 @@ use tikv_util::{
     config::{ensure_dir_exist, ReadableSize, VersionTrack},
     sys::sys_quota::SysQuota,
     time::Monitor,
-    timer::GLOBAL_TIMER_HANDLE,
     worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker, Worker},
 };
 use tokio::runtime::Builder;
@@ -854,24 +854,20 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             BytesFetcher::FromRateLimiter(limiter.statistics())
         };
         set_io_rate_limiter(Some(Arc::new(limiter)));
+        start_io_rate_limiter_daemon(&self.background_worker);
         fetcher
     }
 
     fn init_metrics_flusher(&mut self, fetcher: BytesFetcher) {
-        let handle = self.background_worker.clone_raw_handle();
-        let mut interval = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now(), DEFAULT_METRICS_FLUSH_INTERVAL)
-            .compat();
         let mut engine_metrics =
             EngineMetricsManager::new(self.engines.as_ref().unwrap().engines.clone());
         let mut io_metrics = IOMetricsManager::new(fetcher);
-        handle.spawn(async move {
-            while let Some(Ok(_)) = interval.next().await {
+        self.background_worker
+            .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-            }
-        });
+            });
     }
 
     fn run_server(&mut self, server_config: Arc<ServerConfig>) {
