@@ -51,6 +51,7 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
+        coprocessor_v2,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
