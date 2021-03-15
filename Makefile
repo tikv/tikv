@@ -59,6 +59,12 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
+# Enable flags for AWS Graviton2
+ifeq ($(shell uname -p),aarch64)
+RUSTFLAGS="-Ctarget-cpu=native -C target-feature=+lse"
+endif
+
+
 # Disable SSE on ARM
 ifeq ($(shell uname -p),aarch64)
 ROCKSDB_SYS_SSE=0
