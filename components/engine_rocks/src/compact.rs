@@ -101,7 +101,7 @@ impl CompactExt for RocksEngine {
         mut files: Vec<String>,
         output_level: Option<i32>,
         max_subcompactions: u32,
-        without_l0: bool,
+        exclude_l0: bool,
     ) -> Result<()> {
         let db = self.as_inner();
         let handle = util::get_cf_handle(db, cf)?;
@@ -114,13 +114,13 @@ impl CompactExt for RocksEngine {
             .unwrap_or(DBCompressionType::No);
         let output_file_size_limit = cf_opts.get_target_file_size_base() as usize;
 
-        if without_l0 {
+        if exclude_l0 {
             let cf_meta = db.get_column_family_meta_data(handle);
-            let mut l0_files = vec![];
-            for f in cf_meta.get_levels()[0].get_files() {
-                l0_files.push(f.get_name());
-            }
-            files.retain(|f| !l0_files.iter().any(|n| f.ends_with(n)));
+            let mut l0_files = cf_meta.get_levels()[0]
+                .get_files()
+                .into_iter()
+                .map(|f| f.get_name());
+            files.retain(|f| !l0_files.any(|n| f.ends_with(&n)));
         }
 
         if files.is_empty() {

@@ -47,7 +47,7 @@ impl CompactExt for PanicEngine {
         files: Vec<String>,
         output_level: Option<i32>,
         max_subcompactions: u32,
-        without_l0: bool,
+        exclude_l0: bool,
     ) -> Result<()> {
         panic!()
     }

@@ -145,7 +145,7 @@ fn check_ttl_and_compact_files<E: KvEngine>(
     engine: &E,
     start_key: &[u8],
     end_key: &[u8],
-    without_l0: bool,
+    exclude_l0: bool,
 ) {
     let current_ts = UnixSecs::now().into_inner();
     let mut files = Vec::new();
@@ -186,7 +186,7 @@ fn check_ttl_and_compact_files<E: KvEngine>(
     let files_count = files.len();
     for file in files {
         let compact_range_timer = TTL_CHECKER_COMPACT_DURATION_HISTOGRAM.start_coarse_timer();
-        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, vec![file], None, 0, without_l0) {
+        if let Err(e) = engine.compact_files_cf(CF_DEFAULT, vec![file], None, 0, exclude_l0) {
             error!(
                 "execute ttl compact files failed";
                 "range_start" => log_wrappers::Value::key(&start_key),
