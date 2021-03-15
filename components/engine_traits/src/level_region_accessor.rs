@@ -14,10 +14,11 @@ pub struct LevelRegionBoundaries<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelRegionAccessorResult<'a> {
-    pub regions:  Vec<LevelRegionBoundaries<'a>>,
+    pub regions: *const LevelRegionBoundaries<'a>,
+    pub region_count: i32
 }
 
-pub trait LevelRegionAccessor {
-    fn name(&self) -> &Cstring;
-    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResult;
+pub trait LevelRegionAccessor<'a> {
+    fn name(&self) -> &CString;
+    fn level_regions(&self, req: &LevelRegionAccessorRequest) -> *const LevelRegionAccessorResult;
 }

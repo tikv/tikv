@@ -46,7 +46,8 @@ impl LevelRegionAccessor for SizeRatioCompaction {
                     .map(|region| LevelRegionBoundaries{start_key: &region.start_key,
                         end_key: &region.end_key}).collect();
                 LevelRegionAccessorResult{
-                    regions: boundaries,
+                    regions: boundaries.as_ptr() as *const LevelRegionBoundaries,
+                    region_count: boundaries.len() as i32,
                 }
             }
             Err(e) => {

@@ -27,5 +27,5 @@ pub trait ColumnFamilyOptions {
     fn set_disable_auto_compactions(&mut self, v: bool);
     fn get_disable_auto_compactions(&self) -> bool;
     fn set_sst_partitioner_factory<F: SstPartitionerFactory>(&mut self, factory: F);
-    fn set_level_region_accessor<A: LevelRegionAccessor>(&mut self, accessor: A);
+    fn set_level_region_accessor<'a, A: LevelRegionAccessor<'a>>(&mut self, accessor: A);
 }
