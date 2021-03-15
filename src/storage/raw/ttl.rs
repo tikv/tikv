@@ -29,8 +29,8 @@ impl<S: Snapshot> TTLSnapshot<S> {
                 }
                 truncate_expire_ts(&mut v).unwrap();
                 Ok(Some(v))
-            },
-            None => Ok(None)
+            }
+            None => Ok(None),
         }
     }
 

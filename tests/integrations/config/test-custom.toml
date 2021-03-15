@@ -65,6 +65,7 @@ heavy-load-wait-duration = "2ms"
 enable-request-batch = false
 background-thread-count = 999
 end-point-slow-log-threshold = "1s"
+forward-max-connections-per-address = 5
 
 [server.labels]
 a = "b"
@@ -78,6 +79,8 @@ scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
 reserve-space = "10GB"
+enable-ttl = true
+ttl-check-poll-interval = "0s"
 
 [storage.block-cache]
 shared = true
@@ -612,3 +615,12 @@ pipelined = false
 min-ts-interval = "4s"
 old-value-cache-size = 512
 hibernate-regions-compatible = false
+
+[split]
+detect-times = 10
+qps-threshold = 3000
+sample-num = 20
+sample-threshold = 100
+byte-threshold = 31457280
+split.split-balance-score = 0.25
+split.split-contained-score = 0.5
