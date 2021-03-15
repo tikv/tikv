@@ -1056,7 +1056,7 @@ fn test_atomic_cas_lock_by_latch() {
     assert!(!acquire_flag.load(Ordering::Acquire));
     cas_tx.send(()).unwrap();
     let _ = block_on(f1).unwrap();
-    let ret = block_on(f2).unwrap().unwrap();
+    let (ret, _) = block_on(f2).unwrap().unwrap();
     assert!(wakeup_latch_flag.load(Ordering::Acquire));
     assert!(ret.is_none());
     let f = storage.raw_get(ctx, "".to_string(), b"key".to_vec());
