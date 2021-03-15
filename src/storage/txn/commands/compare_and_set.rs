@@ -126,7 +126,7 @@ mod tests {
     pub fn sched_command<E: Engine>(
         engine: &E,
         cm: ConcurrencyManager,
-        cmd: TypedCommand<Option<Value>>,
+        cmd: TypedCommand<(Option<Value>, bool)>,
     ) -> Result<Option<Value>> {
         let snap = engine.snapshot(Default::default())?;
         use crate::storage::DummyLockManager;
@@ -141,8 +141,11 @@ mod tests {
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
-            ProcessResult::CompareAndSetRes { previous_value } => {
-                if previous_value.is_some() {
+            ProcessResult::RawCompareAndSetRes {
+                previous_value,
+                not_equal,
+            } => {
+                if not_equal {
                     return Ok(previous_value);
                 }
             }
