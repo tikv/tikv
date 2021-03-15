@@ -56,7 +56,7 @@ pub use self::{
     },
     raw::{RawStore, TTLSnapshot},
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, Store, TxnStore},
+    txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
     types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
 };
 
@@ -341,7 +341,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = TxnStore::new(
+                    let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -550,7 +550,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     let begin_instant = Instant::now_coarse();
                     let mut statistics = Statistics::default();
                     let perf_statistics = PerfStatisticsInstant::new();
-                    let snap_store = TxnStore::new(
+                    let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),
@@ -697,7 +697,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 {
                     let begin_instant = Instant::now_coarse();
 
-                    let snap_store = TxnStore::new(
+                    let snap_store = SnapshotStore::new(
                         snapshot,
                         start_ts,
                         ctx.get_isolation_level(),

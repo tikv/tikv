@@ -16,7 +16,6 @@ const STAT_NEXT_TOMBSTONE: &str = "next_tombstone";
 const STAT_PREV_TOMBSTONE: &str = "prev_tombstone";
 const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
-const STAT_TTL_TOMBSTONE: &str = "ttl_tombstone";
 
 /// Statistics collects the ops taken when fetching data.
 #[derive(Default, Clone, Debug)]
@@ -37,7 +36,6 @@ pub struct CfStatistics {
     pub prev_tombstone: usize,
     pub seek_tombstone: usize,
     pub seek_for_prev_tombstone: usize,
-    pub ttl_tombstone: usize,
 }
 
 impl CfStatistics {
@@ -46,7 +44,7 @@ impl CfStatistics {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> [(&'static str, usize); 12] {
+    pub fn details(&self) -> [(&'static str, usize); 11] {
         [
             (STAT_PROCESSED_KEYS, self.processed_keys),
             (STAT_GET, self.get),
@@ -59,11 +57,10 @@ impl CfStatistics {
             (STAT_PREV_TOMBSTONE, self.prev_tombstone),
             (STAT_SEEK_TOMBSTONE, self.seek_tombstone),
             (STAT_SEEK_FOR_PREV_TOMBSTONE, self.seek_for_prev_tombstone),
-            (STAT_TTL_TOMBSTONE, self.ttl_tombstone),
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 12] {
+    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 11] {
         [
             (GcKeysDetail::processed_keys, self.processed_keys),
             (GcKeysDetail::get, self.get),
@@ -79,7 +76,6 @@ impl CfStatistics {
                 GcKeysDetail::seek_for_prev_tombstone,
                 self.seek_for_prev_tombstone,
             ),
-            (GcKeysDetail::ttl_tombstone, self.ttl_tombstone),
         ]
     }
 
@@ -98,7 +94,6 @@ impl CfStatistics {
         self.seek_for_prev_tombstone = self
             .seek_for_prev_tombstone
             .saturating_add(other.seek_for_prev_tombstone);
-        self.ttl_tombstone = self.ttl_tombstone.saturating_add(other.ttl_tombstone);
     }
 
     /// Deprecated
@@ -118,7 +113,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 12]); 3] {
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 11]); 3] {
         [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
@@ -126,7 +121,7 @@ impl Statistics {
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 12]); 3] {
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 11]); 3] {
         [
             (GcKeysCF::default, self.data.details_enum()),
             (GcKeysCF::lock, self.lock.details_enum()),

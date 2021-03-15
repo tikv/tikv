@@ -14,12 +14,12 @@ use yatp::task::future::reschedule;
 
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, Statistics, TxnStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TiKVStorage<TxnStore<S>>>,
+    scanner: RangesScanner<TiKVStorage<SnapshotStore<S>>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -30,7 +30,7 @@ impl<S: Snapshot> ChecksumContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let store = TxnStore::new(
+        let store = SnapshotStore::new(
             snap,
             start_ts.into(),
             req_ctx.context.get_isolation_level(),

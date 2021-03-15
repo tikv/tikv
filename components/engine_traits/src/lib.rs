@@ -126,8 +126,8 @@
 //!   for this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
-//!   - [https://github.com/rust-lang/rfcs/pull/1598](https://github.com/rust-lang/rfcs/pull/1598)
-//!   - [https://github.com/rust-lang/rust/issues/44265](https://github.com/rust-lang/rust/issues/44265)
+//!   - <https://github.com/rust-lang/rfcs/pull/1598>
+//!   - <https://github.com/rust-lang/rust/issues/44265>
 //!
 //! - Traits can't have mutually-recursive associated types. That is, if
 //!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a

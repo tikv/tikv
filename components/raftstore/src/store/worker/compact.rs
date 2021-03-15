@@ -5,7 +5,8 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Instant;
 
-use engine_traits::{KvEngine, CF_WRITE};
+use engine_traits::KvEngine;
+use engine_traits::CF_WRITE;
 use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
@@ -97,23 +98,23 @@ where
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
-        cf: &str,
+        cf_name: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[cf])
+            .with_label_values(&[cf_name])
             .start_coarse_timer();
         box_try!(self
             .engine
-            .compact_range(cf, start_key, end_key, false, 1 /* threads */,));
+            .compact_range(cf_name, start_key, end_key, false, 1 /* threads */,));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
             "range_start" => start_key.map(::log_wrappers::Value::key),
             "range_end" => end_key.map(::log_wrappers::Value::key),
-            "cf" => cf,
+            "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
         Ok(())

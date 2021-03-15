@@ -1,7 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-
 use crate::storage::kv::{Iterator, Result, Snapshot};
 use crate::storage::Statistics;
 
@@ -14,10 +12,6 @@ use txn_types::{Key, Value};
 
 #[cfg(test)]
 pub const TEST_CURRENT_TS: u64 = 15;
-
-thread_local! {
-    pub static TTL_TOMBSTONE : RefCell<usize> = RefCell::new(0);
-}
 
 #[derive(Clone)]
 pub struct TTLSnapshot<S: Snapshot> {
@@ -136,17 +130,11 @@ impl<S: Snapshot> Snapshot for TTLSnapshot<S> {
 pub struct TTLIterator<I: Iterator> {
     i: I,
     current_ts: u64,
-
-    skip_ttl: usize,
 }
 
 impl<I: Iterator> TTLIterator<I> {
     fn new(i: I, current_ts: u64) -> Self {
-        TTLIterator {
-            i,
-            current_ts,
-            skip_ttl: 0,
-        }
+        TTLIterator { i, current_ts }
     }
 
     fn find_valid_value(&mut self, mut res: Result<bool>, forward: bool) -> Result<bool> {
@@ -158,7 +146,6 @@ impl<I: Iterator> TTLIterator<I> {
             if *res.as_ref().unwrap() {
                 let expire_ts = get_expire_ts(self.i.value())?;
                 if expire_ts != 0 && expire_ts <= self.current_ts {
-                    self.skip_ttl += 1;
                     res = if forward {
                         self.i.next()
                     } else {
@@ -170,14 +157,6 @@ impl<I: Iterator> TTLIterator<I> {
             break;
         }
         res
-    }
-}
-
-impl<I: Iterator> Drop for TTLIterator<I> {
-    fn drop(&mut self) {
-        TTL_TOMBSTONE.with(|m| {
-            *m.borrow_mut() += self.skip_ttl;
-        });
     }
 }
 

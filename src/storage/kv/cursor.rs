@@ -13,7 +13,6 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
-use crate::storage::raw::TTL_TOMBSTONE;
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -41,58 +40,6 @@ macro_rules! near_loop {
             }
         }
     }};
-}
-
-pub enum StatsKind {
-    Next,
-    Prev,
-    Seek,
-    SeekForPrev,
-}
-
-struct StatsWrapper<'a> {
-    stats: &'a mut CfStatistics,
-    kind: StatsKind,
-
-    internal_tombstone: usize,
-    ttl_tombstone: usize,
-}
-
-impl<'a> StatsWrapper<'a> {
-    pub fn new(kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
-        StatsWrapper {
-            stats,
-            kind,
-            internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
-            ttl_tombstone: TTL_TOMBSTONE.with(|m| *m.borrow()),
-        }
-    }
-}
-
-impl Drop for StatsWrapper<'_> {
-    fn drop(&mut self) {
-        self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
-        let internal_tombstone =
-            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
-        match self.kind {
-            StatsKind::Next => {
-                self.stats.next += 1;
-                self.stats.next_tombstone += internal_tombstone;
-            }
-            StatsKind::Prev => {
-                self.stats.prev += 1;
-                self.stats.prev_tombstone += internal_tombstone;
-            }
-            StatsKind::Seek => {
-                self.stats.seek += 1;
-                self.stats.seek_tombstone += internal_tombstone;
-            }
-            StatsKind::SeekForPrev => {
-                self.stats.seek_for_prev += 1;
-                self.stats.seek_for_prev_tombstone += internal_tombstone;
-            }
-        }
-    }
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -382,24 +329,36 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
+        statistics.seek += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
-        self.iter.seek_to_first().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.seek_to_first().expect("Invalid Iterator");
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
+        res
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
+        statistics.seek += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
-        self.iter.seek_to_last().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.seek_to_last().expect("Invalid Iterator");
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
+        res
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
+        statistics.seek += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
-        self.iter.seek(key)
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.seek(key);
+        statistics.seek_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
+        res
     }
 
     #[inline]
@@ -408,23 +367,35 @@ impl<I: Iterator> Cursor<I> {
         key: &Key,
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
+        statistics.seek_for_prev += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::SeekForPrev, statistics);
-        self.iter.seek_for_prev(key)
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.seek_for_prev(key);
+        statistics.seek_for_prev_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before;
+        res
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
+        statistics.next += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Next, statistics);
-        self.iter.next().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.next().expect("Invalid Iterator");
+        statistics.next_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
+        res
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
+        statistics.prev += 1;
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Prev, statistics);
-        self.iter.prev().expect("Invalid Iterator")
+        let before = PerfContext::get().internal_delete_skipped_count() as usize;
+        let res = self.iter.prev().expect("Invalid Iterator");
+        statistics.prev_tombstone +=
+            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
+        res
     }
 
     #[inline]

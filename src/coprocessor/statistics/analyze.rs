@@ -30,7 +30,7 @@ use super::fmsketch::FmSketch;
 use super::histogram::Histogram;
 use crate::coprocessor::dag::TiKVStorage;
 use crate::coprocessor::*;
-use crate::storage::{Snapshot, Statistics, TxnStore};
+use crate::storage::{Snapshot, SnapshotStore, Statistics};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
@@ -38,7 +38,7 @@ const ANALYZE_VERSION_V2: i32 = 2;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKVStorage<TxnStore<S>>>,
+    storage: Option<TiKVStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
 }
@@ -51,7 +51,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
-        let store = TxnStore::new(
+        let store = SnapshotStore::new(
             snap,
             start_ts.into(),
             req_ctx.context.get_isolation_level(),
@@ -100,7 +100,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TiKVStorage<TxnStore<S>>>,
+        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -271,7 +271,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<TxnStore<S>>>,
+    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -292,7 +292,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,
-        storage: TiKVStorage<TxnStore<S>>,
+        storage: TiKVStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();

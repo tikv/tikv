@@ -70,14 +70,12 @@ use tikv::{
         resolve,
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
-        ttl::TTLChecker,
         Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
         config::{StorageConfigManger, MAX_RESERVED_SPACE_GB},
         mvcc::MvccConsistencyCheckObserver,
-        Engine,
     },
 };
 use tikv_util::{
@@ -123,7 +121,8 @@ pub fn run_tikv(config: TiKvConfig) {
             tikv.init_encryption();
             let engines = tikv.init_raw_engines();
             tikv.init_engines(engines);
-            let server_config = tikv.init_servers();
+            let gc_worker = tikv.init_gc_worker();
+            let server_config = tikv.init_servers(&gc_worker);
             tikv.register_services();
             tikv.init_metrics_flusher(fetcher);
             tikv.run_server(server_config);
@@ -453,6 +452,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             engines.kv.clone(),
         );
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            tikv::config::Module::Storage,
+            Box::new(StorageConfigManger::new(
+                engines.kv.clone(),
+                self.config.storage.block_cache.shared,
+            )),
+        );
+
         self.engines = Some(TiKVEngines {
             engines,
             store_meta,
@@ -489,20 +497,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         gc_worker
     }
 
-    fn init_servers(&mut self) -> Arc<ServerConfig> {
-        let gc_worker = self.init_gc_worker();
-        let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
-        let ttl_scheduler = ttl_checker.scheduler();
-
+    fn init_servers(
+        &mut self,
+        gc_worker: &GcWorker<
+            RaftKv<ServerRaftStoreRouter<RocksEngine, ER>>,
+            RaftRouter<RocksEngine, ER>,
+        >,
+    ) -> Arc<ServerConfig> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
-        cfg_controller.register(
-            tikv::config::Module::Storage,
-            Box::new(StorageConfigManger::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
-                self.config.storage.block_cache.shared,
-                ttl_scheduler,
-            )),
-        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -717,12 +719,6 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         initial_metric(&self.config.metric);
-        ttl_checker.start_with_timer(TTLChecker::new(
-            self.engines.as_ref().unwrap().engine.kv_engine(),
-            self.region_info_accessor.clone(),
-            self.config.storage.ttl_check_poll_interval.into(),
-        ));
-        self.to_stop.push(ttl_checker);
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(

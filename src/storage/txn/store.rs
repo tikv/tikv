@@ -215,7 +215,7 @@ impl EntryBatch {
     }
 }
 
-pub struct TxnStore<S: Snapshot> {
+pub struct SnapshotStore<S: Snapshot> {
     snapshot: S,
     start_ts: TimeStamp,
     isolation_level: IsolationLevel,
@@ -226,7 +226,7 @@ pub struct TxnStore<S: Snapshot> {
     point_getter_cache: Option<PointGetter<S>>,
 }
 
-impl<S: Snapshot> Store for TxnStore<S> {
+impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
@@ -340,7 +340,7 @@ impl<S: Snapshot> Store for TxnStore<S> {
     }
 }
 
-impl<S: Snapshot> TxnEntryStore for TxnStore<S> {
+impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     type Scanner = EntryScanner<S>;
     fn entry_scanner(
         &self,
@@ -373,7 +373,7 @@ impl<S: Snapshot> TxnEntryStore for TxnStore<S> {
     }
 }
 
-impl<S: Snapshot> TxnStore<S> {
+impl<S: Snapshot> SnapshotStore<S> {
     pub fn new(
         snapshot: S,
         start_ts: TimeStamp,
@@ -382,7 +382,7 @@ impl<S: Snapshot> TxnStore<S> {
         bypass_locks: TsSet,
         check_has_newer_ts_data: bool,
     ) -> Self {
-        TxnStore {
+        SnapshotStore {
             snapshot,
             start_ts,
             isolation_level,
@@ -695,8 +695,8 @@ mod tests {
             self.snapshot = self.engine.snapshot(snap_ctx).unwrap()
         }
 
-        fn store(&self) -> TxnStore<Arc<RocksSnapshot>> {
-            TxnStore::new(
+        fn store(&self) -> SnapshotStore<Arc<RocksSnapshot>> {
+            SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS.next(),
                 IsolationLevel::Si,
@@ -910,7 +910,7 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let store = TxnStore::new(
+        let store = SnapshotStore::new(
             snap,
             TimeStamp::zero(),
             IsolationLevel::Si,
@@ -956,7 +956,7 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = TxnStore::new(
+        let store2 = SnapshotStore::new(
             snap2,
             TimeStamp::zero(),
             IsolationLevel::Si,
