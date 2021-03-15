@@ -36,9 +36,3 @@ impl ThreadInfoStatistics {
         HashMap::default()
     }
 }
-
-impl Default for ThreadInfoStatistics {
-    fn default() -> Self {
-        Self::new()
-    }
-}
