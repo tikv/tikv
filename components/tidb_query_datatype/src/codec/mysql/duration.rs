@@ -426,7 +426,7 @@ impl Duration {
 
     /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
-    /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
+    /// See: <http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html>
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
         parser::parse(ctx, input, fsp, true)
