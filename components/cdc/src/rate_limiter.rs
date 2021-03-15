@@ -998,6 +998,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_close_downstream() -> Result<(), RateLimiterError> {
+        let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(2, 1024);
+        let mock_sink = MockRpcSink::new();
+        let drain_handle = tokio::spawn(drainer.drain(mock_sink.clone(), ()));
+
+        let rate_limiter = rate_limiter.with_region_id(1);
+        let rate_limiter_clone = rate_limiter.clone();
+        let send_task = tokio::spawn(async move {
+            rate_limiter_clone.send_scan_event(1).await.unwrap();
+            tokio::task::yield_now().await;
+            assert_eq!(rate_limiter_clone.sink.len(), 0);
+            rate_limiter_clone.send_scan_event(2).await.unwrap();
+            tokio::task::yield_now().await;
+            assert_eq!(rate_limiter_clone.sink.len(), 1);
+            rate_limiter_clone.send_scan_event(3).await.unwrap();
+            tokio::task::yield_now().await;
+            assert_eq!(rate_limiter_clone.sink.len(), 2);
+            let res = rate_limiter_clone.send_scan_event(4).await;
+            assert_eq!(res, Err(RateLimiterError::DownstreamClosed(1)));
+        });
+
+        tokio::time::delay_for(std::time::Duration::from_millis(200)).await;
+        rate_limiter.close_with_error(9)?;
+        assert_eq!(mock_sink.recv().await.unwrap(), 1);
+        assert_eq!(mock_sink.recv().await.unwrap(), 2);
+        assert_eq!(mock_sink.recv().await.unwrap(), 3);
+        drop(rate_limiter);
+        send_task.await.unwrap();
+        drain_handle.await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_single_thread_many_events() -> Result<(), RateLimiterError> {
         let (rate_limiter, drainer) = new_pair::<MockCdcEvent>(1024, 1024);
         let mut mock_sink = MockRpcSink::new();

@@ -546,6 +546,7 @@ impl ChangeData for Service {
             match drain_res {
                 Ok(_) => {
                     info!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
+                    let _ = sink.close().await;
                 },
                 Err(e) => {
                     error!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id, "error" => ?e);
@@ -558,7 +559,6 @@ impl ChangeData for Service {
             }
 
             info!("cdc send half closed"; "downstream" => peer.clone(), "conn_id" => ?conn_id);
-            let _ = sink.close().await;
         });
     }
 }
