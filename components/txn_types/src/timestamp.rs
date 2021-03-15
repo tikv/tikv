@@ -33,24 +33,24 @@ impl TimeStamp {
     }
 
     pub fn next(self) -> TimeStamp {
-        assert!(self.0 + 1 > 0);
+        assert!(self.0 + 1 >= 0);
         TimeStamp(self.0 + 1)
     }
 
     pub fn prev(self) -> TimeStamp {
-        assert!(self.0 - 1 > 0);
+        assert!(self.0 - 1 >= 0);
         TimeStamp(self.0 - 1)
     }
 
     pub fn incr(&mut self) -> &mut TimeStamp {
         self.0 += 1;
-        assert!(self.0 > 0);
+        assert!(self.0 >= 0);
         self
     }
 
     pub fn decr(&mut self) -> &mut TimeStamp {
         self.0 -= 1;
-        assert!(self.0 > 0);
+        assert!(self.0 >= 0);
         self
     }
 
