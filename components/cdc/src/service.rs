@@ -24,7 +24,7 @@ use tokio::sync::mpsc::channel as tokio_bounded_channel;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
-use crate::rate_limiter::{new_pair, RateLimiter};
+use crate::rate_limiter::{new_pair, RateLimiter, DrainerError};
 use futures::ready;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -550,6 +550,12 @@ impl ChangeData for Service {
                 },
                 Err(e) => {
                     error!("cdc drainer exit"; "downstream" => peer.clone(), "conn_id" => ?conn_id, "error" => ?e);
+                    match e {
+                        DrainerError::RateLimitExceededError => {
+                            let _ = sink.close().await;
+                        },
+                        _ => {},
+                    }
                 }
             }
             // Unregister this downstream only.
