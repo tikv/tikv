@@ -231,7 +231,6 @@ where
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
-
         Ok(store_id)
     }
 
@@ -425,6 +424,5 @@ where
         let store_id = self.store.get_id();
         self.stop_store(store_id);
         self.bg_worker.stop();
-        self.has_started = false;
     }
 }

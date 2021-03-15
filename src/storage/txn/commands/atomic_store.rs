@@ -63,7 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicStore {
             match m {
                 Mutation::Put((key, value)) => {
                     let mut m = Modify::Put(cf, key, value);
-                    if let Some(ts) = expire_ts.clone() {
+                    if let Some(ts) = expire_ts {
                         m.with_ttl(ts);
                     }
                     data.push(m);
