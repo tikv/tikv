@@ -5308,6 +5308,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "libc 0.2.86",
+ "libloading",
  "log",
  "log_wrappers",
  "match_template",

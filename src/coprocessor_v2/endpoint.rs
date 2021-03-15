@@ -2,13 +2,16 @@
 
 use std::future::Future;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
+use super::plugin_manager::PluginManager;
 use crate::storage::Engine;
 use kvproto::coprocessor_v2 as coprv2pb;
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
 pub struct Endpoint<E: Engine> {
+    plugin_manager: Arc<PluginManager>,
     _phantom: PhantomData<E>,
 }
 
@@ -17,6 +20,7 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 impl<E: Engine> Endpoint<E> {
     pub fn new() -> Self {
         Self {
+            plugin_manager: Arc::new(PluginManager::default()),
             _phantom: Default::default(),
         }
     }

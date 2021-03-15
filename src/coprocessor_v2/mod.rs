@@ -26,5 +26,6 @@
 //! [hbase-copr]: https://blogs.apache.org/hbase/entry/coprocessor_introduction
 
 mod endpoint;
+mod plugin_manager;
 
 pub use self::endpoint::Endpoint;
