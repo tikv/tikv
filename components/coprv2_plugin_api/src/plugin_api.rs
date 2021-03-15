@@ -11,22 +11,13 @@ pub type RawResponse = Vec<u8>;
 ///
 /// If you want to implement a custom coprocessor plugin for TiKV, your plugin needs to implement
 /// the [`CoprocessorPlugin`] trait.
+///
+/// Plugins can run setup code in their constructor and teardown code by implementing
+/// [`std::ops::Drop`].
 pub trait CoprocessorPlugin: Send + Sync {
     /// Returns the name of the plugin.
     /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
     fn name(&self) -> &'static str;
-
-    /// A callback fired immediately after the plugin is loaded. Usually used
-    /// for initialization.
-    ///
-    /// The default implementation does nothing, but can be overridden by plugins.
-    fn on_plugin_load(&self) {}
-
-    /// A callback fired immediately before the plugin is unloaded. Use this if
-    /// you need to do any cleanup.
-    ///
-    /// The default implementation does nothing, but can be overridden by plugins.
-    fn on_plugin_unload(&self) {}
 
     /// Handles a request to the coprocessor.
     ///
