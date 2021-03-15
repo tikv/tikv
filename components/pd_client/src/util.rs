@@ -35,6 +35,7 @@ use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
 const RETRY_INTERVAL_SEC: u64 = 1; // 1s
+const MAX_RETRY_TIMES: u64 = 3;
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -227,7 +228,7 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
-    pub async fn reconnect(&self, force: bool, try_follower: bool) -> Result<()> {
+    pub async fn reconnect(&self, force: bool) -> Result<()> {
         let (future, start) = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
@@ -238,7 +239,7 @@ impl Client {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = self.reconnect_pd(connector, members, force, try_follower);
+            let fut = self.reconnect_pd(connector, members, force);
             slow_log!(start.elapsed(), "try reconnect pd");
             (fut, start)
         };
@@ -259,7 +260,6 @@ impl Client {
         connector: PdConnector,
         members_resp: GetMembersResponse,
         force: bool,
-        try_follower: bool,
     ) -> Result<Option<StubTuple>> {
         let resp = connector.load_members(&members_resp).await?;
         if !force && resp == members_resp {
@@ -267,14 +267,18 @@ impl Client {
         }
         let leader = resp.get_leader();
         let members = resp.get_members();
-        if let Ok(Some((client, address))) = connector.reconnect_leader(leader).await {
-            return Ok(Some((client, address, resp)));
-        }
-        if try_follower {
-            if let Ok(Some((client, address))) =
-                connector.reconnect_followers(members, leader).await
-            {
-                return Ok(Some((client, address, resp)));
+        let (res, has_network_error) = connector.reconnect_leader(leader).await?;
+        match res {
+            Some((client, address)) => return Ok(Some((client, address, resp))),
+            None => {
+                if has_network_error {
+                    if let Ok(Some((client, address))) = connector
+                        .reconnect_followers(members, leader)
+                        .await
+                    {
+                        return Ok(Some((client, address, resp)));
+                    }
+                }
             }
         }
         Err(box_err!(
@@ -302,7 +306,7 @@ where
     Req: Clone + Send + 'static,
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    async fn reconnect_if_needed(&mut self, try_follower: bool) -> bool {
+    async fn reconnect_if_needed(&mut self) -> bool {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
@@ -314,7 +318,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect(true, try_follower).await {
+        match self.client.reconnect(true).await {
             Ok(_) => {
                 self.request_sent = 0;
                 true
@@ -338,26 +342,14 @@ where
         (self.func)(&self.client, r).await
     }
 
-    fn should_not_retry(resp: &Result<Resp>) -> (bool, bool) {
+    fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
-            Ok(_) => (true, false),
+            Ok(_) => true,
             // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => (true, false),
-            Err(Error::Grpc(err)) => match err {
-                RpcFailure(RpcStatus { status, details: _ }) => {
-                    if *status == RpcStatusCode::UNAVAILABLE
-                        || *status == RpcStatusCode::DEADLINE_EXCEEDED
-                    {
-                        (false, true)
-                    } else {
-                        (false, false)
-                    }
-                }
-                _ => (false, false),
-            },
+            Err(Error::Incompatible) => true,
             Err(err) => {
                 error!(?*err; "request failed, retry");
-                (false, false)
+                false
             }
         }
     }
@@ -366,16 +358,11 @@ where
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(mut self) -> PdFuture<Resp> {
         Box::pin(async move {
-            let mut try_follower = false;
             while self.reconnect_count != 0 {
-                if self.reconnect_if_needed(try_follower).await {
+                if self.reconnect_if_needed().await {
                     let resp = self.send_and_receive().await;
-                    let (not_retry, network_err) = Self::should_not_retry(&resp);
-                    if not_retry {
+                    if Self::should_not_retry(&resp) {
                         return resp;
-                    }
-                    if network_err {
-                        try_follower = true
                     }
                 }
             }
@@ -404,7 +391,7 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if let Err(e) = block_on(client.reconnect(true, false)) {
+                if let Err(e) = block_on(client.reconnect(true)) {
                     error!(?e; "reconnect failed");
                 }
                 err = Some(e);
@@ -468,9 +455,26 @@ impl PdConnector {
         match members {
             Some(members) => {
                 let resp = self.load_members(&members).await?;
-                let (client, address) = self.reconnect_leader(resp.get_leader()).await?.unwrap();
-                info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-                Ok((client, address, resp))
+                let (res, has_network_error) = self.reconnect_leader(resp.get_leader()).await?;
+                match res {
+                    Some((client, address)) =>
+                    {
+                        info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
+                        return Ok((client, address, resp));
+                    }
+                    None => {
+                        if has_network_error {
+                            if let Ok(Some((client, address))) = self
+                                .reconnect_followers(resp.get_members(), resp.get_leader())
+                                .await
+                            {
+                                info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
+                                return Ok((client, address, resp));
+                            }
+                        }
+                    }
+                }
+                Err(box_err!("failed to connect to {:?}", resp.get_members()))
             }
             _ => Err(box_err!("PD cluster failed to respond")),
         }
@@ -542,34 +546,57 @@ impl PdConnector {
     pub async fn connect_member(
         &self,
         peer: &Member,
-        retry: bool,
-    ) -> Option<(PdClientStub, String)> {
-        for ep in peer.get_client_urls() {
-            if let Ok((client, address, _)) = self.connect(ep.as_str()).await {
-                info!("connected to PD member"; "endpoints" => ep);
-                return Some((client, address));
-            }
-            if retry {
-                let _ = GLOBAL_TIMER_HANDLE
-                    .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
-                    .compat()
-                    .await;
+    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
+        let mut network_fail_num = 0;
+        let mut has_network_error = false;
+        let client_urls = peer.get_client_urls();
+        for ep in client_urls {
+            match self.connect(ep.as_str()).await {
+                Ok((client, address, _)) => {
+                    info!("connected to PD member"; "endpoints" => ep);
+                    return Ok((Some((client, address)), false));
+                }
+                Err(Error::Grpc(RpcFailure(RpcStatus { status, details:_ }))) => {
+                    if status == RpcStatusCode::UNAVAILABLE
+                        || status == RpcStatusCode::DEADLINE_EXCEEDED
+                    {
+                        network_fail_num += 1;
+                    }
+                }
+                Err(_) => {},
             }
         }
-        None
+        let url_num = client_urls.len();
+        if url_num != 0 && url_num == network_fail_num {
+            has_network_error = true;
+        }
+        Ok((None, has_network_error))
     }
 
     pub async fn reconnect_leader(
         &self,
         leader: &Member,
-    ) -> Result<Option<(PdClientStub, String)>> {
-        fail_point!("connect_leader", |_| Err(box_err!(
-            "failed to connect to leader"
-        )));
+    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
+        fail_point!("connect_leader", |_| Ok((None, true)));
+        let mut retry_times = MAX_RETRY_TIMES;
+
         // Try to connect the PD cluster leader.
-        match self.connect_member(leader, true).await {
-            Some((client, address)) => Ok(Some((client, address))),
-            None => Err(box_err!("failed to connect to {:?}", leader)),
+        loop {
+            let (res, has_network_err) = self.connect_member(leader).await?;
+            match res {
+                Some((client, address)) => return Ok((Some((client, address)), has_network_err)),
+                None => {
+                    if has_network_err && retry_times > 0 {
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
+                            .compat()
+                            .await;
+                        retry_times -= 1;
+                        continue
+                    }
+                    return Ok((None, has_network_err));
+                }
+            }
         }
     }
 
@@ -580,9 +607,10 @@ impl PdConnector {
     ) -> Result<Option<(PdClientStub, String)>> {
         // Try to connect the PD cluster follower.
         for m in members.iter().filter(|m| *m != leader) {
-            match self.connect_member(m, false).await {
+            let (res, _) = self.connect_member(m).await?;
+            match res {
                 Some((client, address)) => return Ok(Some((client, address))),
-                None => continue,
+                _ => continue,
             }
         }
         Err(box_err!("failed to connect to followers"))
