@@ -272,9 +272,8 @@ impl Client {
             Some((client, address)) => return Ok(Some((client, address, resp))),
             None => {
                 if has_network_error {
-                    if let Ok(Some((client, address))) = connector
-                        .reconnect_followers(members, leader)
-                        .await
+                    if let Ok(Some((client, address))) =
+                        connector.reconnect_followers(members, leader).await
                     {
                         return Ok(Some((client, address, resp)));
                     }
@@ -457,8 +456,7 @@ impl PdConnector {
                 let resp = self.load_members(&members).await?;
                 let (res, has_network_error) = self.reconnect_leader(resp.get_leader()).await?;
                 match res {
-                    Some((client, address)) =>
-                    {
+                    Some((client, address)) => {
                         info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
                         return Ok((client, address, resp));
                     }
@@ -556,14 +554,14 @@ impl PdConnector {
                     info!("connected to PD member"; "endpoints" => ep);
                     return Ok((Some((client, address)), false));
                 }
-                Err(Error::Grpc(RpcFailure(RpcStatus { status, details:_ }))) => {
+                Err(Error::Grpc(RpcFailure(RpcStatus { status, details: _ }))) => {
                     if status == RpcStatusCode::UNAVAILABLE
                         || status == RpcStatusCode::DEADLINE_EXCEEDED
                     {
                         network_fail_num += 1;
                     }
                 }
-                Err(_) => {},
+                Err(_) => {}
             }
         }
         let url_num = client_urls.len();
@@ -592,7 +590,7 @@ impl PdConnector {
                             .compat()
                             .await;
                         retry_times -= 1;
-                        continue
+                        continue;
                     }
                     return Ok((None, has_network_err));
                 }
