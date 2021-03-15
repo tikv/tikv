@@ -503,6 +503,6 @@ lazy_static! {
     register_histogram!(
         "tikv_raftstore_peer_pending_duration_seconds",
         "Bucketed histogram of region peer pending duration.",
-        exponential_buckets(0.005, 2.0, 20).unwrap()
+        exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
     ).unwrap();
 }
