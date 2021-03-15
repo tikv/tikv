@@ -445,6 +445,7 @@ impl<E> Drainer<E> {
                         self.state.wake_up_all_senders();
                         return Err(DrainerError::RateLimitExceededError);
                     }
+                    return Ok(())
                 },
             }
 
@@ -499,6 +500,7 @@ impl<E> Drainer<E> {
                         self.state.wake_up_all_senders();
                         return Err(DrainerError::RateLimitExceededError);
                     }
+                    return Ok(())
                 },
             }
         }
