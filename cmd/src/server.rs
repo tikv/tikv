@@ -717,12 +717,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         }
 
         initial_metric(&self.config.metric);
-        ttl_checker.start_with_timer(TTLChecker::new(
-            self.engines.as_ref().unwrap().engine.kv_engine(),
-            self.region_info_accessor.clone(),
-            self.config.storage.ttl_check_poll_interval.into(),
-        ));
-        self.to_stop.push(ttl_checker);
+        if self.config.storage.enable_ttl {
+            ttl_checker.start_with_timer(TTLChecker::new(
+                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.region_info_accessor.clone(),
+                self.config.storage.ttl_check_poll_interval.into(),
+            ));
+            self.to_stop.push(ttl_checker);
+        }
 
         // Start CDC.
         let cdc_endpoint = cdc::Endpoint::new(
