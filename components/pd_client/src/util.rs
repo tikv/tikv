@@ -162,13 +162,14 @@ impl Client {
         let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
+        let prev_addr = inner.address.clone();
         inner.address = address.clone();
         inner.members = members;
         inner.last_update = Instant::now();
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
-        info!("change pd client stub"; "from"=> &inner.address, "to" => address);
+        info!("change pd client stub"; "from"=> &prev_addr, "to" => address);
         slow_log!(
             start_refresh.elapsed(),
             "PD client refresh region heartbeat",
