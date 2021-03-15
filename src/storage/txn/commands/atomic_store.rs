@@ -12,8 +12,8 @@ use engine_traits::CfName;
 use txn_types::Mutation;
 
 command! {
-    /// Run Put or Delete for keys which may be changed by `AtomicCompareAndSet`.
-    AtomicStore:
+    /// Run Put or Delete for keys which may be changed by `RawCompareAndSet`.
+    RawAtomicStore:
         cmd_ty => (),
         display => "kv::command::atomic_store {:?}", (ctx),
         content => {
@@ -24,7 +24,7 @@ command! {
         }
 }
 
-impl CommandExt for AtomicStore {
+impl CommandExt for RawAtomicStore {
     ctx!();
     tag!(raw_atomic_store);
     gen_lock!(mutations: multiple(|x| x.key()));
@@ -47,7 +47,7 @@ impl CommandExt for AtomicStore {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicStore {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
     fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut data = vec![];
         let rows = self.mutations.len();

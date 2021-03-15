@@ -72,7 +72,7 @@ pub enum ProcessResult {
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,
     },
-    CompareAndSetRes {
+    RawCompareAndSetRes {
         previous_value: Option<Value>,
     },
 }

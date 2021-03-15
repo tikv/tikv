@@ -1654,7 +1654,7 @@ fn future_raw_compare_and_set<E: Engine, L: LockManager>(
                     resp.set_value(val);
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
-                _ => (),
+                Ok(None) => (),
             }
         }
         Ok(resp)

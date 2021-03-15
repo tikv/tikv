@@ -14,9 +14,9 @@ use txn_types::{Key, Value};
 command! {
     /// CompareAndSet to check whether the previous value of the key equals to the given value.
     /// If they are equal, write the new value, otherwise return the previous value.
-    AtomicCompareAndSet:
+    RawCompareAndSet:
         cmd_ty => Option<Value>,
-        display => "kv::command::atomic_compare_and_set {:?}", (ctx),
+        display => "kv::command::raw_compare_and_set {:?}", (ctx),
         content => {
             cf: CfName,
             key: Key,
@@ -26,7 +26,7 @@ command! {
         }
 }
 
-impl CommandExt for AtomicCompareAndSet {
+impl CommandExt for RawCompareAndSet {
     ctx!();
     tag!(raw_compare_and_set);
     gen_lock!(key);
@@ -36,7 +36,7 @@ impl CommandExt for AtomicCompareAndSet {
     }
 }
 
-impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicCompareAndSet {
+impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSet {
     fn process_write(self, snapshot: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
@@ -60,11 +60,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicCompareAndSet {
                 m.with_ttl(ts);
             }
             data.push(m);
-            ProcessResult::CompareAndSetRes {
+            ProcessResult::RawCompareAndSetRes {
                 previous_value: None,
             }
         } else {
-            ProcessResult::CompareAndSetRes {
+            ProcessResult::RawCompareAndSetRes {
                 previous_value: old_value,
             }
         };
@@ -97,7 +97,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"k";
-        let cmd = AtomicCompareAndSet::new(
+        let cmd = RawCompareAndSet::new(
             CF_DEFAULT,
             Key::from_encoded(key.to_vec()),
             None,
@@ -108,7 +108,7 @@ mod tests {
 
         let ret = sched_command(&engine, cm.clone(), cmd).unwrap();
         assert!(ret.is_none());
-        let cmd = AtomicCompareAndSet::new(
+        let cmd = RawCompareAndSet::new(
             CF_DEFAULT,
             Key::from_encoded(key.to_vec()),
             None,

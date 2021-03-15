@@ -22,12 +22,12 @@ pub(crate) mod rollback;
 pub(crate) mod txn_heart_beat;
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
-pub use atomic_store::AtomicStore;
+pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
-pub use compare_and_set::AtomicCompareAndSet;
+pub use compare_and_set::RawCompareAndSet;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
@@ -84,8 +84,8 @@ pub enum Command {
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
-    AtomicCompareAndSet(AtomicCompareAndSet),
-    AtomicStore(AtomicStore),
+    RawCompareAndSet(RawCompareAndSet),
+    RawAtomicStore(RawAtomicStore),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -489,8 +489,8 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::AtomicCompareAndSet(t) => t,
-            Command::AtomicStore(t) => t,
+            Command::RawCompareAndSet(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -512,8 +512,8 @@ impl Command {
             Command::Pause(t) => t,
             Command::MvccByKey(t) => t,
             Command::MvccByStartTs(t) => t,
-            Command::AtomicCompareAndSet(t) => t,
-            Command::AtomicStore(t) => t,
+            Command::RawCompareAndSet(t) => t,
+            Command::RawAtomicStore(t) => t,
         }
     }
 
@@ -549,8 +549,8 @@ impl Command {
             Command::CheckTxnStatus(t) => t.process_write(snapshot, context),
             Command::CheckSecondaryLocks(t) => t.process_write(snapshot, context),
             Command::Pause(t) => t.process_write(snapshot, context),
-            Command::AtomicCompareAndSet(t) => t.process_write(snapshot, context),
-            Command::AtomicStore(t) => t.process_write(snapshot, context),
+            Command::RawCompareAndSet(t) => t.process_write(snapshot, context),
+            Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }

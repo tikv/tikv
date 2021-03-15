@@ -63,7 +63,7 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{AtomicCompareAndSet, AtomicStore};
+use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSet};
 
 use crate::storage::{
     config::Config,
@@ -1598,7 +1598,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             None
         };
         let cmd =
-            AtomicCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
+            RawCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
         self.sched_txn_command(cmd, cb)
     }
 
@@ -1623,7 +1623,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
             None
         };
-        let cmd = AtomicStore::new(cf, muations, ttl, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
         self.sched_txn_command(cmd, callback)
     }
 
@@ -1639,7 +1639,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .into_iter()
             .map(|k| Mutation::Delete(Key::from_encoded(k)))
             .collect();
-        let cmd = AtomicStore::new(cf, muations, None, ctx);
+        let cmd = RawAtomicStore::new(cf, muations, None, ctx);
         self.sched_txn_command(cmd, callback)
     }
 }
