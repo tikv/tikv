@@ -22,8 +22,7 @@ command! {
             key: Key,
             previous_value: Option<Value>,
             value: Value,
-            enable_ttl: bool,
-            ttl: u64,
+            ttl: Option<u64>,
         }
 }
 
@@ -42,20 +41,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicCompareAndSet {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let old_value = if self.enable_ttl {
+        let expire_ts = self.ttl.map(|ttl| {
+            if ttl > 0 {
+                ttl + raw::TTLSnapshot::<S>::current_ts()
+            } else {
+                0
+            }
+        });
+        let old_value = if expire_ts.is_some() {
             raw::TTLSnapshot::from(snapshot).get_cf(cf, &key)?
         } else {
             snapshot.get_cf(cf, &key)?
         };
-        let expire_ts = if self.ttl == 0 {
-            0
-        } else {
-            self.ttl + raw::TTLSnapshot::<S>::current_ts()
-        };
+
         let pr = if old_value == previous_value {
             let mut m = Modify::Put(cf, key, value);
-            if self.enable_ttl {
-                m.with_ttl(expire_ts);
+            if let Some(ts) = expire_ts {
+                m.with_ttl(ts);
             }
             data.push(m);
             ProcessResult::CompareAndSetRes {
@@ -100,8 +102,7 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             None,
             b"v1".to_vec(),
-            false,
-            0,
+            None,
             Context::default(),
         );
 
@@ -112,8 +113,7 @@ mod tests {
             Key::from_encoded(key.to_vec()),
             None,
             b"v2".to_vec(),
-            false,
-            0,
+            None,
             Context::default(),
         );
         let ret = sched_command(&engine, cm, cmd).unwrap();

@@ -75,7 +75,6 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
@@ -1590,15 +1589,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cb: Callback<Option<Value>>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        let cmd = AtomicCompareAndSet::new(
-            cf,
-            Key::from_encoded(key),
-            previous_value,
-            value,
-            self.enable_ttl,
-            ttl,
-            ctx,
-        );
+        let ttl = if self.enable_ttl { Some(ttl) } else { None };
+        let cmd =
+            AtomicCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
         self.sched_txn_command(cmd, cb)
     }
 
@@ -1611,19 +1604,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        let mut muations = vec![];
-        let expire_ts = if ttl == 0 {
-            0
-        } else {
-            ttl + TTLSnapshot::<E::Snap>::current_ts()
-        };
-        for (k, mut v) in pairs {
-            if self.enable_ttl {
-                append_expire_ts(&mut v, expire_ts);
-            }
-            muations.push(Mutation::Put((Key::from_encoded(k), v)));
-        }
-        let cmd = AtomicStore::new(cf, muations, ctx);
+        let muations = pairs
+            .into_iter()
+            .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
+            .collect();
+        let ttl = if self.enable_ttl { Some(ttl) } else { None };
+        let cmd = AtomicStore::new(cf, muations, ttl, ctx);
         self.sched_txn_command(cmd, callback)
     }
 
@@ -1635,11 +1621,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        let mut muations = vec![];
-        for k in keys {
-            muations.push(Mutation::Delete(Key::from_encoded(k)));
-        }
-        let cmd = AtomicStore::new(cf, muations, ctx);
+        let muations = keys
+            .into_iter()
+            .map(|k| Mutation::Delete(Key::from_encoded(k)))
+            .collect();
+        let cmd = AtomicStore::new(cf, muations, None, ctx);
         self.sched_txn_command(cmd, callback)
     }
 }

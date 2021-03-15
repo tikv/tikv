@@ -2,6 +2,7 @@
 
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
+use crate::storage::raw;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -19,6 +20,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Mutation>,
+            ttl: Option<u64>,
         }
 }
 
@@ -50,10 +52,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
+        let expire_ts = self.ttl.map(|ttl| {
+            if ttl > 0 {
+                ttl + raw::TTLSnapshot::<S>::current_ts()
+            } else {
+                0
+            }
+        });
         for m in mutations {
             match m {
                 Mutation::Put((key, value)) => {
-                    data.push(Modify::Put(cf, key, value));
+                    let mut m = Modify::Put(cf, key, value);
+                    if let Some(ts) = expire_ts.clone() {
+                        m.with_ttl(ts);
+                    }
+                    data.push(m);
                 }
                 Mutation::Delete(key) => {
                     data.push(Modify::Delete(cf, key));

@@ -153,6 +153,14 @@ fn test_rawkv_ttl() {
     assert!(!get_ttl_resp.has_region_error());
     assert!(get_ttl_resp.error.is_empty());
     assert!(get_ttl_resp.ttl > 100);
+    let mut delete_req = RawDeleteRequest::default();
+    delete_req.set_context(ctx.clone());
+    delete_req.key = k.clone();
+    let delete_resp = client.raw_delete(&delete_req).unwrap();
+    assert!(!delete_resp.has_region_error());
+    let get_ttl_resp = client.raw_get_key_ttl(&get_ttl_req).unwrap();
+    assert!(!get_ttl_resp.has_region_error());
+    assert!(get_ttl_resp.get_not_found());
 
     // Raw put
     let mut put_req = RawPutRequest::default();
