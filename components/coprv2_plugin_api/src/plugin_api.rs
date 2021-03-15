@@ -56,7 +56,7 @@ macro_rules! declare_plugin {
             let constructor: fn() -> $plugin_type = $constructor;
 
             let object = constructor();
-            let boxed: Box<$crate::CoprocessorPlugin> = Box::new(object);
+            let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new(object);
             Box::into_raw(boxed)
         }
     };
