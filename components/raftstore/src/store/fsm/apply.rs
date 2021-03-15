@@ -1346,7 +1346,6 @@ where
         let exec_res = if !ranges.is_empty() {
             ApplyResult::Res(ExecResult::DeleteRange { ranges })
         } else if !ssts.is_empty() {
-            // Wrap the fail point in a closure, so we can modify local variables without return.
             #[cfg(feature = "failpoints")]
             {
                 let mut dont_delete_ingested_sst_fp = || {
