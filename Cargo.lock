@@ -790,7 +790,6 @@ name = "coprocessor_plugin_api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "kvproto",
 ]
 
 [[package]]

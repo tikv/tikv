@@ -31,9 +31,12 @@ pub struct RegionEpoch {
 /// Errors when operating on [`RawStorage`].
 #[derive(Debug)]
 pub enum StorageError {
-    // TODO: this introduces a dependency to kvproto. Is this okay?
-    // TODO: also, should we use `#[derive(Fail)]` (add another dependency)?
-    RegionError(kvproto::errorpb::Error),
+    KeyNotInRegion {
+        key: Key,
+        region: Region,
+        start_key: Key,
+        end_key: Key,
+    },
     OtherError(String),
 }
 
