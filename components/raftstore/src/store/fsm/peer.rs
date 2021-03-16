@@ -1029,8 +1029,14 @@ where
         }
 
         if self.fsm.peer.is_leader() && !self.fsm.peer.peers_start_pending_time.is_empty() {
-            let (_, pending_after) = self.fsm.peer.peers_start_pending_time[0];
-            let elapsed = duration_to_sec(pending_after.elapsed());
+            let (_, mut oldest_pending) = self.fsm.peer.peers_start_pending_time[0];
+            for i in 1..self.fsm.peer.peers_start_pending_time.len() {
+                let (_, pending_after) = self.fsm.peer.peers_start_pending_time[i];
+                if pending_after.le(&oldest_pending) {
+                    oldest_pending = pending_after;
+                }
+            }
+            let elapsed = duration_to_sec(oldest_pending.elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         }
 
