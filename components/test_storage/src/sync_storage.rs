@@ -298,7 +298,7 @@ impl<E: Engine> SyncTestStorage<E> {
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, 0, cb)).unwrap()
     }
 
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
@@ -331,5 +331,45 @@ impl<E: Engine> SyncTestStorage<E> {
             self.store
                 .raw_scan(ctx, cf, start_key, end_key, limit, false, true),
         )
+    }
+
+    pub fn raw_compare_and_set_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+        ttl: u64,
+    ) -> Result<(Option<Vec<u8>>, bool)> {
+        wait_op!(|cb| self.store.raw_compare_and_set_atomic(
+            ctx,
+            cf,
+            key,
+            previous_value,
+            value,
+            ttl,
+            cb
+        ))
+        .unwrap()
+    }
+
+    pub fn raw_batch_put_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        pairs: Vec<KvPair>,
+        ttl: u64,
+    ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_batch_put_atomic(ctx, cf, pairs, ttl, cb)).unwrap()
+    }
+
+    pub fn raw_batch_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.store.raw_batch_delete_atomic(ctx, cf, keys, cb)).unwrap()
     }
 }

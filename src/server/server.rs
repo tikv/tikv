@@ -14,7 +14,9 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::coprocessor_v2;
 use crate::server::gc_worker::GcWorker;
+use crate::server::Proxy;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use engine_rocks::RocksEngine;
@@ -75,6 +77,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint<E>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
@@ -103,15 +106,18 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
+        let proxy = Proxy::new(security_mgr.clone(), &env, cfg.clone());
         let kv_service = KvService::new(
             storage,
             gc_worker,
             cop,
+            coprv2,
             raft_router.clone(),
             lazy_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
             cfg.enable_request_batch,
+            proxy,
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
@@ -426,7 +432,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .build()
             .unwrap();
 
@@ -462,6 +468,7 @@ mod tests {
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
         );
+        let coprv2 = coprocessor_v2::Endpoint::new();
         let debug_thread_pool = Arc::new(
             TokioBuilder::new()
                 .threaded_scheduler()
@@ -476,6 +483,7 @@ mod tests {
             &security_mgr,
             storage,
             cop,
+            coprv2,
             router.clone(),
             MockResolver {
                 quick_fail: Arc::clone(&quick_fail),

@@ -38,6 +38,7 @@ use raftstore::store::{
 use raftstore::Result;
 use security::SecurityManager;
 use tikv::coprocessor;
+use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
@@ -307,6 +308,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
+        let coprv2 = coprocessor_v2::Endpoint::new();
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
@@ -331,6 +333,7 @@ impl Simulator for ServerCluster {
                 &security_mgr,
                 store.clone(),
                 cop.clone(),
+                coprv2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
