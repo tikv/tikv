@@ -1028,7 +1028,7 @@ where
             return;
         }
 
-        if self.fsm.peer.is_leader() && self.fsm.peer.peers_start_pending_time.len() > 0 {
+        if self.fsm.peer.is_leader() && !self.fsm.peer.peers_start_pending_time.is_empty() {
             let (_, pending_after) = self.fsm.peer.peers_start_pending_time[0];
             let elapsed = duration_to_sec(pending_after.elapsed());
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
