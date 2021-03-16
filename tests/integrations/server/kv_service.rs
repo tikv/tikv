@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
+use grpcio_health::proto::HealthCheckRequest;
+use grpcio_health::*;
 use tempfile::Builder;
 
 use kvproto::{
@@ -1561,4 +1563,25 @@ fn test_forwarding_reconnect() {
     cluster.run_node(leader.get_store_id()).unwrap();
     let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
+}
+
+#[test]
+fn test_health_check() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let addr = cluster.sim.rl().get_addr(1);
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = HealthClient::new(channel);
+    let req = HealthCheckRequest {
+        service: "".to_string(),
+        ..Default::default()
+    };
+    let resp = client.check(&req).unwrap();
+    assert_eq!(ServingStatus::Serving, resp.status.into());
+
+    cluster.shutdown();
+    client.check(&req).unwrap_err();
 }
