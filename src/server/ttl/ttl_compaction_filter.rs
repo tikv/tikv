@@ -7,7 +7,7 @@ use engine_rocks::raw::{
     new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
     CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
 };
-use engine_rocks::{RocksTTLProperties, RocksUserCollectedPropertiesNoRc};
+use engine_rocks::{RocksTtlProperties, RocksUserCollectedPropertiesNoRc};
 use engine_traits::util::get_expire_ts;
 #[cfg(not(test))]
 use tikv_util::time::UnixSecs;
@@ -45,7 +45,7 @@ impl CompactionFilterFactory for TTLCompactionFilterFactory {
                 &*(table_props.user_collected_properties() as *const _
                     as *const RocksUserCollectedPropertiesNoRc)
             };
-            if let Ok(props) = RocksTTLProperties::decode(user_props) {
+            if let Ok(props) = RocksTtlProperties::decode(user_props) {
                 if props.min_expire_ts != 0 {
                     min_expire_ts = std::cmp::min(min_expire_ts, props.min_expire_ts);
                 }

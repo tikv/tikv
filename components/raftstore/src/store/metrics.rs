@@ -479,6 +479,13 @@ lazy_static! {
         &["order"]
         ).unwrap();
 
+    pub static ref LOAD_BASE_SPLIT_EVENT: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_load_base_split_event",
+            "Load base split event.",
+            &["type"]
+        ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."

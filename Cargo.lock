@@ -1785,6 +1785,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "grpcio-health"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62390e02d912a4cda2d93c500f3d3ce29ef5fc1c0501e89c61c8d005e5a3f3e3"
+dependencies = [
+ "futures 0.3.7",
+ "grpcio",
+ "log",
+ "prost",
+ "protobuf",
+]
+
+[[package]]
 name = "grpcio-sys"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2127,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3cd2fc5fad226caeffed72297e3e13a571f5592e"
+source = "git+https://github.com/pingcap/kvproto.git#a02e2549f82fe0f35455717fcb0a107ab264c486"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -4998,6 +5011,7 @@ dependencies = [
  "file_system",
  "futures 0.3.7",
  "grpcio",
+ "grpcio-health",
  "hyper",
  "keys",
  "kvproto",
@@ -5266,6 +5280,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "http",
  "hyper",
