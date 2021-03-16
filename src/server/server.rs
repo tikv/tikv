@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures::compat::Stream01CompatExt;
 use futures::stream::StreamExt;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
@@ -66,6 +67,7 @@ pub struct Server<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolve
     yatp_read_pool: Option<ReadPool>,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     debug_thread_pool: Arc<Runtime>,
+    health_service: HealthService,
     timer: Handle,
 }
 
@@ -131,10 +133,12 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             .keepalive_time(cfg.grpc_keepalive_time.into())
             .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
+        let health_service = HealthService::default();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
-                .register_service(create_tikv(kv_service));
+                .register_service(create_tikv(kv_service))
+                .register_service(create_health(health_service.clone()));
             sb = security_mgr.bind(sb, &ip, addr.port());
             Either::Left(sb)
         };
@@ -150,6 +154,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let raft_client = RaftClient::new(conn_builder);
 
         let trans = ServerTransport::new(raft_client);
+        health_service.set_serving_status("", ServingStatus::Serving);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -164,6 +169,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             yatp_read_pool,
             readpool_normal_thread_load,
             debug_thread_pool,
+            health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
@@ -259,6 +265,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
                 option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
             ])
             .set(startup_ts as i64);
+        self.health_service
+            .set_serving_status("", ServingStatus::Serving);
 
         info!("TiKV is ready to serve");
         Ok(())
@@ -274,6 +282,8 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
             let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
+        self.health_service
+            .set_serving_status("", ServingStatus::NotServing);
         Ok(())
     }
 
