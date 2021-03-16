@@ -42,7 +42,7 @@ pub enum Error {
     #[error("corrupted data: {0}")]
     CorruptedData(String),
     #[error("{0}")]
-    Other(#[from] Box<dyn error::Error + Send + Sync>), 
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
 }
 
 impl Error {

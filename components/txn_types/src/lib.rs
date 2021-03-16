@@ -36,7 +36,7 @@ pub enum ErrorInner {
     #[error("bad format write data")]
     BadFormatWrite,
     #[error("key is locked (backoff or cleanup) {0:?}")]
-    KeyIsLocked(kvproto::kvrpcpb::LockInfo),  
+    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
 }
 
 impl ErrorInner {
