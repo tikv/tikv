@@ -30,7 +30,7 @@ pub struct Config {
     pub retry_log_every: usize,
     /// The interval at which to update PD information.
     ///
-    /// Default is 1m.
+    /// Default is 10m.
     pub update_interval: ReadableDuration,
     /// The switch to support forwarding requests to follower when the network partition problem happens.
     ///
@@ -45,7 +45,7 @@ impl Default for Config {
             retry_interval: ReadableDuration::millis(300),
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
-            update_interval: ReadableDuration::minutes(1),
+            update_interval: ReadableDuration::minutes(10),
             enable_forwarding: false,
         }
     }
