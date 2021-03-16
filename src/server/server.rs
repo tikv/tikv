@@ -154,7 +154,7 @@ impl<T: RaftStoreRouter<RocksEngine> + Unpin, S: StoreAddrResolver + 'static> Se
         let raft_client = RaftClient::new(conn_builder);
 
         let trans = ServerTransport::new(raft_client);
-        health_service.set_serving_status("", ServingStatus::Serving);
+        health_service.set_serving_status("", ServingStatus::NotServing);
 
         let svr = Server {
             env: Arc::clone(&env),
