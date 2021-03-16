@@ -1032,7 +1032,7 @@ where
             let (_, mut oldest_pending) = self.fsm.peer.peers_start_pending_time[0];
             for i in 1..self.fsm.peer.peers_start_pending_time.len() {
                 let (_, pending_after) = self.fsm.peer.peers_start_pending_time[i];
-                if pending_after.le(&oldest_pending) {
+                if pending_after.lt(&oldest_pending) {
                     oldest_pending = pending_after;
                 }
             }
