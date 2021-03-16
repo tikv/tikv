@@ -15,10 +15,13 @@
 //! ```rust
 //! use coprocessor_plugin_api::*;
 //!
-//! #[derive(Default)]
 //! struct MyPlugin;
 //!
 //! impl CoprocessorPlugin for MyPlugin {
+//!     fn create() -> Self where Self: Sized {
+//!         MyPlugin{}
+//!     }
+//!
 //!     fn name(&self) -> &'static str { "my-plugin" }
 //!
 //!     fn on_raw_coprocessor_request(
@@ -31,7 +34,7 @@
 //!     }
 //! }
 //!
-//! declare_plugin!(MyPlugin, MyPlugin::default);
+//! declare_plugin!(MyPlugin);
 //! ```
 
 mod plugin_api;

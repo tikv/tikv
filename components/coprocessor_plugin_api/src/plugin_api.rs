@@ -15,6 +15,11 @@ pub type RawResponse = Vec<u8>;
 /// Plugins can run setup code in their constructor and teardown code by implementing
 /// [`std::ops::Drop`].
 pub trait CoprocessorPlugin: Send + Sync {
+    /// A constructor that initializes the plugin.
+    fn create() -> Self
+    where
+        Self: Sized;
+
     /// Returns the name of the plugin.
     /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
     fn name(&self) -> &'static str;
@@ -41,7 +46,7 @@ pub trait CoprocessorPlugin: Send + Sync {
     ) -> Result<RawResponse, Box<dyn std::error::Error>>;
 }
 
-/// Declare a plugin type and its constructor.
+/// Declare a plugin for the library so that it can be loaded by TiKV.
 ///
 /// # Notes
 /// This works by automatically generating an `extern "C"` function with a
@@ -49,13 +54,10 @@ pub trait CoprocessorPlugin: Send + Sync {
 /// declare one plugin per library.
 #[macro_export]
 macro_rules! declare_plugin {
-    ($plugin_type:ty, $constructor:path) => {
+    ($plugin_type:ty) => {
         #[no_mangle]
         pub extern "C" fn _plugin_create() -> *mut $crate::CoprocessorPlugin {
-            // make sure the constructor is the correct type.
-            let constructor: fn() -> $plugin_type = $constructor;
-
-            let object = constructor();
+            let object = <$plugin_type>::create();
             let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new(object);
             Box::into_raw(boxed)
         }
