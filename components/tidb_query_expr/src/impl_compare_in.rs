@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::{PhantomData, Send, Sized};
 
 use codec::prelude::NumberDecoder;
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::{Expr, ExprType};
 
 use tidb_query_common::{Error, Result};
@@ -155,8 +155,10 @@ impl InByCompare for DateTime {}
 
 #[derive(Debug)]
 pub struct CompareInMeta<T: Eq + Hash> {
-    lookup_set: HashSet<T>,
+    lookup_map: HashMap<T, bool>,
     has_null: bool,
+    // only used when arg0 is int type.
+    unsigned_flags: Vec<bool>,
 }
 
 #[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
@@ -174,7 +176,7 @@ where
         None => Ok(None),
         Some(base_val) => {
             let base_val = T::map_ref(base_val)?;
-            if metadata.lookup_set.contains(base_val) {
+            if metadata.lookup_map.contains_key(base_val) {
                 return Ok(Some(1));
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
@@ -186,6 +188,51 @@ where
                     Some(v) => {
                         let v = T::map_ref(v)?;
                         if base_val == v {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
+#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
+#[inline]
+pub fn compare_in_int_type_by_hash<T: InByHash>(
+    metadata: &CompareInMeta<T::StoreKey>,
+    args: &[Option<&T::Key>],
+) -> Result<Option<Int>>
+where
+    T::Key: Evaluable + PartialOrd<i64>,
+    T::StoreKey: PartialOrd<i64>,
+{
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    let arg0_unsigned = metadata.unsigned_flags[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let base_val = T::map_ref(base_val)?;
+            match metadata.lookup_map.get(base_val) {
+                None => {}
+                Some(&argi_unsigned) => {
+                    if *base_val >= 0 || (arg0_unsigned && argi_unsigned) || (!arg0_unsigned && ! argi_unsigned) {
+                        return Ok(Some(1))
+                    }
+                }
+            }
+            let mut default_ret = if metadata.has_null { None } else { Some(0) };
+            for (i, arg) in (&args[1..]).iter().enumerate() {
+                let argi_unsigned = metadata.unsigned_flags[i];
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        let v = T::map_ref(v)?;
+                        if base_val == v && ((*base_val >= 0) || (arg0_unsigned && argi_unsigned) || (!arg0_unsigned && !argi_unsigned)) {
                             return Ok(Some(1));
                         }
                     }
@@ -208,7 +255,7 @@ pub fn compare_in_by_hash_bytes<C: Collator>(
         None => Ok(None),
         Some(base_val) => {
             let base_val = CollationAwareBytesInByHash::<C>::map(base_val.to_vec())?;
-            if metadata.lookup_set.contains(&base_val) {
+            if metadata.lookup_map.contains_key(&base_val) {
                 return Ok(Some(1));
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
@@ -231,10 +278,12 @@ pub fn compare_in_by_hash_bytes<C: Collator>(
 }
 
 fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T::StoreKey>> {
-    let mut lookup_set = HashSet::new();
+    let mut lookup_map = HashMap::new();
     let mut has_null = false;
     let children = expr.mut_children();
     assert!(!children.is_empty());
+    let mut unsigned_flags = vec![false; children.len()];
+    unsigned_flags[0] = children[0].get_field_type().as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
 
     let n = children.len();
     let mut tail_index = n - 1;
@@ -242,6 +291,8 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
     for i in (1..n).rev() {
         let tree_node = &mut children[i];
         let mut is_constant = true;
+        let is_unsigned = tree_node.get_field_type().as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
+        unsigned_flags[i] = is_unsigned;
         match tree_node.get_tp() {
             ExprType::ScalarFunc | ExprType::ColumnRef => {
                 is_constant = false;
@@ -252,19 +303,22 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
             expr_type => {
                 let val = T::Key::extract(expr_type, tree_node.take_val())?;
                 let val = T::map(val)?;
-                lookup_set.insert(val);
+                lookup_map.insert(val, is_unsigned);
             }
         }
         if is_constant {
             children.as_mut_slice().swap(i, tail_index);
+            unsigned_flags.swap(i, tail_index);
             tail_index -= 1;
         }
     }
     children.truncate(tail_index + 1);
+    unsigned_flags.truncate(tail_index + 1);
 
     Ok(CompareInMeta {
-        lookup_set,
+        lookup_map,
         has_null,
+        unsigned_flags,
     })
 }
 
@@ -552,6 +606,36 @@ mod tests {
             val.vector_value().unwrap().as_ref().to_int_vec(),
             &[Some(1), Some(1), Some(0)],
         );
+    }
+
+    #[test]
+    fn test_unsigned_signed_int() {
+        // test col_int in (max_u64, 1)
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Long))
+            .push_child(ExprDefBuilder::constant_uint(18446744073709551615))
+            .push_child(ExprDefBuilder::constant_int(1))
+            .build();
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2).unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::Long.into()];
+        let log_rows = vec![0];
+        // each vec represents a column
+        let mut phy_rows = LazyBatchColumnVec::from(vec![
+            {
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                col.mut_decoded().push_int(Some(1));
+                col
+            },
+        ]);
+        let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(val.vector_value().unwrap().as_ref().to_int_vec(),
+                &[Some(1)]);
     }
 
     #[bench]

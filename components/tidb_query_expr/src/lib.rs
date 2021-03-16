@@ -444,7 +444,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_json_fn_meta(),
         // impl_compare_in
-        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<NormalInByHash::<Int>>(),
+        ScalarFuncSig::InInt => compare_in_int_type_by_hash_fn_meta::<NormalInByHash::<i64>>(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<NormalInByHash::<Real>>(),
         ScalarFuncSig::InString => map_compare_in_string_sig(ft)?,
         ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<NormalInByHash::<Decimal>>(),
