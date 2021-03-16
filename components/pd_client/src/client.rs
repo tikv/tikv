@@ -85,6 +85,7 @@ impl RpcClient {
                             client,
                             members,
                             address,
+                            cfg.enable_forwarding,
                         )),
                         monitor: monitor.clone(),
                     };

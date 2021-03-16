@@ -96,6 +96,7 @@ pub struct Client {
     timer: Handle,
     pub(crate) inner: RwLock<Inner>,
     pub feature_gate: FeatureGate,
+    enable_forwarding: bool,
 }
 
 impl Client {
@@ -105,6 +106,7 @@ impl Client {
         client_stub: PdClientStub,
         members: GetMembersResponse,
         address: String,
+        enable_forwarding: bool,
     ) -> Client {
         let (tx, rx) = client_stub
             .region_heartbeat()
@@ -124,6 +126,7 @@ impl Client {
                 last_update: Instant::now(),
             }),
             feature_gate: FeatureGate::default(),
+            enable_forwarding,
         }
     }
 
@@ -274,7 +277,7 @@ impl Client {
                 }
             }
             None => {
-                if has_network_error {
+                if self.enable_forwarding && has_network_error {
                     if let Ok(Some((client, address))) =
                         connector.reconnect_followers(members, leader).await
                     {
@@ -468,7 +471,7 @@ impl PdConnector {
                         return Ok((client, address, resp));
                     }
                     None => {
-                        if has_network_error {
+                        if cfg.enable_forwarding && has_network_error {
                             if let Ok(Some((client, address))) = self
                                 .reconnect_followers(resp.get_members(), resp.get_leader())
                                 .await

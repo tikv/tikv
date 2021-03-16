@@ -136,7 +136,8 @@ fn test_connect_follower() {
     let connect_leader_fp = "connect_leader";
     let server = MockServer::new(2);
     let eps = server.bind_addrs();
-    let cfg = new_config(eps.clone());
+    let mut cfg = new_config(eps.clone());
+    cfg.enable_forwarding = true;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let client = RpcClient::new(&cfg, None, mgr).unwrap();
     fail::cfg(connect_leader_fp, "return").unwrap();

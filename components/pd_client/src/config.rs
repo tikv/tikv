@@ -32,6 +32,10 @@ pub struct Config {
     ///
     /// Default is 1m.
     pub update_interval: ReadableDuration,
+    /// The switch to support forwarding requests to follower when the network partition problem happens.
+    ///
+    /// Default is false.
+    pub enable_forwarding: bool,
 }
 
 impl Default for Config {
@@ -42,6 +46,7 @@ impl Default for Config {
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
             update_interval: ReadableDuration::minutes(1),
+            enable_forwarding: false,
         }
     }
 }

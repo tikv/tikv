@@ -26,6 +26,7 @@ out/
 target
 dist
 tmp
+/bin
 
 # fuzzing hack, see fuzz/cli.rs
 fuzz-incremental/
