@@ -45,8 +45,6 @@ pub enum StorageError {
 /// [`RawStorage`] allows coprocessor plugins to interact with TiKV storage on a low level.
 ///
 /// Batch operations should be preferred due to their better performance.
-/// TODO: in the RFC, some methods took `&mut self`. Why?
-/// TODO: in the RFC, this trait was sync. But with `async_trait(?Send)` we don't need this. Is this okay?
 #[async_trait(?Send)]
 pub trait RawStorage {
     /// Retrieves the value for a given key from the storage on the current node.
@@ -62,7 +60,6 @@ pub trait RawStorage {
     async fn scan(&self, key_range: Range<Key>) -> StorageResult<Vec<Value>>;
 
     /// Inserts a new key-value pair into the storage on the current node.
-    /// TODO: what happens, if the key already existed? Error or overwritten?
     async fn put(&self, key: Key, value: Value) -> StorageResult<()>;
 
     /// Same as [`RawStorage::put()`], but inserts multiple key-value pairs at once.
