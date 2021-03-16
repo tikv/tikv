@@ -218,8 +218,11 @@ where
             match metadata.lookup_map.get(base_val) {
                 None => {}
                 Some(&argi_unsigned) => {
-                    if *base_val >= 0 || (arg0_unsigned && argi_unsigned) || (!arg0_unsigned && ! argi_unsigned) {
-                        return Ok(Some(1))
+                    if (*base_val >= 0)
+                        || (arg0_unsigned && argi_unsigned)
+                        || (!arg0_unsigned && !argi_unsigned)
+                    {
+                        return Ok(Some(1));
                     }
                 }
             }
@@ -232,7 +235,11 @@ where
                     }
                     Some(v) => {
                         let v = T::map_ref(v)?;
-                        if base_val == v && ((*base_val >= 0) || (arg0_unsigned && argi_unsigned) || (!arg0_unsigned && !argi_unsigned)) {
+                        if (base_val == v)
+                            && ((*base_val >= 0)
+                                || (arg0_unsigned && argi_unsigned)
+                                || (!arg0_unsigned && !argi_unsigned))
+                        {
                             return Ok(Some(1));
                         }
                     }
@@ -283,7 +290,11 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
     let children = expr.mut_children();
     assert!(!children.is_empty());
     let mut unsigned_flags = vec![false; children.len()];
-    unsigned_flags[0] = children[0].get_field_type().as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
+    unsigned_flags[0] = children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED);
 
     let n = children.len();
     let mut tail_index = n - 1;
@@ -291,7 +302,11 @@ fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T:
     for i in (1..n).rev() {
         let tree_node = &mut children[i];
         let mut is_constant = true;
-        let is_unsigned = tree_node.get_field_type().as_accessor().flag().contains(FieldTypeFlag::UNSIGNED);
+        let is_unsigned = tree_node
+            .get_field_type()
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
         unsigned_flags[i] = is_unsigned;
         match tree_node.get_tp() {
             ExprType::ScalarFunc | ExprType::ColumnRef => {
@@ -619,23 +634,25 @@ mod tests {
         let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
             node,
             map_expr_node_to_rpn_func,
-            2).unwrap();
+            2,
+        )
+        .unwrap();
         let mut ctx = EvalContext::default();
         let schema = &[FieldTypeTp::Long.into()];
         let log_rows = vec![0];
         // each vec represents a column
-        let mut phy_rows = LazyBatchColumnVec::from(vec![
-            {
-                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
-                col.mut_decoded().push_int(Some(1));
-                col
-            },
-        ]);
+        let mut phy_rows = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+            col.mut_decoded().push_int(Some(1));
+            col
+        }]);
         let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
         let val = result.unwrap();
         assert!(val.is_vector());
-        assert_eq!(val.vector_value().unwrap().as_ref().to_int_vec(),
-                &[Some(1)]);
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
     }
 
     #[bench]
