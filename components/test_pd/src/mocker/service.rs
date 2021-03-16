@@ -4,6 +4,7 @@ use collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use fail::fail_point;
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 

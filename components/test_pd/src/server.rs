@@ -12,6 +12,7 @@ use grpcio::{
 use pd_client::Error as PdError;
 use security::*;
 
+use fail::fail_point;
 use kvproto::pdpb::*;
 
 use super::mocker::*;
@@ -134,8 +135,14 @@ fn hijack_unary<F, R, C: PdMocker>(
                     .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
             );
         }
-        _ => {
-            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some("Unavailable".to_owned()));
+        None => {
+            let mut status = RpcStatus::new(
+                RpcStatusCode::UNIMPLEMENTED,
+                Some("Unimplemented".to_owned()),
+            );
+            fail_point!("connect_leader", |_| {
+                status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some("Unavailable".to_owned()));
+            });
             ctx.spawn(
                 sink.fail(status)
                     .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
