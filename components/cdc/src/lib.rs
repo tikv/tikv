@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(box_patterns)]
+#![feature(async_closure)]
 #![recursion_limit = "512"]
 
 #[macro_use]

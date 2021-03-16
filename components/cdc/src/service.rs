@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use collections::HashMap;
-use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
+use futures::future::{self, BoxFuture, Future, TryFutureExt};
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use futures::task::{AtomicWaker, Context, Poll};
@@ -169,7 +169,7 @@ impl EventBatcher {
     }
 }
 
-struct EventBatcherSink<S, E>
+pub struct EventBatcherSink<S, E>
 where
     S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
@@ -187,7 +187,7 @@ impl<S, E> EventBatcherSink<S, E>
 where
     S: Sink<(ChangeDataEvent, grpcio::WriteFlags), Error = E> + Send + Unpin,
 {
-    fn new(sink: S) -> Self {
+    pub fn new(sink: S) -> Self {
         Self {
             buf: None,
             send_buf: VecDeque::new(),

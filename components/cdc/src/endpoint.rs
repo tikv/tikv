@@ -664,10 +664,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 features
             } else {
                 // None means there is no downsteam registered yet.
+                info!("skip sending batched resolved event"; "conn" => ?conn.get_id());
                 continue;
             };
 
             if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
+                info!("sending batched resolved event"; "conn" => ?conn.get_id());
                 send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
             } else {
                 // Fallback to previous non-batch resolved ts event.
