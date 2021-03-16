@@ -70,6 +70,7 @@ fail = "0.4"
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
+branch = "tikv-5.0"
 features = ["encryption", "static_libcpp"]
 
 [dev-dependencies]
