@@ -221,7 +221,6 @@ impl Client {
         self.inner.rl().members.get_leader().clone()
     }
 
-    /// Only used for test purpose.
     pub fn get_address(&self) -> String {
         self.inner.rl().address.clone()
     }
@@ -263,20 +262,27 @@ impl Client {
         force: bool,
     ) -> Result<Option<StubTuple>> {
         let resp = connector.load_members(&members_resp).await?;
-        if !force && resp == members_resp {
-            return Ok(None);
-        }
         let leader = resp.get_leader();
         let members = resp.get_members();
         let (res, has_network_error) = connector.reconnect_leader(leader).await?;
         match res {
-            Some((client, address)) => return Ok(Some((client, address, resp))),
+            Some((client, address)) => {
+                if force || address != self.get_address() || resp != members_resp {
+                    return Ok(Some((client, address, resp)));
+                } else {
+                    return Ok(None);
+                }
+            }
             None => {
                 if has_network_error {
                     if let Ok(Some((client, address))) =
                         connector.reconnect_followers(members, leader).await
                     {
-                        return Ok(Some((client, address, resp)));
+                        if force || address != self.get_address() || resp != members_resp {
+                            return Ok(Some((client, address, resp)));
+                        } else {
+                            return Ok(None);
+                        }
                     }
                 }
             }
@@ -559,10 +565,13 @@ impl PdConnector {
                     if status == RpcStatusCode::UNAVAILABLE
                         || status == RpcStatusCode::DEADLINE_EXCEEDED
                     {
+                        error!("failed to connect to PD member"; "endpoints" => ep, "status_code" => ?status);
                         network_fail_num += 1;
                     }
                 }
-                Err(_) => {}
+                Err(e) => {
+                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
+                }
             }
         }
         let url_num = client_urls.len();

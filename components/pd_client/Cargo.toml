@@ -46,5 +46,5 @@ tokio-timer = "0.2"
 txn_types = { path = "../txn_types", default-features = false }
 semver = "0.10"
 fail = "0.4"
-rand= "0.7"
+rand = "0.7"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
