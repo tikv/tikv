@@ -254,8 +254,6 @@
 #![feature(min_specialization)]
 #![recursion_limit = "200"]
 
-#[macro_use]
-extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 #[cfg(test)]
