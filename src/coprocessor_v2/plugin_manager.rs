@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coprv2_plugin_api::{CoprocessorPlugin, PluginConstructorSignature, PLUGIN_CONSTRUCTOR_NAME};
+use coprocessor_plugin_api::{
+    CoprocessorPlugin, PluginConstructorSignature, PLUGIN_CONSTRUCTOR_NAME,
+};
 use libloading::{Error as DylibError, Library, Symbol};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
