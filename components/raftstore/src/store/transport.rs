@@ -13,6 +13,10 @@ pub trait Transport: Send + Clone {
 
     fn need_flush(&self) -> bool;
 
+    fn try_flush(&mut self) {
+        self.flush();
+    }
+
     fn flush(&mut self);
 }
 

@@ -53,6 +53,8 @@ pub enum GrpcCompressionType {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    pub raft_client_queue_size: usize,
+    pub raft_msg_flush_delay_us: u64,
     #[serde(skip)]
     pub cluster_id: u64,
 
@@ -133,6 +135,8 @@ impl Default for Config {
         let cpu_num = SysQuota::new().cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
+            raft_client_queue_size: 4096,
+            raft_msg_flush_delay_us: 100,
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),

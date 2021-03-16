@@ -475,7 +475,6 @@ where
         loop {
             let loop_begin = UtilInstant::now_coarse();
 
-
             if !self.queue.has_task() {
                 let msg = match self.receiver.recv() {
                     Ok(msg) => msg,
@@ -489,8 +488,7 @@ where
             for _ in 0..len {
                 msgs.push(self.receiver.try_recv().unwrap());
             }
-            STORE_WRITE_RECEIVE_MSG_DURATION_HISTOGRAM
-                .observe(duration_to_sec(begin.elapsed()));
+            STORE_WRITE_RECEIVE_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(begin.elapsed()));
             let begin = UtilInstant::now_coarse();
             for msg_vec in msgs.drain(..) {
                 for msg in msg_vec {
@@ -503,8 +501,7 @@ where
                     }
                 }
             }
-            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
-                .observe(duration_to_sec(begin.elapsed()));
+            STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(begin.elapsed()));
 
             if !self.queue.has_task() {
                 continue;

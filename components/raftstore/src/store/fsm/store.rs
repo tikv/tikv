@@ -638,9 +638,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // Only enable the fail point when the store id is equal to 3, which is
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
-        if self.poll_ctx.trans.need_flush() {
-            self.poll_ctx.trans.flush();
-        }
+        self.poll_ctx.trans.try_flush();
 
         // TODO(ASYNC_IO): change the logic
         let dur = self.timer.elapsed();
@@ -835,6 +833,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready();
+        self.poll_ctx.trans.try_flush();
         self.maybe_flush_async_write(false);
         expected_msg_count
     }

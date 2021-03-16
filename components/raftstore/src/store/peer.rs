@@ -1783,7 +1783,6 @@ where
                 self.switch_to_raft_msg(ready.take_messages(), &mut ctx.raft_metrics.message);
             if self.is_leader() {
                 self.send_raft_messages(&mut ctx.trans, msgs);
-                ctx.trans.flush();
                 Vec::new()
             } else {
                 fail_point!("raft_before_follower_send");
@@ -2017,7 +2016,6 @@ where
                     .switch_to_raft_msg(light_rd.take_messages(), &mut ctx.raft_metrics.message);
 
                 self.send_raft_messages(&mut ctx.trans, msgs);
-                ctx.trans.flush();
             }
 
             if !light_rd.committed_entries().is_empty() {
