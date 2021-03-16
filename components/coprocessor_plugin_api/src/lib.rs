@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust
-//! use coprv2_plugin_api::*;
+//! use coprocessor_plugin_api::*;
 //!
 //! #[derive(Default)]
 //! struct MyPlugin;
