@@ -495,7 +495,7 @@ where
         };
 
         for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
+            for pd_addr in pd_client.get_leader().get_inner_client_urls() {
                 let client = client.clone();
                 let uri: Uri = (pd_addr.to_owned() + "/pd/api/v1/component")
                     .parse()
@@ -556,7 +556,7 @@ where
         let client = Client::builder().build::<_, Body>(conn);
 
         for _ in 0..COMPONENT_REQUEST_RETRY {
-            for pd_addr in pd_client.get_leader().get_client_urls() {
+            for pd_addr in pd_client.get_leader().get_inner_client_urls() {
                 let client = client.clone();
                 let uri: Uri = (pd_addr.to_owned()
                     + &format!("/pd/api/v1/component/{}/{}", COMPONENT, advertise_addr))

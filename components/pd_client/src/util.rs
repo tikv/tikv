@@ -433,7 +433,7 @@ impl PdConnector {
             .filter(|m| *m != previous_leader)
             .chain(&[previous_leader.clone()])
         {
-            for ep in m.get_client_urls() {
+            for ep in m.get_inner_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
                         let new_cluster_id = r.get_header().get_cluster_id();
@@ -460,7 +460,7 @@ impl PdConnector {
     }
 
     pub async fn connect_member(&self, peer: &Member) -> Option<PdClientStub> {
-        for ep in peer.get_client_urls() {
+        for ep in peer.get_inner_client_urls() {
             if let Ok((client, _)) = self.connect(ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Some(client);
