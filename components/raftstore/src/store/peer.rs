@@ -57,7 +57,7 @@ use tikv_util::worker::{FutureScheduler, Scheduler};
 use tikv_util::Either;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use super::local_metrics::{RaftReadyMetrics, RaftSendMessageMetrics};
 use super::metrics::*;
 use super::peer_storage::{
     write_peer_state, ApplySnapResult, CheckApplyingSnapStatus, InvokeContext, PeerStorage,
@@ -1030,31 +1030,33 @@ where
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftSendMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
+            let snapshot_index = msg.get_request_snapshot();
+            let i = self.send_raft_message(msg, trans) as usize;
             match msg_type {
-                MessageType::MsgAppend => metrics.append += 1,
+                MessageType::MsgAppend => metrics.append[i] += 1,
                 MessageType::MsgAppendResponse => {
-                    if msg.get_request_snapshot() != raft::INVALID_INDEX {
-                        metrics.request_snapshot += 1;
+                    if snapshot_index != raft::INVALID_INDEX {
+                        metrics.request_snapshot[i] += 1;
                     }
-                    metrics.append_resp += 1;
+                    metrics.append_resp[i] += 1;
                 }
-                MessageType::MsgRequestPreVote => metrics.prevote += 1,
-                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp += 1,
-                MessageType::MsgRequestVote => metrics.vote += 1,
-                MessageType::MsgRequestVoteResponse => metrics.vote_resp += 1,
-                MessageType::MsgSnapshot => metrics.snapshot += 1,
-                MessageType::MsgHeartbeat => metrics.heartbeat += 1,
-                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp += 1,
-                MessageType::MsgTransferLeader => metrics.transfer_leader += 1,
-                MessageType::MsgReadIndex => metrics.read_index += 1,
-                MessageType::MsgReadIndexResp => metrics.read_index_resp += 1,
+                MessageType::MsgRequestPreVote => metrics.prevote[i] += 1,
+                MessageType::MsgRequestPreVoteResponse => metrics.prevote_resp[i] += 1,
+                MessageType::MsgRequestVote => metrics.vote[i] += 1,
+                MessageType::MsgRequestVoteResponse => metrics.vote_resp[i] += 1,
+                MessageType::MsgSnapshot => metrics.snapshot[i] += 1,
+                MessageType::MsgHeartbeat => metrics.heartbeat[i] += 1,
+                MessageType::MsgHeartbeatResponse => metrics.heartbeat_resp[i] += 1,
+                MessageType::MsgTransferLeader => metrics.transfer_leader[i] += 1,
+                MessageType::MsgReadIndex => metrics.read_index[i] += 1,
+                MessageType::MsgReadIndexResp => metrics.read_index_resp[i] += 1,
                 MessageType::MsgTimeoutNow => {
                     // After a leader transfer procedure is triggered, the lease for
                     // the old leader may be expired earlier than usual, since a new leader
@@ -1064,7 +1066,7 @@ where
                     // to suspect.
                     self.leader_lease.suspect(monotonic_raw_now());
 
-                    metrics.timeout_now += 1;
+                    metrics.timeout_now[i] += 1;
                 }
                 // We do not care about these message types for metrics.
                 // Explicitly declare them so when we add new message types we are forced to
@@ -1076,7 +1078,6 @@ where
                 | MessageType::MsgSnapStatus
                 | MessageType::MsgCheckQuorum => {}
             }
-            self.send_raft_message(msg, trans);
         }
     }
 
@@ -1713,7 +1714,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in ready.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -1919,7 +1920,7 @@ where
                 fail_point!("raft_before_follower_send");
             }
             for vec_msg in light_rd.take_messages() {
-                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.message);
+                self.send(&mut ctx.trans, vec_msg, &mut ctx.raft_metrics.send_message);
             }
         }
 
@@ -3400,7 +3401,7 @@ where
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) -> bool {
         let mut send_msg = self.prepare_raft_message();
 
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
@@ -3412,7 +3413,7 @@ where
                     "peer_id" => self.peer.get_id(),
                     "to_peer" => msg.get_to(),
                 );
-                return;
+                return false;
             }
         };
 
@@ -3446,7 +3447,8 @@ where
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
-            warn!(
+            // We use metrics to observe failure on production.
+            debug!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
@@ -3464,7 +3466,9 @@ where
                 self.raft_group
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
+            return false;
         }
+        true
     }
 
     pub fn bcast_wake_up_message<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {

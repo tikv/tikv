@@ -1108,7 +1108,7 @@ impl TomlLine {
 
 /// TomlWriter use to update the config file and only cover the most commom toml
 /// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,

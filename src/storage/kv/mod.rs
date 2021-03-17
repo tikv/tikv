@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
-//! [`RocksEngine`](RocksEngine) are used for testing only.
+//! There are multiple [`Engine`] implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
+//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`] and [`RocksEngine`] are
+//! used for testing only.
 
 mod btree_engine;
 mod cursor;
@@ -17,6 +17,7 @@ use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine_rocks::RocksTablePropertiesCollection;
+use engine_traits::util::append_expire_ts;
 use engine_traits::{CfName, CF_DEFAULT};
 use engine_traits::{IterOptions, KvEngine as LocalEngine, MvccProperties, ReadOptions};
 use futures::prelude::*;
@@ -81,6 +82,12 @@ impl Modify {
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::DeleteRange(..) => unreachable!(),
         }
+    }
+
+    pub fn with_ttl(&mut self, expire_ts: u64) {
+        if let Modify::Put(_, _, ref mut v) = self {
+            append_expire_ts(v, expire_ts)
+        };
     }
 }
 
