@@ -4,7 +4,6 @@
 extern crate tikv_util;
 #[macro_use]
 extern crate slog_global;
-extern crate fail;
 
 pub mod mocker;
 mod server;

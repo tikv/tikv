@@ -154,11 +154,6 @@ impl RpcClient {
         self.pd_client.get_leader()
     }
 
-    /// Gets the forwarded host
-    pub fn get_forwarded_host(&self) -> String {
-        self.pd_client.get_forwarded_host()
-    }
-
     /// Re-establishes connection with PD leader in synchronized fashion.
     pub fn reconnect(&self) -> Result<()> {
         block_on(self.pd_client.reconnect(true))
@@ -166,10 +161,10 @@ impl RpcClient {
 
     /// Creates a new call option with default request timeout.
     #[inline]
-    fn call_option(forwarded_host: &str) -> CallOption {
+    fn call_option(client: &Client) -> CallOption {
         let mut builder = MetadataBuilder::with_capacity(1);
         builder
-            .add_str("pd-forwarded-host", forwarded_host)
+            .add_str("pd-forwarded-host", &client.inner.rl().forwarded_host)
             .unwrap();
         let metadata = builder.build();
         CallOption::default()
@@ -189,14 +184,13 @@ impl RpcClient {
         let mut req = pdpb::GetRegionRequest::default();
         req.set_header(self.header());
         req.set_region_key(key.to_vec());
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::GetRegionRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_async_opt(&req, Self::call_option(&forwarded_host))
+                .get_region_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
                 });
@@ -229,14 +223,13 @@ impl RpcClient {
         let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::GetStoreRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_store_async_opt(&req, Self::call_option(&forwarded_host))
+                .get_store_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_store_async", e));
 
             Box::pin(async move {
@@ -295,10 +288,9 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(stores);
         req.set_region(region);
-        let forwarded_host = self.get_forwarded_host();
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.bootstrap_opt(&req, Self::call_option(&forwarded_host))
+            client.bootstrap_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
         Ok(resp.replication_status.take())
@@ -311,10 +303,9 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
-        let forwarded_host = self.get_forwarded_host();
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.is_bootstrapped_opt(&req, Self::call_option(&forwarded_host))
+            client.is_bootstrapped_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -328,10 +319,9 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
-        let forwarded_host = self.get_forwarded_host();
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.alloc_id_opt(&req, Self::call_option(&forwarded_host))
+            client.alloc_id_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -346,10 +336,9 @@ impl PdClient for RpcClient {
         let mut req = pdpb::PutStoreRequest::default();
         req.set_header(self.header());
         req.set_store(store);
-        let forwarded_host = self.get_forwarded_host();
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.put_store_opt(&req, Self::call_option(&forwarded_host))
+            client.put_store_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -364,10 +353,9 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetStoreRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
-        let forwarded_host = self.get_forwarded_host();
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_store_opt(&req, Self::call_option(&forwarded_host))
+            client.get_store_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -391,10 +379,9 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetAllStoresRequest::default();
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
-        let forwarded_host = self.get_forwarded_host();
 
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_all_stores_opt(&req, Self::call_option(&forwarded_host))
+            client.get_all_stores_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -408,9 +395,9 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
-        let forwarded_host = self.get_forwarded_host();
+
         let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_cluster_config_opt(&req, Self::call_option(&forwarded_host))
+            client.get_cluster_config_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -441,14 +428,13 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(&forwarded_host))
+                .get_region_by_id_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
@@ -480,14 +466,13 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(&forwarded_host))
+                .get_region_by_id_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                 });
@@ -594,14 +579,13 @@ impl PdClient for RpcClient {
         let mut req = pdpb::AskSplitRequest::default();
         req.set_header(self.header());
         req.set_region(region);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::AskSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .ask_split_async_opt(&req, Self::call_option(&forwarded_host))
+                .ask_split_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
 
             Box::pin(async move {
@@ -630,14 +614,13 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .ask_batch_split_async_opt(&req, Self::call_option(&forwarded_host))
+                .ask_batch_split_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
 
             Box::pin(async move {
@@ -667,7 +650,6 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
@@ -675,7 +657,7 @@ impl PdClient for RpcClient {
                 .inner
                 .rl()
                 .client_stub
-                .store_heartbeat_async_opt(&req, Self::call_option(&forwarded_host))
+                .store_heartbeat_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
             Box::pin(async move {
                 let resp = handler.await?;
@@ -703,14 +685,13 @@ impl PdClient for RpcClient {
         let mut req = pdpb::ReportBatchSplitRequest::default();
         req.set_header(self.header());
         req.set_regions(regions.into());
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::ReportBatchSplitRequest| {
             let handler = client
                 .inner
                 .rl()
                 .client_stub
-                .report_batch_split_async_opt(&req, Self::call_option(&forwarded_host))
+                .report_batch_split_async_opt(&req, Self::call_option(client))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "report_batch_split", e)
                 });
@@ -741,10 +722,9 @@ impl PdClient for RpcClient {
             req.set_leader(leader);
         }
         req.set_region(region.region);
-        let forwarded_host = self.get_forwarded_host();
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.scatter_region_opt(&req, Self::call_option(&forwarded_host))
+            client.scatter_region_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())
     }
@@ -758,9 +738,9 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetGcSafePointRequest::default();
         req.set_header(self.header());
-        let forwarded_host = self.get_forwarded_host();
+
         let executor = move |client: &Client, req: pdpb::GetGcSafePointRequest| {
-            let option = Self::call_option(&forwarded_host);
+            let option = Self::call_option(client);
             let handler = client
                 .inner
                 .rl()
@@ -796,10 +776,9 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetOperatorRequest::default();
         req.set_header(self.header());
         req.set_region_id(region_id);
-        let forwarded_host = self.get_forwarded_host();
 
         let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_operator_opt(&req, Self::call_option(&forwarded_host))
+            client.get_operator_opt(&req, Self::call_option(&self.pd_client))
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -813,13 +792,12 @@ impl PdClient for RpcClient {
         let mut req = pdpb::TsoRequest::default();
         req.set_count(1);
         req.set_header(self.header());
-        let forwarded_host = self.get_forwarded_host();
 
         let executor = move |client: &Client, req: pdpb::TsoRequest| {
             let cli = client.inner.rl();
             let (mut req_sink, mut resp_stream) = cli
                 .client_stub
-                .tso_opt(Self::call_option(&forwarded_host))
+                .tso_opt(Self::call_option(client))
                 .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
             let send_once = async move {
                 req_sink.send((req, WriteFlags::default())).await?;

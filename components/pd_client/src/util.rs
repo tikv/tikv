@@ -45,7 +45,7 @@ pub struct Inner {
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
     pub client_stub: PdClientStub,
     address: String,
-    forwarded_host: String,
+    pub forwarded_host: String,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
@@ -225,10 +225,6 @@ impl Client {
         self.inner.rl().address.clone()
     }
 
-    pub fn get_forwarded_host(&self) -> String {
-        self.inner.rl().forwarded_host.clone()
-    }
-
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
@@ -243,7 +239,11 @@ impl Client {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = self.reconnect_pd(connector, members, force);
+            let fut = async move {
+                connector
+                    .reconnect_pd(members, self.get_address(), force, self.enable_forwarding)
+                    .await
+            };
             slow_log!(start.elapsed(), "try reconnect pd");
             (fut, start)
         };
@@ -257,44 +257,6 @@ impl Client {
         self.update_client(client, address, forwarded_host, Some(members));
         info!("tring to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
-    }
-
-    async fn reconnect_pd(
-        &self,
-        connector: PdConnector,
-        members_resp: GetMembersResponse,
-        force: bool,
-    ) -> Result<Option<StubTuple>> {
-        let resp = connector.load_members(&members_resp).await?;
-        let leader = resp.get_leader();
-        let members = resp.get_members();
-        let (res, has_network_error) = connector.reconnect_leader(leader).await?;
-        match res {
-            Some((client, address, forwarded_host)) => {
-                if force || address != self.get_address() || resp != members_resp {
-                    return Ok(Some((client, address, forwarded_host, resp)));
-                } else {
-                    return Ok(None);
-                }
-            }
-            None => {
-                if self.enable_forwarding && has_network_error {
-                    if let Ok(Some((client, address, forwarded_host))) =
-                        connector.reconnect_followers(members, leader).await
-                    {
-                        if force || address != self.get_address() || resp != members_resp {
-                            return Ok(Some((client, address, forwarded_host, resp)));
-                        } else {
-                            return Ok(None);
-                        }
-                    }
-                }
-            }
-        }
-        Err(box_err!(
-            "failed to connect to {:?}",
-            members_resp.get_members()
-        ))
     }
 }
 
@@ -473,26 +435,12 @@ impl PdConnector {
 
         match members {
             Some(members) => {
-                let resp = self.load_members(&members).await?;
-                let (res, has_network_error) = self.reconnect_leader(resp.get_leader()).await?;
-                match res {
-                    Some((client, address, forwarded_host)) => {
-                        info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-                        return Ok((client, address, forwarded_host, resp));
-                    }
-                    None => {
-                        if cfg.enable_forwarding && has_network_error {
-                            if let Ok(Some((client, address, forwarded_host))) = self
-                                .reconnect_followers(resp.get_members(), resp.get_leader())
-                                .await
-                            {
-                                info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
-                                return Ok((client, address, forwarded_host, resp));
-                            }
-                        }
-                    }
-                }
-                Err(box_err!("failed to connect to {:?}", resp.get_members()))
+                let (client, address, forwarded_host, resp) = self
+                    .reconnect_pd(members, "".to_string(), true, cfg.enable_forwarding)
+                    .await?
+                    .unwrap();
+                info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
+                Ok((client, address, forwarded_host, resp))
             }
             _ => Err(box_err!("PD cluster failed to respond")),
         }
@@ -541,7 +489,10 @@ impl PdConnector {
                         Err(_) => continue,
                     }
                 }
-                return Err(box_err!("failed to connect to leader through follower"));
+                return Err(box_err!(
+                    "failed to connect to leader {:?} through follower",
+                    leader
+                ));
             }
             Err(e) => Err(Error::Grpc(e)),
         }
@@ -587,6 +538,45 @@ impl PdConnector {
         ))
     }
 
+    async fn reconnect_pd(
+        &self,
+        members_resp: GetMembersResponse,
+        previous_addr: String,
+        force: bool,
+        enable_forwarding: bool,
+    ) -> Result<Option<StubTuple>> {
+        let resp = self.load_members(&members_resp).await?;
+        let leader = resp.get_leader();
+        let members = resp.get_members();
+        let (res, has_network_error) = self.reconnect_leader(leader).await?;
+        match res {
+            Some((client, address, forwarded_host)) => {
+                if force || address != previous_addr || resp != members_resp {
+                    return Ok(Some((client, address, forwarded_host, resp)));
+                } else {
+                    return Ok(None);
+                }
+            }
+            None => {
+                if enable_forwarding && has_network_error {
+                    if let Ok(Some((client, address, forwarded_host))) =
+                        self.try_forward(members, leader).await
+                    {
+                        if force || address != previous_addr || resp != members_resp {
+                            return Ok(Some((client, address, forwarded_host, resp)));
+                        } else {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+        }
+        Err(box_err!(
+            "failed to connect to {:?}",
+            members_resp.get_members()
+        ))
+    }
+
     pub async fn connect_member(
         &self,
         peer: &Member,
@@ -604,12 +594,15 @@ impl PdConnector {
                     if status == RpcStatusCode::UNAVAILABLE
                         || status == RpcStatusCode::DEADLINE_EXCEEDED
                     {
-                        error!("failed to connect to PD member"; "endpoints" => ep, "status_code" => ?status);
+                        error!("failed to connect to PD member due to the network"; "endpoints" => ep, "status_code" => ?status);
                         network_fail_num += 1;
                     }
                 }
+                Err(Error::Grpc(e)) => {
+                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e)
+                }
                 Err(e) => {
-                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
+                    error!("failed to connect to PD leader through forwarding"; "endpoints" => ep, "error" => ?e);
                 }
             }
         }
@@ -649,7 +642,7 @@ impl PdConnector {
         }
     }
 
-    pub async fn reconnect_followers(
+    pub async fn try_forward(
         &self,
         members: &[Member],
         leader: &Member,
