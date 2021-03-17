@@ -17,7 +17,7 @@ pub struct LevelRegionAccessorResult {
     pub regions: Vec<LevelRegionBoundaries>,
 }
 
-pub trait LevelRegionAccessor<'a> {
+pub trait LevelRegionAccessor {
     fn name(&self) -> &CString;
     fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResult;
 }

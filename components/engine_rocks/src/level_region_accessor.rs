@@ -1,9 +1,9 @@
 use std::ffi::CString;
 
-pub struct RocksLevelRegionAccessor<'a, A: engine_traits::LevelRegionAccessor<'a>>(pub &'a A);
+pub struct RocksLevelRegionAccessor<A: engine_traits::LevelRegionAccessor>(pub A);
 
-impl<'a, A: engine_traits::LevelRegionAccessor<'a>> rocksdb::LevelRegionAccessor
-for RocksLevelRegionAccessor<'a, A>
+impl<A: engine_traits::LevelRegionAccessor> rocksdb::LevelRegionAccessor
+for RocksLevelRegionAccessor<A>
 {
     fn name(&self) -> &CString {
         self.0.name()
@@ -17,6 +17,9 @@ for RocksLevelRegionAccessor<'a, A>
             smallest_user_key: request.smallest_user_key,
             largest_user_key: request.largest_user_key,
         };
-        self.0.level_regions(&req)
+        let result = self.0.level_regions(&req);
+        rocksdb::LevelRegionAccessorResult {
+            regions: result.regions,
+        }
     }
 }

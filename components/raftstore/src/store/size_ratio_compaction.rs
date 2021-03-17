@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::Cell, ffi::CString};
+use std::{ptr::null, ffi::CString};
 
 use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use engine_traits::{
@@ -41,7 +41,7 @@ impl LevelRegionAccessor for SizeRatioCompaction {
             .get_regions_in_range(req.smallest_user_key, req.largest_user_key)
         {
             Ok(regions) => {
-                let mut boundaries = regions
+                let boundaries: Vec<LevelRegionBoundaries> = regions
                     .iter()
                     .map(|region| LevelRegionBoundaries{start_key: data_key(&region.start_key),
                         end_key: data_end_key(&region.end_key)}).collect();

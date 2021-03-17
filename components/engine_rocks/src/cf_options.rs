@@ -97,8 +97,8 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
         self.0
             .set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
     }
-    fn set_level_region_accessor<'a, A: LevelRegionAccessor<'a>>(&mut self, accessor: A) {
+    fn set_level_region_accessor<A: 'static + LevelRegionAccessor>(&mut self, accessor: A) {
         self.0
-            .set_level_region_accessor(RocksLevelRegionAccessor(&accessor));
+            .set_level_region_accessor(RocksLevelRegionAccessor(accessor));
     }
 }
