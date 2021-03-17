@@ -46,6 +46,7 @@ pub struct Inner {
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
+    last_try_reconnect: Instant,
 }
 
 pub struct HeartbeatReceiver {
@@ -103,7 +104,7 @@ impl LeaderClient {
         let (tx, rx) = client_stub
             .region_heartbeat()
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-
+        let now = Instant::now();
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
@@ -115,7 +116,8 @@ impl LeaderClient {
                 security_mgr,
                 on_reconnect: None,
 
-                last_update: Instant::now(),
+                last_update: now,
+                last_try_reconnect: now,
             }),
             feature_gate: FeatureGate::default(),
         }
@@ -172,23 +174,32 @@ impl LeaderClient {
     ///
     /// If `force` is false, it will reconnect only when members change.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
-        let (future, start) = {
+        let start = Instant::now();
+
+        let future = {
             let inner = self.inner.rl();
             if inner.last_update.elapsed() < RECONNECT_UPDATE_INTERVAL {
                 // Avoid unnecessary updating.
                 return Ok(());
             }
-
-            let start = Instant::now();
+            if !force && inner.last_try_reconnect.elapsed() < ALL_NON_FORCE_RECONNECT_INTERVAL {
+                // Prevent a large number of reconnections in a short time.
+                return Err(box_err!(
+                    "cancel non-force reconnection due to too small interval"
+                ));
+            }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = async move {
-                let ret = connector.reconnect_leader(&members, force).await;
-                slow_log!(start.elapsed(), "PD client try connect leader");
-                ret
-            };
-            (fut, start)
+            async move { connector.reconnect_leader(&members, force).await }
         };
+
+        {
+            slow_log!(start.elapsed(), "PD client try connect leader");
+            let mut inner = self.inner.wl();
+            if start > inner.last_try_reconnect {
+                inner.last_try_reconnect = start;
+            }
+        }
 
         let (client, members) = match future.await? {
             Some(pair) => pair,
