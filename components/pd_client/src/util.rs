@@ -174,7 +174,7 @@ impl LeaderClient {
     pub async fn reconnect(&self, force: bool) -> Result<()> {
         let (future, start) = {
             let inner = self.inner.rl();
-            if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
+            if inner.last_update.elapsed() < RECONNECT_UPDATE_INTERVAL {
                 // Avoid unnecessary updating.
                 return Ok(());
             }
@@ -228,7 +228,9 @@ impl LeaderClient {
     }
 }
 
-pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
+pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_millis(1000); // 1s
+pub const ALL_NON_FORCE_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
+pub const RECONNECT_UPDATE_INTERVAL: Duration = Duration::from_millis(1500); // 1.5s, need to be greater than REQUEST_RECONNECT_INTERVAL
 
 /// The context of sending requets.
 pub struct Request<Req, F> {
@@ -268,7 +270,7 @@ where
                 let _ = self
                     .client
                     .timer
-                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
+                    .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
                     .compat()
                     .await;
                 false

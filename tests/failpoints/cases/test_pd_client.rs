@@ -76,7 +76,7 @@ fn test_pd_client_deadlock() {
     for (name, func) in test_funcs {
         fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
         // Wait for the PD client thread blocking on the fail point.
-        // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
+        // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
         thread::sleep(Duration::from_secs(2));
 
         let (tx, rx) = mpsc::channel();
@@ -124,7 +124,7 @@ fn test_slow_periodical_update() {
 
     fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
+    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 
     let (tx, rx) = mpsc::channel();

@@ -343,8 +343,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
+    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+    thread::sleep(Duration::from_secs(2));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
