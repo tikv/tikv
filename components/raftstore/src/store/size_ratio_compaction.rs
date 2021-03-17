@@ -7,7 +7,7 @@ use engine_traits::{
     LevelRegionAccessor, LevelRegionBoundaries,
     LevelRegionAccessorRequest, LevelRegionAccessorResult,
 };
-use keys::data_end_key;
+use keys::{data_key, data_end_key};
 
 lazy_static! {
     static ref SIZE_RATIO_COMPACTION: CString = CString::new(b"SizeRatioCompaction".to_vec()).unwrap();
@@ -43,16 +43,17 @@ impl LevelRegionAccessor for SizeRatioCompaction {
             Ok(regions) => {
                 let mut boundaries = regions
                     .iter()
-                    .map(|region| LevelRegionBoundaries{start_key: &region.start_key,
-                        end_key: &region.end_key}).collect();
+                    .map(|region| LevelRegionBoundaries{start_key: data_key(&region.start_key),
+                        end_key: data_end_key(&region.end_key)}).collect();
                 LevelRegionAccessorResult{
-                    regions: boundaries.as_ptr() as *const LevelRegionBoundaries,
-                    region_count: boundaries.len() as i32,
+                    regions: boundaries,
                 }
             }
             Err(e) => {
                 warn!("failed to get region boundaries"; "err" => ?e);
-                None
+                LevelRegionAccessorResult{
+                    regions: Vec::new(),
+                }
             }
         }
     }

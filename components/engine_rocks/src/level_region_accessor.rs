@@ -12,11 +12,11 @@ for RocksLevelRegionAccessor<'a, A>
     fn level_regions (
         &self,
         request: &rocksdb::LevelRegionAccessorRequest,
-    ) -> *const rocksdb::LevelRegionAccessorResult {
+    ) -> rocksdb::LevelRegionAccessorResult {
         let req = engine_traits::LevelRegionAccessorRequest {
             smallest_user_key: request.smallest_user_key,
             largest_user_key: request.largest_user_key,
         };
-        self.0.level_regions(&req) as *const rocksdb::LevelRegionAccessorResult
+        self.0.level_regions(&req)
     }
 }
