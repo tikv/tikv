@@ -210,19 +210,16 @@ pub fn compare_in_int_type_by_hash(
     match base_val {
         None => Ok(None),
         Some(base_val) => {
-            match metadata.lookup_map.get(base_val) {
-                None => {}
-                Some(&argi_unsigned) => {
-                    // Why check 'base_val >= 0', in the following expamle:
-                    // eg: col_int_signed in (col_int_unsigned)
-                    // if both col_int_signed and col_int_unsigned are 1, the result should be true,
-                    // even though their signed flags are different.
-                    if (*base_val >= 0)
-                        || (arg0_unsigned && argi_unsigned)
-                        || (!arg0_unsigned && !argi_unsigned)
-                    {
-                        return Ok(Some(1));
-                    }
+            if let Some(&argi_unsigned) = metadata.lookup_map.get(base_val) {
+                // Why check 'base_val >= 0', in the following expamle:
+                // eg: col_int_signed in (col_int_unsigned)
+                // if both col_int_signed and col_int_unsigned are 1, the result should be true,
+                // even though their signed flags are different.
+                if (*base_val >= 0)
+                    || (arg0_unsigned && argi_unsigned)
+                    || (!arg0_unsigned && !argi_unsigned)
+                {
+                    return Ok(Some(1));
                 }
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
