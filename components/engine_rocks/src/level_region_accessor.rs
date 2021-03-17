@@ -18,8 +18,15 @@ for RocksLevelRegionAccessor<A>
             largest_user_key: request.largest_user_key,
         };
         let result = self.0.level_regions(&req);
+        let mut regions = Vec::new();
+        for region in result.regions {
+            regions.push(rocksdb::LevelRegionBoundaries{
+                start_key: region.start_key,
+                end_key: region.end_key,
+            });
+        }
         rocksdb::LevelRegionAccessorResult {
-            regions: result.regions,
+            regions: regions,
         }
     }
 }

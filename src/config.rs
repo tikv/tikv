@@ -481,10 +481,10 @@ macro_rules! build_cf_opt {
             }
         }
         if $opt.enable_size_ratio_compaction {
-            if let Some(accessor) = $region_info_accessor {
+            if let Some(provider) = $region_info_provider {
                 cf_opts.set_level_region_accessor(RocksLevelRegionAccessor(
                     SizeRatioCompaction::new(
-                        accessor.clone(),
+                        provider.clone(),
                     ),
                 ));
             } else {

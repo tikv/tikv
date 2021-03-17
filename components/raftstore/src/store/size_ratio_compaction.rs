@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{ptr::null, ffi::CString};
+use std::{ffi::CString};
 
 use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use engine_traits::{
@@ -13,23 +13,23 @@ lazy_static! {
     static ref SIZE_RATIO_COMPACTION: CString = CString::new(b"SizeRatioCompaction".to_vec()).unwrap();
 }
 
-pub struct SizeRatioCompaction {
-    accessor: RegionInfoAccessor,
+pub struct SizeRatioCompaction<P> {
+    provider: P,
 }
 
-impl SizeRatioCompaction {
+impl<P:RegionInfoProvider> SizeRatioCompaction<P> {
     pub fn new(
-        accessor: RegionInfoAccessor,
+        provider: P,
     ) -> Self {
         SizeRatioCompaction {
-            accessor,
+            provider,
         }
     }
 }
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
 // ColumnFamilyOptions in src/config.rs.
-impl LevelRegionAccessor for SizeRatioCompaction {
+impl<P: RegionInfoProvider + Sync> LevelRegionAccessor for SizeRatioCompaction<P> {
 
     fn name(&self) -> &CString {
         &SIZE_RATIO_COMPACTION
@@ -37,7 +37,7 @@ impl LevelRegionAccessor for SizeRatioCompaction {
 
     fn level_regions(&self, req: &LevelRegionAccessorRequest) -> LevelRegionAccessorResult {
         match self
-            .accessor
+            .provider
             .get_regions_in_range(req.smallest_user_key, req.largest_user_key)
         {
             Ok(regions) => {
