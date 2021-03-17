@@ -214,6 +214,7 @@ test_sst_importer = { path = "components/test_sst_importer", default-features = 
 test_util = { path = "components/test_util", default-features = false }
 tokio = { version = "0.2", features = ["macros", "rt-threaded", "time"] }
 zipf = "6.1.0"
+example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
@@ -278,6 +279,7 @@ members = [
   "components/file_system",
   "components/collections",
   "components/coprocessor_plugin_api",
+  "components/test_coprocessor_plugin/example_plugin"
 ]
 default-members = ["cmd"]
 

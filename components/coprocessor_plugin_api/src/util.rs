@@ -27,7 +27,7 @@ macro_rules! declare_plugin {
             $crate::allocator::HostAllocator::new();
 
         #[no_mangle]
-        pub unsafe extern "C" fn $crate::PLUGIN_CONSTRUCTOR_NAME(
+        pub unsafe extern "C" fn _plugin_create(
             host_allocator: $crate::allocator::HostAllocatorPtr,
         ) -> *mut $crate::CoprocessorPlugin {
             HOST_ALLOCATOR.set_allocator(host_allocator);

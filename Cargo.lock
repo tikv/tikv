@@ -1362,6 +1362,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "example_plugin"
+version = "0.1.0"
+dependencies = [
+ "coprocessor_plugin_api",
+]
+
+[[package]]
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
@@ -5280,6 +5287,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
+ "example_plugin",
  "fail",
  "failure",
  "file_system",
