@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
+use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::metapb;
 use kvproto::pdpb;
 use tokio::runtime::Builder;
@@ -155,7 +156,15 @@ fn test_connect_follower() {
     let client = RpcClient::new(&cfg, None, mgr).unwrap();
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
-    let _ = client.alloc_id();
+    let res = format!("{}", client.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNAVAILABLE,
+            Some(leader_addr),
+        )))
+    );
+    assert_eq!(res, err);
     let connection_addr = client.get_address();
     let leader_addr = client.get_leader().get_client_urls()[0].clone();
     assert_ne!(leader_addr, connection_addr);

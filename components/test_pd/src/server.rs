@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::str;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -109,6 +110,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 }
 
+#[allow(unused_mut)]
 fn hijack_unary<F, R, C: PdMocker>(
     mock: &mut PdMock<C>,
     ctx: RpcContext<'_>,
@@ -140,9 +142,12 @@ fn hijack_unary<F, R, C: PdMocker>(
                 RpcStatusCode::UNIMPLEMENTED,
                 Some("Unimplemented".to_owned()),
             );
-            fail_point!("connect_leader", |_| {
-                status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some("Unavailable".to_owned()));
-            });
+            (|| {
+                fail_point!("connect_leader", |_| {
+                    let v = str::from_utf8(ctx.request_headers().get(0).unwrap().1).unwrap();
+                    status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(v.to_string()));
+                })
+            })();
             ctx.spawn(
                 sink.fail(status)
                     .unwrap_or_else(|e| error!("failed to reply: {:?}", e)),
