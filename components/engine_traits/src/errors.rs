@@ -14,9 +14,14 @@ pub enum Error {
     // FIXME: It should not know Region.
     #[error(
         "Key {} is out of [region {}] [{}, {})",
-        log_wrappers::Value::key(.0), .1, log_wrappers::Value::key(&.2), log_wrappers::Value::key(&.3)
+        log_wrappers::Value::key(&key), region_id, log_wrappers::Value::key(&start), log_wrappers::Value::key(&end)
     )]
-    NotInRange(Vec<u8>, u64, Vec<u8>, Vec<u8>),
+    NotInRange {
+        key: Vec<u8>,
+        region_id: u64,
+        start: Vec<u8>,
+        end: Vec<u8>,
+    },
     #[error("Protobuf {0}")]
     Protobuf(#[from] protobuf::ProtobufError),
     #[error("Io {0}")]
@@ -45,7 +50,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::Engine(_) => error_code::engine::ENGINE,
-            Error::NotInRange(_, _, _, _) => error_code::engine::NOT_IN_RANGE,
+            Error::NotInRange { .. } => error_code::engine::NOT_IN_RANGE,
             Error::Protobuf(_) => error_code::engine::PROTOBUF,
             Error::Io(_) => error_code::engine::IO,
             Error::CFName(_) => error_code::engine::CF_NAME,
