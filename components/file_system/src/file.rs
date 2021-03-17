@@ -239,7 +239,7 @@ mod tests {
         let content = String::from("magic words");
         {
             let _guard = WithIOType::new(IOType::ForegroundWrite);
-            let mut f = File::create_with_limiter(&tmp_file, Some(limiter.clone())).unwrap();
+            let mut f = File::create_with_limiter(&tmp_file, Some(limiter)).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
@@ -247,8 +247,9 @@ mod tests {
                 content.len()
             );
         }
+        // read IOs bypass limiter
+        /*
         {
-            // only export read IOs are limited
             let _guard = WithIOType::new(IOType::Export);
             let mut buffer = String::new();
             let mut f = File::open_with_limiter(&tmp_file, Some(limiter)).unwrap();
@@ -258,5 +259,6 @@ mod tests {
             // it requires two EOF reads to finish the call.
             assert_eq!(stats.fetch(IOType::Export, IOOp::Read), content.len() + 2);
         }
+        */
     }
 }

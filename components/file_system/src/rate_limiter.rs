@@ -57,7 +57,7 @@ impl IORateLimiterStatistics {
     }
 }
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(200);
+const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(30);
 
 #[inline]
 fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usize {
@@ -71,15 +71,53 @@ struct RawIORateLimiter {
     // IO amount passed through within current epoch
     ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
     // Maximum IOs permitted within current epoch
-    ios_per_sec: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    ios_per_epoch: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
     // IO amount that is drew from the next epoch in advance
     pending_ios: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
     protected: RwLock<RawIORateLimiterProtected>,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct IOThroughputEstimator {
+    index: u64,
+    long_max: usize,
+    short_sum: usize,
+}
+
+impl IOThroughputEstimator {
+    fn new() -> IOThroughputEstimator {
+        IOThroughputEstimator {
+            index: 0,
+            long_max: 0,
+            short_sum: 0,
+        }
+    }
+
+    fn maybe_update_estimation(&mut self, v: usize) -> Option<usize> {
+        self.index += 1;
+        self.short_sum += v;
+        // smoothen raw samples
+        if self.index % 5 == 0 {
+            self.long_max = std::cmp::max(self.long_max, self.short_sum / 5);
+            self.short_sum = 0;
+        }
+        // use maximum throughput of history refills to update limits
+        // second predicate makes unit tests happy
+        if self.index % 200 == 0 || (self.index < 200 && self.index % 5 == 0) {
+            let max = self.long_max;
+            self.long_max = 0;
+            self.short_sum = 0;
+            Some(max)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RawIORateLimiterProtected {
-    last_refill_time: Instant,
+    next_refill_time: Instant,
+    estimated_ios_through: [IOThroughputEstimator; IOPriority::VARIANT_COUNT],
 }
 
 macro_rules! sleep_impl {
@@ -98,7 +136,7 @@ macro_rules! request_impl {
     ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
         loop {
-            let cached_ios_per_refill = $self.ios_per_sec[priority_idx].load(Ordering::Relaxed);
+            let cached_ios_per_refill = $self.ios_per_epoch[priority_idx].load(Ordering::Relaxed);
             if cached_ios_per_refill == 0 {
                 return $amount;
             }
@@ -110,16 +148,17 @@ macro_rules! request_impl {
             }
             if let Some(locked) = $self.protected.try_read() {
                 let now = Instant::now_coarse();
-                // a small delay in case a refill slips in after `ios_per_sec` was fetched.
-                if locked.last_refill_time + Duration::from_millis(1) >= now {
+                // a small delay in case a refill slips in after `ios_per_epoch` was fetched.
+                if locked.next_refill_time + Duration::from_millis(1) >= now + DEFAULT_REFILL_PERIOD
+                {
                     continue;
                 }
                 let pending =
                     $self.pending_ios[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
-                let since_last_refill = now.duration_since(locked.last_refill_time);
+                let next_refill_time = locked.next_refill_time;
                 drop(locked);
-                if since_last_refill < DEFAULT_REFILL_PERIOD {
-                    let wait = DEFAULT_REFILL_PERIOD - since_last_refill;
+                if next_refill_time > now {
+                    let wait = next_refill_time - now;
                     RATE_LIMITER_REQUEST_WAIT_DURATION
                         .with_label_values(&[$priority.as_str()])
                         .observe(wait.as_secs_f64());
@@ -155,10 +194,11 @@ impl RawIORateLimiter {
     fn new() -> Self {
         RawIORateLimiter {
             ios_through: Default::default(),
-            ios_per_sec: Default::default(),
+            ios_per_epoch: Default::default(),
             pending_ios: Default::default(),
             protected: RwLock::new(RawIORateLimiterProtected {
-                last_refill_time: Instant::now_coarse(),
+                next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
+                estimated_ios_through: [IOThroughputEstimator::new(); IOPriority::VARIANT_COUNT],
             }),
         }
     }
@@ -168,14 +208,14 @@ impl RawIORateLimiter {
     #[allow(dead_code)]
     fn set_ios_per_sec(&self, ios_per_sec: usize) {
         let now = calculate_ios_per_refill(ios_per_sec, DEFAULT_REFILL_PERIOD);
-        let before = self.ios_per_sec[IOPriority::High as usize].swap(now, Ordering::Relaxed);
+        let before = self.ios_per_epoch[IOPriority::High as usize].swap(now, Ordering::Relaxed);
         if before == 0 || now == 0 {
             // toggle on/off rate limit.
             // we hold this lock so a concurrent refill can't negate our effort.
             let _locked = self.protected.write();
             for p in &[IOPriority::Medium, IOPriority::Low] {
                 let pi = *p as usize;
-                self.ios_per_sec[pi].store(now, Ordering::Relaxed);
+                self.ios_per_epoch[pi].store(now, Ordering::Relaxed);
             }
         }
     }
@@ -192,36 +232,39 @@ impl RawIORateLimiter {
     /// It is done so because the algorithm correctness relies on refill epoch being
     /// faithful to physical time.
     fn refill(&self) {
-        let locked = self.protected.try_write_for(DEFAULT_REFILL_PERIOD);
-        if locked.is_none() {
-            panic!("Can't acquire lock to refill IO rate limiter");
-        }
-        let mut locked = locked.unwrap();
+        let mut locked = self
+            .protected
+            .try_write_for(DEFAULT_REFILL_PERIOD)
+            .expect("Can't acquire lock to refill IO rate limiter");
 
-        let mut limit = self.ios_per_sec[IOPriority::High as usize].load(Ordering::Relaxed);
+        let mut limit = self.ios_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
         if limit == 0 {
             return;
         }
-
-        let now = Instant::now_coarse();
-        locked.last_refill_time = now;
+        locked.next_refill_time = Instant::now_coarse() + DEFAULT_REFILL_PERIOD;
 
         let mut ios_through = self.ios_through[IOPriority::High as usize].swap(
             self.pending_ios[IOPriority::High as usize].swap(0, Ordering::Relaxed),
             Ordering::Release,
         );
+        ios_through = std::cmp::min(ios_through, limit);
         for p in &[IOPriority::Medium, IOPriority::Low] {
             let pi = *p as usize;
-            limit = if limit > ios_through {
-                limit - ios_through
-            } else {
-                1 // a small positive value
-            };
-            self.ios_per_sec[pi].store(limit, Ordering::Relaxed);
+            if let Some(ios_through) =
+                locked.estimated_ios_through[pi].maybe_update_estimation(ios_through)
+            {
+                limit = if limit > ios_through {
+                    limit - ios_through
+                } else {
+                    1 // a small positive value
+                };
+                self.ios_per_epoch[pi].store(limit, Ordering::Relaxed);
+            }
             ios_through = self.ios_through[pi].swap(
                 self.pending_ios[pi].swap(0, Ordering::Relaxed),
                 Ordering::Release,
             );
+            ios_through = std::cmp::min(ios_through, limit);
         }
     }
 }
