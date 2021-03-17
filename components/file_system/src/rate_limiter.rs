@@ -10,7 +10,7 @@ use std::sync::{
 use std::time::Duration;
 
 use crossbeam_utils::CachePadded;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use strum::EnumCount;
 use tikv_util::time::Instant;
 use tikv_util::worker::Worker;
@@ -74,14 +74,12 @@ struct RawIORateLimiter {
     ios_through: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     // Maximum IOs permitted within current epoch
     ios_per_epoch: [CachePadded<AtomicUsize>; IOPriority::COUNT],
-    // IO amount that is drew from the next epoch in advance
-    pending_ios: [CachePadded<AtomicUsize>; IOPriority::COUNT],
-    protected: RwLock<RawIORateLimiterProtected>,
+    protected: Mutex<RawIORateLimiterProtected>,
 }
 
 #[derive(Debug, Copy, Clone)]
 struct IOThroughputEstimator {
-    index: u64,
+    count: u64,
     long_max: usize,
     short_sum: usize,
 }
@@ -89,23 +87,23 @@ struct IOThroughputEstimator {
 impl IOThroughputEstimator {
     fn new() -> IOThroughputEstimator {
         IOThroughputEstimator {
-            index: 0,
+            count: 0,
             long_max: 0,
             short_sum: 0,
         }
     }
 
     fn maybe_update_estimation(&mut self, v: usize) -> Option<usize> {
-        self.index += 1;
+        self.count += 1;
         self.short_sum += v;
         // smoothen raw samples
-        if self.index % 5 == 0 {
+        if self.count % 5 == 0 {
             self.long_max = std::cmp::max(self.long_max, self.short_sum / 5);
             self.short_sum = 0;
         }
         // use maximum throughput of history refills to update limits
         // second predicate makes unit tests happy
-        if self.index % 200 == 0 || (self.index < 200 && self.index % 5 == 0) {
+        if self.count % 200 == 0 || (self.count < 200 && self.count % 5 == 0) {
             let max = self.long_max;
             self.long_max = 0;
             self.short_sum = 0;
@@ -119,7 +117,19 @@ impl IOThroughputEstimator {
 #[derive(Debug)]
 struct RawIORateLimiterProtected {
     next_refill_time: Instant,
+    // IO amount that is drew from the next epoch in advance
+    pending_ios: [usize; IOPriority::COUNT],
     estimated_ios_through: [IOThroughputEstimator; IOPriority::COUNT],
+}
+
+impl RawIORateLimiterProtected {
+    fn new() -> Self {
+        RawIORateLimiterProtected {
+            next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
+            pending_ios: [0; IOPriority::COUNT],
+            estimated_ios_through: [IOThroughputEstimator::new(); IOPriority::COUNT],
+        }
+    }
 }
 
 macro_rules! sleep_impl {
@@ -148,45 +158,27 @@ macro_rules! request_impl {
             if ios_through <= cached_ios_per_refill {
                 return amount;
             }
-            if let Some(locked) = $self.protected.try_read() {
-                let now = Instant::now_coarse();
+            let now = Instant::now_coarse();
+            let (next_refill_time, pending) = {
+                let mut locked = $self.protected.lock();
                 // a small delay in case a refill slips in after `ios_per_epoch` was fetched.
                 if locked.next_refill_time + Duration::from_millis(1) >= now + DEFAULT_REFILL_PERIOD
                 {
                     continue;
                 }
-                let pending =
-                    $self.pending_ios[priority_idx].fetch_add(amount, Ordering::Relaxed) + amount;
-                let next_refill_time = locked.next_refill_time;
-                drop(locked);
-                if next_refill_time > now {
-                    let wait = next_refill_time - now;
-                    RATE_LIMITER_REQUEST_WAIT_DURATION
-                        .with_label_values(&[$priority.as_str()])
-                        .observe(wait.as_secs_f64());
-                    sleep_impl!(wait, $mode);
-                }
-                // our attempt is already registered in `pending_ios`.
-                if pending <= cached_ios_per_refill {
-                    return amount;
-                }
-            } else {
-                // spin a while for the concurrent refill to complete
-                std::thread::yield_now();
-                let mut spin_count = 100;
-                while $self.protected.try_read().is_none() && spin_count > 0 {
-                    std::thread::yield_now();
-                    spin_count -= 1;
-                }
-                if spin_count == 0 {
-                    if $self
-                        .protected
-                        .try_read_for(DEFAULT_REFILL_PERIOD)
-                        .is_none()
-                    {
-                        panic!("Can't acquire lock to request IO quotas");
-                    };
-                }
+                locked.pending_ios[priority_idx] += amount;
+                (locked.next_refill_time, locked.pending_ios[priority_idx])
+            };
+            if next_refill_time > now {
+                let wait = next_refill_time - now;
+                RATE_LIMITER_REQUEST_WAIT_DURATION
+                    .with_label_values(&[$priority.as_str()])
+                    .observe(wait.as_secs_f64());
+                sleep_impl!(wait, $mode);
+            }
+            // our request will be granted in `refill()`
+            if pending <= cached_ios_per_refill {
+                return amount;
             }
         }
     }};
@@ -197,11 +189,7 @@ impl RawIORateLimiter {
         RawIORateLimiter {
             ios_through: Default::default(),
             ios_per_epoch: Default::default(),
-            pending_ios: Default::default(),
-            protected: RwLock::new(RawIORateLimiterProtected {
-                next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
-                estimated_ios_through: [IOThroughputEstimator::new(); IOPriority::COUNT],
-            }),
+            protected: Mutex::new(RawIORateLimiterProtected::new()),
         }
     }
 
@@ -214,7 +202,7 @@ impl RawIORateLimiter {
         if before == 0 || now == 0 {
             // toggle on/off rate limit.
             // we hold this lock so a concurrent refill can't negate our effort.
-            let _locked = self.protected.write();
+            let _locked = self.protected.lock();
             for p in &[IOPriority::Medium, IOPriority::Low] {
                 let pi = *p as usize;
                 self.ios_per_epoch[pi].store(now, Ordering::Relaxed);
@@ -236,37 +224,35 @@ impl RawIORateLimiter {
     fn refill(&self) {
         let mut locked = self
             .protected
-            .try_write_for(DEFAULT_REFILL_PERIOD)
+            .try_lock_for(DEFAULT_REFILL_PERIOD)
             .expect("Can't acquire lock to refill IO rate limiter");
 
-        let mut limit = self.ios_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
-        if limit == 0 {
+        if self.ios_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed) == 0 {
             return;
         }
         locked.next_refill_time = Instant::now_coarse() + DEFAULT_REFILL_PERIOD;
 
-        let mut ios_through = self.ios_through[IOPriority::High as usize].swap(
-            self.pending_ios[IOPriority::High as usize].swap(0, Ordering::Relaxed),
-            Ordering::Release,
-        );
-        ios_through = std::cmp::min(ios_through, limit);
-        for p in &[IOPriority::Medium, IOPriority::Low] {
+        assert!(IOPriority::High as usize > IOPriority::Medium as usize);
+        for p in &[IOPriority::High, IOPriority::Medium] {
             let pi = *p as usize;
+            let limit = self.ios_per_epoch[pi].load(Ordering::Relaxed);
+            let ios_through = std::cmp::min(
+                self.ios_through[pi].swap(locked.pending_ios[pi], Ordering::Release),
+                limit,
+            );
             if let Some(ios_through) =
                 locked.estimated_ios_through[pi].maybe_update_estimation(ios_through)
             {
-                limit = if limit > ios_through {
-                    limit - ios_through
-                } else {
-                    1 // a small positive value
-                };
-                self.ios_per_epoch[pi].store(limit, Ordering::Relaxed);
+                self.ios_per_epoch[pi - 1].store(
+                    if limit > ios_through {
+                        limit - ios_through
+                    } else {
+                        1 // a small positive value
+                    },
+                    Ordering::Relaxed,
+                );
             }
-            ios_through = self.ios_through[pi].swap(
-                self.pending_ios[pi].swap(0, Ordering::Relaxed),
-                Ordering::Release,
-            );
-            ios_through = std::cmp::min(ios_through, limit);
+            locked.pending_ios[pi] = 0;
         }
     }
 }
@@ -276,29 +262,27 @@ impl RawIORateLimiter {
 pub struct IORateLimiter {
     priority_map: [IOPriority; IOType::COUNT],
     throughput_limiter: Arc<RawIORateLimiter>,
-    enable_statistics: CachePadded<AtomicBool>,
-    stats: Arc<IORateLimiterStatistics>,
+    stats: Option<Arc<IORateLimiterStatistics>>,
 }
 
 impl IORateLimiter {
-    pub fn new() -> IORateLimiter {
+    pub fn new(enable_statistics: bool) -> IORateLimiter {
         IORateLimiter {
             priority_map: [IOPriority::High; IOType::COUNT],
             throughput_limiter: Arc::new(RawIORateLimiter::new()),
-            enable_statistics: CachePadded::new(AtomicBool::new(true)),
-            stats: Arc::new(IORateLimiterStatistics::new()),
+            stats: if enable_statistics {
+                Some(Arc::new(IORateLimiterStatistics::new()))
+            } else {
+                None
+            },
         }
-    }
-
-    pub fn enable_statistics(&self, enable: bool) {
-        self.enable_statistics.store(enable, Ordering::Relaxed);
     }
 
     pub fn set_io_priority(&mut self, io_type: IOType, io_priority: IOPriority) {
         self.priority_map[io_type as usize] = io_priority;
     }
 
-    pub fn statistics(&self) -> Arc<IORateLimiterStatistics> {
+    pub fn statistics(&self) -> Option<Arc<IORateLimiterStatistics>> {
         self.stats.clone()
     }
 
@@ -319,8 +303,8 @@ impl IORateLimiter {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.request(priority, bytes);
         }
-        if self.enable_statistics.load(Ordering::Relaxed) {
-            self.stats.record(io_type, io_op, bytes);
+        if let Some(stats) = &self.stats {
+            stats.record(io_type, io_op, bytes);
         }
         bytes
     }
@@ -334,8 +318,8 @@ impl IORateLimiter {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
-        if self.enable_statistics.load(Ordering::Relaxed) {
-            self.stats.record(io_type, io_op, bytes);
+        if let Some(stats) = &self.stats {
+            stats.record(io_type, io_op, bytes);
         }
         bytes
     }
@@ -402,9 +386,8 @@ pub struct WithIORateLimit {
 impl WithIORateLimit {
     pub fn new() -> (Self, Arc<IORateLimiterStatistics>) {
         let previous_io_rate_limiter = get_io_rate_limiter();
-        let limiter = Arc::new(IORateLimiter::new());
-        limiter.enable_statistics(true);
-        let stats = limiter.statistics();
+        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let stats = limiter.statistics().unwrap();
         set_io_rate_limiter(Some(limiter));
         (
             WithIORateLimit {
@@ -479,7 +462,7 @@ mod tests {
     }
 
     fn verify_rate_limit(limiter: &Arc<IORateLimiter>, bytes_per_sec: usize) {
-        let stats = limiter.statistics();
+        let stats = limiter.statistics().unwrap();
         stats.reset();
         limiter.set_io_rate_limit(bytes_per_sec);
         let duration = {
@@ -506,8 +489,7 @@ mod tests {
     fn test_rate_limited_heavy_flow() {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
-        let limiter = Arc::new(IORateLimiter::new());
-        limiter.enable_statistics(true);
+        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         verify_rate_limit(&limiter, low_bytes_per_sec);
         verify_rate_limit(&limiter, high_bytes_per_sec);
@@ -518,10 +500,9 @@ mod tests {
     fn test_rate_limited_light_flow() {
         let kbytes_per_sec = 3;
         let actual_kbytes_per_sec = 2;
-        let limiter = Arc::new(IORateLimiter::new());
-        limiter.enable_statistics(true);
+        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
-        let stats = limiter.statistics();
+        let stats = limiter.statistics().unwrap();
         let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
@@ -550,12 +531,11 @@ mod tests {
         let write_work = 50;
         let compaction_work = 60;
         let import_work = 10;
-        let mut limiter = IORateLimiter::new();
-        limiter.enable_statistics(true);
+        let mut limiter = IORateLimiter::new(true /*enable_statistics*/);
         limiter.set_io_rate_limit(bytes_per_sec);
         limiter.set_io_priority(IOType::Compaction, IOPriority::Medium);
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
-        let stats = limiter.statistics();
+        let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
         let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         let duration = {

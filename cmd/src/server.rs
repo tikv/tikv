@@ -860,13 +860,15 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             && file_system::init_io_snooper()
                 .map_err(|e| error_unknown!(%e; "failed to init io snooper"))
                 .is_ok();
-        let limiter = self.config.storage.io_rate_limit.build();
+        let limiter = self
+            .config
+            .storage
+            .io_rate_limit
+            .build(!io_snooper_on /*enable_statistics*/);
         let fetcher = if io_snooper_on {
-            limiter.enable_statistics(false);
             BytesFetcher::FromIOSnooper()
         } else {
-            limiter.enable_statistics(true);
-            BytesFetcher::FromRateLimiter(limiter.statistics())
+            BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
         set_io_rate_limiter(Some(Arc::new(limiter)));
         start_io_rate_limiter_daemon(&self.background_worker);

@@ -305,8 +305,8 @@ impl Default for IORateLimitConfig {
 }
 
 impl IORateLimitConfig {
-    pub fn build(&self) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new();
+    pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
+        let mut limiter = IORateLimiter::new(enable_statistics);
         if let Some(limit) = self.total.0 {
             limiter.set_io_rate_limit(limit.0 as usize);
         }
