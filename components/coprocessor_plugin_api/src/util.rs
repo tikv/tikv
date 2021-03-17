@@ -38,3 +38,28 @@ macro_rules! declare_plugin {
         }
     };
 }
+
+/// Transforms the name of a package into the name of the compiled library.
+///
+/// The result of the function can be used to correctly locate build artifacts of `cdylib` on
+/// different platforms.
+///
+/// The name of the `cdylib` is
+/// * `lib<pkgname>.so` on Linux
+/// * `lib<pkgname>.dylib` on MaxOS
+/// * `lib<pkgname>.dll` on Windows
+///
+/// See also <https://doc.rust-lang.org/reference/linkage.html>
+///
+/// *Note: Depending on artifacts of other crates will be easier with
+/// [this RFC](https://github.com/rust-lang/cargo/issues/9096).*
+pub fn pkgname_to_libname(pkgname: &str) -> String {
+    let pkgname = pkgname.to_string().replace("-", "_");
+    if cfg!(target_os = "windows") {
+        format!("{}.dll", pkgname)
+    } else if cfg!(target_os = "macos") {
+        format!("lib{}.dylib", pkgname)
+    } else {
+        format!("lib{}.so", pkgname)
+    }
+}
