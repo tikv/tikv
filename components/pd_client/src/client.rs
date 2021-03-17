@@ -201,7 +201,7 @@ impl RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -236,7 +236,7 @@ impl RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, true)
             .execute()
     }
 }
@@ -435,7 +435,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -473,7 +473,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -544,7 +544,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -581,7 +581,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -616,7 +616,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -656,7 +656,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, true)
             .execute()
     }
 
@@ -687,7 +687,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, false)
             .execute()
     }
 
@@ -741,7 +741,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, true)
             .execute()
     }
 
@@ -804,7 +804,7 @@ impl PdClient for RpcClient {
         };
 
         self.leader_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
+            .request(req, executor, LEADER_CHANGE_RETRY, true)
             .execute()
     }
 
