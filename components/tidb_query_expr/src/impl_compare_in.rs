@@ -198,26 +198,25 @@ where
     }
 }
 
-#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
+#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<NormalInByHash::<Int>>)]
 #[inline]
-pub fn compare_in_int_type_by_hash<T: InByHash>(
-    metadata: &CompareInMeta<T::StoreKey>,
-    args: &[Option<&T::Key>],
-) -> Result<Option<Int>>
-where
-    T::Key: Evaluable + PartialOrd<i64>,
-    T::StoreKey: PartialOrd<i64>,
-{
+pub fn compare_in_int_type_by_hash(
+    metadata: &CompareInMeta<Int>,
+    args: &[Option<&Int>],
+) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
     let arg0_unsigned = metadata.unsigned_flags[0];
     match base_val {
         None => Ok(None),
         Some(base_val) => {
-            let base_val = T::map_ref(base_val)?;
             match metadata.lookup_map.get(base_val) {
                 None => {}
                 Some(&argi_unsigned) => {
+                    // Why check 'base_val >= 0', in the following expamle:
+                    // eg: col_int_signed in (col_int_unsigned)
+                    // if both col_int_signed and col_int_unsigned are 1, the result should be true,
+                    // even though their signed flags are different.
                     if (*base_val >= 0)
                         || (arg0_unsigned && argi_unsigned)
                         || (!arg0_unsigned && !argi_unsigned)
@@ -233,9 +232,8 @@ where
                     None => {
                         default_ret = None;
                     }
-                    Some(v) => {
-                        let v = T::map_ref(v)?;
-                        if (base_val == v)
+                    Some(&v) => {
+                        if (*base_val == v)
                             && ((*base_val >= 0)
                                 || (arg0_unsigned && argi_unsigned)
                                 || (!arg0_unsigned && !argi_unsigned))
@@ -625,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_unsigned_signed_int() {
-        // test col_int in (max_u64, 1)
+        // -1(col int signed) in (max_u64, 1)
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Long))
             .push_child(ExprDefBuilder::constant_uint(18446744073709551615))
@@ -643,7 +641,7 @@ mod tests {
         // each vec represents a column
         let mut phy_rows = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
-            col.mut_decoded().push_int(Some(1));
+            col.mut_decoded().push_int(Some(-1));
             col
         }]);
         let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
@@ -651,7 +649,69 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_ref().to_int_vec(),
-            &[Some(1)]
+            &[Some(0)]
+        );
+
+        // max_u64(col bigint unsigned) in (-1, 1)
+        let mut bigint_unsigned_col = ExprDefBuilder::column_ref(FieldTypeTp::LongLong);
+        bigint_unsigned_col.set_flag(FieldTypeFlag::UNSIGNED);
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
+            .push_child(ExprDefBuilder::constant_uint(-1))
+            .push_child(ExprDefBuilder::constant_int(1))
+            .build();
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::Long.into()];
+        let log_rows = vec![0];
+        // each vec represents a column
+        let mut phy_rows = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+            col.mut_decoded().push_int(Some(18446744073709551615));
+            col
+        }]);
+        let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(0)]
+        );
+
+        // -1 in (max_u64_col, 1)
+        let mut bigint_unsigned_col = ExprDefBuilder::column_ref(FieldTypeTp::LongLong);
+        bigint_unsigned_col.set_flag(FieldTypeFlag::UNSIGNED);
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_uint(-1))
+            .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
+            .push_child(ExprDefBuilder::constant_int(1))
+            .build();
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::Long.into()];
+        let log_rows = vec![0];
+        // each vec represents a column
+        let mut phy_rows = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+            col.mut_decoded().push_int(Some(18446744073709551615));
+            col
+        }]);
+        let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(0)]
         );
     }
 
