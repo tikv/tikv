@@ -180,8 +180,11 @@ impl LeaderClient {
             let start = Instant::now();
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();
-            let fut = async move { connector.reconnect_leader(&members, force).await };
-            slow_log!(start.elapsed(), "PD client try connect leader");
+            let fut = async move {
+                let ret = connector.reconnect_leader(&members, force).await;
+                slow_log!(start.elapsed(), "PD client try connect leader");
+                ret
+            };
             (fut, start)
         };
 
