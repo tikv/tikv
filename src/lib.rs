@@ -52,10 +52,9 @@ extern crate failure;
 #[cfg(test)]
 extern crate test;
 
-extern crate encryption;
-
 pub mod config;
 pub mod coprocessor;
+pub mod coprocessor_v2;
 pub mod import;
 pub mod read_pool;
 pub mod server;

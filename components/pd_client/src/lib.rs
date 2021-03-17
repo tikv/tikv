@@ -1,5 +1,4 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
 
 mod client;
 mod feature_gate;
@@ -12,7 +11,7 @@ pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::validate_endpoints;
+pub use self::util::PdConnector;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;

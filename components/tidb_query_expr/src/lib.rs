@@ -649,7 +649,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::SubstringIndex => substring_index_fn_meta(),
         ScalarFuncSig::Strcmp => map_strcmp_sig(ft)?,
+        ScalarFuncSig::Instr => instr_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
+        ScalarFuncSig::Quote => quote_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::OctString => oct_string_fn_meta(),
         ScalarFuncSig::FindInSet => map_find_in_set_sig(ft)?,
@@ -674,6 +676,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::ToSeconds => to_seconds_fn_meta(),
         ScalarFuncSig::DateDiff => date_diff_fn_meta(),
+        ScalarFuncSig::NullTimeDiff => null_time_diff_fn_meta(),
         ScalarFuncSig::AddDatetimeAndDuration => add_datetime_and_duration_fn_meta(),
         ScalarFuncSig::AddDatetimeAndString => add_datetime_and_string_fn_meta(),
         ScalarFuncSig::SubDatetimeAndDuration => sub_datetime_and_duration_fn_meta(),
@@ -696,6 +699,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::AddDurationAndString => add_duration_and_string_fn_meta(),
         ScalarFuncSig::SubDurationAndDuration => sub_duration_and_duration_fn_meta(),
         ScalarFuncSig::MakeTime => make_time_fn_meta(),
+        ScalarFuncSig::DurationDurationTimeDiff => duration_duration_time_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

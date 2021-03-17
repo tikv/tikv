@@ -366,7 +366,9 @@ pub(crate) fn make_txn_error(
                 ErrorInner::KeyIsLocked(info)
             }
             "committed" => ErrorInner::Committed {
-                commit_ts: TimeStamp::zero(),
+                start_ts,
+                commit_ts: start_ts.next(),
+                key: key.to_raw().unwrap(),
             },
             "pessimisticlockrolledback" => ErrorInner::PessimisticLockRolledBack {
                 start_ts,

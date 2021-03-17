@@ -31,8 +31,7 @@ pub const MAX_NANOS_PART: u32 = 999_999_999;
 pub const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
     + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
     + MAX_SECOND_PART as i64)
-    * NANOS_PER_SEC
-    + MAX_NANOS_PART as i64;
+    * NANOS_PER_SEC;
 const MAX_DURATION_INT_VALUE: u32 = MAX_HOUR_PART * 10000 + MAX_MINUTE_PART * 100 + MAX_SECOND_PART;
 
 #[inline]
@@ -427,7 +426,7 @@ impl Duration {
 
     /// Parses the time from a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
-    /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
+    /// See: <http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html>
     pub fn parse(ctx: &mut EvalContext, input: &str, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
         parser::parse(ctx, input, fsp, true)

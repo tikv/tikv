@@ -30,6 +30,7 @@ quick_error! {
         KeyLength {display("bad format key(length)")}
         KeyPadding {display("bad format key(padding)")}
         KeyNotFound {display("key not found")}
+        ValueLength {display("bad format value(length)")}
     }
 }
 
@@ -39,6 +40,7 @@ impl Error {
             Error::KeyLength => Some(Error::KeyLength),
             Error::KeyPadding => Some(Error::KeyPadding),
             Error::KeyNotFound => Some(Error::KeyNotFound),
+            Error::ValueLength => Some(Error::ValueLength),
             Error::Io(_) => None,
         }
     }
@@ -56,6 +58,7 @@ impl ErrorCodeExt for Error {
             Error::KeyLength => error_code::codec::KEY_LENGTH,
             Error::KeyPadding => error_code::codec::BAD_PADDING,
             Error::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
+            Error::ValueLength => error_code::codec::VALUE_LENGTH,
         }
     }
 }
