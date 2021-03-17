@@ -6,6 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use crate::impl_math::i64_to_usize;
 use bstr::ByteSlice;
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::collation::*;
 use tidb_query_datatype::codec::data_type::*;
@@ -978,6 +979,98 @@ fn substring(input: BytesRef, pos: Int, len: Int, writer: BytesWriter) -> Result
     };
     let end = start.saturating_add(len).min(input.len());
     Ok(writer.write_ref(Some(&input[start..end])))
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn substring_2_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let (len, len_positive) = i64_to_usize(input.len() as Int, input.len() > 0);
+    let (pos, positive_search) = i64_to_usize(*pos, *pos > 0);
+    if pos == 0 || len == 0 || !len_positive {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+
+    let start = if positive_search {
+        input
+            .char_indices()
+            .enumerate()
+            .find(|(cnt, _)| cnt + 1 == pos)
+            .map(|(_, (i, _, _))| i)
+    } else {
+        input
+            .char_indices()
+            .rev()
+            .enumerate()
+            .find(|(cnt, _)| cnt + 1 == pos)
+            .map(|(_, (i, _, _))| i)
+    };
+
+    if let Some(start) = start {
+        Ok(writer.write_ref(Some(&input[start..])))
+    } else {
+        Ok(writer.write_ref(Some(b"")))
+    }
+}
+
+#[rpn_fn(writer)]
+#[inline]
+pub fn substring_3_args_utf8(
+    input: BytesRef,
+    pos: &Int,
+    len: &Int,
+    writer: BytesWriter,
+) -> Result<BytesGuard> {
+    let (pos, positive_search) = i64_to_usize(*pos, *pos > 0);
+    let (len, len_positive) = i64_to_usize(*len, *len > 0);
+
+    if pos == 0 || len == 0 || !len_positive {
+        return Ok(writer.write_ref(Some(b"")));
+    }
+
+    let mut start = None;
+    let end = if positive_search {
+        input
+            .char_indices()
+            .enumerate()
+            .find(|(cnt, (i, _, _))| {
+                if cnt + 1 == pos {
+                    start = Some(*i);
+                }
+                cnt + 1 > len && (cnt + 1 - len) >= pos
+            })
+            .map(|(_, (i, _, _))| i)
+            .unwrap_or_else(|| input.len())
+    } else {
+        let mut positions = VecDeque::with_capacity(len.min(input.len()));
+        positions.push_back(input.len());
+        start = input
+            .char_indices()
+            .rev()
+            .enumerate()
+            .find(|(cnt, (i, _, _))| {
+                if cnt + 1 != pos {
+                    if positions.len() == len {
+                        positions.pop_front();
+                    }
+                    positions.push_back(*i);
+                    false
+                } else {
+                    true
+                }
+            })
+            .map(|(_, (i, _, _))| i);
+        positions[0]
+    };
+
+    if let Some(start) = start {
+        Ok(writer.write_ref(Some(&input[start..end])))
+    } else {
+        Ok(writer.write_ref(Some(b"")))
+    }
 }
 
 #[cfg(test)]
@@ -4102,6 +4195,222 @@ mod tests {
                 .push_param(pos)
                 .push_param(len)
                 .evaluate(ScalarFuncSig::Substring3Args)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_2_args_utf8() {
+        let cases = vec![
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(1),
+                Some("中文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(2),
+                Some("文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(7),
+                Some("b".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(8),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-6),
+                Some("文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-7),
+                Some("中文a测试bb".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-8),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-1),
+                Some("试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-2),
+                Some("a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("Quadratically".as_bytes().to_vec()),
+                Some(5),
+                Some("ratically".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(1),
+                Some("Sakila".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-3),
+                Some("ila".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-100),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(i64::min_value()),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::Substring2ArgsUtf8)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_substring_3_args_utf8() {
+        let cases = vec![
+            (
+                Some("Quadratically".as_bytes().to_vec()),
+                Some(5),
+                Some(6),
+                Some("ratica".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(-5),
+                Some(3),
+                Some("aki".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(0),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(-1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("Sakila".as_bytes().to_vec()),
+                Some(2),
+                Some(100),
+                Some("akila".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-3),
+                Some(1),
+                Some("试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测试bb".as_bytes().to_vec()),
+                Some(-3),
+                Some(2),
+                Some("试b".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(2),
+                Some(1),
+                Some("文".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(2),
+                Some(3),
+                Some("文a测".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-1),
+                Some(1),
+                Some("试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-1),
+                Some(5),
+                Some("试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-6),
+                Some(20),
+                Some("中文a测a试".as_bytes().to_vec()),
+            ),
+            (
+                Some("中文a测a试".as_bytes().to_vec()),
+                Some(-7),
+                Some(5),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(1),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+            (
+                Some("".as_bytes().to_vec()),
+                Some(-1),
+                Some(1),
+                Some("".as_bytes().to_vec()),
+            ),
+        ];
+
+        for (str, pos, len, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(str)
+                .push_param(pos)
+                .push_param(len)
+                .evaluate(ScalarFuncSig::Substring3ArgsUtf8)
                 .unwrap();
             assert_eq!(output, exp);
         }
