@@ -26,13 +26,17 @@ fn test_txn_failpoints() {
     fail::remove("commit");
 
     let v1 = b"v1";
+    let (k2, v2) = (b"k2", b"v2");
     must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
     must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, true);
+    must_prewrite_put(&engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
     must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, true);
     must_commit(&engine, k, 30, 40);
+    must_commit(&engine, k2, 31, 41);
     must_get(&engine, k, 50, v1);
+    must_get(&engine, k2, 50, v2);
 }
 
 #[test]
