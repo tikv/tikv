@@ -93,33 +93,34 @@ impl LoadedPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const PLUGIN_PATH: &'static str = "../dylib-test-plugin/target/debug/libdylib_test_plugin.so";
+    use coprocessor_plugin_api::pkgname_to_libname;
 
     #[test]
     fn load_plugin() {
-        let lib = unsafe { Library::new(PLUGIN_PATH).unwrap() };
+        let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
         let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
         let plugin_name = loaded_plugin.plugin().name();
 
-        assert_eq!(plugin_name, "my-plugin");
+        assert_eq!(plugin_name, "example-plugin");
     }
 
     #[test]
     fn move_loaded_plugin() {
-        let lib = unsafe { Library::new(PLUGIN_PATH).unwrap() };
+        let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
         let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
 
         let moved = move || loaded_plugin;
-        assert_eq!(moved().plugin().name(), "my-plugin");
+        assert_eq!(moved().plugin().name(), "example-plugin");
     }
 
     #[test]
     fn plugin_manager_load_and_get_plugin() {
         let mut plugin_manager = PluginManager::default();
-        let plugin_name = plugin_manager.load_plugin(PLUGIN_PATH).unwrap();
+        let plugin_name = plugin_manager
+            .load_plugin(pkgname_to_libname("example-plugin"))
+            .unwrap();
         let plugin = plugin_manager.get_plugin(plugin_name).unwrap();
 
-        assert_eq!(plugin.name(), "my-plugin");
+        assert_eq!(plugin.name(), "example-plugin");
     }
 }
