@@ -42,8 +42,8 @@ where
     T: RaftStoreRouter<RocksEngine> + Unpin + 'static,
     S: StoreAddrResolver + Unpin + 'static,
 {
-    fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
-        match self.raft_client.send(msg) {
+    fn send(&mut self, seq_id: Option<usize>, msg: RaftMessage) -> RaftStoreResult<()> {
+        match self.raft_client.send(seq_id, msg) {
             Ok(()) => Ok(()),
             Err(reason) => Err(raftstore::Error::Transport(reason)),
         }

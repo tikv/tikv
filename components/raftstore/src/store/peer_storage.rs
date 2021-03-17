@@ -1384,6 +1384,7 @@ where
         destroy_regions: Vec<metapb::Region>,
         async_writer_id: usize,
         msgs: Vec<RaftMessage>,
+        msg_seq_id: usize,
         proposal_times: Vec<Instant>,
     ) -> Result<InvokeContext> {
         let region_id = self.get_region_id();
@@ -1444,6 +1445,7 @@ where
         }
         write_task.proposal_times = proposal_times;
         write_task.messages = msgs;
+        write_task.msg_seq_id = msg_seq_id;
 
         if !write_task.is_empty() {
             let batch = ready_ctx.async_write_batch(async_writer_id);

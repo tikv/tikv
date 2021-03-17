@@ -31,6 +31,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use rand::Rng;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::lru::LruCache;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -857,9 +858,13 @@ where
     /// If the message fails to be sent, false is returned. Returning true means the message is
     /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
     /// are sent out.
-    pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
+    pub fn send(&mut self, seq_id: Option<usize>, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = (msg.region_id % self.builder.cfg.grpc_raft_conn_num as u64) as usize;
+        let conn_id = if let Some(id) = seq_id {
+            id % self.builder.cfg.grpc_raft_conn_num
+        } else {
+            rand::thread_rng().gen_range(0, self.builder.cfg.grpc_raft_conn_num)
+        };
         #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(

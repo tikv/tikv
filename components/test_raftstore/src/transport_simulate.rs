@@ -181,7 +181,7 @@ where
 }
 
 impl<C: Transport> Transport for SimulateTransport<C> {
-    fn send(&mut self, m: RaftMessage) -> Result<()> {
+    fn send(&mut self, _: Option<usize>, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
     }

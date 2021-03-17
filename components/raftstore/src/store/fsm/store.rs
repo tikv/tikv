@@ -480,7 +480,7 @@ where
         } else {
             gc_msg.set_is_tombstone(true);
         }
-        if let Err(e) = self.trans.send(gc_msg) {
+        if let Err(e) = self.trans.send(None, gc_msg) {
             error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
@@ -1530,7 +1530,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let extra_msg = send_msg.mut_extra_msg();
                 extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
                 extra_msg.set_check_peers(region.get_peers().into());
-                if let Err(e) = self.ctx.trans.send(send_msg) {
+                if let Err(e) = self.ctx.trans.send(None, send_msg) {
                     error!(?e;
                         "send check stale peer response message failed";
                         "region_id" => region_id,

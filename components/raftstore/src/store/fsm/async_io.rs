@@ -133,6 +133,7 @@ pub struct AsyncWriteTask {
     pub raft_state: Option<RaftLocalState>,
     pub proposal_times: Vec<Instant>,
     pub messages: Vec<RaftMessage>,
+    pub msg_seq_id: usize,
     pub size: usize,
 }
 
@@ -146,6 +147,7 @@ impl AsyncWriteTask {
             raft_state: None,
             proposal_times: vec![],
             messages: vec![],
+            msg_seq_id: 0,
             size: 0,
         }
     }
@@ -611,7 +613,7 @@ where
                 let from_peer_id = msg.get_from_peer().get_id();
                 let to_peer_id = msg.get_to_peer().get_id();
                 let to_store_id = msg.get_to_peer().get_store_id();
-                if let Err(e) = self.trans.send(msg) {
+                if let Err(e) = self.trans.send(Some(task.msg_seq_id), msg) {
                     warn!(
                         "failed to send msg to other peer in async-writer";
                         "region_id" => region_id,
