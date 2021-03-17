@@ -2,6 +2,7 @@
 
 //! Storage configuration.
 
+use crate::server::ttl::TTLCheckerTask;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Result as CfgResult};
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
@@ -12,6 +13,7 @@ use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
 use tikv_util::sys::sys_quota::SysQuota;
+use tikv_util::worker::Scheduler;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -107,13 +109,19 @@ impl Config {
 pub struct StorageConfigManger {
     kvdb: RocksEngine,
     shared_block_cache: bool,
+    ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
 }
 
 impl StorageConfigManger {
-    pub fn new(kvdb: RocksEngine, shared_block_cache: bool) -> StorageConfigManger {
+    pub fn new(
+        kvdb: RocksEngine,
+        shared_block_cache: bool,
+        ttl_checker_scheduler: Scheduler<TTLCheckerTask>,
+    ) -> StorageConfigManger {
         StorageConfigManger {
             kvdb,
             shared_block_cache,
+            ttl_checker_scheduler,
         }
     }
 }
@@ -139,6 +147,11 @@ impl ConfigManager for StorageConfigManger {
                         .set(size.0 as f64);
                 }
             }
+        } else if let Some(v) = change.remove("ttl_check_poll_interval") {
+            let interval: ReadableDuration = v.into();
+            self.ttl_checker_scheduler
+                .schedule(TTLCheckerTask::UpdatePollInterval(interval.into()))
+                .unwrap();
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = get_io_rate_limiter();

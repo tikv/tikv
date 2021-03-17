@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-use variant_count::VariantCount;
+use strum::EnumCount;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IOOp {
@@ -45,7 +45,7 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
     Other = 0,
     // Including coprocessor and storage read.
@@ -105,7 +105,7 @@ impl std::ops::Sub for IOBytes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, VariantCount)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
 pub enum IOPriority {
     Low = 0,
     Medium = 1,

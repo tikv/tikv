@@ -21,6 +21,7 @@ parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 serde = "1.0"
+strum = { version = "0.20", features = ["derive"] }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"

@@ -1449,6 +1449,7 @@ dependencies = [
  "prometheus-static-metric",
  "rand 0.7.3",
  "serde",
+ "strum",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -1787,6 +1788,19 @@ dependencies = [
  "prost-types",
  "protobuf",
  "tempfile",
+]
+
+[[package]]
+name = "grpcio-health"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62390e02d912a4cda2d93c500f3d3ce29ef5fc1c0501e89c61c8d005e5a3f3e3"
+dependencies = [
+ "futures 0.3.7",
+ "grpcio",
+ "log",
+ "prost",
+ "protobuf",
 ]
 
 [[package]]
@@ -2132,7 +2146,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#3cd2fc5fad226caeffed72297e3e13a571f5592e"
+source = "git+https://github.com/pingcap/kvproto.git#a02e2549f82fe0f35455717fcb0a107ab264c486"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2209,7 +2223,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
+source = "git+https://github.com/tikv/rust-rocksdb.git#317625fb85ef201e89d1d3a59340005419efcd1e"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2228,7 +2242,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
+source = "git+https://github.com/tikv/rust-rocksdb.git#317625fb85ef201e89d1d3a59340005419efcd1e"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3952,7 +3966,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#f831bc619b8318cb59991bd023dc89909483d329"
+source = "git+https://github.com/tikv/rust-rocksdb.git#317625fb85ef201e89d1d3a59340005419efcd1e"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4658,6 +4672,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "strum"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7318c509b5ba57f18533982607f24070a55d353e90d4cae30c467cdb2ad5ac5c"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee8bc6b87a5112aeeab1f4a9f7ab634fe6cbefc4850006df31267f4cfb9e3149"
+dependencies = [
+ "heck",
+ "proc-macro2 1.0.24",
+ "quote 1.0.3",
+ "syn 1.0.48",
+]
+
+[[package]]
 name = "subtle"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5003,6 +5038,7 @@ dependencies = [
  "file_system",
  "futures 0.3.7",
  "grpcio",
+ "grpcio-health",
  "hyper",
  "keys",
  "kvproto",
@@ -5271,6 +5307,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "http",
  "hyper",

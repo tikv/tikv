@@ -3,13 +3,15 @@
 use super::metrics::RATE_LIMITER_REQUEST_WAIT_DURATION;
 use super::{IOOp, IOPriority, IOType};
 
-use crossbeam_utils::CachePadded;
-use parking_lot::{Mutex, RwLock};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
+
+use crossbeam_utils::CachePadded;
+use parking_lot::{Mutex, RwLock};
+use strum::EnumCount;
 use tikv_util::time::Instant;
 use tikv_util::worker::Worker;
 
@@ -17,8 +19,8 @@ use tikv_util::worker::Worker;
 /// Used for testing and metrics.
 #[derive(Debug)]
 pub struct IORateLimiterStatistics {
-    read_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-    write_bytes: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    read_bytes: [CachePadded<AtomicUsize>; IOType::COUNT],
+    write_bytes: [CachePadded<AtomicUsize>; IOType::COUNT],
 }
 
 impl IORateLimiterStatistics {
@@ -50,7 +52,7 @@ impl IORateLimiterStatistics {
     }
 
     pub fn reset(&self) {
-        for i in 0..IOType::VARIANT_COUNT {
+        for i in 0..IOType::COUNT {
             self.read_bytes[i].store(0, Ordering::Relaxed);
             self.write_bytes[i].store(0, Ordering::Relaxed);
         }
@@ -69,11 +71,11 @@ fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usiz
 #[derive(Debug)]
 struct RawIORateLimiter {
     // IO amount passed through within current epoch
-    ios_through: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    ios_through: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     // Maximum IOs permitted within current epoch
-    ios_per_epoch: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    ios_per_epoch: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     // IO amount that is drew from the next epoch in advance
-    pending_ios: [CachePadded<AtomicUsize>; IOPriority::VARIANT_COUNT],
+    pending_ios: [CachePadded<AtomicUsize>; IOPriority::COUNT],
     protected: RwLock<RawIORateLimiterProtected>,
 }
 
@@ -117,7 +119,7 @@ impl IOThroughputEstimator {
 #[derive(Debug)]
 struct RawIORateLimiterProtected {
     next_refill_time: Instant,
-    estimated_ios_through: [IOThroughputEstimator; IOPriority::VARIANT_COUNT],
+    estimated_ios_through: [IOThroughputEstimator; IOPriority::COUNT],
 }
 
 macro_rules! sleep_impl {
@@ -198,7 +200,7 @@ impl RawIORateLimiter {
             pending_ios: Default::default(),
             protected: RwLock::new(RawIORateLimiterProtected {
                 next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
-                estimated_ios_through: [IOThroughputEstimator::new(); IOPriority::VARIANT_COUNT],
+                estimated_ios_through: [IOThroughputEstimator::new(); IOPriority::COUNT],
             }),
         }
     }
@@ -272,7 +274,7 @@ impl RawIORateLimiter {
 /// An instance of `IORateLimiter` should be safely shared between threads.
 #[derive(Debug)]
 pub struct IORateLimiter {
-    priority_map: [IOPriority; IOType::VARIANT_COUNT],
+    priority_map: [IOPriority; IOType::COUNT],
     throughput_limiter: Arc<RawIORateLimiter>,
     enable_statistics: CachePadded<AtomicBool>,
     stats: Arc<IORateLimiterStatistics>,
@@ -281,7 +283,7 @@ pub struct IORateLimiter {
 impl IORateLimiter {
     pub fn new() -> IORateLimiter {
         IORateLimiter {
-            priority_map: [IOPriority::High; IOType::VARIANT_COUNT],
+            priority_map: [IOPriority::High; IOType::COUNT],
             throughput_limiter: Arc::new(RawIORateLimiter::new()),
             enable_statistics: CachePadded::new(AtomicBool::new(true)),
             stats: Arc::new(IORateLimiterStatistics::new()),
