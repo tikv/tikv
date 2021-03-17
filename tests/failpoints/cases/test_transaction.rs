@@ -4,8 +4,12 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::Context;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use storage::mvcc::{self, tests::must_locked};
+use tikv::storage::mvcc::tests::must_get;
 use tikv::storage::txn::commands;
-use tikv::storage::txn::tests::{must_commit, must_prewrite_put, must_prewrite_put_err};
+use tikv::storage::txn::tests::{
+    must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
+    must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
+};
 use tikv::storage::{self, lock_manager::DummyLockManager, TestEngineBuilder, TestStorageBuilder};
 use txn_types::{Key, Mutation, TimeStamp};
 
@@ -20,6 +24,15 @@ fn test_txn_failpoints() {
     fail::cfg("commit", "delay(100)").unwrap();
     must_commit(&engine, k, 10, 20);
     fail::remove("commit");
+
+    let v1 = b"v1";
+    must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+    fail::cfg("pessimistic_prewrite", "return()").unwrap();
+    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, true);
+    fail::remove("pessimistic_prewrite");
+    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, true);
+    must_commit(&engine, k, 30, 40);
+    must_get(&engine, k, 50, v1);
 }
 
 #[test]
