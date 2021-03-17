@@ -224,7 +224,7 @@ pub fn compare_in_int_type_by_hash(
             }
             let mut default_ret = if metadata.has_null { None } else { Some(0) };
             for (i, arg) in (&args[1..]).iter().enumerate() {
-                let argi_unsigned = metadata.unsigned_flags[i];
+                let argi_unsigned = metadata.unsigned_flags[i + 1];
                 match arg {
                     None => {
                         default_ret = None;
@@ -392,7 +392,7 @@ mod tests {
     use test::{black_box, Bencher};
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeTp};
-    use tipb::ScalarFuncSig;
+    use tipb::{FieldType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
 
     use crate::types::RpnFnMeta;
@@ -650,11 +650,13 @@ mod tests {
         );
 
         // max_u64(col bigint unsigned) in (-1, 1)
-        let mut bigint_unsigned_col = ExprDefBuilder::column_ref(FieldTypeTp::LongLong);
-        bigint_unsigned_col.set_flag(FieldTypeFlag::UNSIGNED);
+        let mut bigint_unsigned_col: FieldType = FieldTypeTp::LongLong.into();
+        bigint_unsigned_col
+            .as_mut_accessor()
+            .set_flag(FieldTypeFlag::UNSIGNED);
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
-            .push_child(ExprDefBuilder::constant_uint(-1))
+            .push_child(ExprDefBuilder::constant_int(-1))
             .push_child(ExprDefBuilder::constant_int(1))
             .build();
         let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
@@ -669,7 +671,7 @@ mod tests {
         // each vec represents a column
         let mut phy_rows = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
-            col.mut_decoded().push_int(Some(18446744073709551615));
+            col.mut_decoded().push_int(Some(-1));
             col
         }]);
         let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
@@ -681,10 +683,12 @@ mod tests {
         );
 
         // -1 in (max_u64_col, 1)
-        let mut bigint_unsigned_col = ExprDefBuilder::column_ref(FieldTypeTp::LongLong);
-        bigint_unsigned_col.set_flag(FieldTypeFlag::UNSIGNED);
+        let mut bigint_unsigned_col: FieldType = FieldTypeTp::LongLong.into();
+        bigint_unsigned_col
+            .as_mut_accessor()
+            .set_flag(FieldTypeFlag::UNSIGNED);
         let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
-            .push_child(ExprDefBuilder::constant_uint(-1))
+            .push_child(ExprDefBuilder::constant_int(-1))
             .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
             .push_child(ExprDefBuilder::constant_int(1))
             .build();
@@ -700,7 +704,7 @@ mod tests {
         // each vec represents a column
         let mut phy_rows = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
-            col.mut_decoded().push_int(Some(18446744073709551615));
+            col.mut_decoded().push_int(Some(-1));
             col
         }]);
         let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
@@ -709,6 +713,72 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_ref().to_int_vec(),
             &[Some(0)]
+        );
+
+        // -1 in (max_u64_col, -1)
+        let mut bigint_unsigned_col: FieldType = FieldTypeTp::LongLong.into();
+        bigint_unsigned_col
+            .as_mut_accessor()
+            .set_flag(FieldTypeFlag::UNSIGNED);
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_int(-1))
+            .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
+            .push_child(ExprDefBuilder::constant_int(-1))
+            .build();
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::Long.into()];
+        let log_rows = vec![0];
+        // each vec represents a column
+        let mut phy_rows = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+            col.mut_decoded().push_int(Some(-1));
+            col
+        }]);
+        let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
+        );
+
+        // max_u64 in (max_u64_col, -1)
+        let mut bigint_unsigned_col: FieldType = FieldTypeTp::LongLong.into();
+        bigint_unsigned_col
+            .as_mut_accessor()
+            .set_flag(FieldTypeFlag::UNSIGNED);
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::constant_uint(18446744073709551615))
+            .push_child(ExprDefBuilder::column_ref(0, bigint_unsigned_col))
+            .push_child(ExprDefBuilder::constant_int(-1))
+            .build();
+        let expr = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
+            node,
+            map_expr_node_to_rpn_func,
+            2,
+        )
+        .unwrap();
+        let mut ctx = EvalContext::default();
+        let schema = &[FieldTypeTp::Long.into()];
+        let log_rows = vec![0];
+        // each vec represents a column
+        let mut phy_rows = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+            col.mut_decoded().push_int(Some(-1));
+            col
+        }]);
+        let result = expr.eval(&mut ctx, schema, &mut phy_rows, &log_rows, 1);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().to_int_vec(),
+            &[Some(1)]
         );
     }
 
