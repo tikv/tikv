@@ -321,6 +321,32 @@ pub fn start_io_rate_limiter_daemon(worker: &Worker) {
     });
 }
 
+pub struct IORateLimiterDaemon {
+    _thread: std::thread::JoinHandle<()>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for IORateLimiterDaemon {
+    fn drop(&mut self) {
+        self.stop.store(false, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+pub fn new_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORateLimiterDaemon {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop1 = stop.clone();
+    IORateLimiterDaemon {
+        _thread: std::thread::spawn(move || {
+            while !stop1.load(Ordering::Relaxed) {
+                limiter.refill();
+                std::thread::sleep(DEFAULT_REFILL_PERIOD);
+            }
+        }),
+        stop,
+    }
+}
+
 /// Set a global rate limiter with unlimited quotas that can be used to trace IOs.
 /// Statistics could be inaccurate when multiple threads are using it concurrently.
 /// TODO: remove usage of global limiter in tests.
@@ -437,6 +463,7 @@ mod tests {
         let high_bytes_per_sec = 10000;
         let limiter = Arc::new(IORateLimiter::new());
         limiter.enable_statistics(true);
+        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         verify_rate_limit(&limiter, low_bytes_per_sec);
         verify_rate_limit(&limiter, high_bytes_per_sec);
         verify_rate_limit(&limiter, low_bytes_per_sec);
@@ -450,6 +477,7 @@ mod tests {
         limiter.enable_statistics(true);
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics();
+        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {
@@ -484,6 +512,7 @@ mod tests {
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
         let stats = limiter.statistics();
         let limiter = Arc::new(limiter);
+        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {
