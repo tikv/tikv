@@ -217,10 +217,12 @@ macro_rules! forward_duplex {
                 let (mut forward_req, forward_resp) = client.$func().unwrap();
                 client.spawn(async move {
                     let bridge_req = async move {
+                        forward_req.enhance_batch(true);
                         forward_req.send_all(&mut $req.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
                         forward_req.close().await
                     };
                     let bridge_resp = async move {
+                        $resp.enhance_batch(true);
                         $resp.send_all(&mut forward_resp.map(|i| i.map(|i| (i, WriteFlags::default())))).await?;
                         $resp.close().await
                     };
