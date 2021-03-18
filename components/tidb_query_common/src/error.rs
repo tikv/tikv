@@ -83,7 +83,7 @@ impl ErrorCodeExt for EvaluateError {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct StorageError(pub Box<dyn std::error::Error + Sync + Send>);
+pub struct StorageError(#[from] pub anyhow::Error);
 
 /// We want to restrict the type of errors to be either a `StorageError` or `EvaluateError`, thus
 /// `failure::Error` is not used. Instead, we introduce our own error enum.

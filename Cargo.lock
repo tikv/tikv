@@ -5124,6 +5124,7 @@ dependencies = [
 name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "byteorder",
  "derive_more",
  "error_code",
@@ -5178,10 +5179,10 @@ dependencies = [
 name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "codec",
  "collections",
  "fail",
- "failure",
  "itertools 0.8.2",
  "kvproto",
  "log_wrappers",
