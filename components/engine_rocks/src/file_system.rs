@@ -16,6 +16,19 @@ pub fn get_env(base_env: Option<Arc<Env>>) -> Result<Arc<Env>, String> {
     )?))
 }
 
+pub fn get_env_with_limiter(
+    base_env: Option<Arc<Env>>,
+    limiter: Option<Arc<file_system::IORateLimiter>>,
+) -> Result<Arc<Env>, String> {
+    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+    Ok(Arc::new(Env::new_file_system_inspected_env(
+        base_env,
+        WrappedFileSystemInspector {
+            inspector: EngineFileSystemInspector::from_limiter(limiter),
+        },
+    )?))
+}
+
 pub struct WrappedFileSystemInspector<T: FileSystemInspector> {
     inspector: T,
 }
@@ -38,18 +51,18 @@ mod tests {
     use crate::raw::{ColumnFamilyOptions, DBCompressionType};
     use crate::raw_util::{new_engine_opt, CFOptions};
     use engine_traits::{CompactExt, CF_DEFAULT};
-    use file_system::{IOOp, IORateLimiterStatistics, IOType, WithIORateLimit};
+    use file_system::{IOOp, IORateLimiter, IORateLimiterStatistics, IOType};
     use keys::data_key;
     use rocksdb::Writable;
     use rocksdb::{DBOptions, DB};
     use std::sync::Arc;
     use tempfile::Builder;
 
-    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>, WithIORateLimit) {
-        let (guard, stats) = WithIORateLimit::new();
+    fn new_test_db(dir: &str) -> (Arc<DB>, Arc<IORateLimiterStatistics>) {
+        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         let mut db_opts = DBOptions::new();
         db_opts.add_event_listener(RocksEventListener::new("test_db"));
-        let env = get_env(None).unwrap();
+        let env = get_env_with_limiter(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
@@ -57,7 +70,7 @@ mod tests {
         let db = Arc::new(
             new_engine_opt(dir, db_opts, vec![CFOptions::new(CF_DEFAULT, cf_opts)]).unwrap(),
         );
-        (db, stats, guard)
+        (db, limiter.statistics().unwrap())
     }
 
     #[test]
@@ -68,7 +81,7 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let (db, stats, _guard) = new_test_db(temp_dir.path().to_str().unwrap());
+        let (db, stats) = new_test_db(temp_dir.path().to_str().unwrap());
         let value = vec![b'v'; value_size];
 
         db.put(&data_key(b"a1"), &value).unwrap();

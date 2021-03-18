@@ -30,11 +30,13 @@ use encryption_export::{
 use engine_rocks::config::BlobRunMode;
 use engine_rocks::raw::DB;
 use engine_rocks::{
-    encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
+    encryption::get_env as get_encrypted_env,
+    file_system::get_env_with_limiter as get_inspected_env,
 };
 use engine_rocks::{CompactionListener, RocksCompactionJobInfo};
 use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, Iterable, Peekable};
+use file_system::IORateLimiter;
 use raftstore::store::fsm::RaftRouter;
 use raftstore::store::*;
 use raftstore::Result;
@@ -586,6 +588,7 @@ fn dummpy_filter(_: &RocksCompactionJobInfo) -> bool {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RocksEngine>>,
+    limiter: Option<Arc<IORateLimiter>>,
     cfg: &TiKvConfig,
 ) -> (
     Engines<RocksEngine, RocksEngine>,
@@ -599,7 +602,7 @@ pub fn create_test_engine(
             .map(Arc::new);
 
     let env = get_encrypted_env(key_manager.clone(), None).unwrap();
-    let env = get_inspected_env(Some(env)).unwrap();
+    let env = get_inspected_env(Some(env), limiter).unwrap();
     let cache = cfg.storage.block_cache.build_shared_cache();
 
     let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use engine_rocks::file_system::get_env as get_inspected_env;
+use engine_rocks::file_system::get_env_with_limiter as get_inspected_env;
 use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
 use engine_rocks::raw_util::CFOptions;
 use engine_rocks::{RocksEngine as BaseRocksEngine, RocksEngineIterator};
@@ -15,6 +15,7 @@ use engine_traits::{
     Engines, IterOptions, Iterable, Iterator, KvEngine, Mutable, Peekable, ReadOptions, SeekKey,
     WriteBatch, WriteBatchExt,
 };
+use file_system::IORateLimiter;
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
@@ -93,6 +94,7 @@ impl RocksEngine {
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
         shared_block_cache: bool,
+        io_rate_limiter: Option<Arc<IORateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -104,7 +106,7 @@ impl RocksEngine {
         };
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = DBOptions::new();
-        let env = get_inspected_env(None).unwrap();
+        let env = get_inspected_env(None, io_rate_limiter).unwrap();
         db_opts.set_env(env);
         let db = Arc::new(engine_rocks::raw_util::new_engine(
             &path,
@@ -173,6 +175,7 @@ impl Debug for RocksEngine {
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
+    io_rate_limiter: Option<Arc<IORateLimiter>>,
     enable_ttl: bool,
 }
 
@@ -181,6 +184,7 @@ impl TestEngineBuilder {
         Self {
             path: None,
             cfs: None,
+            io_rate_limiter: None,
             enable_ttl: false,
         }
     }
@@ -203,6 +207,11 @@ impl TestEngineBuilder {
 
     pub fn ttl(mut self, b: bool) -> Self {
         self.enable_ttl = b;
+        self
+    }
+
+    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
+        self.io_rate_limiter = limiter;
         self
     }
 
@@ -233,7 +242,13 @@ impl TestEngineBuilder {
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+        RocksEngine::new(
+            &path,
+            &cfs,
+            Some(cfs_opts),
+            cache.is_some(),
+            self.io_rate_limiter,
+        )
     }
 }
 

@@ -2480,7 +2480,13 @@ mod tests {
                 CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
-            RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
+            RocksEngine::new(
+                &path,
+                &cfs,
+                Some(cfs_opts),
+                cache.is_some(),
+                None, /*io_rate_limiter*/
+            )
         }
         .unwrap();
         let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(

@@ -943,7 +943,7 @@ pub mod tests {
 
     use engine_traits::MiscExt;
     use external_storage::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, WithIORateLimit};
+    use file_system::{IOOp, IORateLimiter};
     use futures::executor::block_on;
     use futures::stream::StreamExt;
     use kvproto::metapb;
@@ -1017,6 +1017,39 @@ pub mod tests {
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
             ])
+            .build()
+            .unwrap();
+        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let db = rocks.get_rocksdb().get_sync_db();
+        (
+            temp,
+            Endpoint::new(
+                1,
+                rocks,
+                MockRegionInfoProvider::new(),
+                db,
+                BackupConfig {
+                    num_threads: 4,
+                    batch_size: 8,
+                    sst_max_size: ReadableSize::mb(144),
+                },
+                concurrency_manager,
+            ),
+        )
+    }
+
+    pub fn new_endpoint_with_limiter(
+        limiter: Arc<IORateLimiter>,
+    ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
+        let temp = TempDir::new().unwrap();
+        let rocks = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs(&[
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
+            .io_rate_limiter(Some(limiter))
             .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
@@ -1230,8 +1263,9 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let (_guard, stats) = WithIORateLimit::new();
-        let (tmp, endpoint) = new_endpoint();
+        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
+        let stats = limiter.statistics().unwrap();
+        let (tmp, endpoint) = new_endpoint_with_limiter(limiter);
         let engine = endpoint.engine.clone();
 
         endpoint
@@ -1520,7 +1554,7 @@ pub mod tests {
 
     #[test]
     fn test_thread_pool_shutdown_when_idle() {
-        let (_, mut endpoint) = new_endpoint();
+        let (_tmp, mut endpoint) = new_endpoint();
 
         // set the idle threshold to 100ms
         endpoint.pool_idle_threshold = 100;

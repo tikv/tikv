@@ -376,34 +376,6 @@ pub fn new_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORateLimiterD
     }
 }
 
-/// Set a global rate limiter with unlimited quotas that can be used to trace IOs.
-/// Statistics could be inaccurate when multiple threads are using it concurrently.
-/// TODO: remove usage of global limiter in tests.
-pub struct WithIORateLimit {
-    previous_io_rate_limiter: Option<Arc<IORateLimiter>>,
-}
-
-impl WithIORateLimit {
-    pub fn new() -> (Self, Arc<IORateLimiterStatistics>) {
-        let previous_io_rate_limiter = get_io_rate_limiter();
-        let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
-        let stats = limiter.statistics().unwrap();
-        set_io_rate_limiter(Some(limiter));
-        (
-            WithIORateLimit {
-                previous_io_rate_limiter,
-            },
-            stats,
-        )
-    }
-}
-
-impl Drop for WithIORateLimit {
-    fn drop(&mut self) {
-        set_io_rate_limiter(self.previous_io_rate_limiter.take());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

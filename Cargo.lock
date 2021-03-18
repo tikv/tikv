@@ -4945,6 +4945,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "file_system",
  "futures 0.3.7",
  "grpcio",
  "keys",

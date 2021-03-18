@@ -24,6 +24,7 @@ use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, WriteBatch, WriteBatchExt, CF_RAFT,
 };
+use file_system::IORateLimiter;
 use pd_client::PdClient;
 use raftstore::store::fsm::store::{StoreMeta, PENDING_MSG_CAP};
 use raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
@@ -130,6 +131,7 @@ pub struct Cluster<T: Simulator> {
     pub dbs: Vec<Engines<RocksEngine, RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
+    pub io_rate_limiter: Option<Arc<IORateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RocksEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
@@ -155,6 +157,7 @@ impl<T: Simulator> Cluster<T> {
             dbs: vec![],
             store_metas: HashMap::default(),
             key_managers: vec![],
+            io_rate_limiter: None,
             engines: HashMap::default(),
             key_managers_map: HashMap::default(),
             labels: HashMap::default(),
@@ -193,7 +196,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
-        let (engines, key_manager, dir) = create_test_engine(router, &self.cfg);
+        if self.io_rate_limiter.is_none() {
+            self.io_rate_limiter = Some(Arc::new(
+                self.cfg
+                    .storage
+                    .io_rate_limit
+                    .build(true /*enable_statistics*/),
+            ));
+        }
+        let (engines, key_manager, dir) =
+            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
