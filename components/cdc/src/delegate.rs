@@ -900,14 +900,13 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow) {
 mod tests {
     use super::*;
     use crate::rate_limiter::new_pair;
-    use futures::stream::StreamExt;
+    use crate::service::EventBatcherSink;
     use futures::future::FutureExt;
+    use futures::stream::StreamExt;
     use kvproto::errorpb::Error as ErrorHeader;
     use kvproto::metapb::Region;
     use tikv::storage::mvcc::test_util::*;
     use tikv_util::mpsc::batch::{self, BatchReceiver, VecCollector};
-    use crate::service::EventBatcherSink;
-
 
     #[test]
     fn test_error() {
@@ -931,7 +930,10 @@ mod tests {
         let (rate_limiter, drainer) = new_pair::<CdcEvent>(1024, 1024);
         let batched_sink = EventBatcherSink::new(tx);
         runtime.spawn(async move {
-            drainer.drain(batched_sink, grpcio::WriteFlags::default()).await.unwrap();
+            drainer
+                .drain(batched_sink, grpcio::WriteFlags::default())
+                .await
+                .unwrap();
         });
 
         let rate_limiter_clone = rate_limiter.clone();
@@ -1054,115 +1056,115 @@ mod tests {
     }
 
     /*
-        #[test]
-        fn test_scan() {
-            let region_id = 1;
-            let mut region = Region::default();
-            region.set_id(region_id);
-            region.mut_peers().push(Default::default());
-            region.mut_region_epoch().set_version(2);
-            region.mut_region_epoch().set_conf_ver(2);
-            let region_epoch = region.get_region_epoch().clone();
+    #[test]
+    fn test_scan() {
+        let region_id = 1;
+        let mut region = Region::default();
+        region.set_id(region_id);
+        region.mut_peers().push(Default::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(2);
+        let region_epoch = region.get_region_epoch().clone();
 
-            let (sink, rx) = batch::unbounded(1);
-            let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
-            let request_id = 123;
-            let mut downstream =
-                Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
-            let downstream_id = downstream.get_id();
-            downstream.set_sink(sink);
-            let mut delegate = Delegate::new(region_id);
-            delegate.subscribe(downstream);
-            let enabled = delegate.enabled();
-            assert!(enabled.load(Ordering::SeqCst));
+        let (sink, rx) = batch::unbounded(1);
+        let rx = BatchReceiver::new(rx, 1, Vec::new, VecCollector);
+        let request_id = 123;
+        let mut downstream =
+            Downstream::new(String::new(), region_epoch, request_id, ConnID::new(), true);
+        let downstream_id = downstream.get_id();
+        downstream.set_sink(sink);
+        let mut delegate = Delegate::new(region_id);
+        delegate.subscribe(downstream);
+        let enabled = delegate.enabled();
+        assert!(enabled.load(Ordering::SeqCst));
 
-            let rx_wrap = Cell::new(Some(rx));
-            let check_event = |event_rows: Vec<EventRow>| {
-                let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-                rx_wrap.set(Some(rx));
-                let mut resps = resps.unwrap();
-                assert_eq!(resps.len(), 1);
-                for r in &resps {
-                    if let CdcEvent::Event(e) = r {
-                        assert_eq!(e.get_request_id(), request_id);
-                    }
+        let rx_wrap = Cell::new(Some(rx));
+        let check_event = |event_rows: Vec<EventRow>| {
+            let (resps, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
+            rx_wrap.set(Some(rx));
+            let mut resps = resps.unwrap();
+            assert_eq!(resps.len(), 1);
+            for r in &resps {
+                if let CdcEvent::Event(e) = r {
+                    assert_eq!(e.get_request_id(), request_id);
                 }
-                let cdc_event = resps.remove(0);
-                if let CdcEvent::Event(mut e) = cdc_event {
-                    assert_eq!(e.region_id, region_id);
-                    assert_eq!(e.index, 0);
-                    let event = e.event.take().unwrap();
-                    match event {
-                        Event_oneof_event::Entries(entries) => {
-                            assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
-                        }
-                        other => panic!("unknown event {:?}", other),
+            }
+            let cdc_event = resps.remove(0);
+            if let CdcEvent::Event(mut e) = cdc_event {
+                assert_eq!(e.region_id, region_id);
+                assert_eq!(e.index, 0);
+                let event = e.event.take().unwrap();
+                match event {
+                    Event_oneof_event::Entries(entries) => {
+                        assert_eq!(entries.entries.as_slice(), event_rows.as_slice());
                     }
+                    other => panic!("unknown event {:?}", other),
                 }
-            };
+            }
+        };
 
-            // Stashed in pending before region ready.
-            let entries = vec![
-                Some(
-                    EntryBuilder::default()
-                        .key(b"a")
-                        .value(b"b")
-                        .start_ts(1.into())
-                        .commit_ts(0.into())
-                        .primary(&[])
-                        .for_update_ts(0.into())
-                        .build_prewrite(LockType::Put, false),
-                ),
-                Some(
-                    EntryBuilder::default()
-                        .key(b"a")
-                        .value(b"b")
-                        .start_ts(1.into())
-                        .commit_ts(2.into())
-                        .primary(&[])
-                        .for_update_ts(0.into())
-                        .build_commit(WriteType::Put, false),
-                ),
-                Some(
-                    EntryBuilder::default()
-                        .key(b"a")
-                        .value(b"b")
-                        .start_ts(3.into())
-                        .commit_ts(0.into())
-                        .primary(&[])
-                        .for_update_ts(0.into())
-                        .build_rollback(),
-                ),
-                None,
-            ];
-            delegate.on_scan(downstream_id, entries);
-            // Flush all pending entries.
-            let mut row1 = EventRow {
-                start_ts: 1,
-                commit_ts: 0,
-                key: b"a".to_vec(),
-                value: b"b".to_vec(),
-                op_type: EventRowOpType::Put as _,
-                ..Default::default()
-            };
-            set_event_row_type(&mut row1, EventLogType::Prewrite);
-            let mut row2 = EventRow {
-                start_ts: 1,
-                commit_ts: 2,
-                key: b"a".to_vec(),
-                value: b"b".to_vec(),
-                op_type: EventRowOpType::Put as _,
-                ..Default::default()
-            };
-            set_event_row_type(&mut row2, EventLogType::Committed);
-            let mut row3 = EventRow::default();
-            set_event_row_type(&mut row3, EventLogType::Initialized);
-            check_event(vec![row1, row2, row3]);
+        // Stashed in pending before region ready.
+        let entries = vec![
+            Some(
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_prewrite(LockType::Put, false),
+            ),
+            Some(
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(1.into())
+                    .commit_ts(2.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_commit(WriteType::Put, false),
+            ),
+            Some(
+                EntryBuilder::default()
+                    .key(b"a")
+                    .value(b"b")
+                    .start_ts(3.into())
+                    .commit_ts(0.into())
+                    .primary(&[])
+                    .for_update_ts(0.into())
+                    .build_rollback(),
+            ),
+            None,
+        ];
+        delegate.on_scan(downstream_id, entries);
+        // Flush all pending entries.
+        let mut row1 = EventRow {
+            start_ts: 1,
+            commit_ts: 0,
+            key: b"a".to_vec(),
+            value: b"b".to_vec(),
+            op_type: EventRowOpType::Put as _,
+            ..Default::default()
+        };
+        set_event_row_type(&mut row1, EventLogType::Prewrite);
+        let mut row2 = EventRow {
+            start_ts: 1,
+            commit_ts: 2,
+            key: b"a".to_vec(),
+            value: b"b".to_vec(),
+            op_type: EventRowOpType::Put as _,
+            ..Default::default()
+        };
+        set_event_row_type(&mut row2, EventLogType::Committed);
+        let mut row3 = EventRow::default();
+        set_event_row_type(&mut row3, EventLogType::Initialized);
+        check_event(vec![row1, row2, row3]);
 
-            let mut resolver = Resolver::new(region_id);
-            resolver.init();
-            delegate.on_region_ready(resolver, region);
-        }
+        let mut resolver = Resolver::new(region_id);
+        resolver.init();
+        delegate.on_region_ready(resolver, region);
+    }
 
-         */
+     */
 }

@@ -24,7 +24,7 @@ use tokio::sync::mpsc::channel as tokio_bounded_channel;
 
 use crate::delegate::{Downstream, DownstreamID};
 use crate::endpoint::{Deregister, Task};
-use crate::rate_limiter::{new_pair, RateLimiter, DrainerError};
+use crate::rate_limiter::{new_pair, DrainerError, RateLimiter};
 use futures::ready;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::event::Event as Event_oneof_event;
@@ -447,8 +447,7 @@ impl ChangeData for Service {
         mut sink: DuplexSink<ChangeDataEvent>,
     ) {
         // TODO determine the right values
-        // 2048 is likely too low for production.
-        let (rate_limiter, drainer) = new_pair::<CdcEvent>(64, 2048);
+        let (rate_limiter, drainer) = new_pair::<CdcEvent>(128, 2048);
         let peer = ctx.peer();
         let conn = Conn::new(rate_limiter, peer.clone());
         let conn_id = conn.get_id();
