@@ -2,7 +2,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
 
 use kvproto::pdpb::*;
 use pd_client::REQUEST_RECONNECT_INTERVAL;

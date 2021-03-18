@@ -142,3 +142,28 @@ fn test_slow_periodical_update() {
     fail::remove(leader_client_reconnect_fp);
     handle.join().unwrap();
 }
+
+// Non-force reconnection will be speed limited.
+#[test]
+fn test_non_force_reconnect_limit() {
+    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let server = MockServer::new(1);
+    let eps = server.bind_addrs();
+
+    let mut cfg = new_config(eps);
+    let env = Arc::new(EnvBuilder::new().cq_count(1).build());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    cfg.update_interval = ReadableDuration(Duration::from_secs(100));
+    let client = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+
+    // The first reconnection will succeed, and the last_update will not be updated.
+    fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+    client.reconnect().unwrap();
+    // The subsequent non-force reconnection will be cancelled.
+    for _ in 0..10 {
+        let res = client.reconnect_non_force();
+        assert!(format!("{:?}", res.unwrap_err()).contains("cancel non-force reconnection"))
+    }
+
+    fail::remove(leader_client_reconnect_fp);
+}
