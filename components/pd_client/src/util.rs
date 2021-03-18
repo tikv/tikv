@@ -158,7 +158,7 @@ impl LeaderClient {
     {
         Request {
             reconnect_count: retry,
-            force_reconnect: force_reconnect,
+            force_reconnect,
             request_sent: 0,
             client: self.clone(),
             req,
