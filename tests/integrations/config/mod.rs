@@ -699,7 +699,7 @@ fn test_serde_custom_tikv_config() {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),
-        enable_compaction_filter: true,
+        enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
     };
     value.pessimistic_txn = PessimisticTxnConfig {

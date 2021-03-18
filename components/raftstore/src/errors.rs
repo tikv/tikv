@@ -213,15 +213,18 @@ impl From<Error> for errorpb::Error {
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
             }
-            Error::Engine(engine_traits::Error::NotInRange(key, region_id, start_key, end_key)) => {
+            Error::Engine(engine_traits::Error::NotInRange {
+                key,
+                region_id,
+                start,
+                end,
+            }) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb.mut_key_not_in_region().set_region_id(region_id);
                 errorpb
                     .mut_key_not_in_region()
-                    .set_start_key(start_key.to_vec());
-                errorpb
-                    .mut_key_not_in_region()
-                    .set_end_key(end_key.to_vec());
+                    .set_start_key(start.to_vec());
+                errorpb.mut_key_not_in_region().set_end_key(end.to_vec());
             }
             _ => {}
         };
