@@ -933,7 +933,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 if cdc_clients.lock().unwrap().get(&store_id).is_none() {
                     let store = box_try!(pd_client.get_store_async(store_id).await);
                     let cb = ChannelBuilder::new(env.clone());
-                    let channel = security_mgr.connect(cb, &store.address);
+                    let channel = security_mgr.connect(cb, &store.address, None);
                     cdc_clients
                         .lock()
                         .unwrap()

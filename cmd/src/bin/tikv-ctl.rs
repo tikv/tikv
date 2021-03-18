@@ -135,7 +135,7 @@ fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
         .keepalive_time(Duration::from_secs(10))
         .keepalive_timeout(Duration::from_secs(3));
 
-    let channel = mgr.connect(cb, host);
+    let channel = mgr.connect(cb, host, None);
     DebugClient::new(channel)
 }
 
@@ -2320,7 +2320,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
 
     let tikv_client = {
         let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
-        let channel = mgr.connect(cb, store.get_address());
+        let channel = mgr.connect(cb, store.get_address(), None);
         TikvClient::new(channel)
     };
 
