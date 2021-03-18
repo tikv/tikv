@@ -107,8 +107,8 @@ impl RpcClient {
                             match client.upgrade() {
                                 Some(cli) => {
                                     let req = cli.reconnect(false).await;
-                                    if req.is_err() {
-                                        warn!("update PD information failed");
+                                    if let Err(e) = req {
+                                        warn!("failed to update PD client"; "error"=> ?e);
                                         // will update later anyway
                                     }
                                 }

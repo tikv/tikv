@@ -541,7 +541,7 @@ impl PdConnector {
                 // If the force is false, we could have already forwarded the requests.
                 // We don't need to try forwarding again.
                 if !force && resp == members_resp {
-                    return Ok(None);
+                    return Err(box_err!("failed to connect to {:?}", leader));
                 }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, forwarded_host))) =
