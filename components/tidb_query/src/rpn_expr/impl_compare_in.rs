@@ -198,11 +198,11 @@ pub fn compare_in_by_hash<T: InByHash>(
     }
 }
 
-#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<NormalInByHash::<Int>>)]
+#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<NormalInByHash::<Int>>)]
 #[inline]
 pub fn compare_in_int_type_by_hash(
     metadata: &CompareInMeta<Int>,
-    args: &[Option<&Int>],
+    args: &[&Option<Int>],
 ) -> Result<Option<Int>> {
     assert!(!args.is_empty());
     let base_val = args[0];
@@ -229,8 +229,8 @@ pub fn compare_in_int_type_by_hash(
                     None => {
                         default_ret = None;
                     }
-                    Some(&v) => {
-                        if (*base_val == v)
+                    Some(v) => {
+                        if (base_val == v)
                             && ((*base_val >= 0)
                                 || (arg0_unsigned && argi_unsigned)
                                 || (!arg0_unsigned && !argi_unsigned))
