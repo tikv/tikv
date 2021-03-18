@@ -32,7 +32,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut result = self.src.next_batch(scan_rows);
+        let mut result = self
+            .src
+            .next_batch(std::cmp::min(scan_rows, self.remaining_rows));
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {
