@@ -5400,6 +5400,7 @@ version = "0.1.0"
 dependencies = [
  "backtrace",
  "derive_more",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "error_code",
