@@ -198,8 +198,6 @@ pub fn compare_in_by_hash<T: InByHash>(
     }
 }
 
-<<<<<<< HEAD:components/tidb_query/src/rpn_expr/impl_compare_in.rs
-=======
 #[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<NormalInByHash::<Int>>)]
 #[inline]
 pub fn compare_in_int_type_by_hash(
@@ -247,41 +245,6 @@ pub fn compare_in_int_type_by_hash(
     }
 }
 
-#[rpn_fn(nullable, varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<CollationAwareBytesInByHash::<C>>)]
-#[inline]
-pub fn compare_in_by_hash_bytes<C: Collator>(
-    metadata: &CompareInMeta<SortKey<Bytes, C>>,
-    args: &[Option<BytesRef>],
-) -> Result<Option<Int>> {
-    assert!(!args.is_empty());
-    let base_val = args[0];
-    match base_val {
-        None => Ok(None),
-        Some(base_val) => {
-            let base_val = CollationAwareBytesInByHash::<C>::map(base_val.to_vec())?;
-            if metadata.lookup_map.contains_key(&base_val) {
-                return Ok(Some(1));
-            }
-            let mut default_ret = if metadata.has_null { None } else { Some(0) };
-            for arg in &args[1..] {
-                match arg {
-                    None => {
-                        default_ret = None;
-                    }
-                    Some(v) => {
-                        let v = CollationAwareBytesInByHash::<C>::map(v.to_vec())?;
-                        if base_val == v {
-                            return Ok(Some(1));
-                        }
-                    }
-                }
-            }
-            Ok(default_ret)
-        }
-    }
-}
-
->>>>>>> 30d86aa5a... copr: fix IN expr didn't handle unsigned/signed int properly (#9823):components/tidb_query_expr/src/impl_compare_in.rs
 fn init_compare_in_data<T: InByHash>(expr: &mut Expr) -> Result<CompareInMeta<T::StoreKey>> {
     let mut lookup_map = HashMap::new();
     let mut has_null = false;
