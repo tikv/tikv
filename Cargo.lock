@@ -5127,12 +5127,12 @@ dependencies = [
  "byteorder",
  "derive_more",
  "error_code",
- "failure",
  "kvproto",
  "lazy_static",
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "thiserror",
  "tikv_util",
  "time 0.1.42",
 ]
