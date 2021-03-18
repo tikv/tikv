@@ -5150,7 +5150,6 @@ dependencies = [
  "codec",
  "collections",
  "error_code",
- "failure",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
