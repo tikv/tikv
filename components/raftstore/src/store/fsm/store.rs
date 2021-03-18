@@ -639,6 +639,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         // the id of slow store in tests.
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         self.poll_ctx.trans.try_flush();
+        self.maybe_flush_async_write(false);
 
         // TODO(ASYNC_IO): change the logic
         let dur = self.timer.elapsed();
@@ -842,7 +843,6 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.flush_ticks();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
-            self.maybe_flush_async_write(true);
         }
         self.poll_ctx.current_time = None;
         self.poll_ctx
@@ -857,9 +857,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn pause(&mut self) -> bool {
-        if self.poll_ctx.trans.need_flush() {
-            self.poll_ctx.trans.flush();
-        }
+        self.poll_ctx.trans.flush();
+        self.maybe_flush_async_write(true);
         // If there are cached data and go into pause status, that will cause high latency or hunger
         // so it should return false(means pause failed) when there are still jobs to do
         //all_synced_and_flushed
