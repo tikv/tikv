@@ -118,6 +118,7 @@ optional = true
 [replace]
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
+"raft:0.4.3" = { git = "https://github.com/tikv/raft-rs", rev = "9782199fa6318f94bf0974129664d974b03f8f11" }
 
 [dev-dependencies]
 test_util = { path = "components/test_util" }

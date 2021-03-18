@@ -1424,7 +1424,7 @@ impl Storage for PeerStorage {
         Ok(self.last_index())
     }
 
-    fn snapshot(&self) -> raft::Result<Snapshot> {
+    fn snapshot(&self, _request_index: u64) -> raft::Result<Snapshot> {
         self.snapshot()
     }
 }
