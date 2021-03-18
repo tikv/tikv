@@ -133,16 +133,10 @@ impl Client {
         &self,
         client_stub: PdClientStub,
         forwarded_host: String,
-        members_resp: Option<GetMembersResponse>,
+        members: GetMembersResponse,
     ) {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
-
-        let members = if let Some(members) = members_resp {
-            members
-        } else {
-            inner.members.clone()
-        };
 
         let (tx, rx) = client_stub
             .region_heartbeat_opt(call_option(&forwarded_host))
@@ -157,13 +151,14 @@ impl Client {
         let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
         let _ = prev_receiver.right().map(|t| t.wake());
         inner.client_stub = client_stub;
-        inner.forwarded_host = forwarded_host;
+        let prev_forwarded_host =
+            std::mem::replace(&mut inner.forwarded_host, forwarded_host.clone());
         inner.members = members;
         inner.last_update = Instant::now();
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
-        info!("change pd client stub");
+        info!("update pd client"; "prev_forwarded_host"=>prev_forwarded_host,"forworded_host"=>forwarded_host);
         slow_log!(
             start_refresh.elapsed(),
             "PD client refresh region heartbeat",
@@ -253,7 +248,7 @@ impl Client {
         };
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
-        self.update_client(client, forwarded_host, Some(members));
+        self.update_client(client, forwarded_host, members);
         info!("tring to update PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
@@ -526,6 +521,9 @@ impl PdConnector {
         let resp = self.load_members(&members_resp).await?;
         let leader = resp.get_leader();
         let members = resp.get_members();
+        if !force && pre_forwarded_host.is_empty() && resp == members_resp {
+            return Ok(None);
+        }
         let (res, has_network_error) = self.reconnect_leader(leader).await?;
         // There are 3 kinds of situations we will return the new client:
         // 1. the force is true which represents the client is newly created or the original connection has some problem

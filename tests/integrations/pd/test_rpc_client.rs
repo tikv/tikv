@@ -171,8 +171,6 @@ fn test_connect_follower() {
         )))
     );
     assert_eq!(res, err);
-    // let leader_addr = client.get_leader().get_client_urls()[0].clone();
-    // assert_ne!(leader_addr, connection_addr);
 
     fail::remove(connect_leader_fp);
 }
