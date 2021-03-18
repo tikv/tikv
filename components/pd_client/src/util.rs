@@ -513,6 +513,10 @@ impl PdConnector {
         ))
     }
 
+    // There are 3 kinds of situations we will return the new client:
+    // 1. the force is true which represents the client is newly created or the original connection has some problem
+    // 2. the previous forwared host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
+    // 3. the member information of PD has been changed
     async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
@@ -529,33 +533,21 @@ impl PdConnector {
             return Ok(None);
         }
         let (res, has_network_error) = self.reconnect_leader(leader).await?;
-        // There are 3 kinds of situations we will return the new client:
-        // 1. the force is true which represents the client is newly created or the original connection has some problem
-        // 2. the previous forwared host is not equal to the one right now which represents the network partition problem to leader may be recovered
-        // 3. the member information of PD has been changed
         match res {
-            Some((client, forwarded_host)) => {
-                if force || pre_forwarded_host != forwarded_host || resp != members_resp {
-                    return Ok(Some((client, forwarded_host, resp)));
-                } else {
-                    return Ok(None);
-                }
+            Some(client) => {
+                return Ok(Some((client, "".to_string(), resp)));
             }
             None => {
                 // If the force is false, we could have already forwarded the requests.
                 // We don't need to try forwarding again.
-                if !force {
+                if !force && resp == members_resp {
                     return Ok(None);
                 }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, forwarded_host))) =
                         self.try_forward(members, leader).await
                     {
-                        if force || pre_forwarded_host != forwarded_host || resp != members_resp {
-                            return Ok(Some((client, forwarded_host, resp)));
-                        } else {
-                            return Ok(None);
-                        }
+                        return Ok(Some((client, forwarded_host, resp)));
                     }
                 }
             }
@@ -599,10 +591,7 @@ impl PdConnector {
         Ok((None, has_network_error))
     }
 
-    pub async fn reconnect_leader(
-        &self,
-        leader: &Member,
-    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
+    pub async fn reconnect_leader(&self, leader: &Member) -> Result<(Option<PdClientStub>, bool)> {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
@@ -611,7 +600,7 @@ impl PdConnector {
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
-                Some((client, _)) => return Ok((Some((client, "".to_string())), has_network_err)),
+                Some((client, _)) => return Ok((Some(client), has_network_err)),
                 None => {
                     if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
                         let _ = GLOBAL_TIMER_HANDLE
