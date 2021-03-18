@@ -2128,11 +2128,10 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "derive_more",
- "failure",
  "kvproto",
  "log_wrappers",
  "panic_hook",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
 ]
