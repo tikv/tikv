@@ -35,6 +35,8 @@ use tokio_timer::timer::Handle;
 
 const RETRY_INTERVAL_SEC: u64 = 1; // 1s
 const MAX_RETRY_TIMES: u64 = 5;
+// The max duration when retrying to connect to leader. No matter if the MAX_RETRY_TIMES is reached.
+const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -521,13 +523,15 @@ impl PdConnector {
         let resp = self.load_members(&members_resp).await?;
         let leader = resp.get_leader();
         let members = resp.get_members();
+        // Currently we connect to leader directly and there is no member change.
+        // We don't need to connect to PD again.
         if !force && pre_forwarded_host.is_empty() && resp == members_resp {
             return Ok(None);
         }
         let (res, has_network_error) = self.reconnect_leader(leader).await?;
         // There are 3 kinds of situations we will return the new client:
         // 1. the force is true which represents the client is newly created or the original connection has some problem
-        // 2. the previous forwared_host is not equal to the one right now which represents the network partition problem to leader may be recovered
+        // 2. the previous forwared host is not equal to the one right now which represents the network partition problem to leader may be recovered
         // 3. the member information of PD has been changed
         match res {
             Some((client, forwarded_host)) => {
@@ -538,6 +542,11 @@ impl PdConnector {
                 }
             }
             None => {
+                // If the force is false, we could have already forwarded the requests.
+                // We don't need to try forwarding again.
+                if !force {
+                    return Ok(None);
+                }
                 if enable_forwarding && has_network_error {
                     if let Ok(Some((client, forwarded_host))) =
                         self.try_forward(members, leader).await
@@ -570,20 +579,17 @@ impl PdConnector {
                     info!("connected to PD member"; "endpoints" => ep);
                     return Ok((Some((client, resp)), false));
                 }
-                Err(Error::Grpc(RpcFailure(RpcStatus { status, details: _ }))) => {
-                    if status == RpcStatusCode::UNAVAILABLE
-                        || status == RpcStatusCode::DEADLINE_EXCEEDED
-                    {
-                        error!("failed to connect to PD member due to the network"; "endpoints" => ep, "status_code" => ?status);
-                        network_fail_num += 1;
-                    }
-                }
                 Err(Error::Grpc(e)) => {
-                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e)
+                    if let RpcFailure(RpcStatus { status, details: _ }) = e {
+                        if status == RpcStatusCode::UNAVAILABLE
+                            || status == RpcStatusCode::DEADLINE_EXCEEDED
+                        {
+                            network_fail_num += 1;
+                        }
+                    }
+                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
-                Err(e) => {
-                    error!("failed to connect to PD leader through forwarding"; "endpoints" => ep, "error" => ?e);
-                }
+                _ => unreachable!(),
             }
         }
         let url_num = client_urls.len();
@@ -599,6 +605,7 @@ impl PdConnector {
     ) -> Result<(Option<(PdClientStub, String)>, bool)> {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
+        let timer = Instant::now();
 
         // Try to connect the PD cluster leader.
         loop {
@@ -606,7 +613,7 @@ impl PdConnector {
             match res {
                 Some((client, _)) => return Ok((Some((client, "".to_string())), has_network_err)),
                 None => {
-                    if has_network_err && retry_times > 0 {
+                    if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
                             .compat()
