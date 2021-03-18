@@ -585,7 +585,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().to_int_vec(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             &[Some(0)]
         );
 
@@ -618,7 +618,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().to_int_vec(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             &[Some(0)]
         );
 
@@ -651,7 +651,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().to_int_vec(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             &[Some(0)]
         );
 
@@ -684,7 +684,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().to_int_vec(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             &[Some(1)]
         );
 
@@ -717,7 +717,7 @@ mod tests {
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
-            val.vector_value().unwrap().as_ref().to_int_vec(),
+            val.vector_value().unwrap().as_ref().as_int_slice(),
             &[Some(1)]
         );
     }
