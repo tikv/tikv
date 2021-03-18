@@ -156,6 +156,10 @@ fn test_non_force_reconnect_limit() {
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
     let client = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
 
+    // Wait for the PD client thread blocking on the fail point.
+    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+    thread::sleep(Duration::from_secs(2));
+
     // The first reconnection will succeed, and the last_update will not be updated.
     fail::cfg(leader_client_reconnect_fp, "return").unwrap();
     client.reconnect().unwrap();
