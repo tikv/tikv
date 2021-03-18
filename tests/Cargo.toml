@@ -47,7 +47,7 @@ test = true
 [features]
 default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
-testexport = ["raftstore/testexport", "tikv/testexport"]
+testexport = ["pd_client/testexport", "raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
   "batch-system/protobuf-codec",

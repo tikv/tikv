@@ -23,6 +23,7 @@ prost-codec = [
   "txn_types/prost-codec",
 ]
 failpoints = ["fail/failpoints"]
+testexport = []
 
 [dependencies]
 error_code = { path = "../error_code", default-features = false }
