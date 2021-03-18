@@ -3,6 +3,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -322,12 +323,11 @@ where
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
+pub fn sync_request<F, R>(client: &LeaderClient, mut retry: usize, func: F) -> Result<R>
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
-    let mut err = None;
-    for _ in 0..retry {
+    loop {
         let ret = {
             // Drop the read lock immediately to prevent the deadlock between the caller thread
             // which may hold the read lock and wait for PD client thread completing the request
@@ -335,21 +335,25 @@ where
             let client_stub = client.inner.rl().client_stub.clone();
             func(&client_stub).map_err(Error::Grpc)
         };
+
         match ret {
             Ok(r) => {
                 return Ok(r);
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if let Err(e) = block_on(client.reconnect(true)) {
-                    error!(?e; "reconnect failed");
+                if retry <= 0 {
+                    return Err(e);
                 }
-                err = Some(e);
             }
         }
-    }
 
-    Err(err.unwrap_or_else(|| box_err!("fail to request")))
+        retry -= 1;
+        if let Err(e) = block_on(client.reconnect(true)) {
+            error!(?e; "reconnect failed");
+            thread::sleep(REQUEST_RECONNECT_INTERVAL);
+        }
+    }
 }
 
 pub type StubPair = (PdClientStub, GetMembersResponse);

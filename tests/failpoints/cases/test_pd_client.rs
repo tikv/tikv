@@ -145,7 +145,7 @@ fn test_slow_periodical_update() {
 
 // Non-force reconnection will be speed limited.
 #[test]
-fn test_non_force_reconnect_limit() {
+fn test_reconnect_limit() {
     let leader_client_reconnect_fp = "leader_client_reconnect";
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
@@ -163,10 +163,10 @@ fn test_non_force_reconnect_limit() {
     // The first reconnection will succeed, and the last_update will not be updated.
     fail::cfg(leader_client_reconnect_fp, "return").unwrap();
     client.reconnect().unwrap();
-    // The subsequent non-force reconnection will be cancelled.
+    // The subsequent reconnection will be cancelled.
     for _ in 0..10 {
         let ret = client.reconnect();
-        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel non-force reconnection"))
+        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel reconnection"));
     }
 
     fail::remove(leader_client_reconnect_fp);
