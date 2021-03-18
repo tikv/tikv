@@ -55,6 +55,7 @@ protobuf-codec = [
   "tipb/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "grpcio-health/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
@@ -85,6 +86,7 @@ prost-codec = [
   "tipb/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "grpcio-health/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -133,6 +135,7 @@ futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.8", default-features = false }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"

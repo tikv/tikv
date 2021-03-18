@@ -50,6 +50,7 @@ extern crate test;
 
 pub mod config;
 pub mod coprocessor;
+pub mod coprocessor_v2;
 pub mod import;
 pub mod read_pool;
 pub mod server;
