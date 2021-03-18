@@ -154,7 +154,7 @@ fn test_reconnect_limit() {
     let env = Arc::new(EnvBuilder::new().cq_count(1).build());
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    let client = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+    let client = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
     // Wait for the PD client thread blocking on the fail point.
     // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
