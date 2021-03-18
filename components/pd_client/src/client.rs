@@ -10,9 +10,7 @@ use futures::executor::block_on;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{StreamExt, TryStreamExt};
-use grpcio::{
-    CallOption, EnvBuilder, Environment, MetadataBuilder, Result as GrpcResult, WriteFlags,
-};
+use grpcio::{CallOption, EnvBuilder, Environment, Result as GrpcResult, WriteFlags};
 
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
@@ -27,7 +25,7 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{check_resp_header, sync_request, Client, PdConnector};
+use super::util::{build_forward_metadata, check_resp_header, sync_request, Client, PdConnector};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -76,7 +74,7 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
-                Ok((client, address, forwarded_host, members)) => {
+                Ok((client, forwarded_host, members)) => {
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
@@ -84,7 +82,6 @@ impl RpcClient {
                             security_mgr,
                             client,
                             members,
-                            address,
                             forwarded_host,
                             cfg.enable_forwarding,
                         )),
@@ -162,14 +159,14 @@ impl RpcClient {
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option(client: &Client) -> CallOption {
-        let mut builder = MetadataBuilder::with_capacity(1);
-        builder
-            .add_str("pd-forwarded-host", &client.inner.rl().forwarded_host)
-            .unwrap();
-        let metadata = builder.build();
-        CallOption::default()
-            .headers(metadata)
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
+        let forwarded_host = &client.inner.rl().forwarded_host;
+        if !forwarded_host.is_empty() {
+            let metadata = build_forward_metadata(forwarded_host);
+            return CallOption::default()
+                .headers(metadata)
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        }
+        CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }
 
     /// Gets given key's Region and Region's leader from PD.
@@ -250,12 +247,6 @@ impl RpcClient {
         self.pd_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
-    }
-
-    /// Gets the connection address of PD.
-    /// Only used for test purpose.
-    pub fn get_address(&self) -> String {
-        self.pd_client.get_address()
     }
 }
 
@@ -795,6 +786,8 @@ impl PdClient for RpcClient {
 
         let executor = move |client: &Client, req: pdpb::TsoRequest| {
             let cli = client.inner.rl();
+            // The reason why we use the call option with the timeout is
+            // the tso stream is used in a unary way.
             let (mut req_sink, mut resp_stream) = cli
                 .client_stub
                 .tso_opt(Self::call_option(client))

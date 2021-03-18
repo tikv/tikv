@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -142,9 +141,16 @@ fn hijack_unary<F, R, C: PdMocker>(
                 RpcStatusCode::UNIMPLEMENTED,
                 Some("Unimplemented".to_owned()),
             );
+            #[allow(clippy::redundant_closure_call)]
             (|| {
                 fail_point!("connect_leader", |_| {
-                    let v = str::from_utf8(ctx.request_headers().get(0).unwrap().1).unwrap();
+                    let key = ctx.request_headers().get(0).unwrap();
+                    // The default option has a metadata named "user-agent" so we check the key here.
+                    let v = if key.0 == "pd-forwarded-host" {
+                        std::str::from_utf8(key.1).unwrap()
+                    } else {
+                        ""
+                    };
                     status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(v.to_string()));
                 })
             })();
