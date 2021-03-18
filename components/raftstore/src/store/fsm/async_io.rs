@@ -353,7 +353,7 @@ where
                     self.current_idx += 1;
                 } else {
                     // do nothing, adaptive IO size
-          }
+                }
             }
         }
         self.wbs[self.current_idx].on_taken_for_write();
@@ -492,8 +492,7 @@ where
                 };
                 msgs.push(msg);
             }
-            STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM
-                .observe(duration_to_sec(loop_begin.elapsed()));
+            STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM.observe(duration_to_sec(loop_begin.elapsed()));
 
             let begin = UtilInstant::now();
             let len = self.receiver.len();

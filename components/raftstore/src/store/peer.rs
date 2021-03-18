@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use rand::Rng;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, ops::Sub};
 use std::{cmp, mem, u64, usize};
-use rand::Rng;
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, Snapshot, WriteOptions, CF_RAFT};
@@ -500,7 +500,7 @@ where
     /// Used for async writer id, raft client
     /// io thread must consume the io request before this peer has been destroyed.
     /// But grpc thread doesn't has this feature so the msg may be reorder if a new peer
-    /// with the same region id is created after this peer is destroyed. 
+    /// with the same region id is created after this peer is destroyed.
     /// TODO: should think it twice(peer id is different so it should be no problem)
     random_id: usize,
 }
@@ -1745,16 +1745,6 @@ where
             }
         }
 
-        for ts in &proposal_times {
-            STORE_PROPOSAL_BEFORE_GET_READY_DURATION_HISTOGRAM
-                .observe(duration_to_sec(now.sub(*ts)));
-        }
-
-        for ts in &proposal_times {
-            STORE_PROPOSAL_AFTER_GET_READY_DURATION_HISTOGRAM
-                .observe(duration_to_sec(ts.elapsed()));
-        }
-
         if !ready.must_sync() {
             // If this ready need not to sync, the term, vote must not be changed,
             // entries and snapshot must be empty.
@@ -2369,11 +2359,6 @@ where
         };
         let is_urgent = is_request_urgent(&req);
 
-        if let Callback::Write { cb, .. } = &cb {
-            STORE_PROPOSAL_BEFORE_PROPOSE_DURATION_HISTOGRAM
-                .observe(duration_to_sec(cb.1.elapsed()));
-        }
-
         let policy = self.inspect(&req);
         let res = match policy {
             Ok(RequestPolicy::ReadLocal) => {
@@ -2388,11 +2373,6 @@ where
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
         };
-
-        if let Callback::Write { cb, .. } = &cb {
-            STORE_PROPOSAL_AFTER_PROPOSE_DURATION_HISTOGRAM
-                .observe(duration_to_sec(cb.1.elapsed()));
-        }
 
         match res {
             Err(e) => {
@@ -2413,10 +2393,6 @@ where
                     // we can safely guarantee that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
                     cb.invoke_proposed();
-                }
-                if let Callback::Write { cb, .. } = &cb {
-                    STORE_PROPOSAL_AFTER_INVOKE_PROPOSED_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(cb.1.elapsed()));
                 }
                 if is_urgent {
                     self.last_urgent_proposal_idx = idx;

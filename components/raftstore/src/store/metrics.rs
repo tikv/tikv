@@ -399,37 +399,6 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
-    pub static ref STORE_PROPOSAL_BEFORE_PROPOSE_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_before_propose_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_PROPOSE_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_propose_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_INVOKE_PROPOSED_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_invoke_proposed_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_BEFORE_GET_READY_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_before_get_ready_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-    pub static ref STORE_PROPOSAL_AFTER_GET_READY_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_proposal_after_get_ready_duration_seconds",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-
     pub static ref APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_write_callback_duration_seconds",

@@ -26,8 +26,6 @@ use tikv_util::time::{duration_to_micros, duration_to_sec, Instant};
 
 use std::time::Duration;
 
-use std::time::Duration;
-
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 5 * 1024 * 1024;
 
