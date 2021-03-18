@@ -602,7 +602,7 @@ import-mode-timeout = "1453s"
 ratio-threshold = 1.2
 batch-keys = 256
 max-write-bytes-per-sec = "10MB"
-enable-compaction-filter = true
+enable-compaction-filter = false
 compaction-filter-skip-version-check = true
 
 [pessimistic-txn]

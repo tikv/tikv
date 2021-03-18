@@ -2,19 +2,21 @@
 
 use super::{IOOp, IOType};
 
-use crossbeam_utils::CachePadded;
 use std::future::{self, Future};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
+use crossbeam_utils::CachePadded;
+use strum::EnumCount;
+
 /// Record accumulated bytes through of different types.
 /// Used for testing and metrics.
 #[derive(Debug)]
 pub struct IORateLimiterStatistics {
-    read: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
-    write: [CachePadded<AtomicUsize>; IOType::VARIANT_COUNT],
+    read: [CachePadded<AtomicUsize>; IOType::COUNT],
+    write: [CachePadded<AtomicUsize>; IOType::COUNT],
 }
 
 impl IORateLimiterStatistics {
