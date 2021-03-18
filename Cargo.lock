@@ -1785,6 +1785,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "grpcio-health"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62390e02d912a4cda2d93c500f3d3ce29ef5fc1c0501e89c61c8d005e5a3f3e3"
+dependencies = [
+ "futures 0.3.7",
+ "grpcio",
+ "log",
+ "prost",
+ "protobuf",
+]
+
+[[package]]
 name = "grpcio-sys"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2204,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#2d1e9b145eda310af9933e5c5eb1bcb277fd1ab0"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#1b3a613154bc5f7c7ffa5e0f86af99a41049d751"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -2223,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#2d1e9b145eda310af9933e5c5eb1bcb277fd1ab0"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#1b3a613154bc5f7c7ffa5e0f86af99a41049d751"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3947,7 +3960,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#2d1e9b145eda310af9933e5c5eb1bcb277fd1ab0"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-5.0#1b3a613154bc5f7c7ffa5e0f86af99a41049d751"
 dependencies = [
  "libc 0.2.86",
  "librocksdb_sys",
@@ -4998,6 +5011,7 @@ dependencies = [
  "file_system",
  "futures 0.3.7",
  "grpcio",
+ "grpcio-health",
  "hyper",
  "keys",
  "kvproto",
@@ -5266,6 +5280,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "http",
  "hyper",
