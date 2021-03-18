@@ -6,7 +6,7 @@ use super::tempdir;
 
 use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions, EngineConstructorExt};
 use engine_test::kv::KvTestEngine;
-use engine_traits::{ALL_CFS, SyncMutable, KvEngine, Error as EngineError};
+use engine_traits::{Error as EngineError, KvEngine, SyncMutable, ALL_CFS};
 
 use std::fs;
 
@@ -74,7 +74,7 @@ fn new_engine_readonly_dir() {
     let err = err.unwrap_err();
 
     match err {
-        EngineError::Other(_) => { /* pass */ },
+        EngineError::Other(_) => { /* pass */ }
         e => panic!(e),
     }
 }
@@ -103,7 +103,7 @@ fn new_engine_opt_readonly_dir() {
     let err = err.unwrap_err();
 
     match err {
-        EngineError::Other(_) => { /* pass */ },
+        EngineError::Other(_) => { /* pass */ }
         e => panic!(e),
     }
 }
