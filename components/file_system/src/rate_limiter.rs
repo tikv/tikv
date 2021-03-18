@@ -254,6 +254,11 @@ impl RawIORateLimiter {
             }
             locked.pending_ios[pi] = 0;
         }
+        self.ios_through[IOPriority::Low as usize].store(
+            locked.pending_ios[IOPriority::Low as usize],
+            Ordering::Release,
+        );
+        locked.pending_ios[IOPriority::Low as usize] = 0;
     }
 }
 
@@ -362,7 +367,7 @@ impl Drop for IORateLimiterDaemon {
 }
 
 #[cfg(test)]
-pub fn new_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORateLimiterDaemon {
+pub fn create_local_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORateLimiterDaemon {
     let stop = Arc::new(AtomicBool::new(false));
     let stop1 = stop.clone();
     IORateLimiterDaemon {
@@ -402,7 +407,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     struct Request(IOType, IOOp, usize);
 
     fn start_background_jobs(
@@ -462,7 +467,7 @@ mod tests {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
-        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
         verify_rate_limit(&limiter, low_bytes_per_sec);
         verify_rate_limit(&limiter, high_bytes_per_sec);
         verify_rate_limit(&limiter, low_bytes_per_sec);
@@ -475,7 +480,7 @@ mod tests {
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics().unwrap();
-        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {
@@ -509,7 +514,7 @@ mod tests {
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
-        let _deamon = new_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {

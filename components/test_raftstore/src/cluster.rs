@@ -196,14 +196,6 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RocksEngine>>) {
-        if self.io_rate_limiter.is_none() {
-            self.io_rate_limiter = Some(Arc::new(
-                self.cfg
-                    .storage
-                    .io_rate_limit
-                    .build(true /*enable_statistics*/),
-            ));
-        }
         let (engines, key_manager, dir) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
@@ -212,6 +204,12 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn create_engines(&mut self) {
+        self.io_rate_limiter = Some(Arc::new(
+            self.cfg
+                .storage
+                .io_rate_limit
+                .build(true /*enable_statistics*/),
+        ));
         for _ in 0..self.count {
             self.create_engine(None);
         }

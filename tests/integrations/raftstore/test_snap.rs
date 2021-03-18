@@ -486,7 +486,6 @@ fn test_request_snapshot_apply_repeatedly() {
 #[test]
 fn test_inspected_snapshot() {
     let mut cluster = new_server_cluster(1, 3);
-    let stats = cluster.io_rate_limiter.statistics().unwrap();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = 8;
     cluster.cfg.raft_store.merge_max_log_gap = 3;
@@ -500,6 +499,12 @@ fn test_inspected_snapshot() {
     // Sleep for a while to ensure all logs are compacted.
     std::thread::sleep(Duration::from_millis(100));
 
+    let stats = cluster
+        .io_rate_limiter
+        .as_ref()
+        .unwrap()
+        .statistics()
+        .unwrap();
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
     // Let store 3 inform leader to generate a snapshot.
