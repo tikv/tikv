@@ -2,7 +2,7 @@
 
 use std::{ffi::CString};
 
-use crate::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
+use crate::coprocessor::{RegionInfoProvider};
 use engine_traits::{
     LevelRegionAccessor, LevelRegionBoundaries,
     LevelRegionAccessorRequest, LevelRegionAccessorResult,
