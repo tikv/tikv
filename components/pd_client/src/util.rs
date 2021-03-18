@@ -150,7 +150,6 @@ impl LeaderClient {
         req: Req,
         func: F,
         retry: usize,
-        force_reconnect: bool,
     ) -> Request<Req, F>
     where
         Req: Clone + 'static,
@@ -158,7 +157,6 @@ impl LeaderClient {
     {
         Request {
             reconnect_count: retry,
-            force_reconnect,
             request_sent: 0,
             client: self.clone(),
             req,
@@ -246,7 +244,6 @@ pub const RECONNECT_UPDATE_INTERVAL: Duration = Duration::from_millis(1500); // 
 /// The context of sending requets.
 pub struct Request<Req, F> {
     reconnect_count: usize,
-    force_reconnect: bool,
     request_sent: usize,
     client: Arc<LeaderClient>,
     req: Req,
@@ -272,7 +269,7 @@ where
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
-        match self.client.reconnect(self.force_reconnect).await {
+        match self.client.reconnect(true).await {
             Ok(_) => {
                 self.request_sent = 0;
                 true
