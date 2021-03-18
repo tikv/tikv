@@ -204,9 +204,6 @@ walkdir = "2"
 minitrace = { git = "https://github.com/pingcap-incubator/minitrace-rust.git", branch = "master" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
-[patch.'https://github.com/pingcap/tipb']
-tipb = { branch = "patch-1", git = "https://github.com/Xuanwo/tipb.git", default-features = false }
-
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
 test_sst_importer = { path = "components/test_sst_importer", default-features = false }
