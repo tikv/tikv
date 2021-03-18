@@ -342,16 +342,20 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if retry <= 0 {
-                    return Err(e);
+                loop {
+                    if retry == 0 {
+                        return Err(e);
+                    }
+                    retry -= 1;
+                    match block_on(client.reconnect(true)) {
+                        Ok(()) => break,
+                        Err(e) => {
+                            error!(?e; "reconnect failed");
+                            thread::sleep(REQUEST_RECONNECT_INTERVAL);
+                        }
+                    }
                 }
             }
-        }
-
-        retry -= 1;
-        if let Err(e) = block_on(client.reconnect(true)) {
-            error!(?e; "reconnect failed");
-            thread::sleep(REQUEST_RECONNECT_INTERVAL);
         }
     }
 }
