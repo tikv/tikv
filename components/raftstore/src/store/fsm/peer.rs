@@ -1027,7 +1027,6 @@ where
             self.fsm.peer.mut_store().flush_cache_metrics();
             return;
         }
-
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
