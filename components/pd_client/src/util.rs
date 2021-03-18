@@ -180,10 +180,10 @@ impl LeaderClient {
                 // Avoid unnecessary updating.
                 return Ok(());
             }
-            if !force && inner.last_try_reconnect.elapsed() < ALL_NON_FORCE_RECONNECT_INTERVAL {
+            if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
                 // Prevent a large number of reconnections in a short time.
                 return Err(box_err!(
-                    "cancel non-force reconnection due to too small interval"
+                    "cancel reconnection due to too small interval"
                 ));
             }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
@@ -238,7 +238,7 @@ impl LeaderClient {
 }
 
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_millis(1000); // 1s
-pub const ALL_NON_FORCE_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
+pub const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const RECONNECT_UPDATE_INTERVAL: Duration = Duration::from_millis(1500); // 1.5s, need to be greater than REQUEST_RECONNECT_INTERVAL
 
 /// The context of sending requets.
