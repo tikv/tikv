@@ -10,10 +10,10 @@ use std::{sync::Arc, time::Duration};
 
 use bitflags::bitflags;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot, RocksTablePropertiesCollection};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::CF_DEFAULT;
 use engine_traits::{CfName, KvEngine};
-use engine_traits::{MvccProperties, MvccPropertiesExt, TablePropertiesExt};
+use engine_traits::{MvccProperties, MvccPropertiesExt};
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
@@ -471,19 +471,6 @@ where
 
     fn release_snapshot(&self) {
         self.router.release_snapshot_cache();
-    }
-
-    fn get_properties_cf(
-        &self,
-        cf: CfName,
-        start: &[u8],
-        end: &[u8],
-    ) -> kv::Result<RocksTablePropertiesCollection> {
-        let start = keys::data_key(start);
-        let end = keys::data_end_key(end);
-        self.engine
-            .get_range_properties_cf(cf, &start, &end)
-            .map_err(|e| e.into())
     }
 
     fn get_mvcc_properties_cf(
