@@ -132,13 +132,9 @@ impl SecurityManager {
         })
     }
 
-    pub fn connect(&self, mut cb: ChannelBuilder, addr: &str, cq_id: Option<usize>) -> Channel {
+    pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
         if self.cfg.ca_path.is_empty() {
-            if let Some(id) = cq_id {
-                cb.connect_with_id(addr, id)
-            } else {
-                cb.connect(addr)
-            }
+            cb.connect(addr)
         } else {
             if !self.cfg.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
@@ -152,11 +148,7 @@ impl SecurityManager {
                 .root_cert(ca)
                 .cert(cert, key)
                 .build();
-            if let Some(id) = cq_id {
-                cb.secure_connect_with_id(addr, cred, id)
-            } else {
-                cb.secure_connect(addr, cred)
-            }
+            cb.secure_connect(addr, cred)
         }
     }
 

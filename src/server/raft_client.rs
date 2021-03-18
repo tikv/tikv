@@ -589,8 +589,8 @@ where
         }
     }
 
-    fn connect(&self, addr: &str, cq_id: usize) -> TikvClient {
-        info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id, "cq_id" => cq_id);
+    fn connect(&self, addr: &str) -> TikvClient {
+        info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
         let cb = ChannelBuilder::new(self.builder.env.clone())
             .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
@@ -603,7 +603,7 @@ where
                 CString::new("random id").unwrap(),
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
             );
-        let channel = self.builder.security_mgr.connect(cb, addr, Some(cq_id));
+        let channel = self.builder.security_mgr.connect(cb, addr);
         TikvClient::new(channel)
     }
 
@@ -677,7 +677,6 @@ async fn start<S, R>(
     back_end: StreamBackEnd<S, R>,
     conn_id: usize,
     pool: Arc<Mutex<ConnectionPool>>,
-    cq_id: usize,
 ) where
     S: StoreAddrResolver + Send,
     R: RaftStoreRouter<RocksEngine> + Unpin + Send + 'static,
@@ -710,7 +709,7 @@ async fn start<S, R>(
                 continue;
             }
         };
-        let client = back_end.connect(&addr, cq_id);
+        let client = back_end.connect(&addr);
         let f = back_end.batch_call(&client, addr.clone());
         let mut res = f.await;
         if res == Ok(()) {
@@ -747,8 +746,6 @@ async fn start<S, R>(
 struct ConnectionPool {
     connections: HashMap<(u64, usize), Arc<Queue>>,
     tombstone_stores: HashSet<u64>,
-    cq_ids: HashMap<(u64, usize), usize>,
-    cq_idx: usize,
 }
 
 /// Queue in cache.
@@ -813,15 +810,6 @@ where
             if pool.tombstone_stores.contains(&store_id) {
                 return false;
             }
-            let cq_id = match pool.cq_ids.get(&(store_id, conn_id)) {
-                Some(id) => *id,
-                None => {
-                    let idx = pool.cq_idx;
-                    pool.cq_ids.insert((store_id, conn_id), idx);
-                    pool.cq_idx += 1;
-                    idx
-                }
-            };
             (
                 pool.connections
                     .entry((store_id, conn_id))
@@ -835,7 +823,7 @@ where
                             builder: self.builder.clone(),
                         };
                         self.future_pool
-                            .spawn(start(back_end, conn_id, self.pool.clone(), cq_id));
+                            .spawn(start(back_end, conn_id, self.pool.clone()));
                         queue
                     })
                     .clone(),

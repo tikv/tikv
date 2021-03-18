@@ -148,7 +148,7 @@ fn send_snap(
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
         .default_compression_algorithm(cfg.grpc_compression_algorithm());
 
-    let channel = security_mgr.connect(cb, addr, None);
+    let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot()?;
 

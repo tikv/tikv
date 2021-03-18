@@ -399,7 +399,7 @@ async fn connect(
         let cb = ChannelBuilder::new(env)
             .keepalive_time(Duration::from_secs(10))
             .keepalive_timeout(Duration::from_secs(3));
-        security_mgr.connect(cb, addr, None)
+        security_mgr.connect(cb, addr)
     };
     let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
