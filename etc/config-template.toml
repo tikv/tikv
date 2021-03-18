@@ -636,12 +636,13 @@
 ## in `storage` to ensure that a restarted TiKV instance can perform compactions successfully.
 # max-compaction-bytes = "2GB"
 
-## There are four different compaction priorities.
+## There are five different compaction priorities.
 ## 0 : ByCompensatedSize
 ## 1 : OldestLargestSeqFirst
 ## 2 : OldestSmallestSeqFirst
 ## 3 : MinOverlappingRatio
-# compaction-pri = 3
+## 4 : MaxViolatingSizeRatio
+# compaction-pri = 4
 
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table

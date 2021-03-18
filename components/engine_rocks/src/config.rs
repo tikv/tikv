@@ -337,6 +337,7 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
+    MaxViolatingSizeRatio = 4,
 }}
 
 numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
