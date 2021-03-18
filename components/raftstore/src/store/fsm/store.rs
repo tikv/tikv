@@ -747,9 +747,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
-        self.timer = TiInstant::now_coarse();
+        self.timer = TiInstant::now();
         STORE_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
-        self.loop_timer = TiInstant::now_coarse();
+        self.loop_timer = TiInstant::now();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(
@@ -1129,8 +1129,8 @@ where
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
-            timer: TiInstant::now_coarse(),
-            loop_timer: TiInstant::now_coarse(),
+            timer: TiInstant::now(),
+            loop_timer: TiInstant::now(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),

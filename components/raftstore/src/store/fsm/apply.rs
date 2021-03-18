@@ -543,9 +543,9 @@ where
         let apply_cb = self.cb.take();
 
         let writer_id = delegate.async_writer_id(self);
-        let wait_lock = Instant::now_coarse();
+        let wait_lock = Instant::now();
         let mut locked_writer = self.async_writers[writer_id].0.lock().unwrap();
-        let hold_lock = Instant::now_coarse();
+        let hold_lock = Instant::now();
 
         self.io_lock_metrics
             .wait_lock_sec
@@ -3113,7 +3113,7 @@ where
         mut apply: Apply<EK::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(Instant::now_coarse());
+            apply_ctx.timer = Some(Instant::now());
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -3232,7 +3232,7 @@ where
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
-            ctx.timer = Some(Instant::now_coarse());
+            ctx.timer = Some(Instant::now());
         }
         if !state.pending_entries.is_empty() {
             self.delegate
@@ -3550,7 +3550,7 @@ where
             }
         }
         APPLY_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
-        self.loop_timer = Instant::now_coarse();
+        self.loop_timer = Instant::now();
     }
 
     /// There is no control fsm in apply poller.
@@ -3698,7 +3698,7 @@ where
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
-            loop_timer: Instant::now_coarse(),
+            loop_timer: Instant::now(),
         }
     }
 }

@@ -2,7 +2,6 @@
 
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::{collections::VecDeque, time::Instant};
@@ -24,7 +23,7 @@ use raft::eraftpb::Entry;
 
 use std::time::Duration;
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, Instant as UtilInstant};
+use tikv_util::time::{duration_to_micros, duration_to_sec, Instant as UtilInstant};
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
@@ -204,7 +203,7 @@ where
 
     fn on_taken_for_write(&mut self) {
         if self.is_empty() {
-            self.begin = Some(UtilInstant::now_coarse());
+            self.begin = Some(UtilInstant::now());
         }
     }
 
@@ -297,6 +296,7 @@ where
     sample_window: SampleWindow,
     sample_quantile: f64,
     task_suggest_bytes_cache: usize,
+    adaptive_size: bool,
 }
 
 impl<EK, ER> AsyncWriteAdaptiveQueue<EK, ER>
@@ -312,6 +312,7 @@ where
         queue_bytes_step: f64,
         queue_adaptive_gain: usize,
         queue_sample_quantile: f64,
+        adaptive_size: bool,
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
@@ -336,20 +337,23 @@ where
             sample_window: SampleWindow::new(),
             sample_quantile: queue_sample_quantile,
             task_suggest_bytes_cache: 0,
+            adaptive_size,
         }
     }
 
     pub fn prepare_current_for_write(
         &mut self,
     ) -> &mut AsyncWriteBatch<EK, EK::WriteBatch, ER::LogBatch> {
-        let current_size = self.wbs[self.current_idx].get_raft_size();
-        if current_size
-            >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
-        {
-            if self.current_idx + 1 < self.wbs.len() {
-                self.current_idx += 1;
-            } else {
-                // do nothing, adaptive IO size
+        if self.adaptive_size {
+            let current_size = self.wbs[self.current_idx].get_raft_size();
+            if current_size
+                >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
+            {
+                if self.current_idx + 1 < self.wbs.len() {
+                    self.current_idx += 1;
+                } else {
+                    // do nothing, adaptive IO size
+          }
             }
         }
         self.wbs[self.current_idx].on_taken_for_write();
@@ -365,25 +369,28 @@ where
         let task_bytes = task.get_raft_size();
         self.metrics.task_real_bytes.observe(task_bytes as f64);
 
-        let limit_bytes =
-            self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
-        self.metrics.task_limit_bytes.observe(limit_bytes as f64);
+        if self.adaptive_size {
+            let limit_bytes =
+                self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
+            self.metrics.task_limit_bytes.observe(limit_bytes as f64);
 
-        self.sample_window.observe(task_bytes as f64);
-        let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
-        self.task_suggest_bytes_cache = task_suggest_bytes as usize;
-        self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
+            self.sample_window.observe(task_bytes as f64);
+            let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
+            self.task_suggest_bytes_cache = task_suggest_bytes as usize;
+            self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
 
-        let current_target_bytes = self.size_limits[self.adaptive_idx + self.current_idx] as f64;
-        if task_suggest_bytes >= current_target_bytes {
-            if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
-                self.adaptive_idx += 1;
+            let current_target_bytes =
+                self.size_limits[self.adaptive_idx + self.current_idx] as f64;
+            if task_suggest_bytes >= current_target_bytes {
+                if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
+                    self.adaptive_idx += 1;
+                }
+            } else if self.adaptive_idx > 0
+                && task_suggest_bytes
+                    < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
+            {
+                self.adaptive_idx -= 1;
             }
-        } else if self.adaptive_idx > 0
-            && task_suggest_bytes
-                < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
-        {
-            self.adaptive_idx -= 1;
         }
 
         if self.current_idx != 0 {
@@ -457,6 +464,7 @@ where
             config.store_batch_system.io_queue_bytes_step,
             config.store_batch_system.io_queue_adaptive_gain,
             config.store_batch_system.io_queue_sample_quantile,
+            config.store_batch_system.io_adaptive_size,
         );
         Self {
             store_id,
@@ -468,14 +476,14 @@ where
             queue,
             trans,
             perf_context_statistics: PerfContextStatistics::new(config.perf_level),
-            io_max_wait_us: config.apply_batch_system.io_max_wait_us as i64,
+            io_max_wait_us: config.store_batch_system.io_max_wait_us as i64,
         }
     }
 
     fn run(&mut self) {
         let mut msgs = vec![];
         loop {
-            let loop_begin = UtilInstant::now_coarse();
+            let loop_begin = UtilInstant::now();
 
             if !self.queue.has_task() {
                 let msg = match self.receiver.recv() {
@@ -484,14 +492,16 @@ where
                 };
                 msgs.push(msg);
             }
+            STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM
+                .observe(duration_to_sec(loop_begin.elapsed()));
 
-            let begin = UtilInstant::now_coarse();
+            let begin = UtilInstant::now();
             let len = self.receiver.len();
             for _ in 0..len {
                 msgs.push(self.receiver.try_recv().unwrap());
             }
             STORE_WRITE_RECEIVE_MSG_DURATION_HISTOGRAM.observe(duration_to_sec(begin.elapsed()));
-            let begin = UtilInstant::now_coarse();
+            let begin = UtilInstant::now();
             for msg_vec in msgs.drain(..) {
                 for msg in msg_vec {
                     match msg {
@@ -523,47 +533,6 @@ where
 
             STORE_WRITE_LOOP_DURATION_HISTOGRAM
                 .observe(duration_to_sec(loop_begin.elapsed()) as f64);
-
-            /*let mut task = {
-                let mut w = self.writer.0.lock().unwrap();
-                let mut delta_us =
-                    self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
-                if self.io_max_wait_us == 0 {
-                    while !w.stop && !w.has_task() {
-                        w = self.writer.1.wait(w).unwrap();
-                    }
-                } else {
-                    while !w.stop && !w.has_writable_task() && delta_us > 0 {
-                        w = self
-                            .writer
-                            .1
-                            .wait_timeout(w, Duration::from_millis(delta_us as u64))
-                            .unwrap()
-                            .0;
-                        delta_us = self.io_max_wait_us
-                            - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
-                    }
-                }
-                if w.stop {
-                    return;
-                }
-                if !w.has_task() {
-                    continue;
-                }
-                let task = w.detach_task();
-                if self.io_max_wait_us == 0 || delta_us < 0 {
-                    STORE_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM
-                        .observe(task.raft_wb.persist_size() as f64);
-                } else {
-                    STORE_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM
-                        .observe((self.io_max_wait_us - delta_us) as f64);
-                }
-                task
-            };
-
-            // TODO: metric change name?
-            STORE_WRITE_WAIT_DURATION_HISTOGRAM
-                .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);*/
         }
     }
 
@@ -573,7 +542,7 @@ where
         self.perf_context_statistics.start();
         fail_point!("raft_before_save");
         if !batch.kv_wb.is_empty() {
-            let now = UtilInstant::now_coarse();
+            let now = UtilInstant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.kv_engine
@@ -591,7 +560,7 @@ where
         fail_point!("raft_between_save");
         if !batch.raft_wb.is_empty() {
             fail_point!("raft_before_save_on_store_1", self.store_id == 1, |_| {});
-            let now = UtilInstant::now_coarse();
+            let now = UtilInstant::now();
             self.raft_engine
                 .consume_and_shrink(&mut batch.raft_wb, true, RAFT_WB_SHRINK_SIZE, 4 * 1024)
                 .unwrap_or_else(|e| {
@@ -606,7 +575,7 @@ where
         );
         batch.after_write_to_db();
 
-        let send_begin = UtilInstant::now_coarse();
+        let send_begin = UtilInstant::now();
         for task in &mut batch.tasks {
             for msg in task.messages.drain(..) {
                 let region_id = msg.get_region_id();
@@ -630,7 +599,7 @@ where
         self.trans.flush();
         STORE_WRITE_SEND_DURATION_HISTOGRAM.observe(duration_to_sec(send_begin.elapsed()));
 
-        let callback_begin = UtilInstant::now_coarse();
+        let callback_begin = UtilInstant::now();
         for (region_id, r) in &batch.unsynced_readies {
             r.flush(*region_id, &self.router);
         }

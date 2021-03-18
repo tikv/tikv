@@ -181,12 +181,6 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
-    pub static ref STORE_WRITE_WAIT_SEND_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_write_wait_send_duration_secs",
-            "TODO",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WRITE_TRIGGER_SEND_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_trigger_send_duration_secs",
@@ -208,6 +202,12 @@ lazy_static! {
     pub static ref STORE_WRITE_FORCE_TRIGGER_SEND_BYTES_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_write_force_trigger_send_bytes",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref APPLY_WRITE_TASK_WAKE_CNT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_task_gen_wake_cnt",
             "TODO",
             exponential_buckets(0.5, 2.0, 20).unwrap()
         ).unwrap();
@@ -252,6 +252,18 @@ lazy_static! {
             "tikv_raftstore_apply_write_time_trigger_wb_bytes",
             "TODO",
             exponential_buckets(0.5, 2.0, 20).unwrap()
+        ).unwrap();
+    pub static ref STORE_WRITE_TASK_GEN_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_store_write_task_gen_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+    pub static ref APPLY_WRITE_TASK_GEN_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_write_task_gen_duration_secs",
+            "TODO",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
         register_histogram!(

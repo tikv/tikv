@@ -22,7 +22,9 @@ use kvproto::metapb::Region;
 
 use std::sync::mpsc::{channel, Sender};
 use tikv_util::collections::HashMap;
-use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::time::{duration_to_micros, duration_to_sec, Instant};
+
+use std::time::Duration;
 
 use std::time::Duration;
 
@@ -183,7 +185,7 @@ where
 
     fn on_taken_for_write(&mut self) {
         if self.is_empty() {
-            self.begin = Some(Instant::now_coarse());
+            self.begin = Some(Instant::now());
         }
     }
 
@@ -224,6 +226,7 @@ where
     sample_window: SampleWindow,
     sample_quantile: f64,
     task_suggest_bytes_cache: usize,
+    adaptive_size: bool,
 }
 
 impl<EK, W> ApplyAsyncWriteTasks<EK, W>
@@ -238,6 +241,7 @@ where
         queue_bytes_step: f64,
         queue_adaptive_gain: usize,
         queue_sample_quantile: f64,
+        adaptive_size: bool,
     ) -> Self {
         let mut wbs = VecDeque::default();
         for _ in 0..queue_size {
@@ -263,18 +267,21 @@ where
             sample_window: SampleWindow::new(),
             sample_quantile: queue_sample_quantile,
             task_suggest_bytes_cache: 0,
+            adaptive_size,
         }
     }
 
     pub fn prepare_current_for_write(&mut self) -> &mut ApplyAsyncWriteTask<EK, W> {
-        let current_size = self.wbs[self.current_idx].kv_wb.data_size();
-        if current_size
-            >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
-        {
-            if self.current_idx + 1 < self.wbs.len() {
-                self.current_idx += 1;
-            } else {
-                // do nothing, adaptive IO size
+        if self.adaptive_size {
+            let current_size = self.wbs[self.current_idx].kv_wb.data_size();
+            if current_size
+                >= self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx]
+            {
+                if self.current_idx + 1 < self.wbs.len() {
+                    self.current_idx += 1;
+                } else {
+                    // do nothing, adaptive IO size
+                }
             }
         }
         self.wbs[self.current_idx].on_taken_for_write();
@@ -294,25 +301,28 @@ where
         let task_bytes = task.kv_wb.data_size();
         self.metrics.task_real_bytes.observe(task_bytes as f64);
 
-        let limit_bytes =
-            self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
-        self.metrics.task_limit_bytes.observe(limit_bytes as f64);
+        if self.adaptive_size {
+            let limit_bytes =
+                self.size_limits[self.adaptive_gain + self.adaptive_idx + self.current_idx];
+            self.metrics.task_limit_bytes.observe(limit_bytes as f64);
 
-        self.sample_window.observe(task_bytes as f64);
-        let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
-        self.task_suggest_bytes_cache = task_suggest_bytes as usize;
-        self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
+            self.sample_window.observe(task_bytes as f64);
+            let task_suggest_bytes = self.sample_window.quantile(self.sample_quantile);
+            self.task_suggest_bytes_cache = task_suggest_bytes as usize;
+            self.metrics.task_suggest_bytes.observe(task_suggest_bytes);
 
-        let current_target_bytes = self.size_limits[self.adaptive_idx + self.current_idx] as f64;
-        if task_suggest_bytes >= current_target_bytes {
-            if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
-                self.adaptive_idx += 1;
+            let current_target_bytes =
+                self.size_limits[self.adaptive_idx + self.current_idx] as f64;
+            if task_suggest_bytes >= current_target_bytes {
+                if self.adaptive_idx + (self.wbs.len() - 1) + 1 < self.size_limits.len() {
+                    self.adaptive_idx += 1;
+                }
+            } else if self.adaptive_idx > 0
+                && task_suggest_bytes
+                    < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
+            {
+                self.adaptive_idx -= 1;
             }
-        } else if self.adaptive_idx > 0
-            && task_suggest_bytes
-                < (self.size_limits[self.adaptive_idx + self.current_idx - 1] as f64)
-        {
-            self.adaptive_idx -= 1;
         }
 
         if self.current_idx != 0 {
@@ -391,6 +401,7 @@ where
                 config.apply_batch_system.io_queue_bytes_step,
                 config.apply_batch_system.io_queue_adaptive_gain,
                 config.apply_batch_system.io_queue_sample_quantile,
+                config.apply_batch_system.io_adaptive_size,
             )),
             Condvar::new(),
         ));
@@ -412,25 +423,27 @@ where
 
     fn run(&mut self) {
         loop {
-            let loop_begin = Instant::now_coarse();
+            let loop_begin = Instant::now();
+            let mut wake_count = 0;
             let mut task = {
                 let mut w = self.writer.0.lock().unwrap();
                 let mut delta_us =
-                    self.io_max_wait_us - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                    self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
                 if self.io_max_wait_us == 0 {
                     while !w.stop && !w.has_task() {
                         w = self.writer.1.wait(w).unwrap();
+                        wake_count += 1;
                     }
                 } else {
                     while !w.stop && !w.has_writable_task() && delta_us > 0 {
                         w = self
                             .writer
                             .1
-                            .wait_timeout(w, Duration::from_millis(delta_us as u64))
+                            .wait_timeout(w, Duration::from_micros(delta_us as u64))
                             .unwrap()
                             .0;
-                        delta_us = self.io_max_wait_us
-                            - (duration_to_sec(loop_begin.elapsed()) * 1e6) as i64;
+                        delta_us =
+                            self.io_max_wait_us - duration_to_micros(loop_begin.elapsed()) as i64;
                     }
                 }
                 if w.stop {
@@ -440,11 +453,11 @@ where
                     continue;
                 }
                 let task = w.detach_task();
+                APPLY_WRITE_TASK_WAKE_CNT_HISTOGRAM.observe(wake_count as f64);
+                APPLY_WRITE_TASK_GEN_DURATION_HISTOGRAM
+                    .observe(duration_to_sec(loop_begin.elapsed()));
                 if self.io_max_wait_us == 0 || delta_us < 0 {
                     APPLY_WRITE_TIME_TRIGGER_SIZE_HISTOGRAM.observe(task.kv_wb.data_size() as f64);
-                } else {
-                    APPLY_WRITE_SIZE_TRIGGER_DURATION_HISTOGRAM
-                        .observe((self.io_max_wait_us - delta_us) as f64);
                 }
                 task
             };
@@ -453,7 +466,7 @@ where
             APPLY_WRITE_WAIT_DURATION_HISTOGRAM
                 .observe(duration_to_sec(task.begin.unwrap().elapsed()) as f64);
 
-            let now = Instant::now_coarse();
+            let now = Instant::now();
             self.sync_write(&mut task);
             APPLY_WRITE_ALL_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()) as f64);
 
@@ -474,7 +487,7 @@ where
 
         self.perf_context_statistics.start();
         if !task.kv_wb.is_empty() {
-            let now = Instant::now_coarse();
+            let now = Instant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(task.sync_log);
             task.kv_wb
@@ -500,7 +513,7 @@ where
         }
         task.after_write_to_db();
 
-        let callback_begin = Instant::now_coarse();
+        let callback_begin = Instant::now();
         self.coprocessor_host.on_flush_apply(self.kv_engine.clone());
 
         if self.async_callback {
@@ -578,13 +591,13 @@ where
             let callback_t = thread::Builder::new()
                 .name(thd_name!("apply-writer-callback"))
                 .spawn(move || {
-                    let mut callback_begin = Instant::now_coarse();
+                    let mut callback_begin = Instant::now();
                     loop {
                         let mut cb_task = async_cb_rx.recv().unwrap();
                         cb_task.before_callback();
                         APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
                             .observe(duration_to_sec(callback_begin.elapsed()) as f64);
-                        callback_begin = Instant::now_coarse();
+                        callback_begin = Instant::now();
                         cb_task.invoke(&callback_notifier, &callback_copr_host);
                         APPLY_WRITE_CALLBACK_DURATION_HISTOGRAM
                             .observe(duration_to_sec(callback_begin.elapsed()) as f64);
@@ -595,12 +608,12 @@ where
             let callback_t = thread::Builder::new()
                 .name(thd_name!("apply-writer-callback"))
                 .spawn(move || {
-                    let mut callback_begin = Instant::now_coarse();
+                    let mut callback_begin = Instant::now();
                     loop {
                         let mut _cmds = async_drop_rx.recv().unwrap();
                         APPLY_WRITE_CALLBACK_TICK_DURATION_HISTOGRAM
                             .observe(duration_to_sec(callback_begin.elapsed()) as f64);
-                        callback_begin = Instant::now_coarse();
+                        callback_begin = Instant::now();
                     }
                 })?;
             self.handlers.push(callback_t);
