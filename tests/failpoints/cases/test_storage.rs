@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, mpsc::channel, mpsc::RecvTimeoutError, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContex
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{self, test_util::*, *};
+use tikv_util::future::paired_future_callback;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 use txn_types::{Mutation, TimeStamp};
@@ -215,7 +217,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {})
+        let storage = TestStorageBuilder::new(DummyLockManager {}, false)
             .set_pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -241,7 +243,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {})
+    let storage = TestStorageBuilder::new(DummyLockManager {}, false)
         .set_pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -965,4 +967,99 @@ fn test_async_apply_prewrite_1pc() {
 
     test_async_apply_prewrite_1pc_impl(&storage, ctx.clone(), b"key", b"value1", 10, false);
     test_async_apply_prewrite_1pc_impl(&storage, ctx, b"key", b"value2", 20, true);
+}
+
+#[test]
+fn test_atomic_cas_lock_by_latch() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let engine = cluster
+        .sim
+        .read()
+        .unwrap()
+        .storages
+        .get(&1)
+        .unwrap()
+        .clone();
+    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+        engine,
+        DummyLockManager {},
+    )
+    .build()
+    .unwrap();
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(1);
+    ctx.set_region_epoch(cluster.get_region_epoch(1));
+    ctx.set_peer(cluster.leader_of_region(1).unwrap());
+
+    let latch_acquire_success_fp = "txn_scheduler_acquire_success";
+    let latch_acquire_fail_fp = "txn_scheduler_acquire_fail";
+    let pending_cas_fp = "txn_commands_compare_and_set";
+    let wakeup_latch_fp = "txn_scheduler_try_to_wake_up";
+    let (cas_tx, cas_rx) = channel();
+    let cas_rx = Mutex::new(Some(cas_rx));
+    let acquire_flag = Arc::new(AtomicBool::new(false));
+    let acquire_flag1 = acquire_flag.clone();
+    let acquire_flag_fail = Arc::new(AtomicBool::new(false));
+    let acquire_flag_fail1 = acquire_flag_fail.clone();
+    let wakeup_latch_flag = Arc::new(AtomicBool::new(false));
+    let wakeup1 = wakeup_latch_flag.clone();
+
+    fail::cfg_callback(pending_cas_fp, move || {
+        if let Some(rx) = cas_rx.lock().unwrap().take() {
+            rx.recv().unwrap();
+        }
+    })
+    .unwrap();
+    fail::cfg_callback(latch_acquire_success_fp, move || {
+        acquire_flag1.store(true, Ordering::Release);
+    })
+    .unwrap();
+    fail::cfg_callback(latch_acquire_fail_fp, move || {
+        acquire_flag_fail1.store(true, Ordering::Release);
+    })
+    .unwrap();
+    fail::cfg_callback(wakeup_latch_fp, move || {
+        wakeup1.store(true, Ordering::Release);
+    })
+    .unwrap();
+    let (cb, f1) = paired_future_callback();
+    storage
+        .raw_compare_and_set_atomic(
+            ctx.clone(),
+            "".to_string(),
+            b"key".to_vec(),
+            None,
+            b"v1".to_vec(),
+            0,
+            cb,
+        )
+        .unwrap();
+    assert!(acquire_flag.load(Ordering::Acquire));
+    assert!(!acquire_flag_fail.load(Ordering::Acquire));
+    acquire_flag.store(false, Ordering::Release);
+    let (cb, f2) = paired_future_callback();
+    storage
+        .raw_compare_and_set_atomic(
+            ctx.clone(),
+            "".to_string(),
+            b"key".to_vec(),
+            Some(b"v1".to_vec()),
+            b"v2".to_vec(),
+            0,
+            cb,
+        )
+        .unwrap();
+    assert!(acquire_flag_fail.load(Ordering::Acquire));
+    assert!(!acquire_flag.load(Ordering::Acquire));
+    cas_tx.send(()).unwrap();
+    let _ = block_on(f1).unwrap();
+    let (ret, _) = block_on(f2).unwrap().unwrap();
+    assert!(wakeup_latch_flag.load(Ordering::Acquire));
+    assert!(ret.is_none());
+    let f = storage.raw_get(ctx, "".to_string(), b"key".to_vec());
+    let ret = block_on(f).unwrap().unwrap();
+    assert_eq!(b"v2".to_vec(), ret);
 }
