@@ -702,12 +702,12 @@ dependencies = [
  "byteorder",
  "bytes 0.5.3",
  "error_code",
- "failure",
  "libc 0.2.86",
  "panic_hook",
  "protobuf",
  "rand 0.7.3",
  "static_assertions",
+ "thiserror",
  "tikv_alloc",
 ]
 
