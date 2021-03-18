@@ -988,7 +988,7 @@ pub fn substring_2_args_utf8(
     pos: &Int,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let (len, len_positive) = i64_to_usize(input.len() as Int, input.len() > 0);
+    let (len, len_positive) = i64_to_usize(input.len() as Int, !input.is_empty());
     let (pos, positive_search) = i64_to_usize(*pos, *pos > 0);
     if pos == 0 || len == 0 || !len_positive {
         return Ok(writer.write_ref(Some(b"")));
