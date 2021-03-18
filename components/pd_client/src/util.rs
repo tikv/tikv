@@ -182,9 +182,7 @@ impl LeaderClient {
             }
             if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
                 // Prevent a large number of reconnections in a short time.
-                return Err(box_err!(
-                    "cancel reconnection due to too small interval"
-                ));
+                return Err(box_err!("cancel reconnection due to too small interval"));
             }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
             let members = inner.members.clone();

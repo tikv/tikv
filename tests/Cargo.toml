@@ -7,7 +7,7 @@ publish = false
 [[test]]
 name = "failpoints"
 path = "failpoints/mod.rs"
-required-features = ["testexport", "failpoints"]
+required-features = ["failpoints"]
 
 [[test]]
 name = "integrations"
@@ -47,7 +47,7 @@ test = true
 [features]
 default = ["failpoints", "testexport", "protobuf-codec", "test-engines-rocksdb"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
-testexport = ["pd_client/testexport", "raftstore/testexport", "tikv/testexport"]
+testexport = ["raftstore/testexport", "tikv/testexport"]
 profiling = ["profiler/profiling"]
 protobuf-codec = [
   "batch-system/protobuf-codec",

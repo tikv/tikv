@@ -88,7 +88,7 @@ prost-codec = [
   "txn_types/prost-codec",
   "grpcio-health/prost-codec",
 ]
-testexport = ["pd_client/testexport", "raftstore/testexport"]
+testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
   "engine_test/test-engines-rocksdb",
 ]

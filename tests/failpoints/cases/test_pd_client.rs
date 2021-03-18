@@ -165,8 +165,8 @@ fn test_non_force_reconnect_limit() {
     client.reconnect().unwrap();
     // The subsequent non-force reconnection will be cancelled.
     for _ in 0..10 {
-        let res = client.reconnect_non_force();
-        assert!(format!("{:?}", res.unwrap_err()).contains("cancel non-force reconnection"))
+        let ret = client.reconnect();
+        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel non-force reconnection"))
     }
 
     fail::remove(leader_client_reconnect_fp);

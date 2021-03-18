@@ -154,11 +154,6 @@ impl RpcClient {
         block_on(self.leader_client.reconnect(true))
     }
 
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn reconnect_non_force(&self) -> Result<()> {
-        block_on(self.leader_client.reconnect(false))
-    }
-
     /// Creates a new call option with default request timeout.
     #[inline]
     fn call_option() -> CallOption {
