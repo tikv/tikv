@@ -605,7 +605,6 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "failure",
  "futures-io",
  "kvproto",
  "openssl",
@@ -613,6 +612,7 @@ dependencies = [
  "rusoto_core",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_util",
  "url",
 ]
