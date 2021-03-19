@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use coprocessor_plugin_api::{
-    CoprocessorPlugin, PluginConstructorSignature, PLUGIN_CONSTRUCTOR_NAME,
+    allocator::HostAllocatorPtr, CoprocessorPlugin, PluginConstructorSignature,
+    PLUGIN_CONSTRUCTOR_NAME,
 };
 use libloading::{Error as DylibError, Library, Symbol};
 use std::collections::BTreeMap;
@@ -75,7 +76,12 @@ impl LoadedPlugin {
         let lib = Box::pin(lib);
         let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_NAME)?;
 
-        let boxed_raw_plugin = constructor();
+        let host_allocator = HostAllocatorPtr {
+            alloc_fn: std::alloc::alloc,
+            dealloc_fn: std::alloc::dealloc,
+        };
+
+        let boxed_raw_plugin = constructor(host_allocator);
         let plugin = Box::from_raw(boxed_raw_plugin);
 
         Ok(LoadedPlugin {
