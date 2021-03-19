@@ -250,7 +250,7 @@ impl Client {
         };
 
         {
-            slow_log!(start.elapsed(), "PD client try connect leader");
+            slow_log!(start.elapsed(), "try reconnect pd");
             let mut inner = self.inner.wl();
             if start > inner.last_try_reconnect {
                 inner.last_try_reconnect = start;
