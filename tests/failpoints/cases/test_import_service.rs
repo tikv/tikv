@@ -1,12 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
 use futures::{stream, Future, Stream};
-=======
-use file_system::calc_crc32;
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
->>>>>>> 3d3dd779d... sst_importer: make ingest reentrant (#9624)
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use std::sync::mpsc::channel;
@@ -15,6 +9,7 @@ use std::time::Duration;
 use tempfile::Builder;
 use test_raftstore::Simulator;
 use test_sst_importer::*;
+use tikv_util::file::calc_crc32;
 use tikv_util::HandyRwLock;
 
 #[allow(dead_code)]
