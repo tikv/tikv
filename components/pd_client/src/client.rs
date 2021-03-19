@@ -76,8 +76,11 @@ impl RpcClient {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
                     if !forwarded_host.is_empty() {
+                        let host = forwarded_host
+                            .trim_start_matches("http://")
+                            .trim_start_matches("https://");
                         REQUEST_FORWARDED_GAUGE_VEC
-                            .with_label_values(&[&forwarded_host])
+                            .with_label_values(&[host])
                             .set(1);
                     }
                     let rpc_client = RpcClient {

@@ -163,14 +163,20 @@ impl Client {
         }
 
         if !prev_forwarded_host.is_empty() {
+            let host = prev_forwarded_host
+                .trim_start_matches("http://")
+                .trim_start_matches("https://");
             REQUEST_FORWARDED_GAUGE_VEC
-                .with_label_values(&[&prev_forwarded_host])
+                .with_label_values(&[host])
                 .set(0);
         }
 
         if !forwarded_host.is_empty() {
+            let host = forwarded_host
+                .trim_start_matches("http://")
+                .trim_start_matches("https://");
             REQUEST_FORWARDED_GAUGE_VEC
-                .with_label_values(&[&forwarded_host])
+                .with_label_values(&[host])
                 .set(1);
         }
 
