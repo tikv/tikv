@@ -75,6 +75,9 @@ impl RpcClient {
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
+                    if !forwarded_host.is_empty() {
+                        REQUEST_FORWARDED_GAUGE.set(1);
+                    }
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
