@@ -7,7 +7,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine_rocks::RocksEngine;
+use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
@@ -71,9 +71,9 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
-    type Local = RocksEngine;
+    type Local = PanicEngine;
 
-    fn kv_engine(&self) -> RocksEngine {
+    fn kv_engine(&self) -> PanicEngine {
         unimplemented!();
     }
 
