@@ -27,8 +27,8 @@ pub trait CoprocessorPlugin: Send + Sync {
     /// Handles a request to the coprocessor.
     ///
     /// The data in the `request` parameter is exactly the same data that was passed with the
-    /// [`RawCoprocessorRequest`](kvproto::coprocessor_v2::RawCoprocessorRequest) in the `data`
-    /// field. Each plugin is responsible to properly decode the raw bytes by itself.
+    /// `RawCoprocessorRequest` in the `data` field. Each plugin is responsible to properly decode
+    /// the raw bytes by itself.
     /// The same is true for the return parameter of this function. Upon successful completion, the
     /// function should return a properly encoded result as raw bytes which is then sent back to
     /// the client.
