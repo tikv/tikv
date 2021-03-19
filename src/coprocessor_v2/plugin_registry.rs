@@ -11,16 +11,16 @@ use std::marker::PhantomPinned;
 use std::pin::Pin;
 
 #[derive(Default)]
-pub struct PluginManager {
+pub struct PluginRegistry {
     /// Plugins that are currently loaded.
     /// Provides a mapping from the plugin's name to the actual instance.
     loaded_plugins: BTreeMap<String, LoadedPlugin>,
 }
 
-impl PluginManager {
-    /// Creates a new `PluginManager`.
+impl PluginRegistry {
+    /// Creates a new `PluginRegistry`.
     pub fn new() -> Self {
-        PluginManager::default()
+        PluginRegistry::default()
     }
 
     /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
@@ -33,7 +33,7 @@ impl PluginManager {
     /// Loads a [`CoprocessorPlugin`] from a `cdylib`.
     ///
     /// After this function has successfully finished, the plugin is registered with the
-    /// [`PluginManager`] and can later be obtained by calling [`get_plugin()`] with the proper
+    /// [`PluginRegistry`] and can later be obtained by calling [`get_plugin()`] with the proper
     /// name.
     ///
     /// Returns the name of the loaded plugin.
@@ -120,12 +120,12 @@ mod tests {
     }
 
     #[test]
-    fn plugin_manager_load_and_get_plugin() {
-        let mut plugin_manager = PluginManager::default();
-        let plugin_name = plugin_manager
+    fn plugin_registry_load_and_get_plugin() {
+        let mut plugin_registry = PluginRegistry::default();
+        let plugin_name = plugin_registry
             .load_plugin(pkgname_to_libname("example-plugin"))
             .unwrap();
-        let plugin = plugin_manager.get_plugin(plugin_name).unwrap();
+        let plugin = plugin_registry.get_plugin(plugin_name).unwrap();
 
         assert_eq!(plugin.name(), "example-plugin");
     }
