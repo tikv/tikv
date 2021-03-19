@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
+use grpcio_health::proto::HealthCheckRequest;
+use grpcio_health::*;
 use tempfile::Builder;
 
 use kvproto::{
@@ -38,7 +40,34 @@ use txn_types::{Key, Lock, LockType, TimeStamp};
 #[test]
 fn test_rawkv() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let v0 = b"v0".to_vec();
+    let v1 = b"v1".to_vec();
+    let (k, v) = (b"key".to_vec(), b"v2".to_vec());
+
+    // Raw cas
+    let mut cas_req = RawCasRequest::default();
+    cas_req.set_context(ctx.clone());
+    cas_req.key = k.clone();
+    cas_req.value = v0.clone();
+    cas_req.previous_not_exist = true;
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(!resp.get_not_equal());
+
+    // Raw get
+    let mut get_req = RawGetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert_eq!(get_resp.value, v0);
+
+    cas_req.value = v1.clone();
+    cas_req.previous_not_exist = false;
+    cas_req.previous_value = v0;
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.get_not_equal());
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert_eq!(get_resp.value, v1);
 
     // Raw put
     let mut put_req = RawPutRequest::default();
@@ -50,9 +79,6 @@ fn test_rawkv() {
     assert!(put_resp.error.is_empty());
 
     // Raw get
-    let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
@@ -92,7 +118,62 @@ fn test_rawkv_ttl() {
     let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
     let client = TikvClient::new(channel);
 
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let (v0, v1) = (b"v0".to_vec(), b"v1".to_vec());
+    let (k, v) = (b"key".to_vec(), b"v2".to_vec());
+    // Raw cas
+    let mut cas_req = RawCasRequest::default();
+    cas_req.set_context(ctx.clone());
+    cas_req.key = k.clone();
+    cas_req.value = v0.clone();
+    cas_req.previous_not_exist = false;
+    cas_req.previous_value = v1.clone();
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_not_equal());
+
+    let mut cas_req = RawCasRequest::default();
+    cas_req.set_context(ctx.clone());
+    cas_req.key = k.clone();
+    cas_req.value = v0.clone();
+    cas_req.previous_not_exist = true;
+    cas_req.previous_value = vec![];
+    cas_req.ttl = 100;
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(!resp.get_not_equal());
+    // Raw get
+    let mut get_req = RawGetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert_eq!(get_resp.value, v0);
+
+    // cas a new value
+    cas_req.value = v1.clone();
+    cas_req.previous_not_exist = false;
+    cas_req.previous_value = v0;
+    cas_req.ttl = 140;
+    let resp = client.raw_compare_and_set(&cas_req).unwrap();
+    assert!(!resp.get_not_equal());
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert_eq!(get_resp.value, v1);
+
+    let mut get_ttl_req = RawGetKeyTtlRequest::default();
+    get_ttl_req.set_context(ctx.clone());
+    get_ttl_req.key = k.clone();
+    let get_ttl_resp = client.raw_get_key_ttl(&get_ttl_req).unwrap();
+    assert!(!get_ttl_resp.has_region_error());
+    assert!(get_ttl_resp.error.is_empty());
+    assert!(get_ttl_resp.ttl > 100);
+    let mut delete_req = RawDeleteRequest::default();
+    delete_req.set_context(ctx.clone());
+    delete_req.key = k.clone();
+    let delete_resp = client.raw_delete(&delete_req).unwrap();
+    assert!(!delete_resp.has_region_error());
+    let get_ttl_resp = client.raw_get_key_ttl(&get_ttl_req).unwrap();
+    assert!(!get_ttl_resp.has_region_error());
+    assert!(get_ttl_resp.get_not_found());
 
     // Raw put
     let mut put_req = RawPutRequest::default();
@@ -104,10 +185,6 @@ fn test_rawkv_ttl() {
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
 
-    // Raw get
-    let mut get_req = RawGetRequest::default();
-    get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
     let get_resp = client.raw_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.error.is_empty());
@@ -128,9 +205,6 @@ fn test_rawkv_ttl() {
     }
 
     // Raw get key ttl
-    let mut get_ttl_req = RawGetKeyTtlRequest::default();
-    get_ttl_req.set_context(ctx.clone());
-    get_ttl_req.key = k.clone();
     let get_ttl_resp = client.raw_get_key_ttl(&get_ttl_req).unwrap();
     assert!(!get_ttl_resp.has_region_error());
     assert!(get_ttl_resp.error.is_empty());
@@ -1561,4 +1635,25 @@ fn test_forwarding_reconnect() {
     cluster.run_node(leader.get_store_id()).unwrap();
     let resp = client.raw_get_opt(&req, call_opt.clone()).unwrap();
     assert!(!resp.get_region_error().has_store_not_match(), "{:?}", resp);
+}
+
+#[test]
+fn test_health_check() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let addr = cluster.sim.rl().get_addr(1);
+
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = HealthClient::new(channel);
+    let req = HealthCheckRequest {
+        service: "".to_string(),
+        ..Default::default()
+    };
+    let resp = client.check(&req).unwrap();
+    assert_eq!(ServingStatus::Serving, resp.status.into());
+
+    cluster.shutdown();
+    client.check(&req).unwrap_err();
 }

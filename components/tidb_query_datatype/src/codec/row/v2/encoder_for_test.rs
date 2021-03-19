@@ -2,7 +2,7 @@
 
 //! This `encoder` module is only used for test, so the implementation is very straightforward.
 //!
-//! According to https://github.com/pingcap/tidb/blob/master/docs/design/2018-07-19-row-format.md
+//! According to <https://github.com/pingcap/tidb/blob/master/docs/design/2018-07-19-row-format.md>
 //!
 //! The row format is:
 //!

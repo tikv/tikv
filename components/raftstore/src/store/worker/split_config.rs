@@ -26,6 +26,16 @@ pub struct SplitConfig {
     pub sample_num: usize,
     pub sample_threshold: u64,
     pub byte_threshold: usize,
+    // deprecated.
+    #[config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub size_threshold: Option<usize>,
+    // deprecated.
+    #[config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub key_threshold: Option<usize>,
 }
 
 impl Default for SplitConfig {
@@ -38,6 +48,8 @@ impl Default for SplitConfig {
             sample_num: DEFAULT_SAMPLE_NUM,
             sample_threshold: DEFAULT_SAMPLE_THRESHOLD,
             byte_threshold: DEFAULT_BYTE_THRESHOLD,
+            size_threshold: None, // deprecated.
+            key_threshold: None,  // deprecated.
         }
     }
 }

@@ -92,10 +92,10 @@ pub trait RetryError {
 /// Retries a future execution.
 ///
 /// This method implements truncated exponential back-off retry strategies outlined in
-/// https://docs.aws.amazon.com/general/latest/gr/api-retries.html and
-/// https://cloud.google.com/storage/docs/exponential-backoff
-/// Since rusoto does not have transparent auto-retry (https://github.com/rusoto/rusoto/issues/234),
-/// we need to implement this manually.
+/// <https://docs.aws.amazon.com/general/latest/gr/api-retries.html> and
+/// <https://cloud.google.com/storage/docs/exponential-backoff>
+/// Since rusoto does not have transparent auto-retry
+/// (<https://github.com/rusoto/rusoto/issues/234>), we need to implement this manually.
 pub async fn retry<G, T, F, E>(mut action: G) -> Result<T, E>
 where
     G: FnMut() -> F,
