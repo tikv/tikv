@@ -40,23 +40,26 @@ use txn_types::TimeStamp;
 struct Locks {
     ts: TimeStamp,
     hashes: Vec<u64>,
+    keys: Vec<Vec<u8>>,
     last_detect_time: Instant,
 }
 
 impl Locks {
     /// Creates a new `Locks`.
-    fn new(ts: TimeStamp, hash: u64, last_detect_time: Instant) -> Self {
+    fn new(ts: TimeStamp, key: Vec<u8>, hash: u64, last_detect_time: Instant) -> Self {
         Self {
             ts,
             hashes: vec![hash],
+            keys: vec![key],
             last_detect_time,
         }
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, now: Instant) {
+    fn push(&mut self, key: Vec<u8>, lock_hash: u64, now: Instant) {
         if !self.hashes.contains(&lock_hash) {
-            self.hashes.push(lock_hash)
+            self.hashes.push(lock_hash);
+            self.keys.push(key);
         }
         self.last_detect_time = now
     }
@@ -65,6 +68,7 @@ impl Locks {
     fn remove(&mut self, lock_hash: u64) -> bool {
         if let Some(idx) = self.hashes.iter().position(|hash| *hash == lock_hash) {
             self.hashes.remove(idx);
+            self.keys.remove(idx);
         }
         self.hashes.is_empty()
     }
@@ -104,7 +108,13 @@ impl DetectTable {
     }
 
     /// Returns the key hash which causes deadlock.
-    pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
+    pub fn detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        key: Vec<u8>,
+    ) -> Option<u64> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_METRICS.detect.inc();
 
@@ -112,7 +122,7 @@ impl DetectTable {
         self.active_expire();
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
+        if self.register_if_existed(txn_ts, lock_ts, key.clone(), lock_hash) {
             return None;
         }
 
@@ -120,7 +130,7 @@ impl DetectTable {
             ERROR_COUNTER_METRICS.deadlock.inc();
             return Some(deadlock_key_hash);
         }
-        self.register(txn_ts, lock_ts, lock_hash);
+        self.register(txn_ts, lock_ts, key, lock_hash);
         None
     }
 
@@ -160,11 +170,12 @@ impl DetectTable {
         &mut self,
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
+        key: Vec<u8>,
         lock_hash: u64,
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, self.now);
+                locks.push(key, lock_hash, self.now);
                 return true;
             }
         }
@@ -172,10 +183,10 @@ impl DetectTable {
     }
 
     /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
-    fn register(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    fn register(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, key: Vec<u8>, lock_hash: u64) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
-        let locks = Locks::new(lock_ts, lock_hash, self.now);
+        let locks = Locks::new(lock_ts, key, lock_hash, self.now);
         wait_for.insert(locks.ts, locks);
     }
 
@@ -704,7 +715,9 @@ where
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some(deadlock_key_hash) = detect_table.detect(txn_ts, lock.ts, lock.hash) {
+                if let Some(deadlock_key_hash) =
+                    detect_table.detect(txn_ts, lock.ts, lock.hash, lock.key.clone())
+                {
                     self.waiter_mgr_scheduler
                         .deadlock(txn_ts, lock, deadlock_key_hash);
                 }
@@ -770,14 +783,18 @@ where
                 txn,
                 wait_for_txn,
                 key_hash,
+                key,
                 ..
             } = req.get_entry();
             let detect_table = &mut inner.detect_table;
             let res = match req.get_tp() {
                 DeadlockRequestType::Detect => {
-                    if let Some(deadlock_key_hash) =
-                        detect_table.detect(txn.into(), wait_for_txn.into(), *key_hash)
-                    {
+                    if let Some(deadlock_key_hash) = detect_table.detect(
+                        txn.into(),
+                        wait_for_txn.into(),
+                        *key_hash,
+                        key.to_vec(),
+                    ) {
                         let mut resp = DeadlockResponse::default();
                         resp.set_entry(req.take_entry());
                         resp.set_deadlock_key_hash(deadlock_key_hash);
