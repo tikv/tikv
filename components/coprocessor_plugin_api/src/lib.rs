@@ -38,7 +38,9 @@
 //! declare_plugin!(MyPlugin);
 //! ```
 
+#[doc(hidden)]
 pub mod allocator;
+
 mod plugin_api;
 mod storage_api;
 mod util;
