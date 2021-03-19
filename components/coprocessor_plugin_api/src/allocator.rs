@@ -17,7 +17,7 @@ pub struct HostAllocatorPtr {
 }
 
 /// An allocator that forwards invocations to the host (TiKV) of the plugin.
-struct HostAllocator {
+pub struct HostAllocator {
     alloc_fn: AtomicPtr<AllocFn>,
     dealloc_fn: AtomicPtr<DeallocFn>,
 }

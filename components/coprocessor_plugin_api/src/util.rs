@@ -1,5 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use super::allocator::HostAllocatorPtr;
+use super::plugin_api::CoprocessorPlugin;
+
+/// Name of the exported constructor function for the plugin in the `dylib`.
+pub const PLUGIN_CONSTRUCTOR_NAME: &'static [u8] = b"_plugin_create";
+/// Type signature of the exported constructor function for the plugin in the `dylib`.
+pub type PluginConstructorSignature =
+    unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
+
 /// Declare a plugin for the library so that it can be loaded by TiKV.
 ///
 /// # Notes
@@ -14,7 +23,8 @@
 macro_rules! declare_plugin {
     ($plugin_type:ty) => {
         #[global_allocator]
-        static HOST_ALLOCATOR: HostAllocator = HostAllocator::new();
+        static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
+            $crate::allocator::HostAllocator::new();
 
         #[no_mangle]
         pub unsafe extern "C" fn _plugin_create(

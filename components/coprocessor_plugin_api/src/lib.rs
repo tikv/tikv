@@ -38,12 +38,11 @@
 //! declare_plugin!(MyPlugin);
 //! ```
 
-mod allocator;
+pub mod allocator;
 mod plugin_api;
 mod storage_api;
 mod util;
 
-pub use allocator::HostAllocatorPtr;
 pub use plugin_api::*;
 pub use storage_api::*;
 pub use util::*;
