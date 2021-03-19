@@ -97,7 +97,6 @@ mod tests {
     use std::{fs, path::Path, sync::Arc};
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
-    use tikv_util::file::calc_crc32;
 
     #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
@@ -159,8 +158,6 @@ mod tests {
         ingest_opts.move_files(true);
 
         gen_sst_with_kvs(&db, cf_name, sst_path.to_str().unwrap(), &kvs);
-        let size = fs::metadata(&sst_path).unwrap().len();
-        let checksum = calc_crc32(&sst_path).unwrap();
 
         if was_encrypted {
             // Add the file to key_manager to simulate an encrypted file.
@@ -172,14 +169,12 @@ mod tests {
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
-            .unwrap();
+        db.reset_global_seq(cf, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
-            .unwrap();
+        db.reset_global_seq(cf, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
@@ -195,8 +190,7 @@ mod tests {
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
-            .unwrap();
+        db.reset_global_seq(cf, &sst_clone).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
