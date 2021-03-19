@@ -25,7 +25,9 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{build_forward_metadata, check_resp_header, sync_request, Client, PdConnector};
+use super::util::{
+    build_forward_metadata, check_resp_header, sync_request, trim_http_prefix, Client, PdConnector,
+};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -76,9 +78,7 @@ impl RpcClient {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
                     if !forwarded_host.is_empty() {
-                        let host = forwarded_host
-                            .trim_start_matches("http://")
-                            .trim_start_matches("https://");
+                        let host = trim_http_prefix(&forwarded_host);
                         REQUEST_FORWARDED_GAUGE_VEC
                             .with_label_values(&[host])
                             .set(1);

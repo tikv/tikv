@@ -163,18 +163,14 @@ impl Client {
         }
 
         if !prev_forwarded_host.is_empty() {
-            let host = prev_forwarded_host
-                .trim_start_matches("http://")
-                .trim_start_matches("https://");
+            let host = trim_http_prefix(&prev_forwarded_host);
             REQUEST_FORWARDED_GAUGE_VEC
                 .with_label_values(&[host])
                 .set(0);
         }
 
         if !forwarded_host.is_empty() {
-            let host = forwarded_host
-                .trim_start_matches("http://")
-                .trim_start_matches("https://");
+            let host = trim_http_prefix(&forwarded_host);
             REQUEST_FORWARDED_GAUGE_VEC
                 .with_label_values(&[host])
                 .set(1);
@@ -472,9 +468,7 @@ impl PdConnector {
 
     pub async fn connect(&self, addr: &str) -> Result<(PdClientStub, GetMembersResponse)> {
         info!("connecting to PD endpoint"; "endpoints" => addr);
-        let addr_trim = addr
-            .trim_start_matches("http://")
-            .trim_start_matches("https://");
+        let addr_trim = trim_http_prefix(addr);
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
                 .keepalive_time(Duration::from_secs(10))
@@ -670,6 +664,11 @@ impl PdConnector {
         }
         Err(box_err!("failed to connect to followers"))
     }
+}
+
+pub fn trim_http_prefix(s: &str) -> &str {
+    s.trim_start_matches("http://")
+        .trim_start_matches("https://")
 }
 
 /// Convert a PD protobuf error to an `Error`.
