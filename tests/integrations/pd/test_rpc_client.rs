@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
+use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::metapb;
 use kvproto::pdpb;
 use tokio::runtime::Builder;
@@ -129,6 +130,49 @@ fn test_rpc_client() {
 
     let region_info = client.get_region_info(region_key).unwrap();
     client.scatter_region(region_info).unwrap();
+}
+
+#[test]
+fn test_connect_follower() {
+    let connect_leader_fp = "connect_leader";
+    let server = MockServer::new(2);
+    let eps = server.bind_addrs();
+    let mut cfg = new_config(eps.clone());
+
+    // test switch
+    cfg.enable_forwarding = false;
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client1 = RpcClient::new(&cfg, None, mgr).unwrap();
+    fail::cfg(connect_leader_fp, "return").unwrap();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let res = format!("{}", client1.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNAVAILABLE,
+            Some("".to_string()),
+        )))
+    );
+    assert_eq!(res, err);
+
+    cfg.enable_forwarding = true;
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let client = RpcClient::new(&cfg, None, mgr).unwrap();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let leader_addr = client1.get_leader().get_client_urls()[0].clone();
+    let res = format!("{}", client.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNAVAILABLE,
+            Some(leader_addr),
+        )))
+    );
+    assert_eq!(res, err);
+
+    fail::remove(connect_leader_fp);
 }
 
 #[test]

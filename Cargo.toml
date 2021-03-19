@@ -120,7 +120,6 @@ configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
-derive_more = "0.99.3"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
@@ -176,7 +175,6 @@ serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-slog_derive = "0.2"
 parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
@@ -191,6 +189,7 @@ tidb_query_expr = { path = "components/tidb_query_expr", default-features = fals
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
+tikv_kv = { path = "components/tikv_kv" }
 tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 time = "0.1"

@@ -6,6 +6,10 @@ use prometheus_static_metric::*;
 use crate::storage::ErrorHeaderKind;
 use prometheus::exponential_buckets;
 
+pub use crate::storage::kv::metrics::{
+    GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
+};
+
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
         invalid,
@@ -82,26 +86,6 @@ make_auto_flush_static_metric! {
         tombstone,
     }
 
-    pub label_enum GcKeysCF {
-        default,
-        lock,
-        write,
-    }
-
-    pub label_enum GcKeysDetail {
-        processed_keys,
-        get,
-        next,
-        prev,
-        seek,
-        seek_for_prev,
-        over_seek_bound,
-        next_tombstone,
-        prev_tombstone,
-        seek_tombstone,
-        seek_for_prev_tombstone,
-    }
-
     pub label_enum ReplicaReadLockCheckResult {
         unlocked,
         locked,
@@ -139,11 +123,6 @@ make_auto_flush_static_metric! {
     pub struct GrpcProxyMsgCounterVec: LocalIntCounter {
         "type" => GrpcTypeKind,
         "success" => WhetherSuccess,
-    }
-
-    pub struct GcKeysCounterVec: LocalIntCounter {
-        "cf" => GcKeysCF,
-        "tag" => GcKeysDetail,
     }
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
