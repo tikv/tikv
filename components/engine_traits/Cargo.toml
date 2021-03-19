@@ -26,7 +26,7 @@ error_code = { path = "../error_code", default-features = false }
 file_system = { path = "../file_system" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
-quick-error = "1.2.3"
+thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }

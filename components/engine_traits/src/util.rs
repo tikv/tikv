@@ -15,12 +15,12 @@ pub fn check_key_in_range(
     if key >= start_key && (end_key.is_empty() || key < end_key) {
         Ok(())
     } else {
-        Err(Error::NotInRange(
-            key.to_vec(),
+        Err(Error::NotInRange {
+            key: key.to_vec(),
             region_id,
-            start_key.to_vec(),
-            end_key.to_vec(),
-        ))
+            start: start_key.to_vec(),
+            end: end_key.to_vec(),
+        })
     }
 }
 

@@ -1,0 +1,62 @@
+[package]
+name = "tikv_kv"
+version = "0.1.0"
+authors = ["The TiKV Authors"]
+description = "The key-value abstraction directly used by TiKV"
+edition = "2018"
+publish = false
+
+[features]
+default = ["protobuf-codec", "test-engines-rocksdb"]
+failpoints = ["fail/failpoints"]
+protobuf-codec = [
+  "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "error_code/protobuf-codec",
+  "into_other/protobuf-codec",
+  "raftstore/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "txn_types/protobuf-codec",
+]
+prost-codec = [
+  "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
+  "error_code/prost-codec",
+  "into_other/prost-codec",
+  "raftstore/prost-codec",
+  "tikv_util/prost-codec",
+  "txn_types/prost-codec",
+]
+test-engines-rocksdb = [
+  "raftstore/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "raftstore/test-engines-panic",
+]
+
+[dependencies]
+backtrace = "0.3"
+derive_more = "0.99.3"
+engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_traits = { path = "../engine_traits", default-features = false }
+error_code = { path = "../error_code", default-features = false }
+fail = "0.4"
+futures = { version = "0.3", features = ["thread-pool", "compat"] }
+into_other = { path = "../into_other", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+log_wrappers = { path = "../log_wrappers" }
+prometheus = { version = "0.10", features = ["nightly"] }
+prometheus-static-metric = "0.4"
+quick-error = "1.2.3"
+raftstore = { path = "../raftstore", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog_derive = "0.2"
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tempfile = "3.0"
+tikv_util = { path = "../tikv_util", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
+vlog = "0.1.4"
+
+[dev-dependencies]
+keys = { path = "../keys", default-features = false }
+panic_hook = { path = "../panic_hook" }
