@@ -45,21 +45,3 @@ pub trait CoprocessorPlugin: Send + Sync {
         storage: &dyn RawStorage,
     ) -> Result<RawResponse, Box<dyn std::error::Error>>;
 }
-
-/// Declare a plugin for the library so that it can be loaded by TiKV.
-///
-/// # Notes
-/// This works by automatically generating an `extern "C"` function with a
-/// pre-defined signature and symbol name. Therefore you will only be able to
-/// declare one plugin per library.
-#[macro_export]
-macro_rules! declare_plugin {
-    ($plugin_type:ty) => {
-        #[no_mangle]
-        pub extern "C" fn _plugin_create() -> *mut $crate::CoprocessorPlugin {
-            let object = <$plugin_type>::create();
-            let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new(object);
-            Box::into_raw(boxed)
-        }
-    };
-}

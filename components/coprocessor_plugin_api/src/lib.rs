@@ -1,4 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(const_fn_fn_ptr_basics)]
 
 //! This crate contains some necessary types and traits for implementing a custom coprocessor plugin
 //! for TiKV.
@@ -37,8 +38,12 @@
 //! declare_plugin!(MyPlugin);
 //! ```
 
+mod allocator;
 mod plugin_api;
 mod storage_api;
+mod util;
 
+pub use allocator::HostAllocatorPtr;
 pub use plugin_api::*;
 pub use storage_api::*;
+pub use util::*;
