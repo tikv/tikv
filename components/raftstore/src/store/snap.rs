@@ -618,12 +618,7 @@ impl Snap {
             if !plain_file_used(cf_file.cf) {
                 // Reset global seq number.
                 let cf = engine.cf_handle(cf_file.cf)?;
-                engine.validate_sst_for_ingestion(
-                    &cf,
-                    &cf_file.path,
-                    cf_file.size,
-                    cf_file.checksum,
-                )?;
+                engine.reset_global_seq(cf, &cf_file.path)?;
             }
             check_file_size_and_checksum(
                 &cf_file.path,
