@@ -16,7 +16,7 @@ use futures::task::Context;
 use futures::task::Poll;
 use futures::task::Waker;
 
-use super::metrics::REQUEST_FORWARDED_GAUGE;
+use super::metrics::REQUEST_FORWARDED_GAUGE_VEC;
 use super::{Config, Error, FeatureGate, PdFuture, Result, REQUEST_TIMEOUT};
 use collections::HashSet;
 use fail::fail_point;
@@ -162,10 +162,16 @@ impl Client {
             on_reconnect();
         }
 
-        if forwarded_host.is_empty() {
-            REQUEST_FORWARDED_GAUGE.set(0);
-        } else {
-            REQUEST_FORWARDED_GAUGE.set(1);
+        if !prev_forwarded_host.is_empty() {
+            REQUEST_FORWARDED_GAUGE_VEC
+                .with_label_values(&[&prev_forwarded_host])
+                .set(0);
+        }
+
+        if !forwarded_host.is_empty() {
+            REQUEST_FORWARDED_GAUGE_VEC
+                .with_label_values(&[&forwarded_host])
+                .set(1);
         }
 
         info!("update pd client"; "prev_forwarded_host"=>prev_forwarded_host,"forworded_host"=>forwarded_host);

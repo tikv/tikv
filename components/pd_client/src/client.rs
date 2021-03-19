@@ -76,7 +76,9 @@ impl RpcClient {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
                     if !forwarded_host.is_empty() {
-                        REQUEST_FORWARDED_GAUGE.set(1);
+                        REQUEST_FORWARDED_GAUGE_VEC
+                            .with_label_values(&[&forwarded_host])
+                            .set(1);
                     }
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
