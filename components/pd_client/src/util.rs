@@ -391,6 +391,7 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
+                // try reconnect
                 loop {
                     if retry == 0 {
                         return Err(e);
@@ -400,7 +401,10 @@ where
                         Ok(()) => break,
                         Err(e) => {
                             error!(?e; "reconnect failed");
-                            thread::sleep(REQUEST_RECONNECT_INTERVAL);
+                            if retry > 0 {
+                                // If the reconnection fails, and it needs to be retried.
+                                thread::sleep(REQUEST_RECONNECT_INTERVAL);
+                            }
                         }
                     }
                 }

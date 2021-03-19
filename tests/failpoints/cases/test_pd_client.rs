@@ -143,7 +143,7 @@ fn test_slow_periodical_update() {
     handle.join().unwrap();
 }
 
-// Non-force reconnection will be speed limited.
+// Reconnection will be speed limited.
 #[test]
 fn test_reconnect_limit() {
     let leader_client_reconnect_fp = "leader_client_reconnect";
