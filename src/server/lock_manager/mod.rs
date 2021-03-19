@@ -246,7 +246,7 @@ impl LockManagerTrait for LockManager {
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout);
+            .wait_for(start_ts, cb, pr, lock.clone(), timeout);
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
@@ -259,6 +259,7 @@ impl LockManagerTrait for LockManager {
         &self,
         lock_ts: TimeStamp,
         hashes: Vec<u64>,
+        keys: Vec<Vec<u8>>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     ) {
@@ -266,7 +267,7 @@ impl LockManagerTrait for LockManager {
         // Try to wake up them.
         if !hashes.is_empty() && self.has_waiter() {
             self.waiter_mgr_scheduler
-                .wake_up(lock_ts, hashes, commit_ts);
+                .wake_up(lock_ts, hashes, keys, commit_ts);
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.

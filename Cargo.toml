@@ -130,7 +130,7 @@ fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8", default-features = false, features = ["openssl-vendored"] }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -217,6 +217,8 @@ openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "pat
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
+[patch.'https://github.com/pingcap/kvproto.git']
+kvproto = { git = "https://github.com/longfangsong/kvproto", default-features = false }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

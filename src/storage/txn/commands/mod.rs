@@ -332,6 +332,7 @@ pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     hashes: Vec<u64>,
+    keys: Vec<Vec<u8>>,
     pessimistic: bool,
 }
 
@@ -387,7 +388,13 @@ impl ReleasedLocks {
 
     // Wake up pessimistic transactions that waiting for these locks.
     pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
-        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+        lock_mgr.wake_up(
+            self.start_ts,
+            self.hashes,
+            self.keys,
+            self.commit_ts,
+            self.pessimistic,
+        );
     }
 }
 

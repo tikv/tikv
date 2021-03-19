@@ -647,12 +647,14 @@ where
                 txn,
                 wait_for_txn,
                 key_hash,
+                key,
                 ..
             } = resp.take_entry();
             waiter_mgr_scheduler.deadlock(
                 txn.into(),
                 Lock {
                     ts: wait_for_txn.into(),
+                    key,
                     hash: key_hash,
                 },
                 resp.get_deadlock_key_hash(),
@@ -717,7 +719,7 @@ where
     /// Handles detect requests of itself.
     fn handle_detect(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock);
+            self.handle_detect_locally(tp, txn_ts, lock.clone());
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -727,7 +729,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock) {
+                if self.send_request_to_leader(tp, txn_ts, lock.clone()) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until failing to send a

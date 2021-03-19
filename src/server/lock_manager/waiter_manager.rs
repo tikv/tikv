@@ -108,6 +108,7 @@ pub enum Task {
         // lock info
         lock_ts: TimeStamp,
         hashes: Vec<u64>,
+        keys: Vec<Vec<u8>>,
         commit_ts: TimeStamp,
     },
     Dump {
@@ -411,10 +412,17 @@ impl Scheduler {
         });
     }
 
-    pub fn wake_up(&self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
+    pub fn wake_up(
+        &self,
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        keys: Vec<Vec<u8>>,
+        commit_ts: TimeStamp,
+    ) {
         self.notify_scheduler(Task::WakeUp {
             lock_ts,
             hashes,
+            keys,
             commit_ts,
         });
     }
@@ -480,13 +488,13 @@ impl WaiterManager {
     }
 
     fn handle_wait_for(&mut self, waiter: Waiter) {
-        let (waiter_ts, lock) = (waiter.start_ts, waiter.lock);
+        let (waiter_ts, lock) = (waiter.start_ts, waiter.lock.clone());
         let wait_table = self.wait_table.clone();
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
             if let Some(waiter) = wait_table.borrow_mut().remove_waiter(lock, waiter_ts) {
-                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock);
+                detector_scheduler.clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
                 waiter.notify();
             }
         });
@@ -496,19 +504,29 @@ impl WaiterManager {
         spawn_local(f);
     }
 
-    fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
+    fn handle_wake_up(
+        &mut self,
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        keys: Vec<Vec<u8>>,
+        commit_ts: TimeStamp,
+    ) {
         let mut wait_table = self.wait_table.borrow_mut();
         if wait_table.is_empty() {
             return;
         }
         let duration: Duration = self.wake_up_delay_duration.into();
         let new_timeout = Instant::now() + duration;
-        for hash in hashes {
-            let lock = Lock { ts: lock_ts, hash };
-            if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
+        for (hash, key) in hashes.into_iter().zip(keys.into_iter()) {
+            let lock = Lock {
+                ts: lock_ts,
+                hash,
+                key,
+            };
+            if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock.clone()) {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
-                    .clean_up_wait_for(oldest.start_ts, oldest.lock);
+                    .clean_up_wait_for(oldest.start_ts, oldest.lock.clone());
                 oldest.conflict_with(lock_ts, commit_ts);
                 oldest.notify();
                 // Others will be waked up after `wake_up_delay_duration`.
@@ -574,10 +592,11 @@ impl FutureRunnable<Task> for WaiterManager {
             }
             Task::WakeUp {
                 lock_ts,
+                keys,
                 hashes,
                 commit_ts,
             } => {
-                self.handle_wake_up(lock_ts, hashes, commit_ts);
+                self.handle_wake_up(lock_ts, hashes, keys, commit_ts);
                 TASK_COUNTER_METRICS.wake_up.inc();
             }
             Task::Dump { cb } => {

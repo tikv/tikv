@@ -62,6 +62,7 @@ fn extract_lock_from_result<T>(res: &StorageResult<T>) -> Lock {
             box MvccErrorInner::KeyIsLocked(info),
         )))))) => Lock {
             ts: info.get_lock_version().into(),
+            key: info.get_key().to_vec(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },
         _ => panic!("unexpected mvcc error"),

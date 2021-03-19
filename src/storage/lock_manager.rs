@@ -4,9 +4,10 @@ use crate::storage::{txn::ProcessResult, types::StorageCallback};
 use std::time::Duration;
 use txn_types::TimeStamp;
 
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
+    pub key: Vec<u8>,
     pub hash: u64,
 }
 
@@ -69,6 +70,7 @@ pub trait LockManager: Clone + Send + 'static {
         &self,
         lock_ts: TimeStamp,
         hashes: Vec<u64>,
+        keys: Vec<Vec<u8>>,
         commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     );
@@ -101,6 +103,7 @@ impl LockManager for DummyLockManager {
         &self,
         _lock_ts: TimeStamp,
         _hashes: Vec<u64>,
+        _keys: Vec<Vec<u8>>,
         _commit_ts: TimeStamp,
         _is_pessimistic_txn: bool,
     ) {
