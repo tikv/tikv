@@ -11,7 +11,7 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use file_system::{IOOp, IOType};
+use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOType};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
@@ -507,6 +507,8 @@ fn test_inspected_snapshot() {
         .unwrap();
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
     assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    // Make sure snapshot read hits disk
+    cluster.flush_data();
     // Let store 3 inform leader to generate a snapshot.
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");

@@ -255,6 +255,14 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn flush_data(&self) {
+        for engine in self.engines.values() {
+            let db = &engine.kv;
+            db.flush_cf(engine_traits::CF_DEFAULT, true /*sync*/)
+                .unwrap();
+        }
+    }
+
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {

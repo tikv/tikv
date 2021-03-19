@@ -59,14 +59,18 @@ impl IORateLimiterStatistics {
     }
 }
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(30);
-
-#[inline]
-fn calculate_ios_per_refill(ios_per_sec: usize, refill_period: Duration) -> usize {
-    (ios_per_sec as f64 * refill_period.as_secs_f64()) as usize
+macro_rules! do_sleep {
+    ($duration:expr, "sync") => {
+        std::thread::sleep($duration)
+    };
+    ($duration:expr, "async") => {
+        tokio::time::delay_for($duration).await
+    };
 }
 
-/// Limit total IO flow below provided threshold by throttling low-priority IOs.
+const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(40);
+
+/// Limit total IO flow below provided threshold by throttling lower-priority IOs.
 /// Rate limit is disabled when total IO threshold is set to zero.
 #[derive(Debug)]
 struct RawIORateLimiter {
@@ -77,48 +81,12 @@ struct RawIORateLimiter {
     protected: Mutex<RawIORateLimiterProtected>,
 }
 
-#[derive(Debug, Copy, Clone)]
-struct IOThroughputEstimator {
-    count: u64,
-    long_max: usize,
-    short_sum: usize,
-}
-
-impl IOThroughputEstimator {
-    fn new() -> IOThroughputEstimator {
-        IOThroughputEstimator {
-            count: 0,
-            long_max: 0,
-            short_sum: 0,
-        }
-    }
-
-    fn maybe_update_estimation(&mut self, v: usize) -> Option<usize> {
-        self.count += 1;
-        self.short_sum += v;
-        // smoothen raw samples
-        if self.count % 5 == 0 {
-            self.long_max = std::cmp::max(self.long_max, self.short_sum / 5);
-            self.short_sum = 0;
-        }
-        // use maximum throughput of history refills to update limits
-        // second predicate makes unit tests happy
-        if self.count % 200 == 0 || (self.count < 200 && self.count % 5 == 0) {
-            let max = self.long_max;
-            self.long_max = 0;
-            self.short_sum = 0;
-            Some(max)
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RawIORateLimiterProtected {
     next_refill_time: Instant,
     // IO amount that is drew from the next epoch in advance
     pending_ios: [usize; IOPriority::COUNT],
+    // estimated throughput of recent epochs
     estimated_ios_through: [IOThroughputEstimator; IOPriority::COUNT],
 }
 
@@ -132,19 +100,38 @@ impl RawIORateLimiterProtected {
     }
 }
 
-macro_rules! sleep_impl {
-    ($duration:expr, "sync") => {
-        std::thread::sleep($duration)
-    };
-    ($duration:expr, "async") => {
-        tokio::time::delay_for($duration).await
-    };
+#[derive(Debug, Copy, Clone)]
+struct IOThroughputEstimator {
+    /// total count of sampled epochs
+    count: usize,
+    /// sum of IOs amount over a window
+    sum: usize,
+}
+
+impl IOThroughputEstimator {
+    fn new() -> IOThroughputEstimator {
+        IOThroughputEstimator { count: 0, sum: 0 }
+    }
+
+    fn maybe_update_estimation(&mut self, v: usize) -> Option<usize> {
+        const WINDOW_SIZE: usize = 5;
+        self.count += 1;
+        self.sum += v;
+        // average over DEFAULT_REFILL_PERIOD*WINDOW_SIZE=200ms window
+        if self.count % WINDOW_SIZE == 0 {
+            let avg = self.sum / WINDOW_SIZE;
+            self.sum = 0;
+            Some(avg)
+        } else {
+            None
+        }
+    }
 }
 
 /// Actual implementation for requesting IOs from RawIORateLimiter.
 /// An attempt will be recorded first. If the attempted amount exceeds the available quotas of
-/// current epoch, the requester will register itself for next epoch and sleep until next epoch.
-macro_rules! request_impl {
+/// current epoch, the requester will register itself and sleep until next epoch.
+macro_rules! request_imp {
     ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
         loop {
@@ -174,9 +161,9 @@ macro_rules! request_impl {
                 RATE_LIMITER_REQUEST_WAIT_DURATION
                     .with_label_values(&[$priority.as_str()])
                     .observe(wait.as_secs_f64());
-                sleep_impl!(wait, $mode);
+                do_sleep!(wait, $mode);
             }
-            // our request will be granted in `refill()`
+            // our request will be passed to new epoch in `refill()`
             if pending <= cached_ios_per_refill {
                 return amount;
             }
@@ -197,7 +184,7 @@ impl RawIORateLimiter {
     /// `DEFAULT_REFILL_PERIOD`.
     #[allow(dead_code)]
     fn set_ios_per_sec(&self, ios_per_sec: usize) {
-        let now = calculate_ios_per_refill(ios_per_sec, DEFAULT_REFILL_PERIOD);
+        let now = (ios_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
         let before = self.ios_per_epoch[IOPriority::High as usize].swap(now, Ordering::Relaxed);
         if before == 0 || now == 0 {
             // toggle on/off rate limit.
@@ -211,11 +198,11 @@ impl RawIORateLimiter {
     }
 
     fn request(&self, priority: IOPriority, amount: usize) -> usize {
-        request_impl!(self, priority, amount, "sync")
+        request_imp!(self, priority, amount, "sync")
     }
 
     async fn async_request(&self, priority: IOPriority, amount: usize) -> usize {
-        request_impl!(self, priority, amount, "async")
+        request_imp!(self, priority, amount, "async")
     }
 
     /// Called by a daemon thread every `DEFAULT_REFILL_PERIOD`.
@@ -291,7 +278,6 @@ impl IORateLimiter {
         self.stats.clone()
     }
 
-    #[allow(dead_code)]
     pub fn set_io_rate_limit(&self, rate: usize) {
         self.throughput_limiter.set_ios_per_sec(rate);
     }
@@ -304,7 +290,7 @@ impl IORateLimiter {
     /// request can not be satisfied, the call is blocked. Granted token can be
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write || io_type == IOType::Export {
+        if io_op == IOOp::Write {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.request(priority, bytes);
         }
@@ -319,7 +305,7 @@ impl IORateLimiter {
     /// Granted token can be less than the requested bytes, but must be greater
     /// than zero.
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
-        if io_op == IOOp::Write || io_type == IOType::Export {
+        if io_op == IOOp::Write {
             let priority = self.priority_map[io_type as usize];
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
@@ -334,7 +320,7 @@ lazy_static! {
     static ref IO_RATE_LIMITER: Mutex<Option<Arc<IORateLimiter>>> = Mutex::new(None);
 }
 
-// Do NOT use this method in multi-threaded test environment.
+// Do NOT use this method in test environment.
 pub fn set_io_rate_limiter(limiter: Option<Arc<IORateLimiter>>) {
     *IO_RATE_LIMITER.lock() = limiter;
 }
@@ -347,7 +333,7 @@ pub fn get_io_rate_limiter() -> Option<Arc<IORateLimiter>> {
     }
 }
 
-pub fn start_io_rate_limiter_daemon(worker: &Worker) {
+pub fn start_global_io_rate_limiter_daemon(worker: &Worker) {
     worker.spawn_interval_task(DEFAULT_REFILL_PERIOD, move || {
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.refill();
@@ -355,22 +341,22 @@ pub fn start_io_rate_limiter_daemon(worker: &Worker) {
     });
 }
 
-pub struct IORateLimiterDaemon {
+pub struct LocalIORateLimiterDaemon {
     _thread: std::thread::JoinHandle<()>,
     stop: Arc<AtomicBool>,
 }
 
-impl Drop for IORateLimiterDaemon {
+impl Drop for LocalIORateLimiterDaemon {
     fn drop(&mut self) {
         self.stop.store(false, Ordering::Relaxed);
     }
 }
 
 #[cfg(test)]
-pub fn create_local_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORateLimiterDaemon {
+pub fn start_local_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> LocalIORateLimiterDaemon {
     let stop = Arc::new(AtomicBool::new(false));
     let stop1 = stop.clone();
-    IORateLimiterDaemon {
+    LocalIORateLimiterDaemon {
         _thread: std::thread::spawn(move || {
             while !stop1.load(Ordering::Relaxed) {
                 limiter.refill();
@@ -384,7 +370,6 @@ pub fn create_local_io_rate_limiter_daemon(limiter: Arc<IORateLimiter>) -> IORat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
 
     fn approximate_eq(left: f64, right: f64) {
         assert!(left >= right * 0.9);
@@ -467,7 +452,7 @@ mod tests {
         let low_bytes_per_sec = 2000;
         let high_bytes_per_sec = 10000;
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
-        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         verify_rate_limit(&limiter, low_bytes_per_sec);
         verify_rate_limit(&limiter, high_bytes_per_sec);
         verify_rate_limit(&limiter, low_bytes_per_sec);
@@ -480,7 +465,7 @@ mod tests {
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
         limiter.set_io_rate_limit(kbytes_per_sec * 1000);
         let stats = limiter.statistics().unwrap();
-        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {
@@ -514,7 +499,7 @@ mod tests {
         limiter.set_io_priority(IOType::Import, IOPriority::Low);
         let stats = limiter.statistics().unwrap();
         let limiter = Arc::new(limiter);
-        let _deamon = create_local_io_rate_limiter_daemon(limiter.clone());
+        let _deamon = start_local_io_rate_limiter_daemon(limiter.clone());
         let duration = {
             let begin = Instant::now();
             {

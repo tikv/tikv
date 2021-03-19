@@ -228,10 +228,11 @@ mod tests {
 
     #[test]
     fn test_instrumented_file() {
-        // make sure read at most one bytes at a time
         let limiter = Arc::new(IORateLimiter::new(true /*enable_statistics*/));
-        limiter.set_io_rate_limit(5 /* 1s / refill_period */);
+        // make sure read at most one bytes at a time
+        limiter.set_io_rate_limit(25 /* 1s / refill_period */);
         let stats = limiter.statistics().unwrap();
+        let _daemon = start_local_io_rate_limiter_daemon(limiter.clone());
 
         let tmp_dir = TempDir::new().unwrap();
         let tmp_file = tmp_dir.path().join("instrumented.txt");

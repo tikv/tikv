@@ -28,7 +28,7 @@ use engine_rocks::{
 use engine_traits::{compaction_job::CompactionJobInfo, Engines, RaftEngine, CF_DEFAULT, CF_WRITE};
 use error_code::ErrorCodeExt;
 use file_system::{
-    set_io_rate_limiter, start_io_rate_limiter_daemon, BytesFetcher,
+    set_io_rate_limiter, start_global_io_rate_limiter_daemon, BytesFetcher,
     MetricsManager as IOMetricsManager,
 };
 use fs2::FileExt;
@@ -871,7 +871,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
         set_io_rate_limiter(Some(Arc::new(limiter)));
-        start_io_rate_limiter_daemon(&self.background_worker);
+        start_global_io_rate_limiter_daemon(&self.background_worker);
         fetcher
     }
 

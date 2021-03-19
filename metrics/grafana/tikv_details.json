@@ -6364,9 +6364,9 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[30s])) by (type)",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"write\"}[1m])) by (type)",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": " {{type}}",
               "refId": "A",
               "step": 4
@@ -6459,9 +6459,9 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[30s])) by (type)",
+              "expr": "sum(rate(tikv_io_bytes{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", op=\"read\"}[1m])) by (type)",
               "format": "time_series",
-              "intervalFactor": 2,
+              "intervalFactor": 1,
               "legendFormat": " {{type}}",
               "refId": "A",
               "step": 4
