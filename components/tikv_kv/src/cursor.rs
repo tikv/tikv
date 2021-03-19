@@ -12,7 +12,7 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -597,7 +597,7 @@ mod tests {
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use crate::{CfStatistics, Cursor, ScanMode};
     use engine_rocks::util::new_temp_engine;
     use raftstore::store::RegionSnapshot;
 
