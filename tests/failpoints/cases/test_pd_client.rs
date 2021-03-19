@@ -146,7 +146,7 @@ fn test_slow_periodical_update() {
 // Reconnection will be speed limited.
 #[test]
 fn test_reconnect_limit() {
-    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let pd_client_reconnect_fp = "pd_client_reconnect";
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
 
@@ -161,7 +161,7 @@ fn test_reconnect_limit() {
     thread::sleep(Duration::from_secs(2));
 
     // The first reconnection will succeed, and the last_update will not be updated.
-    fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+    fail::cfg(pd_client_reconnect_fp, "return").unwrap();
     client.reconnect().unwrap();
     // The subsequent reconnection will be cancelled.
     for _ in 0..10 {
@@ -169,5 +169,5 @@ fn test_reconnect_limit() {
         assert!(format!("{:?}", ret.unwrap_err()).contains("cancel reconnection"));
     }
 
-    fail::remove(leader_client_reconnect_fp);
+    fail::remove(pd_client_reconnect_fp);
 }
