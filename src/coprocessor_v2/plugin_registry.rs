@@ -30,7 +30,7 @@ impl PluginRegistry {
         self.loaded_plugins.get(plugin_name).map(|p| p.plugin())
     }
 
-    /// Loads a [`CoprocessorPlugin`] from a `cdylib`.
+    /// Loads a [`CoprocessorPlugin`] from a `dylib`.
     ///
     /// After this function has successfully finished, the plugin is registered with the
     /// [`PluginRegistry`] and can later be obtained by calling [`get_plugin()`] with the proper
@@ -56,12 +56,12 @@ struct LoadedPlugin {
     plugin: Box<dyn CoprocessorPlugin>,
     /// Underlying library file on a fixed position on the heap.
     lib: Pin<Box<Library>>,
-    // Make sure the struct does not implement [`Unpin`]
+    // Make sure the struct does not implement [`Unpin`].
     _pin: PhantomPinned,
 }
 
 impl LoadedPlugin {
-    /// Creates a new `LoadedPlugin` by loading a `cdylib` from a file into memory.
+    /// Creates a new `LoadedPlugin` by loading a `dylib` from a file into memory.
     ///
     /// The function instantiates the plugin by calling `_plugin_create()` to obtain a
     /// [`CoprocessorPlugin`].

@@ -5,7 +5,11 @@
 //! for TiKV.
 //!
 //! Most notably, if you want to write a custom plugin, your plugin needs to implement the
-//! [`CoprocessorPlugin`] trait. The plugin then needs to be compiled to a `cdylib`.
+//! [`CoprocessorPlugin`] trait. The plugin then needs to be compiled to a `dylib`.
+//!
+//! > Note: Only `dylib` is supported, and not `cdylib` or `staticlib`, because the latter two are
+//! > not able to use TiKV's allocator. See also the documentation in [`std::alloc`].
+//!
 //! In order to make your plugin callable, you need to declare a constructor with the
 //! [`declare_plugin`] macro.
 //!

@@ -41,10 +41,10 @@ macro_rules! declare_plugin {
 
 /// Transforms the name of a package into the name of the compiled library.
 ///
-/// The result of the function can be used to correctly locate build artifacts of `cdylib` on
+/// The result of the function can be used to correctly locate build artifacts of `dylib` on
 /// different platforms.
 ///
-/// The name of the `cdylib` is
+/// The name of the `dylib` is
 /// * `lib<pkgname>.so` on Linux
 /// * `lib<pkgname>.dylib` on MaxOS
 /// * `lib<pkgname>.dll` on Windows

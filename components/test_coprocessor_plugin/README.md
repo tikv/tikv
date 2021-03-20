@@ -4,7 +4,7 @@ Example plugins should have the following lines in their `Cargo.toml`
 
 ```toml
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["dylib"]
 ```
 
 When a crate specifies an example plugin as a dependency, a `dylib` will be built in the 
