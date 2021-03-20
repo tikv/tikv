@@ -487,6 +487,7 @@ macro_rules! build_cf_opt {
                         provider.clone(),
                     ),
                 ));
+                info!("set level region accessor success!")
             } else {
                 warn!("size ratio compaction is disabled due to region info accessor not available")
             }
