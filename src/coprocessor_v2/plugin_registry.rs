@@ -7,8 +7,6 @@ use coprocessor_plugin_api::{
 use libloading::{Error as DylibError, Library, Symbol};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::marker::PhantomPinned;
-use std::pin::Pin;
 
 #[derive(Default)]
 pub struct PluginRegistry {
@@ -54,10 +52,8 @@ impl PluginRegistry {
 struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
-    /// Underlying library file on a fixed position on the heap.
-    lib: Pin<Box<Library>>,
-    // Make sure the struct does not implement [`Unpin`].
-    _pin: PhantomPinned,
+    /// Underlying library.
+    lib: Library,
 }
 
 impl LoadedPlugin {
@@ -73,7 +69,6 @@ impl LoadedPlugin {
     /// See also [`libloading::Library::get()`] for more information on what restrictions apply to
     /// [`PLUGIN_CONSTRUCTOR_NAME`].
     pub unsafe fn new(lib: Library) -> Result<Self, DylibError> {
-        let lib = Box::pin(lib);
         let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_NAME)?;
 
         let host_allocator = HostAllocatorPtr {
@@ -87,7 +82,6 @@ impl LoadedPlugin {
         Ok(LoadedPlugin {
             plugin,
             lib,
-            _pin: PhantomPinned,
         })
     }
 
@@ -108,15 +102,6 @@ mod tests {
         let plugin_name = loaded_plugin.plugin().name();
 
         assert_eq!(plugin_name, "example-plugin");
-    }
-
-    #[test]
-    fn move_loaded_plugin() {
-        let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
-        let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
-
-        let moved = move || loaded_plugin;
-        assert_eq!(moved().plugin().name(), "example-plugin");
     }
 
     #[test]
