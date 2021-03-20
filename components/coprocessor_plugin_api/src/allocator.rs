@@ -23,12 +23,14 @@ pub struct HostAllocator {
 }
 
 impl HostAllocator {
-    /// Creates a new [`HostAllocator`], but initializes the functions to the current allocator.
-    /// Make sure to call [`set_allocator()`] because otherwise the default allocator will be used.
+    /// Creates a new [`HostAllocator`].
+    ///
+    /// The internal function pointers are set to `nullptr`, so any attempt to allocate memory
+    /// before a call to [`set_allocator()`] will result in a segmentation fault.
     pub const fn new() -> Self {
         HostAllocator {
-            alloc_fn: AtomicPtr::new(std::alloc::alloc as *mut _),
-            dealloc_fn: AtomicPtr::new(std::alloc::dealloc as *mut _),
+            alloc_fn: AtomicPtr::new(std::ptr::null_mut()),
+            dealloc_fn: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
 
