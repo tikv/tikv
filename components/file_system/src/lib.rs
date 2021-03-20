@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{self, Hasher, MessageDigest};
-use variant_count::VariantCount;
+use strum::EnumCount;
 
 #[derive(Debug)]
 pub enum IOOp {
@@ -43,7 +43,7 @@ pub enum IOOp {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, VariantCount)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount)]
 pub enum IOType {
     Other,
     // Including coprocessor and storage read.
