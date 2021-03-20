@@ -4,7 +4,7 @@ use super::allocator::HostAllocatorPtr;
 use super::plugin_api::CoprocessorPlugin;
 
 /// Name of the exported constructor function for the plugin in the `dylib`.
-pub const PLUGIN_CONSTRUCTOR_NAME: &[u8] = b"_plugin_create";
+pub const PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
 /// Type signature of the exported constructor function for the plugin in the `dylib`.
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;

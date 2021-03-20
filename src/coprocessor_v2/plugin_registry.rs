@@ -64,12 +64,12 @@ impl LoadedPlugin {
     ///
     /// # Safety
     ///
-    /// The library **must** contain a function with name [`PLUGIN_CONSTRUCTOR_NAME`] and the
+    /// The library **must** contain a function with name [`PLUGIN_CONSTRUCTOR_SYMBOL`] and the
     /// signature of [`PluginConstructorSignature`]. Otherwise, behavior is undefined.
     /// See also [`libloading::Library::get()`] for more information on what restrictions apply to
-    /// [`PLUGIN_CONSTRUCTOR_NAME`].
+    /// [`PLUGIN_CONSTRUCTOR_SYMBOL`].
     pub unsafe fn new(lib: Library) -> Result<Self, DylibError> {
-        let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_NAME)?;
+        let constructor: Symbol<PluginConstructorSignature> = lib.get(PLUGIN_CONSTRUCTOR_SYMBOL)?;
 
         let host_allocator = HostAllocatorPtr {
             alloc_fn: std::alloc::alloc,
