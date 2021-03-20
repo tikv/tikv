@@ -7,6 +7,9 @@ Example plugins should have the following lines in their `Cargo.toml`
 crate-type = ["cdylib"]
 ```
 
-When a crate specifies an example plugin as a dependency, a `cdylib` will be built in the `target/<profile>` directory.
+When a crate specifies an example plugin as a dependency, a `dylib` will be built in the 
+`target/<profile>` directory.
 The function `coprocessor_plugin_api::pkgname_to_libname()` can be used to resolve the package name
 to a proper library name. 
+
+Also make sure to whitelist plugins in `scripts/check-bins.py` for not containing jemalloc.
