@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec", "test-engines-rocksdb"]
+default = ["protobuf-codec", "test-engines-rocksdb", "cloud-aws", "cloud-gcp"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -24,15 +24,18 @@ failpoints = [
   "raftstore/failpoints",
   "engine_rocks/failpoints"
 ]
+cloud-aws = [ "encryption_export/cloud-aws" ]
+cloud-gcp = [ "encryption_export/cloud-gcp" ]
 protobuf-codec = [
   "batch-system/protobuf-codec",
   "codec/protobuf-codec",
   "concurrency_manager/protobuf-codec",
-  "encryption/protobuf-codec",
+  "encryption_export/protobuf-codec",
   "engine_panic/protobuf-codec",
   "engine_rocks/protobuf-codec",
   "engine_test/protobuf-codec",
   "engine_traits/protobuf-codec",
+  "engine_traits_tests/protobuf-codec",
   "error_code/protobuf-codec",
   "grpcio/protobuf-codec",
   "into_other/protobuf-codec",
@@ -52,16 +55,18 @@ protobuf-codec = [
   "tipb/protobuf-codec",
   "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
+  "grpcio-health/protobuf-codec",
 ]
 prost-codec = [
   "batch-system/prost-codec",
   "codec/prost-codec",
   "concurrency_manager/prost-codec",
-  "encryption/prost-codec",
+  "encryption_export/prost-codec",
   "engine_panic/prost-codec",
   "engine_rocks/prost-codec",
   "engine_test/prost-codec",
   "engine_traits/prost-codec",
+  "engine_traits_tests/prost-codec",
   "error_code/prost-codec",
   "grpcio/prost-codec",
   "into_other/prost-codec",
@@ -81,6 +86,7 @@ prost-codec = [
   "tipb/prost-codec",
   "tikv_util/prost-codec",
   "txn_types/prost-codec",
+  "grpcio-health/prost-codec",
 ]
 testexport = ["raftstore/testexport"]
 test-engines-rocksdb = [
@@ -114,12 +120,12 @@ configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
-derive_more = "0.99.3"
-encryption = { path = "components/encryption", default-features = false }
+encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
 engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits", default-features = false }
+engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
 failure = "0.1"
@@ -128,7 +134,8 @@ fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.7", default-features = false, features = ["openssl-vendored"] }
+grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
+grpcio-health = { version = "0.8", default-features = false }
 hex = "0.4"
 hyper-tls = "0.4"
 itertools = "0.8"
@@ -151,8 +158,8 @@ num_cpus = "1"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "0.4.8"
 pnet_datalink = "0.23"
-prost = "0.6"
-pprof = { version = "^0.3.14", default-features = false, features = ["flamegraph", "protobuf"] }
+prost = "0.7"
+pprof = { version = "^0.4", default-features = false, features = ["flamegraph", "protobuf"] }
 protobuf = "2.8"
 quick-error = "1.2.3"
 raft = { version = "0.6.0-alpha", default-features = false }
@@ -168,20 +175,21 @@ serde_ignored = "0.1"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-slog_derive = "0.2"
 parking_lot = "0.11"
 prometheus = { version = "0.10", features = ["nightly"] }
 prometheus-static-metric = "0.4"
 sst_importer = { path = "components/sst_importer", default-features = false }
-sysinfo = "0.15"
+sysinfo = "0.16"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
+paste = "1.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc" }
+tikv_kv = { path = "components/tikv_kv" }
 tikv_util = { path = "components/tikv_util", default-features = false }
 collections = { path = "components/collections" }
 time = "0.1"
@@ -211,6 +219,7 @@ raft = { git = "https://github.com/tikv/raft-rs", branch = "master", default-fea
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", default-features = false }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
+openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }
@@ -250,6 +259,8 @@ members = [
   "components/tidb_query_executors",
   "components/pd_client",
   "components/external_storage",
+  "components/cloud",
+  "components/cloud/aws",
   "components/backup",
   "components/keys",
   "components/sst_importer",

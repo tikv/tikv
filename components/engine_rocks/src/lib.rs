@@ -93,6 +93,9 @@ pub use event_listener::*;
 pub mod config;
 pub use config::*;
 
+pub mod ttl_properties;
+pub use ttl_properties::*;
+
 pub mod encryption;
 
 pub mod file_system;

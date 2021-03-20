@@ -29,7 +29,7 @@ impl Default for GcConfig {
             ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
-            enable_compaction_filter: false,
+            enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
         }
     }

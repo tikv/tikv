@@ -37,10 +37,6 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate slog_derive;
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
 extern crate more_asserts;
 #[macro_use]
 extern crate vlog;
@@ -52,10 +48,9 @@ extern crate failure;
 #[cfg(test)]
 extern crate test;
 
-extern crate encryption;
-
 pub mod config;
 pub mod coprocessor;
+pub mod coprocessor_v2;
 pub mod import;
 pub mod read_pool;
 pub mod server;

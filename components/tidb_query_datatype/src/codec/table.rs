@@ -34,10 +34,12 @@ pub const MAX_OLD_ENCODED_VALUE_LEN: usize = 9;
 pub const INDEX_VALUE_COMMON_HANDLE_FLAG: u8 = 127;
 /// Flag that indicate if the index value has partition id.
 pub const INDEX_VALUE_PARTITION_ID_FLAG: u8 = 126;
+/// Flag that indicate if the index values has the version information.
+pub const INDEX_VALUE_VERSION_FLAG: u8 = 125;
 /// Flag that indicate if the index value has restored data.
 pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERSION;
 
-/// ID for partition column, see https://github.com/pingcap/parser/pull/1010
+/// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
 /// `TableEncoder` encodes the table record/index prefix.
