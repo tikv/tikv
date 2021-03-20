@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use rand::Rng;
 use std::borrow::Cow;
 use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
@@ -12,12 +11,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
-//use std::time::Duration;
+use std::time::Duration;
 use std::vec::Drain;
 use std::{cmp, usize};
 
 use batch_system::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine_rocks::{PerfContext, PerfLevel};
 use engine_traits::{
     DeleteStrategy, KvEngine, RaftEngine, Range as EngineRange, Snapshot, WriteBatch,
 };
@@ -42,14 +42,12 @@ use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::worker::Scheduler;
-use tikv_util::Either;
+use tikv_util::{Either, MustConsumeVec};
 use time::Timespec;
 use uuid::Builder as UuidBuilder;
 
 use crate::coprocessor::{Cmd, CoprocessorHost};
-use crate::store::fsm::apply_async_io::ApplyAsyncWriter;
 use crate::store::fsm::RaftPollerBuilder;
-use crate::store::local_metrics::ApplyIOLockMetrics;
 use crate::store::metrics::*;
 use crate::store::msg::{Callback, PeerMsg, ReadResponse, SignificantMsg};
 use crate::store::peer::Peer;
@@ -58,17 +56,15 @@ use crate::store::peer_storage::{
 };
 use crate::store::util::{
     check_region_epoch, compare_region_epoch, is_learner, ChangePeerI, ConfChangeKind,
-    KeysInfoFormatter, ADMIN_CMD_EPOCH_MAP,
+    KeysInfoFormatter, PerfContextStatistics, ADMIN_CMD_EPOCH_MAP,
 };
 use crate::store::{cmd_resp, util, Config, RegionSnapshot, RegionTask};
-use crate::{Error, Result};
+use crate::{observe_perf_context_type, report_perf_context, Error, Result};
 
 use super::metrics::*;
-use crate::store::metrics::APPLY_TIME_HISTOGRAM;
-use crate::store::metrics::STORE_TIME_HISTOGRAM;
 
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-//const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd<S>
@@ -287,134 +283,41 @@ impl ExecContext {
     }
 }
 
-pub struct ApplyCallback<EK>
+struct ApplyCallback<EK>
 where
     EK: KvEngine,
 {
-    //region: Region,
+    region: Region,
     cbs: Vec<(Option<Callback<EK::Snapshot>>, Cmd)>,
-    has_callback: bool,
 }
 
 impl<EK> ApplyCallback<EK>
 where
     EK: KvEngine,
 {
-    fn new() -> Self {
+    fn new(region: Region) -> Self {
         let cbs = vec![];
-        ApplyCallback {
-            //region,
-            cbs,
-            has_callback: false,
-        }
+        ApplyCallback { region, cbs }
     }
 
-    pub fn has_callback(&self) -> bool {
-        self.has_callback
-    }
-
-    pub fn invoke_all(self, host: &CoprocessorHost<EK>, region: &Region) -> Vec<Cmd> {
-        let mut cmds = vec![];
+    fn invoke_all(self, host: &CoprocessorHost<EK>) {
         for (cb, mut cmd) in self.cbs {
-            host.post_apply(&region, &mut cmd);
+            host.post_apply(&self.region, &mut cmd);
             if let Some(cb) = cb {
                 if let Some(scheduled_ts) = cb.invoke_with_response(cmd.response.clone()) {
                     APPLY_TIME_HISTOGRAM.observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-            cmds.push(cmd);
-        }
-        cmds
-    }
-
-    pub fn on_to_write_queue(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_QUEUE_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-        }
-    }
-
-    pub fn on_write_state(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_STATE_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-        }
-    }
-
-    pub fn on_write(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_TO_WRITE_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-        }
-    }
-
-    pub fn on_write_end(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_WRITE_END_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-        }
-    }
-
-    pub fn proposal_len(&self) -> usize {
-        let mut sum: usize = 0;
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(_) = cb.get_scheduled_ts() {
-                    sum += 1;
-                }
-            }
-        }
-        sum
-    }
-
-    pub fn on_to_callback_queue(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_IN_CALLBACK_QUEUE_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
-                }
-            };
-        }
-    }
-
-    pub fn on_before_callback(&self) {
-        for (cb, _cmd) in &self.cbs {
-            if let Some(cb) = cb {
-                if let Some(scheduled_ts) = cb.get_scheduled_ts() {
-                    APPLY_BEFORE_CALLBACK_DURATION_HISTOGRAM
-                        .observe(duration_to_sec(scheduled_ts.elapsed()));
                 }
             };
         }
     }
 
     fn push(&mut self, cb: Option<Callback<EK::Snapshot>>, cmd: Cmd) {
-        if cb.is_some() {
-            self.has_callback = true;
-        }
         self.cbs.push((cb, cmd));
     }
 }
 
 pub trait Notifier<EK: KvEngine>: Send {
-    fn notify(&self, apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>);
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
@@ -432,13 +335,15 @@ where
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
-    cb: Option<ApplyCallback<EK>>,
+    cbs: MustConsumeVec<ApplyCallback<EK>>,
+    apply_res: Vec<ApplyRes<EK::Snapshot>>,
     exec_ctx: Option<ExecContext>,
 
     kv_wb: W,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
+    last_applied_index: u64,
     committed_count: usize,
 
     // Whether synchronize WAL is preferred.
@@ -446,19 +351,15 @@ where
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
 
-    //yield_duration: Duration,
+    perf_context_statistics: PerfContextStatistics,
+
+    yield_duration: Duration,
+
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-
-    async_writers: Vec<ApplyAsyncWriter<EK, W>>,
-
-    trigger_io_bytes: u64,
-    trigger_io_keys: u64,
-
-    io_lock_metrics: ApplyIOLockMetrics,
 }
 
 impl<EK, W> ApplyContext<EK, W>
@@ -477,7 +378,6 @@ where
         cfg: &Config,
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-        async_writers: Vec<ApplyAsyncWriter<EK, W>>,
     ) -> ApplyContext<EK, W> {
         // If `enable_multi_batch_write` was set true, we create `RocksWriteBatchVec`.
         // Otherwise create `RocksWriteBatch`.
@@ -492,21 +392,20 @@ where
             engine,
             router,
             notifier,
-            cb: None,
             kv_wb,
+            cbs: MustConsumeVec::new("callback of apply context"),
+            apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
+            last_applied_index: 0,
             committed_count: 0,
-            exec_ctx: None,
             sync_log_hint: false,
+            exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
-            //yield_duration: cfg.apply_yield_duration.0,
+            perf_context_statistics: PerfContextStatistics::new(cfg.perf_level),
+            yield_duration: cfg.apply_yield_duration.0,
             store_id,
             pending_create_peers,
-            async_writers,
-            trigger_io_bytes: cfg.trigger_apply_io_bytes,
-            trigger_io_keys: cfg.trigger_apply_io_keys,
-            io_lock_metrics: ApplyIOLockMetrics::default(),
         }
     }
 
@@ -514,12 +413,10 @@ where
     ///
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
+    /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        delegate.metrics = ApplyMetrics::default();
-        self.cb = Some(ApplyCallback::new());
-        self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
-        self.kv_wb_last_keys = self.kv_wb().count() as u64;
-        self.sync_log_hint = false;
+        self.cbs.push(ApplyCallback::new(delegate.region.clone()));
+        self.last_applied_index = delegate.apply_state.get_applied_index();
 
         if let Some(observe_cmd) = &delegate.observe_cmd {
             let region_id = delegate.region_id();
@@ -533,63 +430,102 @@ where
         }
     }
 
+    /// Commits all changes have done for delegate. `persistent` indicates whether
+    /// write the changes into rocksdb.
+    ///
+    /// This call is valid only when it's between a `prepare_for` and `finish_for`.
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
+        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+            delegate.write_apply_state(self.kv_wb_mut());
+        }
+        // last_applied_index doesn't need to be updated, set persistent to true will
+        // force it call `prepare_for` automatically.
+        self.commit_opt(delegate, true);
+    }
+
+    fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
+        delegate.update_metrics(self);
+        if persistent {
+            self.write_to_db();
+            self.prepare_for(delegate);
+        }
+        self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
+        self.kv_wb_last_keys = self.kv_wb().count() as u64;
+    }
+
+    /// Writes all the changes into RocksDB.
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.sync_log_hint;
+        if !self.kv_wb_mut().is_empty() {
+            let mut write_opts = engine_traits::WriteOptions::new();
+            write_opts.set_sync(need_sync);
+            self.kv_wb()
+                .write_to_engine(&self.engine, &write_opts)
+                .unwrap_or_else(|e| {
+                    panic!("failed to write to engine: {:?}", e);
+                });
+            report_perf_context!(
+                self.perf_context_statistics,
+                APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC
+            );
+            self.sync_log_hint = false;
+            let data_size = self.kv_wb().data_size();
+            if data_size > APPLY_WB_SHRINK_SIZE {
+                // Control the memory usage for the WriteBatch. Whether it's `RocksWriteBatch` or
+                // `RocksWriteBatchVec` depends on the `enable_multi_batch_write` configuration.
+                self.kv_wb = W::with_capacity(&self.engine, DEFAULT_APPLY_WB_SIZE);
+            } else {
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                self.kv_wb_mut().clear();
+            }
+            self.kv_wb_last_bytes = 0;
+            self.kv_wb_last_keys = 0;
+        }
+        // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
+        self.host.on_flush_apply(self.engine.clone());
+
+        for cbs in self.cbs.drain(..) {
+            cbs.invoke_all(&self.host);
+        }
+        need_sync
+    }
+
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        delegate.update_metrics(self);
-        let apply_cb = self.cb.take();
-
-        let writer_id = delegate.async_writer_id(self);
-        let wait_lock = Instant::now();
-        let mut locked_writer = self.async_writers[writer_id].0.lock().unwrap();
-        let hold_lock = Instant::now();
-
-        self.io_lock_metrics
-            .wait_lock_sec
-            .observe(duration_to_sec(wait_lock.elapsed()) as f64);
-
-        let current = locked_writer.prepare_current_for_write();
-        // append write batch
-        current.kv_wb.append(&mut self.kv_wb);
-
-        current.update_apply(
-            delegate.region_id(),
-            self.sync_log_hint,
-            apply_cb.unwrap(),
-            ApplyRes {
-                apply_state: delegate.apply_state.clone(),
-                applied_index_term: delegate.applied_index_term,
-                exec_res: results,
-                metrics: delegate.metrics.clone(),
-            },
-        );
-        if locked_writer.should_notify() {
-            self.async_writers[writer_id].1.notify_one();
+        if !delegate.pending_remove {
+            delegate.write_apply_state(self.kv_wb_mut());
         }
-        self.io_lock_metrics
-            .hold_lock_sec
-            .observe(duration_to_sec(hold_lock.elapsed()) as f64);
+        self.commit_opt(delegate, false);
+        self.apply_res.push(ApplyRes {
+            region_id: delegate.region_id(),
+            apply_state: delegate.apply_state.clone(),
+            exec_res: results,
+            metrics: delegate.metrics.clone(),
+            applied_index_term: delegate.applied_index_term,
+        });
+    }
+
+    pub fn delta_bytes(&self) -> u64 {
+        self.kv_wb().data_size() as u64 - self.kv_wb_last_bytes
+    }
+
+    pub fn delta_keys(&self) -> u64 {
+        self.kv_wb().count() as u64 - self.kv_wb_last_keys
     }
 
     #[inline]
-    pub fn kv_wb(&mut self) -> &W {
+    pub fn kv_wb(&self) -> &W {
         &self.kv_wb
     }
 
     #[inline]
     pub fn kv_wb_mut(&mut self) -> &mut W {
         &mut self.kv_wb
-    }
-
-    pub fn delta_bytes(&mut self) -> u64 {
-        self.kv_wb().data_size() as u64 - self.kv_wb_last_bytes
-    }
-
-    pub fn delta_keys(&mut self) -> u64 {
-        self.kv_wb().count() as u64 - self.kv_wb_last_keys
     }
 
     /// Flush all pending writes to engines.
@@ -601,6 +537,18 @@ where
             None => return false,
         };
 
+        // Write to engine
+        // raftstore.sync-log = true means we need prevent data loss when power failure.
+        // take raft log gc for example, we write kv WAL first, then write raft WAL,
+        // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
+        // so we use sync-log flag here.
+        let is_synced = self.write_to_db();
+
+        if !self.apply_res.is_empty() {
+            let apply_res = std::mem::replace(&mut self.apply_res, vec![]);
+            self.notifier.notify(apply_res);
+        }
+
         let elapsed = t.elapsed();
         STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
 
@@ -611,7 +559,7 @@ where
             self.committed_count
         );
         self.committed_count = 0;
-        true
+        is_synced
     }
 }
 
@@ -655,7 +603,6 @@ pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
     cb.invoke_with_response(resp);
 }
 
-/*
 /// Checks if a write is needed to be issued before handling the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
@@ -682,7 +629,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
 
     false
 }
-*/
 
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
@@ -724,14 +670,6 @@ struct WaitSourceMergeState {
     logs_up_to_date: Arc<AtomicU64>,
 }
 
-impl Debug for WaitSourceMergeState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WaitSourceMergeState")
-            .field("logs_up_to_date", &self.logs_up_to_date)
-            .finish()
-    }
-}
-
 struct YieldState<EK>
 where
     EK: KvEngine,
@@ -743,7 +681,6 @@ where
     /// the source peer has applied its logs and pending entries
     /// are all handled.
     pending_msgs: Vec<Msg<EK>>,
-    offset: usize,
 }
 
 impl<EK> Debug for YieldState<EK>
@@ -754,6 +691,14 @@ where
         f.debug_struct("YieldState")
             .field("pending_entries", &self.pending_entries.len())
             .field("pending_msgs", &self.pending_msgs.len())
+            .finish()
+    }
+}
+
+impl Debug for WaitSourceMergeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WaitSourceMergeState")
+            .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
 }
@@ -834,8 +779,6 @@ where
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
-
-    async_writer_id: Option<usize>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -863,7 +806,6 @@ where
             last_merge_version: 0,
             pending_request_snapshot_count: reg.pending_request_snapshot_count,
             observe_cmd: None,
-            async_writer_id: None,
         }
     }
 
@@ -875,125 +817,96 @@ where
         self.id
     }
 
-    fn async_writer_id<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) -> usize {
-        if let Some(id) = self.async_writer_id {
-            id
-        } else {
-            assert!(apply_ctx.async_writers.len() > 0);
-            let id = rand::thread_rng().gen_range(0, apply_ctx.async_writers.len());
-            self.async_writer_id = Some(id);
-            id
-        }
-    }
-
     /// Handles all the committed_entries, namely, applies the committed entries.
     fn handle_raft_committed_entries<W: WriteBatch<EK>>(
         &mut self,
         apply_ctx: &mut ApplyContext<EK, W>,
-        committed_entries: Vec<Entry>,
-        offset: usize,
+        mut committed_entries_drainer: Drain<Entry>,
     ) {
-        if committed_entries.is_empty() || offset >= committed_entries.len() {
+        if committed_entries_drainer.len() == 0 {
             return;
         }
-
+        apply_ctx.prepare_for(self);
         // If we send multiple ConfChange commands, only first one will be proposed correctly,
         // others will be saved as a normal entry with no data, so we must re-propose these
         // commands again.
-        apply_ctx.committed_count += committed_entries.len() - offset;
-
-        let mut off = offset;
-        while off < committed_entries.len() {
-            apply_ctx.prepare_for(self);
-
-            let mut results = VecDeque::new();
-
-            while off < committed_entries.len() {
-                if self.pending_remove {
-                    // This peer is about to be destroyed, skip everything.
-                    break;
-                }
-
-                if apply_ctx.delta_bytes() >= apply_ctx.trigger_io_bytes
-                    && apply_ctx.delta_keys() >= apply_ctx.trigger_io_keys
-                {
-                    break;
-                }
-
-                let entry = &committed_entries[off];
-                let expect_index = self.apply_state.get_applied_index() + 1;
-                if expect_index != entry.get_index() {
-                    panic!(
-                        "{} expect index {}, but got {}",
-                        self.tag,
-                        expect_index,
-                        entry.get_index()
-                    );
-                }
-
-                // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
-                // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
-                // but PD will reject old version tikv join the cluster, so this should not happen.
-                let res = match entry.get_entry_type() {
-                    EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
-                    EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
-                        self.handle_raft_entry_conf_change(apply_ctx, &entry)
-                    }
-                };
-
-                match res {
-                    ApplyResult::None => {}
-                    ApplyResult::Res(res) => results.push_back(res),
-                    ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
-                        // Both cancel and merge will yield current processing.
-                        apply_ctx.committed_count -= committed_entries.len() - off;
-                        apply_ctx.finish_for(self, results);
-
-                        self.yield_state = Some(YieldState {
-                            pending_entries: committed_entries,
-                            pending_msgs: Vec::default(),
-                            offset: off,
-                        });
-                        if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
-                            self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
-                        }
-                        return;
-                    }
-                }
-
-                off += 1;
-            }
-
-            apply_ctx.finish_for(self, results);
-
+        apply_ctx.committed_count += committed_entries_drainer.len();
+        let mut results = VecDeque::new();
+        while let Some(entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
-                self.destroy(apply_ctx);
                 break;
             }
+
+            let expect_index = self.apply_state.get_applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!(
+                    "{} expect index {}, but got {}",
+                    self.tag,
+                    expect_index,
+                    entry.get_index()
+                );
+            }
+
+            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
+            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
+            // but PD will reject old version tikv join the cluster, so this should not happen.
+            let res = match entry.get_entry_type() {
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                    self.handle_raft_entry_conf_change(apply_ctx, &entry)
+                }
+            };
+
+            match res {
+                ApplyResult::None => {}
+                ApplyResult::Res(res) => results.push_back(res),
+                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
+                    // Both cancel and merge will yield current processing.
+                    apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
+                    let mut pending_entries =
+                        Vec::with_capacity(committed_entries_drainer.len() + 1);
+                    // Note that current entry is skipped when yield.
+                    pending_entries.push(entry);
+                    pending_entries.extend(committed_entries_drainer);
+                    apply_ctx.finish_for(self, results);
+                    self.yield_state = Some(YieldState {
+                        pending_entries,
+                        pending_msgs: Vec::default(),
+                    });
+                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                        self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    }
+                    return;
+                }
+            }
+        }
+
+        apply_ctx.finish_for(self, results);
+
+        if self.pending_remove {
+            self.destroy(apply_ctx);
         }
     }
 
-    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &mut ApplyContext<EK, W>) {
+    fn update_metrics<W: WriteBatch<EK>>(&mut self, apply_ctx: &ApplyContext<EK, W>) {
         self.metrics.written_bytes += apply_ctx.delta_bytes();
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    /*
-        fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
-            wb.put_msg_cf(
-                CF_RAFT,
-                &keys::apply_state_key(self.region.get_id()),
-                &self.apply_state,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to save apply state to write batch, error: {:?}",
-                    self.tag, e
-                );
-            });
-        }
-    */
+    fn write_apply_state<W: WriteBatch<EK>>(&self, wb: &mut W) {
+        wb.put_msg_cf(
+            CF_RAFT,
+            &keys::apply_state_key(self.region.get_id()),
+            &self.apply_state,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save apply state to write batch, error: {:?}",
+                self.tag, e
+            );
+        });
+    }
 
     fn handle_raft_entry_normal<W: WriteBatch<EK>>(
         &mut self,
@@ -1011,10 +924,14 @@ where
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            // TODO: fix it
-            /*if should_write_to_engine(&cmd) {
+            if should_write_to_engine(&cmd) || apply_ctx.kv_wb().should_write_to_engine() {
                 apply_ctx.commit(self);
-            }*/
+                if let Some(start) = self.handle_start.as_ref() {
+                    if start.elapsed() >= apply_ctx.yield_duration {
+                        return ApplyResult::Yield;
+                    }
+                }
+            }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
@@ -1029,7 +946,7 @@ where
         //    it will also propose an empty entry. But that entry will not contain
         //    any associated callback. So no need to clear callback.
         while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
-            apply_ctx.cb.as_mut().unwrap().push(
+            apply_ctx.cbs.last_mut().unwrap().push(
                 cmd.cb.take(),
                 Cmd::new(
                     cmd.index,
@@ -1159,7 +1076,7 @@ where
                 .on_apply_cmd(observe_cmd.id, self.region_id(), cmd.clone());
         }
 
-        apply_ctx.cb.as_mut().unwrap().push(cmd_cb, cmd);
+        apply_ctx.cbs.last_mut().unwrap().push(cmd_cb, cmd);
 
         exec_result
     }
@@ -3022,21 +2939,12 @@ pub struct ApplyMetrics {
     pub lock_cf_written_bytes: u64,
 }
 
-impl ApplyMetrics {
-    pub fn combine(&mut self, other: &ApplyMetrics) {
-        self.size_diff_hint += other.size_diff_hint;
-        self.delete_keys_hint += other.delete_keys_hint;
-        self.written_bytes += other.written_bytes;
-        self.written_keys += other.written_keys;
-        self.lock_cf_written_bytes += other.lock_cf_written_bytes;
-    }
-}
-
 #[derive(Debug)]
 pub struct ApplyRes<S>
 where
     S: Snapshot,
 {
+    pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
@@ -3113,7 +3021,7 @@ where
         mut apply: Apply<EK::Snapshot>,
     ) {
         if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(Instant::now());
+            apply_ctx.timer = Some(Instant::now_coarse());
         }
 
         fail_point!("on_handle_apply_1003", self.delegate.id() == 1003, |_| {});
@@ -3124,6 +3032,7 @@ where
             return;
         }
 
+        self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
         if let Some(entry) = apply.entries.last() {
             let prev_state = (
@@ -3142,9 +3051,8 @@ where
         }
 
         self.append_proposal(apply.cbs.drain(..));
-        let entries = std::mem::take(&mut apply.entries);
         self.delegate
-            .handle_raft_committed_entries(apply_ctx, entries, 0);
+            .handle_raft_committed_entries(apply_ctx, apply.entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
         if self.delegate.yield_state.is_some() {
             return;
@@ -3182,6 +3090,11 @@ where
     }
 
     fn destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>) {
+        let region_id = self.delegate.region_id();
+        if ctx.apply_res.iter().any(|res| res.region_id == region_id) {
+            // Flush before destroying to avoid reordering messages.
+            ctx.flush();
+        }
         fail_point!(
             "before_peer_destroy_1003",
             self.delegate.id() == 1003,
@@ -3203,10 +3116,7 @@ where
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            let writer_id = self.delegate.async_writer_id(ctx);
-            let mut locked_writer = ctx.async_writers[writer_id].0.lock().unwrap();
-            let current = locked_writer.prepare_current_for_write();
-            current.update_destroy(
+            ctx.notifier.notify_one(
                 self.delegate.region_id(),
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
@@ -3232,11 +3142,11 @@ where
         let mut state = self.delegate.yield_state.take().unwrap();
 
         if ctx.timer.is_none() {
-            ctx.timer = Some(Instant::now());
+            ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
             self.delegate
-                .handle_raft_committed_entries(ctx, state.pending_entries, state.offset);
+                .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
             if let Some(ref mut s) = self.delegate.yield_state {
                 // So the delegate is expected to yield the CPU.
                 // It can either be executing another `CommitMerge` in pending_msgs
@@ -3296,8 +3206,7 @@ where
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        // TODO: It seems we don't need snapshot must be the newest one
-        /*let applied_index = self.delegate.apply_state.get_applied_index();
+        let applied_index = self.delegate.apply_state.get_applied_index();
         let mut need_sync = apply_ctx
             .apply_res
             .iter()
@@ -3319,7 +3228,7 @@ where
             // For now, it's more like last_flush_apply_index.
             // TODO: Update it only when `flush()` returns true.
             self.delegate.last_sync_apply_index = applied_index;
-        }*/
+        }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
             apply_ctx.engine.snapshot(),
@@ -3378,11 +3287,10 @@ where
             true,  /* include_region */
         ) {
             Ok(()) => {
-                // TODO
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
-                /*if apply_ctx.kv_wb().count() > 0 {
+                if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
-                }*/
+                }
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
@@ -3527,7 +3435,6 @@ where
     apply_ctx: ApplyContext<EK, W>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
-    loop_timer: Instant,
 }
 
 impl<EK, W> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, W>
@@ -3549,8 +3456,7 @@ where
                 _ => {}
             }
         }
-        APPLY_LOOP_DURATION_HISTOGRAM.observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
-        self.loop_timer = Instant::now();
+        self.apply_ctx.perf_context_statistics.start();
     }
 
     /// There is no control fsm in apply poller.
@@ -3604,7 +3510,6 @@ where
                 }
             }
         }
-
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
         if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
@@ -3616,18 +3521,13 @@ where
         expected_msg_count
     }
 
-    fn end(&mut self, _fsms: &mut [Box<ApplyFsm<EK>>]) {
-        //let is_synced = self.apply_ctx.flush();
-        self.apply_ctx.flush();
-        self.apply_ctx.io_lock_metrics.flush();
-        // TODO: remove this code(last_sync_apply_index belongs to the logic of `handle_snapshot`)
-        /*if is_synced {
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm<EK>>]) {
+        let is_synced = self.apply_ctx.flush();
+        if is_synced {
             for fsm in fsms {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
-        }*/
-        APPLY_LOOP_WORK_DURATION_HISTOGRAM
-            .observe(duration_to_sec(self.loop_timer.elapsed()) as f64);
+        }
     }
 }
 
@@ -3643,7 +3543,6 @@ pub struct Builder<EK: KvEngine, W: WriteBatch<EK>> {
     _phantom: PhantomData<W>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    async_writers: Vec<ApplyAsyncWriter<EK, W>>,
 }
 
 impl<EK: KvEngine, W> Builder<EK, W>
@@ -3651,7 +3550,7 @@ where
     W: WriteBatch<EK>,
 {
     pub fn new<T, ER: RaftEngine>(
-        builder: &RaftPollerBuilder<EK, ER, T, W>,
+        builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
     ) -> Builder<EK, W> {
@@ -3667,7 +3566,6 @@ where
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
-            async_writers: builder.apply_async_writers.clone(),
         }
     }
 }
@@ -3675,7 +3573,7 @@ where
 impl<EK, W> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, W>
 where
     EK: KvEngine,
-    W: WriteBatch<EK> + 'static,
+    W: WriteBatch<EK>,
 {
     type Handler = ApplyPoller<EK, W>;
 
@@ -3694,11 +3592,9 @@ where
                 &cfg,
                 self.store_id,
                 self.pending_create_peers.clone(),
-                self.async_writers.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
-            loop_timer: Instant::now(),
         }
     }
 }
@@ -3915,8 +3811,8 @@ mod tests {
     }
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
-        fn notify(&self, apply_res: HashMap<u64, ApplyRes<EK::Snapshot>>) {
-            for (_, r) in apply_res {
+        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+            for r in apply_res {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }

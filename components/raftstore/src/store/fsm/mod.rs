@@ -5,7 +5,6 @@
 //! stores. They are mixed for now, will be separated in the future.
 
 pub mod apply;
-pub mod apply_async_io;
 pub mod async_io;
 mod metrics;
 mod peer;
