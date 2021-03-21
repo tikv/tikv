@@ -15,11 +15,6 @@ pub type RawResponse = Vec<u8>;
 /// Plugins can run setup code in their constructor and teardown code by implementing
 /// [`std::ops::Drop`].
 pub trait CoprocessorPlugin: Send + Sync {
-    /// A constructor that initializes the plugin.
-    fn create() -> Self
-    where
-        Self: Sized;
-
     /// Returns the name of the plugin.
     /// Requests that are sent to TiKV coprocessor must have a matching `copr_name` field.
     fn name(&self) -> &'static str;

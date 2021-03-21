@@ -21,7 +21,7 @@ pub type PluginConstructorSignature =
 /// but at the cost of not being able to use a custom allocator.
 #[macro_export]
 macro_rules! declare_plugin {
-    ($plugin_type:ty) => {
+    ($plugin_ctor:expr) => {
         #[global_allocator]
         static HOST_ALLOCATOR: $crate::allocator::HostAllocator =
             $crate::allocator::HostAllocator::new();
@@ -32,8 +32,7 @@ macro_rules! declare_plugin {
         ) -> *mut $crate::CoprocessorPlugin {
             HOST_ALLOCATOR.set_allocator(host_allocator);
 
-            let object = <$plugin_type>::create();
-            let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new(object);
+            let boxed: Box<dyn $crate::CoprocessorPlugin> = Box::new($plugin_ctor);
             Box::into_raw(boxed)
         }
     };
