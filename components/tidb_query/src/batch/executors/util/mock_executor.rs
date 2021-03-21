@@ -2,16 +2,11 @@
 
 use tipb::FieldType;
 
-<<<<<<< HEAD:components/tidb_query/src/batch/executors/util/mock_executor.rs
 use crate::batch::interface::*;
+use crate::codec::batch::LazyBatchColumnVec;
+use crate::codec::data_type::VectorValue;
+use crate::expr::EvalWarnings;
 use crate::storage::IntervalRange;
-=======
-use crate::interface::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::VectorValue;
-use tidb_query_datatype::expr::EvalWarnings;
->>>>>>> f02f49261... copr: optimize limit operator next_batch method (#9851):components/tidb_query_executors/src/util/mock_executor.rs
 
 /// A simple mock executor that will return batch data according to a fixture without any
 /// modification.

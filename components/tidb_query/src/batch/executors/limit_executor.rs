@@ -79,18 +79,11 @@ mod tests {
 
     use tidb_query_datatype::FieldTypeTp;
 
-<<<<<<< HEAD:components/tidb_query/src/batch/executors/limit_executor.rs
     use crate::batch::executors::util::mock_executor::MockExecutor;
+    use crate::batch::executors::util::mock_executor::MockScanExecutor;
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::VectorValue;
     use crate::expr::EvalWarnings;
-=======
-    use crate::util::mock_executor::MockExecutor;
-    use crate::util::mock_executor::MockScanExecutor;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::codec::data_type::VectorValue;
-    use tidb_query_datatype::expr::EvalWarnings;
->>>>>>> f02f49261... copr: optimize limit operator next_batch method (#9851):components/tidb_query_executors/src/limit_executor.rs
 
     #[test]
     fn test_limit_0() {
