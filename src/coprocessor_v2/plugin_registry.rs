@@ -12,6 +12,7 @@ pub struct PluginRegistry {
     loaded_plugins: BTreeMap<String, LoadedPlugin>,
 }
 
+#[allow(dead_code)]
 impl PluginRegistry {
     /// Creates a new `PluginRegistry`.
     pub fn new() -> Self {
@@ -50,7 +51,7 @@ struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
     /// Underlying library.
-    lib: Library,
+    _lib: Library,
 }
 
 impl LoadedPlugin {
@@ -76,7 +77,7 @@ impl LoadedPlugin {
         let boxed_raw_plugin = constructor(host_allocator);
         let plugin = Box::from_raw(boxed_raw_plugin);
 
-        Ok(LoadedPlugin { plugin, lib })
+        Ok(LoadedPlugin { plugin, _lib: lib })
     }
 }
 

@@ -20,7 +20,7 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 impl<E: Engine> Endpoint<E> {
     pub fn new() -> Self {
         Self {
-            plugin_registry: Arc::new(PluginRegistry::default()),
+            plugin_registry: Arc::new(PluginRegistry::new()),
             _phantom: Default::default(),
         }
     }
