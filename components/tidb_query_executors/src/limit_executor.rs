@@ -97,7 +97,7 @@ mod tests {
             }],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 0).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 0, false).unwrap();
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
@@ -119,7 +119,7 @@ mod tests {
             }],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 10, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
@@ -151,7 +151,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 10, false).unwrap();
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
@@ -188,7 +188,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 4, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
@@ -231,7 +231,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 4, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
