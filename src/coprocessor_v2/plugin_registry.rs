@@ -1,9 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coprocessor_plugin_api::{
-    allocator::HostAllocatorPtr, CoprocessorPlugin, PluginConstructorSignature,
-    PLUGIN_CONSTRUCTOR_NAME,
-};
+use coprocessor_plugin_api::{allocator::HostAllocatorPtr, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -24,8 +21,8 @@ impl PluginRegistry {
     /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
     ///
     /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
-    pub fn get_plugin(&self, plugin_name: &str) -> Option<&dyn CoprocessorPlugin> {
-        self.loaded_plugins.get(plugin_name).map(|p| p.plugin())
+    pub fn get_plugin(&self, plugin_name: &str) -> Option<&impl CoprocessorPlugin> {
+        self.loaded_plugins.get(plugin_name)
     }
 
     /// Loads a [`CoprocessorPlugin`] from a `dylib`.
@@ -41,7 +38,7 @@ impl PluginRegistry {
     ) -> Result<&'static str, DylibError> {
         let lib = unsafe { Library::new(filename)? };
         let plugin = unsafe { LoadedPlugin::new(lib)? };
-        let plugin_name = plugin.plugin().name();
+        let plugin_name = plugin.name();
 
         self.loaded_plugins.insert(plugin_name.to_string(), plugin);
         Ok(plugin_name)
@@ -79,14 +76,23 @@ impl LoadedPlugin {
         let boxed_raw_plugin = constructor(host_allocator);
         let plugin = Box::from_raw(boxed_raw_plugin);
 
-        Ok(LoadedPlugin {
-            plugin,
-            lib,
-        })
+        Ok(LoadedPlugin { plugin, lib })
+    }
+}
+
+impl CoprocessorPlugin for LoadedPlugin {
+    fn name(&self) -> &'static str {
+        self.plugin.name()
     }
 
-    pub fn plugin(&self) -> &dyn CoprocessorPlugin {
-        self.plugin.as_ref()
+    fn on_raw_coprocessor_request(
+        &self,
+        region: &Region,
+        request: &RawRequest,
+        storage: &dyn RawStorage,
+    ) -> Result<RawResponse, Box<dyn std::error::Error>> {
+        self.plugin
+            .on_raw_coprocessor_request(region, request, storage)
     }
 }
 
@@ -99,7 +105,7 @@ mod tests {
     fn load_plugin() {
         let lib = unsafe { Library::new(pkgname_to_libname("example-plugin")).unwrap() };
         let loaded_plugin = unsafe { LoadedPlugin::new(lib).unwrap() };
-        let plugin_name = loaded_plugin.plugin().name();
+        let plugin_name = loaded_plugin.name();
 
         assert_eq!(plugin_name, "example-plugin");
     }
