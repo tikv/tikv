@@ -11,7 +11,7 @@ use raft::eraftpb::{Message, MessageType};
 
 use engine_rocks::Compat;
 use engine_traits::Peekable;
-use file_system::{set_io_rate_limiter, IOOp, IORateLimiter, IOType};
+use file_system::{IOOp, IOType};
 use raftstore::store::*;
 use raftstore::Result;
 use test_raftstore::*;
