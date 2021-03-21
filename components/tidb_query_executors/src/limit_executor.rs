@@ -11,13 +11,15 @@ use tidb_query_common::Result;
 pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
     remaining_rows: usize,
+    is_src_scan_executor: bool,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
-    pub fn new(src: Src, limit: usize) -> Result<Self> {
+    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool) -> Result<Self> {
         Ok(Self {
             src,
             remaining_rows: limit,
+            is_src_scan_executor,
         })
     }
 }
@@ -32,9 +34,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut result = self
-            .src
-            .next_batch(std::cmp::min(scan_rows, self.remaining_rows));
+        let mut real_scan_rows = scan_rows;
+        if self.is_src_scan_executor {
+            real_scan_rows = std::cmp::min(scan_rows, self.remaining_rows);
+        }
+        let mut result = self.src.next_batch(real_scan_rows);
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {
