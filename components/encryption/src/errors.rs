@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use failure::Fail;
 use openssl::error::ErrorStack as CrypterError;
 use protobuf::ProtobufError;
 use std::fmt::{Debug, Display};
