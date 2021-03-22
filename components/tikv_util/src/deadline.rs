@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::time::{Duration, Instant};
+use fail::fail_point;
 
 #[derive(Debug, Copy, Clone)]
 pub struct DeadlineError;
