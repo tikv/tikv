@@ -3,10 +3,11 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::storage::{lock_manager::LockManager, Engine, Storage};
+use kvproto::coprocessor_v2 as coprv2pb;
 
 use super::plugin_registry::PluginRegistry;
-use kvproto::coprocessor_v2 as coprv2pb;
+use super::raw_storage_impl::RawStorageImpl;
+use crate::storage::{lock_manager::LockManager, Engine, Storage};
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
@@ -30,9 +31,11 @@ impl Endpoint {
     #[inline]
     pub fn handle_request<E: Engine, L: LockManager>(
         &self,
-        _storage: &Storage<E, L>,
-        _req: coprv2pb::RawCoprocessorRequest,
+        storage: &Storage<E, L>,
+        req: coprv2pb::RawCoprocessorRequest,
     ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
+        let _raw_storage_api = RawStorageImpl::new(req.get_context(), storage);
+
         todo!("Coprocessor V2 is currently not implemented.");
 
         // Make sure we produce a valid return type
