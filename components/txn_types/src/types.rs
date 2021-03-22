@@ -247,7 +247,10 @@ pub enum MutationType {
 
 impl MutationType {
     pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
+        matches!(
+            self,
+            MutationType::Put | MutationType::Delete | MutationType::Insert
+        )
     }
 }
 
