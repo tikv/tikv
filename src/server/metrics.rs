@@ -6,6 +6,10 @@ use prometheus_static_metric::*;
 use crate::storage::ErrorHeaderKind;
 use prometheus::exponential_buckets;
 
+pub use crate::storage::kv::metrics::{
+    GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
+};
+
 make_auto_flush_static_metric! {
     pub label_enum GrpcTypeKind {
         invalid,
@@ -37,6 +41,7 @@ make_auto_flush_static_metric! {
         raw_delete_range,
         raw_batch_delete,
         raw_get_key_ttl,
+        raw_compare_and_set,
         ver_get,
         ver_batch_get,
         ver_mut,
@@ -50,6 +55,7 @@ make_auto_flush_static_metric! {
         remove_lock_observer,
         coprocessor,
         coprocessor_stream,
+        coprocessor_v2,
         mvcc_get_by_key,
         mvcc_get_by_start_ts,
         split_region,
@@ -78,26 +84,6 @@ make_auto_flush_static_metric! {
         failed,
         success,
         tombstone,
-    }
-
-    pub label_enum GcKeysCF {
-        default,
-        lock,
-        write,
-    }
-
-    pub label_enum GcKeysDetail {
-        processed_keys,
-        get,
-        next,
-        prev,
-        seek,
-        seek_for_prev,
-        over_seek_bound,
-        next_tombstone,
-        prev_tombstone,
-        seek_tombstone,
-        seek_for_prev_tombstone,
     }
 
     pub label_enum ReplicaReadLockCheckResult {
@@ -137,11 +123,6 @@ make_auto_flush_static_metric! {
     pub struct GrpcProxyMsgCounterVec: LocalIntCounter {
         "type" => GrpcTypeKind,
         "success" => WhetherSuccess,
-    }
-
-    pub struct GcKeysCounterVec: LocalIntCounter {
-        "cf" => GcKeysCF,
-        "tag" => GcKeysDetail,
     }
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {

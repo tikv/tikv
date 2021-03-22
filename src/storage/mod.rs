@@ -63,6 +63,8 @@ pub use self::{
 use crate::read_pool::{ReadPool, ReadPoolHandle};
 use crate::storage::metrics::CommandKind;
 use crate::storage::mvcc::MvccReader;
+use crate::storage::txn::commands::{RawAtomicStore, RawCompareAndSet};
+
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -73,7 +75,7 @@ use crate::storage::{
     types::StorageCallbackType,
 };
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, DATA_CFS};
+use engine_traits::{CfName, CF_DEFAULT, DATA_CFS};
 use futures::prelude::*;
 use kvproto::kvrpcpb::{
     CommandPri, Context, GetRequest, IsolationLevel, KeyRange, LockInfo, RawGetRequest,
@@ -86,7 +88,7 @@ use std::{
     sync::{atomic, Arc},
 };
 use tikv_util::time::{Instant, ThreadReadId};
-use txn_types::{Key, KvPair, Lock, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1575,6 +1577,71 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 .await?
         }
     }
+
+    pub fn raw_compare_and_set_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+        ttl: u64,
+        cb: Callback<(Option<Value>, bool)>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let ttl = if self.enable_ttl {
+            Some(ttl)
+        } else {
+            if ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
+            }
+            None
+        };
+        let cmd =
+            RawCompareAndSet::new(cf, Key::from_encoded(key), previous_value, value, ttl, ctx);
+        self.sched_txn_command(cmd, cb)
+    }
+
+    pub fn raw_batch_put_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        pairs: Vec<KvPair>,
+        ttl: u64,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let muations = pairs
+            .into_iter()
+            .map(|(k, v)| Mutation::Put((Key::from_encoded(k), v)))
+            .collect();
+        let ttl = if self.enable_ttl {
+            Some(ttl)
+        } else {
+            if ttl != 0 {
+                return Err(Error::from(ErrorInner::TTLNotEnabled));
+            }
+            None
+        };
+        let cmd = RawAtomicStore::new(cf, muations, ttl, ctx);
+        self.sched_txn_command(cmd, callback)
+    }
+
+    pub fn raw_batch_delete_atomic(
+        &self,
+        ctx: Context,
+        cf: String,
+        keys: Vec<Vec<u8>>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cf = Self::rawkv_cf(&cf)?;
+        let muations = keys
+            .into_iter()
+            .map(|k| Mutation::Delete(Key::from_encoded(k)))
+            .collect();
+        let cmd = RawAtomicStore::new(cf, muations, None, ctx);
+        self.sched_txn_command(cmd, callback)
+    }
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -1881,7 +1948,7 @@ mod tests {
     };
     use collections::HashMap;
     use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::{CommandPri, Op};
@@ -2401,7 +2468,7 @@ mod tests {
         };
         let engine = {
             let path = "".to_owned();
-            let cfs = crate::storage::ALL_CFS.to_vec();
+            let cfs = ALL_CFS.to_vec();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![

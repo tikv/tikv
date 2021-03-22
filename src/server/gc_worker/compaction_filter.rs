@@ -15,7 +15,7 @@ use engine_rocks::raw::{
 use engine_rocks::{
     RocksEngine, RocksMvccProperties, RocksUserCollectedPropertiesNoRc, RocksWriteBatch,
 };
-use engine_traits::{MiscExt, Mutable, MvccProperties};
+use engine_traits::{MiscExt, Mutable, MvccProperties, WriteBatch};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use tikv_util::worker::FutureScheduler;

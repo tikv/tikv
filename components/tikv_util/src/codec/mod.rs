@@ -3,9 +3,10 @@
 pub mod bytes;
 pub mod number;
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use quick_error::quick_error;
 use std::io::{self, ErrorKind};
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
 
 pub type BytesSlice<'a> = &'a [u8];
 
@@ -20,19 +21,18 @@ pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSli
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        KeyLength {display("bad format key(length)")}
-        KeyPadding {display("bad format key(padding)")}
-        KeyNotFound {display("key not found")}
-        ValueLength {display("bad format value(length)")}
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("bad format key(length)")]
+    KeyLength,
+    #[error("bad format key(padding)")]
+    KeyPadding,
+    #[error("key not found")]
+    KeyNotFound,
+    #[error("bad format value(length)")]
+    ValueLength,
 }
 
 impl Error {
