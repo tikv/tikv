@@ -60,7 +60,7 @@ pub struct Service<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: Lock
     // For handling coprocessor requests.
     cop: Endpoint<E>,
     // For handling corprocessor v2 requests.
-    coprv2: coprocessor_v2::Endpoint<E>,
+    coprv2: coprocessor_v2::Endpoint,
     // For handling raft messages.
     ch: T,
     // For handling snapshot.
@@ -103,7 +103,7 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
         storage: Storage<E, L>,
         gc_worker: GcWorker<E, T>,
         cop: Endpoint<E>,
-        coprv2: coprocessor_v2::Endpoint<E>,
+        coprv2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         grpc_thread_load: Arc<ThreadLoad>,
@@ -1096,7 +1096,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L>,
     cop: &Endpoint<E>,
-    coprv2: &coprocessor_v2::Endpoint<E>,
+    coprv2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
@@ -1774,8 +1774,8 @@ fn future_cop<E: Engine>(
     async move { Ok(ret.await) }
 }
 
-fn future_coprv2<E: Engine>(
-    coprv2: &coprocessor_v2::Endpoint<E>,
+fn future_coprv2(
+    coprv2: &coprocessor_v2::Endpoint,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = coprv2.handle_request(req);
