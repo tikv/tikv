@@ -249,6 +249,8 @@ impl MutationType {
     pub fn may_have_old_value(&self) -> bool {
         matches!(
             self,
+            // Insert operations don't have old value but need to update a flag
+            // for indicating that not seeking for old value for it.
             MutationType::Put | MutationType::Delete | MutationType::Insert
         )
     }
