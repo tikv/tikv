@@ -14,20 +14,20 @@ use tikv_util::future::paired_future_callback;
 /// It wraps TiKV's [`Storage`] into an API that is exposed to coprocessor plugins.
 /// The `RawStorageImpl` should be constructed for every invocation of a [`CoprocessorPlugin`] as
 /// it wraps a [`Context`] that is unique for every request.
-pub struct RawStorageImpl<E: Engine, L: LockManager> {
-    context: Context,
-    storage: Storage<E, L>,
+pub struct RawStorageImpl<'a, E: Engine, L: LockManager> {
+    context: &'a Context,
+    storage: &'a Storage<E, L>,
 }
 
-impl<E: Engine, L: LockManager> RawStorageImpl<E, L> {
+impl<'a, E: Engine, L: LockManager> RawStorageImpl<'a, E, L> {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and [`Storage`].
-    pub fn new(context: Context, storage: Storage<E, L>) -> Self {
+    pub fn new(context: &'a Context, storage: &'a Storage<E, L>) -> Self {
         RawStorageImpl { context, storage }
     }
 }
 
 #[async_trait(?Send)]
-impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<E, L> {
+impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn get(&self, key: Key) -> StorageResult<Option<Value>> {
         let ctx = self.context.clone();
         let cf = "".to_string();
