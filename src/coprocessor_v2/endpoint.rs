@@ -3,6 +3,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::storage::{lock_manager::LockManager, Engine, Storage};
+
 use super::plugin_registry::PluginRegistry;
 use kvproto::coprocessor_v2 as coprv2pb;
 
@@ -26,8 +28,9 @@ impl Endpoint {
     /// Each request is dispatched to the corresponding coprocessor plugin based on it's `copr_name`
     /// field. A plugin with a matching name must be loaded by TiKV, otherwise an error is returned.
     #[inline]
-    pub fn handle_request(
+    pub fn handle_request<E: Engine, L: LockManager>(
         &self,
+        _storage: &Storage<E, L>,
         _req: coprv2pb::RawCoprocessorRequest,
     ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
         todo!("Coprocessor V2 is currently not implemented.");
