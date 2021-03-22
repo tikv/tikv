@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-
-use crate::storage::kv::{Iterator, Result, Snapshot};
+use crate::storage::kv::{Iterator, Result, Snapshot, TTL_TOMBSTONE};
 use crate::storage::Statistics;
 
 use engine_traits::util::{get_expire_ts, strip_expire_ts, truncate_expire_ts};
@@ -14,10 +12,6 @@ use txn_types::{Key, Value};
 
 #[cfg(test)]
 pub const TEST_CURRENT_TS: u64 = 15;
-
-thread_local! {
-    pub static TTL_TOMBSTONE : RefCell<usize> = RefCell::new(0);
-}
 
 #[derive(Clone)]
 pub struct TTLSnapshot<S: Snapshot> {

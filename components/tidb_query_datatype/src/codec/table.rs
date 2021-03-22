@@ -39,7 +39,7 @@ pub const INDEX_VALUE_VERSION_FLAG: u8 = 125;
 /// Flag that indicate if the index value has restored data.
 pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERSION;
 
-/// ID for partition column, see https://github.com/pingcap/parser/pull/1010
+/// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
 /// `TableEncoder` encodes the table record/index prefix.

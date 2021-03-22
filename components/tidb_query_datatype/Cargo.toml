@@ -43,12 +43,12 @@ num-traits = "0.2"
 num-derive = "0.3"
 ordered-float = "1.0"
 protobuf = "2"
-quick-error = "1.2.3"
 regex = "1.1"
 serde = "1.0"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 collections = { path = "../collections" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

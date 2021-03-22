@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
@@ -12,8 +11,8 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
-use crate::storage::raw::TTL_TOMBSTONE;
+use crate::stats::{StatsCollector, StatsKind};
+use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -41,58 +40,6 @@ macro_rules! near_loop {
             }
         }
     }};
-}
-
-pub enum StatsKind {
-    Next,
-    Prev,
-    Seek,
-    SeekForPrev,
-}
-
-struct StatsWrapper<'a> {
-    stats: &'a mut CfStatistics,
-    kind: StatsKind,
-
-    internal_tombstone: usize,
-    ttl_tombstone: usize,
-}
-
-impl<'a> StatsWrapper<'a> {
-    pub fn new(kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
-        StatsWrapper {
-            stats,
-            kind,
-            internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
-            ttl_tombstone: TTL_TOMBSTONE.with(|m| *m.borrow()),
-        }
-    }
-}
-
-impl Drop for StatsWrapper<'_> {
-    fn drop(&mut self) {
-        self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
-        let internal_tombstone =
-            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
-        match self.kind {
-            StatsKind::Next => {
-                self.stats.next += 1;
-                self.stats.next_tombstone += internal_tombstone;
-            }
-            StatsKind::Prev => {
-                self.stats.prev += 1;
-                self.stats.prev_tombstone += internal_tombstone;
-            }
-            StatsKind::Seek => {
-                self.stats.seek += 1;
-                self.stats.seek_tombstone += internal_tombstone;
-            }
-            StatsKind::SeekForPrev => {
-                self.stats.seek_for_prev += 1;
-                self.stats.seek_for_prev_tombstone += internal_tombstone;
-            }
-        }
-    }
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -383,7 +330,7 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
         self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
@@ -391,14 +338,14 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
         self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Seek, statistics);
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
         self.iter.seek(key)
     }
 
@@ -409,21 +356,21 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::SeekForPrev, statistics);
+        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
         self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Next, statistics);
+        let _guard = StatsCollector::new(StatsKind::Next, statistics);
         self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsWrapper::new(StatsKind::Prev, statistics);
+        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
         self.iter.prev().expect("Invalid Iterator")
     }
 
@@ -626,7 +573,7 @@ mod tests {
     use tempfile::Builder;
     use txn_types::Key;
 
-    use crate::storage::{CfStatistics, Cursor, ScanMode};
+    use crate::{CfStatistics, Cursor, ScanMode};
     use engine_rocks::util::new_temp_engine;
     use raftstore::store::RegionSnapshot;
 

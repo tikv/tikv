@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::{GcKeysCF, GcKeysDetail};
+use std::cell::RefCell;
+
+use super::metrics::{GcKeysCF, GcKeysDetail};
+use engine_rocks::PerfContext;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
@@ -17,6 +20,62 @@ const STAT_PREV_TOMBSTONE: &str = "prev_tombstone";
 const STAT_SEEK_TOMBSTONE: &str = "seek_tombstone";
 const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
 const STAT_TTL_TOMBSTONE: &str = "ttl_tombstone";
+
+thread_local! {
+    pub static TTL_TOMBSTONE : RefCell<usize> = RefCell::new(0);
+}
+
+pub enum StatsKind {
+    Next,
+    Prev,
+    Seek,
+    SeekForPrev,
+}
+
+pub struct StatsCollector<'a> {
+    stats: &'a mut CfStatistics,
+    kind: StatsKind,
+
+    internal_tombstone: usize,
+    ttl_tombstone: usize,
+}
+
+impl<'a> StatsCollector<'a> {
+    pub fn new(kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
+        StatsCollector {
+            stats,
+            kind,
+            internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
+            ttl_tombstone: TTL_TOMBSTONE.with(|m| *m.borrow()),
+        }
+    }
+}
+
+impl Drop for StatsCollector<'_> {
+    fn drop(&mut self) {
+        self.stats.ttl_tombstone += TTL_TOMBSTONE.with(|m| *m.borrow()) - self.ttl_tombstone;
+        let internal_tombstone =
+            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
+        match self.kind {
+            StatsKind::Next => {
+                self.stats.next += 1;
+                self.stats.next_tombstone += internal_tombstone;
+            }
+            StatsKind::Prev => {
+                self.stats.prev += 1;
+                self.stats.prev_tombstone += internal_tombstone;
+            }
+            StatsKind::Seek => {
+                self.stats.seek += 1;
+                self.stats.seek_tombstone += internal_tombstone;
+            }
+            StatsKind::SeekForPrev => {
+                self.stats.seek_for_prev += 1;
+                self.stats.seek_for_prev_tombstone += internal_tombstone;
+            }
+        }
+    }
+}
 
 /// Statistics collects the ops taken when fetching data.
 #[derive(Default, Clone, Debug)]
