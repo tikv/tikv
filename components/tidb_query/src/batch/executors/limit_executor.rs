@@ -11,13 +11,15 @@ use crate::Result;
 pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
     remaining_rows: usize,
+    is_src_scan_executor: bool,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
-    pub fn new(src: Src, limit: usize) -> Result<Self> {
+    pub fn new(src: Src, limit: usize, is_src_scan_executor: bool) -> Result<Self> {
         Ok(Self {
             src,
             remaining_rows: limit,
+            is_src_scan_executor,
         })
     }
 }
@@ -32,7 +34,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut result = self.src.next_batch(scan_rows);
+        let real_scan_rows = if self.is_src_scan_executor {
+            std::cmp::min(scan_rows, self.remaining_rows)
+        } else {
+            scan_rows
+        };
+        let mut result = self.src.next_batch(real_scan_rows);
         if result.logical_rows.len() < self.remaining_rows {
             self.remaining_rows -= result.logical_rows.len();
         } else {
@@ -72,10 +79,18 @@ mod tests {
 
     use tidb_query_datatype::FieldTypeTp;
 
+<<<<<<< HEAD:components/tidb_query/src/batch/executors/limit_executor.rs
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::VectorValue;
     use crate::expr::EvalWarnings;
+=======
+    use crate::util::mock_executor::MockExecutor;
+    use crate::util::mock_executor::MockScanExecutor;
+    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
+    use tidb_query_datatype::codec::data_type::VectorValue;
+    use tidb_query_datatype::expr::EvalWarnings;
+>>>>>>> f02f49261... copr: optimize limit operator next_batch method (#9851):components/tidb_query_executors/src/limit_executor.rs
 
     #[test]
     fn test_limit_0() {
@@ -93,7 +108,7 @@ mod tests {
             }],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 0).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 0, false).unwrap();
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
@@ -117,7 +132,7 @@ mod tests {
             }],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 10, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
@@ -153,7 +168,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 10).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 10, false).unwrap();
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
@@ -194,7 +209,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 4, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
@@ -243,7 +258,7 @@ mod tests {
             ],
         );
 
-        let mut exec = BatchLimitExecutor::new(src_exec, 4).unwrap();
+        let mut exec = BatchLimitExecutor::new(src_exec, 4, false).unwrap();
 
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
@@ -259,5 +274,29 @@ mod tests {
         assert_eq!(&r.logical_rows, &[0, 4]);
         assert_eq!(r.physical_columns.rows_len(), 5);
         assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_src_exec_is_scan() {
+        let schema = vec![FieldTypeTp::LongLong.into()];
+        let rows = (0..1024).collect();
+        let src_exec = MockScanExecutor::new(rows, schema);
+
+        let mut exec = BatchLimitExecutor::new(src_exec, 5, true).unwrap();
+        let r = exec.next_batch(100);
+        assert_eq!(r.logical_rows, &[0, 1, 2, 3, 4]);
+        let r = exec.next_batch(2);
+        assert_eq!(r.is_drained.unwrap(), true);
+
+        let schema = vec![FieldTypeTp::LongLong.into()];
+        let rows = (0..1024).collect();
+        let src_exec = MockScanExecutor::new(rows, schema);
+        let mut exec = BatchLimitExecutor::new(src_exec, 1024, true).unwrap();
+        for _i in 0..1023 {
+            let r = exec.next_batch(1);
+            assert_eq!(r.is_drained.unwrap(), false);
+        }
+        let r = exec.next_batch(1);
+        assert_eq!(r.is_drained.unwrap(), true);
     }
 }
