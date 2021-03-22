@@ -971,7 +971,7 @@
 # max-write-bytes-per-sec = "0"
 
 ## Enable GC by compaction filter or not.
-# enable-compaction-filter = false
+# enable-compaction-filter = true
 
 ## Garbage ratio threshold to trigger a GC.
 # ratio-threshold = 1.1

@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::time::{monotonic_raw_now, Instant};
+use lazy_static::lazy_static;
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::{mpsc, Arc};
