@@ -1,14 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[macro_use(fail_point)]
-extern crate fail;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate tikv_util;
-#[macro_use]
-extern crate configuration;
-
 mod config;
 mod crypter;
 mod encrypted_file;
