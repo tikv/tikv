@@ -10,8 +10,7 @@ use std::time::Instant;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksWriteBatch};
 use engine_traits::{
-    DeleteStrategy, MiscExt, Mutable, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    DeleteStrategy, MiscExt, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IOType, WithIOType};
 use futures::executor::block_on;
@@ -98,7 +97,7 @@ pub enum GcTask {
     /// but its orphan versions are not deleted. Those orphan versions will never get cleaned
     /// until `DefaultCompactionFilter` is introduced.
     ///
-    /// The tracking issue: https://github.com/tikv/tikv/issues/9719.
+    /// The tracking issue: <https://github.com/tikv/tikv/issues/9719>.
     OrphanVersions { wb: RocksWriteBatch, id: usize },
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&GcConfig, &Limiter) + Send>),

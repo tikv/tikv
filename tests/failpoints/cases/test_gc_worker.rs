@@ -14,9 +14,8 @@ use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
 use test_raftstore::*;
-use tikv::server::gc_worker::GcTask;
 use tikv::server::gc_worker::{
-    AutoGcConfig, GcSafePointProvider, Result as GcWorkerResult, TestGCRunner,
+    AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGCRunner,
 };
 use tikv::storage::kv::TestEngineBuilder;
 use tikv::storage::mvcc::tests::must_get_none;
