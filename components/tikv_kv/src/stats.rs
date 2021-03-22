@@ -99,13 +99,15 @@ pub struct CfStatistics {
     pub ttl_tombstone: usize,
 }
 
+const STATS_COUNT: usize = 12;
+
 impl CfStatistics {
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
 
-    pub fn details(&self) -> [(&'static str, usize); 12] {
+    pub fn details(&self) -> [(&'static str, usize); STATS_COUNT] {
         [
             (STAT_PROCESSED_KEYS, self.processed_keys),
             (STAT_GET, self.get),
@@ -122,7 +124,7 @@ impl CfStatistics {
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysDetail, usize); 12] {
+    pub fn details_enum(&self) -> [(GcKeysDetail, usize); STATS_COUNT] {
         [
             (GcKeysDetail::processed_keys, self.processed_keys),
             (GcKeysDetail::get, self.get),
@@ -177,7 +179,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 12]); 3] {
+    pub fn details(&self) -> [(&'static str, [(&'static str, usize); STATS_COUNT]); 3] {
         [
             (CF_DEFAULT, self.data.details()),
             (CF_LOCK, self.lock.details()),
@@ -185,7 +187,7 @@ impl Statistics {
         ]
     }
 
-    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); 12]); 3] {
+    pub fn details_enum(&self) -> [(GcKeysCF, [(GcKeysDetail, usize); STATS_COUNT]); 3] {
         [
             (GcKeysCF::default, self.data.details_enum()),
             (GcKeysCF::lock, self.lock.details_enum()),
