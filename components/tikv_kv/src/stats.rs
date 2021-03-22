@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::metrics::{GcKeysCF, GcKeysDetail};
+use super::metrics::{GcKeysCF, GcKeysDetail};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};

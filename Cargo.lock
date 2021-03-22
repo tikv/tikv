@@ -5256,7 +5256,6 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
- "derive_more",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -5320,7 +5319,6 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "slog_derive",
  "sst_importer",
  "sysinfo",
  "tempfile",
@@ -5332,6 +5330,7 @@ dependencies = [
  "tidb_query_executors",
  "tidb_query_expr",
  "tikv_alloc",
+ "tikv_kv",
  "tikv_util",
  "time 0.1.42",
  "tipb",
@@ -5393,6 +5392,36 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
  "tikv-jemallocator",
+]
+
+[[package]]
+name = "tikv_kv"
+version = "0.1.0"
+dependencies = [
+ "backtrace",
+ "derive_more",
+ "engine_panic",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "fail",
+ "futures 0.3.7",
+ "into_other",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "panic_hook",
+ "prometheus",
+ "prometheus-static-metric",
+ "quick-error",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "slog_derive",
+ "tempfile",
+ "tikv_util",
+ "txn_types",
+ "vlog",
 ]
 
 [[package]]
