@@ -78,6 +78,9 @@ impl RpcClient {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
                     if !forwarded_host.is_empty() {
+                        // The reason why we don't directly save the trimmed result here is we need it
+                        // as the part of metadata of the request so that PD can use it to connect to the actual leader.
+                        // But the trimmed result cannot be parsed by the go standard library correctly.
                         let host = trim_http_prefix(&forwarded_host);
                         REQUEST_FORWARDED_GAUGE_VEC
                             .with_label_values(&[host])
