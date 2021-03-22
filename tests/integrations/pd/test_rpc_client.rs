@@ -387,7 +387,7 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+    // The REQUEST_RECONNECT_INTERVAL is 1s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 
     let region = block_on(client.get_region_by_id(region.get_id())).unwrap();

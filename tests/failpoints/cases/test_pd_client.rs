@@ -76,7 +76,7 @@ fn test_pd_client_deadlock() {
     for (name, func) in test_funcs {
         fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
         // Wait for the PD client thread blocking on the fail point.
-        // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+        // The REQUEST_RECONNECT_INTERVAL is 1s so sleeps 2s here.
         thread::sleep(Duration::from_secs(2));
 
         let (tx, rx) = mpsc::channel();
@@ -124,7 +124,7 @@ fn test_slow_periodical_update() {
 
     fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+    // The REQUEST_RECONNECT_INTERVAL is 1s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 
     let (tx, rx) = mpsc::channel();
@@ -157,7 +157,7 @@ fn test_reconnect_limit() {
     let client = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
     // Wait for the PD client thread blocking on the fail point.
-    // The RECONNECT_UPDATE_INTERVAL is 1.5s so sleeps 2s here.
+    // The REQUEST_RECONNECT_INTERVAL is 1s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 
     // The first reconnection will succeed, and the last_update will not be updated.

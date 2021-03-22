@@ -34,10 +34,14 @@ use tikv_util::{box_err, debug, error, info, slow_log, warn};
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-const RETRY_INTERVAL_SEC: u64 = 1; // 1s
+const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
 // The max duration when retrying to connect to leader. No matter if the MAX_RETRY_TIMES is reached.
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
+
+// FIXME: Use a request-independent way to handle reconnection.
+const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
+pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -52,7 +56,6 @@ pub struct Inner {
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
-    last_update: Instant,
     last_try_reconnect: Instant,
 }
 
@@ -114,7 +117,6 @@ impl Client {
         let (tx, rx) = client_stub
             .region_heartbeat_opt(call_option(&forwarded_host))
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        let now = Instant::now();
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
@@ -126,8 +128,7 @@ impl Client {
                 forwarded_host,
                 security_mgr,
                 on_reconnect: None,
-                last_update: now,
-                last_try_reconnect: now,
+                last_try_reconnect: Instant::now(),
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
@@ -159,7 +160,6 @@ impl Client {
         let prev_forwarded_host =
             std::mem::replace(&mut inner.forwarded_host, forwarded_host.clone());
         inner.members = members;
-        inner.last_update = Instant::now();
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
@@ -227,11 +227,8 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if inner.last_update.elapsed() < RECONNECT_UPDATE_INTERVAL {
-                // Avoid unnecessary updating.
-                return Ok(());
-            }
             if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
+                // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
@@ -250,17 +247,22 @@ impl Client {
         };
 
         {
-            slow_log!(start.elapsed(), "try reconnect pd");
             let mut inner = self.inner.wl();
-            if start > inner.last_try_reconnect {
+            if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
+                // There may be multiple reconnections that pass the read lock at the same time.
+                // Check again in the write lock to avoid unnecessary updating.
+                return Err(box_err!("cancel reconnection due to too small interval"));
+            } else {
                 inner.last_try_reconnect = start;
             }
         }
 
+        slow_log!(start.elapsed(), "try reconnect pd");
         let (client, forwarded_host, members) = match future.await? {
             Some(tuple) => tuple,
             None => return Ok(()),
         };
+
         fail_point!("pd_client_reconnect", |_| Ok(()));
 
         self.update_client(client, forwarded_host, members);
@@ -286,10 +288,6 @@ pub fn build_forward_metadata(forwarded_host: &str) -> Metadata {
     builder.build()
 }
 
-pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_millis(1000); // 1s
-pub const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
-pub const RECONNECT_UPDATE_INTERVAL: Duration = Duration::from_millis(1500); // 1.5s, need to be greater than REQUEST_RECONNECT_INTERVAL
-
 /// The context of sending requets.
 pub struct Request<Req, F> {
     reconnect_count: usize,
@@ -306,33 +304,31 @@ where
     Req: Clone + Send + 'static,
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    async fn reconnect_if_needed(&mut self) -> bool {
+    async fn reconnect_if_needed(&mut self) -> Result<()> {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
-
         if self.request_sent < MAX_REQUEST_COUNT {
-            return true;
+            return Ok(());
         }
-
+        if self.reconnect_count == 0 {
+            return Err(box_err!("request retry exceeds limit"));
+        }
         // Updating client.
         self.reconnect_count -= 1;
-
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
         match self.client.reconnect(true).await {
             Ok(_) => {
                 self.request_sent = 0;
-                true
             }
             Err(_) => {
-                let _ = self
-                    .client
+                let _ = self.client
                     .timer
                     .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
                     .compat()
                     .await;
-                false
             }
         }
+        Ok(())
     }
 
     async fn send_and_receive(&mut self) -> Result<Resp> {
@@ -358,15 +354,15 @@ where
     /// is resolved successfully, otherwise it repeats `retry` times.
     pub fn execute(mut self) -> PdFuture<Resp> {
         Box::pin(async move {
-            while self.reconnect_count != 0 {
-                if self.reconnect_if_needed().await {
+            loop {
+                {
                     let resp = self.send_and_receive().await;
                     if Self::should_not_retry(&resp) {
                         return resp;
                     }
                 }
+                self.reconnect_if_needed().await?;
             }
-            Err(box_err!("request retry exceeds limit"))
         })
     }
 }
@@ -384,31 +380,22 @@ where
             let client_stub = client.inner.rl().client_stub.clone();
             func(&client_stub).map_err(Error::Grpc)
         };
-
         match ret {
             Ok(r) => {
                 return Ok(r);
             }
             Err(e) => {
                 error!(?e; "request failed");
-                // try reconnect
-                loop {
-                    if retry == 0 {
-                        return Err(e);
-                    }
-                    retry -= 1;
-                    match block_on(client.reconnect(true)) {
-                        Ok(()) => break,
-                        Err(e) => {
-                            error!(?e; "reconnect failed");
-                            if retry > 0 {
-                                // If the reconnection fails, and it needs to be retried.
-                                thread::sleep(REQUEST_RECONNECT_INTERVAL);
-                            }
-                        }
-                    }
+                if retry == 0 {
+                    return Err(e);
                 }
             }
+        }
+        // try reconnect
+        retry -= 1;
+        if let Err(e) = block_on(client.reconnect(true)) {
+            error!(?e; "reconnect failed");
+            thread::sleep(REQUEST_RECONNECT_INTERVAL);
         }
     }
 }
@@ -630,7 +617,7 @@ impl PdConnector {
                 None => {
                     if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
                         let _ = GLOBAL_TIMER_HANDLE
-                            .delay(Instant::now() + Duration::from_secs(RETRY_INTERVAL_SEC))
+                            .delay(Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
                         retry_times -= 1;
