@@ -4,7 +4,6 @@ use std::io::Error as IoError;
 use std::{error, result};
 
 use engine_traits::Error as EngineTraitError;
-use failure::Fail;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
