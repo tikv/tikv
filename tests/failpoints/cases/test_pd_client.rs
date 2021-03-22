@@ -156,7 +156,6 @@ fn test_reconnect_limit() {
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
     let client = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
-    // Wait for the PD client thread blocking on the fail point.
     // The REQUEST_RECONNECT_INTERVAL is 1s so sleeps 2s here.
     thread::sleep(Duration::from_secs(2));
 

@@ -227,7 +227,7 @@ impl Client {
 
         let future = {
             let inner = self.inner.rl();
-            if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
+            if start.duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
                 return Err(box_err!("cancel reconnection due to too small interval"));
@@ -248,7 +248,7 @@ impl Client {
 
         {
             let mut inner = self.inner.wl();
-            if inner.last_try_reconnect.elapsed() < GLOBAL_RECONNECT_INTERVAL {
+            if start.duration_since(inner.last_try_reconnect) < GLOBAL_RECONNECT_INTERVAL {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
                 return Err(box_err!("cancel reconnection due to too small interval"));
