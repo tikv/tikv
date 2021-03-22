@@ -386,7 +386,6 @@ impl Delegate {
         let change_data_err = self.error_event(err);
 
         for d in self.downstreams() {
-            d.state.store(DownstreamState::Stopped);
             {
                 let mut incremental_state = d.incremental_scan_state.lock().unwrap();
                 match *incremental_state {
@@ -395,6 +394,7 @@ impl Delegate {
                         *incremental_state = IncrementalScanState::ErrorPending(change_data_err.clone())
                     },
                     _ => {
+                        d.state.store(DownstreamState::Stopped);
                         d.sink_error(change_data_err.clone());
                     },
                 }

@@ -1313,17 +1313,24 @@ impl Initializer {
             }
         }
 
+        let resolved_ts = ResolvedTs {
+            regions: vec![self.region_id],
+            ts: self.real_time_start_ts.unwrap().into_inner(),
+            ..Default::default()
+        };
+
+        self.downstream.as_ref().unwrap().get_rate_limiter().unwrap().send_realtime_event(CdcEvent::ResolvedTs(resolved_ts));
+
         // handle the case where the region has already deregistered
         {
             let mut st = incremental_scan_state.lock().unwrap();
             match std::mem::replace(&mut *st, IncrementalScanState::Done) {
                 // normal case
-                IncrementalScanState::Ongoing => {
-                    
-                },
+                IncrementalScanState::Ongoing => {},
                 // real time stream has terminiated due to region error (splitting, etc.)
                 IncrementalScanState::ErrorPending(err_event) => {
                     info!("cdc incremental scan finished after region error, sending error"; "err_event" => ?err_event);
+                    self.downstream_state.store(DownstreamState::Stopped);
                     self.downstream.as_ref().unwrap().sink_error(err_event);
                 },
                 other => {
