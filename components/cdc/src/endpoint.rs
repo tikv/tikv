@@ -42,12 +42,12 @@ use txn_types::{
     Key, Lock, LockType, MutationType, OldValue, TimeStamp, TxnExtra, TxnExtraScheduler,
 };
 
-use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
+use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState, IncrementalScanState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
 use futures::stream::StreamExt;
-use futures::{try_join, TryFutureExt};
+use futures::{try_join, TryFutureExt, Future};
 
 pub enum Deregister {
     Downstream {
@@ -418,6 +418,33 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
         }
     }
 
+    fn get_current_resolved_ts(&self, region_id: u64, observer_id: ObserveID) -> impl Future<Output = Option<TimeStamp>> {
+        let pd_client = self.pd_client.clone();
+        let cm = self.concurrency_manager.clone();
+        let raft_router = self.raft_router.clone();
+        let scheduler = self.scheduler.clone();
+        let regions = vec![(region_id, observer_id)];
+    
+        
+        async move {
+            let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+
+            cm.update_max_ts(min_ts); // TODO do we need this here?
+            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+                if min_mem_lock_ts < min_ts {
+                    min_ts = min_mem_lock_ts;
+                }
+            }
+
+            let valid_regions = Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await;
+            if valid_regions.len() == 0 {
+                return None;
+            }
+
+            Some(min_ts)
+        }
+    }
+
     pub fn on_register(
         &mut self,
         mut request: ChangeDataRequest,
@@ -506,7 +533,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 reader.txn_extra_op.store(txn_extra_op);
             }
         }
-        let init = Initializer {
+        let mut init = Initializer {
             sched,
             region_id,
             conn_id,
@@ -518,6 +545,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             observe_id: delegate.id,
             checkpoint_ts: checkpoint_ts.into(),
             build_resolver: is_new_delegate,
+            real_time_start_ts: None,
         };
 
         let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -557,7 +585,21 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             deregister_downstream(Error::Request(e.into()));
             return;
         }
+
+        let get_current_resolved_ts_fut = self.get_current_resolved_ts(region_id, init.observe_id);
         self.workers.spawn(async move {
+            match get_current_resolved_ts_fut.await {
+                Some(ts) => {
+                    init.real_time_start_ts = Some(ts);
+                    info!("cdc got real time start ts"; "region_id" => region_id, "start_ts" => ?ts);
+                },
+                None => {
+                    info!("cdc failed to get real time start ts"; "region_id" => region_id);
+                    deregister_downstream(Error::RealTimeStart);
+                    return;
+                }
+            }
+
             match fut.await {
                 Ok(resp) => init.on_change_cmd(resp).await,
                 Err(e) => deregister_downstream(Error::Other(box_err!(e))),
@@ -1010,6 +1052,8 @@ struct Initializer {
     batch_size: usize,
     txn_extra_op: TxnExtraOp,
 
+    real_time_start_ts: Option<TimeStamp>,
+
     build_resolver: bool,
 }
 
@@ -1175,6 +1219,20 @@ impl Initializer {
             scanner: RefCell::new(scanner),
         }));
 
+        let incremental_scan_state = self.downstream.as_ref().unwrap().get_incremental_scan_state();
+        {
+            let mut st = incremental_scan_state.lock().unwrap();
+            match *st {
+                IncrementalScanState::NotStarted => {
+                    *st = IncrementalScanState::Ongoing;
+                },
+                ref other => {
+                    panic!("unexpected incremental scan state {:?}", other);
+                }
+            }
+            // unlock incremental_scan_state
+        }
+
         let mut done = false;
         while !done {
             if self.downstream_state.load() != DownstreamState::Normal {
@@ -1233,7 +1291,7 @@ impl Initializer {
                     match rate_limiter.send_scan_event(CdcEvent::Event(event)).await {
                         Ok(_) => {
                             debug!("cdc incremental scan sent data"; "num_entires" => num_entires)
-                        }
+                        },
                         Err(e) => {
                             error!("cdc scan entries failed"; "error" => ?e, "region_id" => region_id);
                             // TODO: record in metrics.
@@ -1253,6 +1311,26 @@ impl Initializer {
                     warn!("cdc rate limiter not found, report a bug");
                 }
             }
+        }
+
+        // handle the case where the region has already deregistered
+        {
+            let mut st = incremental_scan_state.lock().unwrap();
+            match std::mem::replace(&mut *st, IncrementalScanState::Done) {
+                // normal case
+                IncrementalScanState::Ongoing => {
+                    
+                },
+                // real time stream has terminiated due to region error (splitting, etc.)
+                IncrementalScanState::ErrorPending(err_event) => {
+                    info!("cdc incremental scan finished after region error, sending error"; "err_event" => ?err_event);
+                    self.downstream.as_ref().unwrap().sink_error(err_event);
+                },
+                other => {
+                    panic!("unexpected incremental scan state {:?}", other);
+                }
+            }
+            // unlock incremental_scan_state
         }
 
         let takes = start.elapsed();

@@ -36,6 +36,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch::Ref;
+use crate::metrics::*;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -199,7 +200,7 @@ where
     /// converts all buffered CdcEvents into ChangeDataEvents.
     /// consumes `buf`
     fn prepare_flush(&mut self) {
-        debug_assert!(self.buf.is_some());
+        assert!(self.buf.is_some());
 
         let mut batcher = EventBatcher::with_capacity(128);
         self.buf
@@ -239,7 +240,7 @@ where
             this.prepare_flush();
             ready!(this.inner_sink.poll_flush_unpin(cx))?;
 
-            debug_assert!(this.buf.is_none());
+            assert!(this.buf.is_none());
             this.buf = Some(vec![]);
             return Poll::Ready(Ok(()));
         }
@@ -250,7 +251,7 @@ where
     /// Will always succeed as long as called correctly.
     fn start_send(self: Pin<&mut Self>, item: (CdcEvent, WriteFlags)) -> Result<(), Self::Error> {
         let this = self.get_mut();
-        debug_assert!(this.buf.is_some());
+        assert!(this.buf.is_some());
 
         let (event, _) = item;
 
@@ -279,12 +280,18 @@ where
             this.prepare_flush();
         }
 
-        debug_assert!(this.buf.is_none());
+        assert!(this.buf.is_none());
 
         let flag = WriteFlags::default().buffer_hint(false);
         while !this.send_buf.is_empty() {
             ready!(this.inner_sink.poll_ready_unpin(cx))?;
             let event = this.send_buf.pop_front().unwrap();
+
+            let latest_resolved_ts = event.get_resolved_ts().get_ts();
+            if latest_resolved_ts > 0 {
+                CDC_GRPC_WRITE_RESOLVED_TS.add(latest_resolved_ts as i64);
+            }
+
             this.inner_sink.start_send_unpin((event, flag))?;
         }
 

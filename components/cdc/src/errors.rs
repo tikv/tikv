@@ -32,6 +32,8 @@ pub enum Error {
     EngineTraits(EngineTraitsError),
     #[fail(display = "Incremental scan timed out {:?}", _0)]
     ScanTimedOut(Duration),
+    #[fail(display = "Fail to get real time stream start")]
+    RealTimeStart,
 }
 
 macro_rules! impl_from {

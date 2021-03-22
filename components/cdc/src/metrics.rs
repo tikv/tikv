@@ -73,4 +73,9 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_GRPC_WRITE_RESOLVED_TS: IntGauge = register_int_gauge!(
+        "tikv_cdc_grpc_write_resolved_ts",
+        "The latest resolved ts written to the grpc stream"
+    )
+    .unwrap();
 }

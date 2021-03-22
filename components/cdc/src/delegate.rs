@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -64,6 +64,14 @@ pub enum DownstreamState {
     Stopped,
 }
 
+#[derive(Debug)]
+pub enum IncrementalScanState {
+    NotStarted,
+    Ongoing,
+    Done,
+    ErrorPending(Event),
+}
+
 impl Default for DownstreamState {
     fn default() -> Self {
         Self::Uninitialized
@@ -85,6 +93,7 @@ pub struct Downstream {
     state: Arc<AtomicCell<DownstreamState>>,
     enable_old_value: bool,
     cancel_func: Option<Arc<dyn FnMut(grpcio::RpcStatus) -> () + Sync + Send>>,
+    incremental_scan_state: Arc<Mutex<IncrementalScanState>>,
 }
 
 impl Downstream {
@@ -109,6 +118,7 @@ impl Downstream {
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             enable_old_value,
             cancel_func: None,
+            incremental_scan_state: Arc::new(Mutex::new(IncrementalScanState::NotStarted)),
         }
     }
 
@@ -192,6 +202,10 @@ impl Downstream {
         F: FnMut(grpcio::RpcStatus) -> () + Sync + Send,
     {
         self.cancel_func = Some(Arc::new(f));
+    }
+
+    pub fn get_incremental_scan_state(&self) -> Arc<Mutex<IncrementalScanState>> {
+        self.incremental_scan_state.clone()
     }
 }
 
@@ -370,10 +384,23 @@ impl Delegate {
         info!("region met error";
             "region_id" => self.region_id, "error" => ?err);
         let change_data_err = self.error_event(err);
+
         for d in &self.downstreams {
             d.state.store(DownstreamState::Stopped);
+            {
+                let mut incremental_state = d.incremental_scan_state.lock().unwrap();
+                match *incremental_state {
+                    IncrementalScanState::Ongoing => {
+                        info!("cdc incremental scan not done, holding off error"; "region_id" => self.region_id);
+                        *incremental_state = IncrementalScanState::ErrorPending(change_data_err.clone())
+                    },
+                    _ => {
+                        d.sink_error(change_data_err.clone());
+                    },
+                }
+            }
+            
         }
-        self.broadcast(change_data_err, false);
     }
 
     fn broadcast(&self, change_data_event: Event, normal_only: bool) {
