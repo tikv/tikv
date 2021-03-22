@@ -321,7 +321,8 @@ where
                 self.request_sent = 0;
             }
             Err(_) => {
-                let _ = self.client
+                let _ = self
+                    .client
                     .timer
                     .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
                     .compat()
