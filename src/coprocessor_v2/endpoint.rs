@@ -1,9 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::coprocessor_v2 as coprv2pb;
 use std::future::Future;
 use std::sync::Arc;
-
-use kvproto::coprocessor_v2 as coprv2pb;
 
 use super::plugin_registry::PluginRegistry;
 use super::raw_storage_impl::RawStorageImpl;
