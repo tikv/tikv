@@ -411,7 +411,6 @@ fn cap_two() {
 
 // We should write when count is greater than WRITE_BATCH_MAX_KEYS
 #[test]
-#[allow(clippy::vec_init_then_push)]
 fn should_write_to_engine() {
     let db = default_engine();
     let mut wb = db.engine.write_batch();
@@ -434,7 +433,6 @@ fn should_write_to_engine() {
 
 // But there kind of aren't consequences for making huge write batches
 #[test]
-#[allow(clippy::vec_init_then_push)]
 fn should_write_to_engine_but_whatever() {
     let db = default_engine();
     let mut wb = db.engine.write_batch();
