@@ -4,6 +4,7 @@ use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use failure::{Backtrace, Fail};
+use static_assertions::const_assert;
 
 #[derive(Debug, Fail)]
 pub enum ErrorInner {
