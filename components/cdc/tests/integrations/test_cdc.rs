@@ -810,7 +810,7 @@ fn test_old_value_basic() {
     suite.must_kv_prewrite(1, vec![m6], k1.clone(), ts10);
     let ts11 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![k1.clone()], ts10, ts11);
-    // Update value
+    // Delete value
     let mut m7 = Mutation::default();
     m7.set_op(Op::PessimisticLock);
     m7.key = k1.clone();
