@@ -28,6 +28,7 @@ use encryption_export::{
 };
 use engine_rocks::encryption::get_env;
 use engine_rocks::RocksEngine;
+use engine_traits::util::{get_expire_ts, strip_expire_ts};
 use engine_traits::{EncryptionKeyManager, Engines, RaftEngine};
 use engine_traits::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::calc_crc32;
@@ -303,7 +304,7 @@ trait DebugExecutor {
         }
     }
 
-    fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str) {
+    fn raw_scan(&self, from_key: &[u8], to_key: &[u8], limit: usize, cf: &str, decode_ttl: bool) {
         if !ALL_CFS.contains(&cf) {
             eprintln!("CF \"{}\" doesn't exist.", cf);
             process::exit(-1);
@@ -321,7 +322,7 @@ trait DebugExecutor {
             process::exit(-1);
         }
 
-        self.raw_scan_impl(from_key, to_key, limit, cf);
+        self.raw_scan_impl(from_key, to_key, limit, cf, decode_ttl);
     }
 
     fn diff_region(
@@ -565,7 +566,14 @@ trait DebugExecutor {
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream;
 
-    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
+    fn raw_scan_impl(
+        &self,
+        from_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+        cf: &str,
+        decode_ttl: bool,
+    );
 
     fn do_compaction(
         &self,
@@ -673,7 +681,7 @@ impl DebugExecutor for DebugClient {
         )
     }
 
-    fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
+    fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str, _: bool) {
         unimplemented!();
     }
 
@@ -837,13 +845,28 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         Box::pin(stream)
     }
 
-    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
+    fn raw_scan_impl(
+        &self,
+        from_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+        cf: &str,
+        decode_ttl: bool,
+    ) {
         let res = self
             .raw_scan(from_key, end_key, limit, cf)
             .unwrap_or_else(|e| perror_and_exit("Debugger::raw_scan_impl", e));
 
         for (k, v) in &res {
-            println!("key: \"{}\", value: \"{}\"", escape(k), escape(v));
+            print!("key: \"{}\", ", escape(k));
+            if decode_ttl {
+                let ttl = get_expire_ts(v).unwrap_or_else(|e| {
+                    perror_and_exit("Debugger::raw_scan_impl::get_expire_ts", e)
+                });
+                println!("value: \"{}\", ttl: {}", escape(strip_expire_ts(v)), ttl);
+            } else {
+                println!("value: \"{}\"", escape(v));
+            }
         }
         println!();
         println!("Total scanned keys: {}", res.len());
@@ -2048,7 +2071,8 @@ fn main() {
         let to = unescape(matches.value_of("to").unwrap());
         let limit: usize = matches.value_of("limit").unwrap().parse().unwrap();
         let cf = matches.value_of("cf").unwrap();
-        debug_executor.raw_scan(&from, &to, limit, cf);
+        let decode_ttl = matches.is_present("decode_ttl");
+        debug_executor.raw_scan(&from, &to, limit, cf, decode_ttl);
     } else if let Some(matches) = matches.subcommand_matches("mvcc") {
         let from = unescape(matches.value_of("key").unwrap());
         let cfs = matches.values_of("show-cf").unwrap().collect();
