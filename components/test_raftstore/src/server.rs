@@ -58,6 +58,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
 use tikv_util::HandyRwLock;
+use txn_types::TxnExtraScheduler;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
@@ -121,6 +122,7 @@ pub struct ServerCluster {
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
+    pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -163,6 +165,7 @@ impl ServerCluster {
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
+            txn_extra_schedulers: HashMap::default(),
         }
     }
 
@@ -244,7 +247,10 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
+            engine.set_txn_extra_scheduler(scheduler);
+        }
 
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
