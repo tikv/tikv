@@ -436,3 +436,33 @@ fn test_receive_old_snapshot() {
 
     fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }
+
+#[test]
+fn test_snapshot_after_isolation() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let on_raft_gc_log_tick_fp = "on_raft_gc_log_tick";
+    fail::cfg(on_raft_gc_log_tick_fp, "return()").unwrap();
+
+    let before_no_ready_gen_snap_task_fp = "before_no_ready_gen_snap_task";
+    fail::cfg(before_no_ready_gen_snap_task_fp, "return()").unwrap();
+
+    cluster.run();
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 1..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    fail::remove(on_raft_gc_log_tick_fp);
+    sleep_ms(100);
+
+    cluster.clear_send_filters();
+    // Snapshot should be generated and sent after leader 1 receives the heartbeat
+    // response from peer 3.
+    must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
+}
