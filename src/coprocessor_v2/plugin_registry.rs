@@ -50,8 +50,6 @@ impl PluginRegistry {
 struct LoadedPlugin {
     /// Pointer to a [`CoprocessorPlugin`] in the loaded `lib`.
     plugin: Box<dyn CoprocessorPlugin>,
-    /// Underlying library.
-    _lib: Library,
 }
 
 impl LoadedPlugin {
@@ -77,7 +75,10 @@ impl LoadedPlugin {
         let boxed_raw_plugin = constructor(host_allocator);
         let plugin = Box::from_raw(boxed_raw_plugin);
 
-        Ok(LoadedPlugin { plugin, _lib: lib })
+        // Leak library so that we will never drop it
+        std::mem::forget(lib);
+
+        Ok(LoadedPlugin { plugin })
     }
 }
 
