@@ -12,6 +12,7 @@ use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
 use crate::crypter::{Iv, PlainKey};
 use crate::{Error, Result};
 use tikv_util::stream::{retry, with_timeout};
+use tikv_util::{box_err, error};
 
 #[async_trait]
 pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {

@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
+use thiserror::Error;
+
 const CGROUP_PATH: &str = "/proc/self/cgroup";
 const CGROUP_MOUNTINFO: &str = "/proc/self/mountinfo";
 const CGROUP_FSTYPE: &str = "cgroup";
@@ -24,25 +26,14 @@ const OPTIONAL_FIELDS_SEP: &str = "-";
 const CGROUP_SEP: &str = ":";
 const SUBSYS_SEP: &str = ",";
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-        Io(err: std::io::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        PathErr(err: std::path::StripPrefixError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    PathErr(#[from] std::path::StripPrefixError),
 }
 
 enum MountInfoFieldPart1 {

@@ -7,12 +7,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
-use engine_rocks::RocksEngine;
+use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
-use crate::storage::kv::{
+use crate::{
     Callback as EngineCallback, CbContext, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
@@ -71,9 +71,9 @@ impl Default for BTreeEngine {
 
 impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
-    type Local = RocksEngine;
+    type Local = PanicEngine;
 
-    fn kv_engine(&self) -> RocksEngine {
+    fn kv_engine(&self) -> PanicEngine {
         unimplemented!();
     }
 
@@ -288,7 +288,7 @@ pub mod tests {
     use super::super::tests::*;
     use super::super::CfStatistics;
     use super::*;
-    use crate::storage::{Cursor, ScanMode};
+    use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
 
     #[test]
