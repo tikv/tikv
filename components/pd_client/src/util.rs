@@ -203,7 +203,7 @@ impl Client {
         F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
-            reconnect_count: retry,
+            remain_reconnect_count: retry,
             request_sent: 0,
             client: self.clone(),
             req,
@@ -296,7 +296,7 @@ pub fn build_forward_metadata(forwarded_host: &str) -> Metadata {
 
 /// The context of sending requets.
 pub struct Request<Req, F> {
-    reconnect_count: usize,
+    remain_reconnect_count: usize,
     request_sent: usize,
     client: Arc<Client>,
     req: Req,
@@ -311,15 +311,15 @@ where
     F: FnMut(&Client, Req) -> PdFuture<Resp> + Send + 'static,
 {
     async fn reconnect_if_needed(&mut self) -> Result<()> {
-        debug!("reconnecting ..."; "remain" => self.reconnect_count);
+        debug!("reconnecting ..."; "remain" => self.remain_reconnect_count);
         if self.request_sent < MAX_REQUEST_COUNT {
             return Ok(());
         }
-        if self.reconnect_count == 0 {
+        if self.remain_reconnect_count == 0 {
             return Err(box_err!("request retry exceeds limit"));
         }
         // Updating client.
-        self.reconnect_count -= 1;
+        self.remain_reconnect_count -= 1;
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
         match self.client.reconnect(true).await {
