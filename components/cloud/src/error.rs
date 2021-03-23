@@ -5,6 +5,7 @@ use std::{error, result};
 use protobuf::ProtobufError;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use failure::Fail;
 use tikv_util::stream::RetryError;
 
 pub type Result<T> = result::Result<T, Error>;
