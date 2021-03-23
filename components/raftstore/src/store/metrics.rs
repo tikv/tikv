@@ -253,41 +253,6 @@ lazy_static! {
             "collect topN of read qps",
         &["order"]
         ).unwrap();
-<<<<<<< HEAD
-=======
-
-    pub static ref LOAD_BASE_SPLIT_EVENT: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_load_base_split_event",
-            "Load base split event.",
-            &["type"]
-        ).unwrap();
-
-    pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raft_entries_caches",
-        "Total memory size of raft entries caches."
-        ).unwrap();
-
-    pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raftstore_apply_pending_bytes",
-        "The bytes pending in the channel of apply FSMs."
-    )
-    .unwrap();
-
-    pub static ref APPLY_PENDING_ENTRIES_GAUGE: IntGauge = register_int_gauge!(
-            "tikv_raftstore_apply_pending_entries",
-            "The number of pending entries in the channel of apply FSMs."
-    )
-    .unwrap();
-
-    pub static ref COMPACTION_GUARD_ACTION_COUNTER_VEC: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_raftstore_compaction_guard_action_total",
-            "Total number of compaction guard actions.",
-            &["cf", "type"]
-        ).unwrap();
-    pub static ref COMPACTION_GUARD_ACTION_COUNTER: CompactionGuardActionVec =
-        auto_flush_from!(COMPACTION_GUARD_ACTION_COUNTER_VEC, CompactionGuardActionVec);
 
     pub static ref RAFT_PEER_PENDING_DURATION: Histogram =
     register_histogram!(
@@ -295,5 +260,4 @@ lazy_static! {
         "Bucketed histogram of region peer pending duration.",
         exponential_buckets(0.1, 1.5, 30).unwrap()  // 0.1s ~ 5.3 hours
     ).unwrap();
->>>>>>> 01d5feceb... raftstore: add region pending peer duration metrics (#9798)
 }
