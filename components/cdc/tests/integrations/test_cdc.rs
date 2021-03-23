@@ -761,7 +761,7 @@ fn test_old_value_basic() {
     // Insert value
     let mut m1 = Mutation::default();
     let k1 = b"k1".to_vec();
-    m1.set_op(Op::Put);
+    m1.set_op(Op::Insert);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
     let ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
