@@ -1014,7 +1014,7 @@ mod tests {
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use configuration::Configuration;
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -1024,8 +1024,8 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+    impl CasualRouter<KvTestEngine> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<KvTestEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }
