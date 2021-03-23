@@ -4,6 +4,5 @@ unstable_features = true
 condense_wildcard_suffixes = true
 license_template_path = "license.template"
 newline_style = "Unix"
-report_todo = "Always"
 use_field_init_shorthand = true
 use_try_shorthand = true

@@ -115,9 +115,10 @@ pub fn get_region_approximate_middle(
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db
-        .get_range_approximate_split_keys(range, 1)
-        .map(|mut v| v.pop())))
+    Ok(box_try!(
+        db.get_range_approximate_split_keys(range, 1)
+            .map(|mut v| v.pop())
+    ))
 }
 
 #[cfg(test)]

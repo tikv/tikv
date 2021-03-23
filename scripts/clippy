@@ -23,7 +23,7 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::needless_range_loop \
 	-A clippy::new_ret_no_self \
 	-A clippy::unnecessary_sort_by \
-        -A clippy::unnecessary_wraps \
+	-A clippy::unnecessary_wraps \
         -W clippy::dbg_macro \
         -W clippy::todo)
 
