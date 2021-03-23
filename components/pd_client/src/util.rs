@@ -222,6 +222,7 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
+    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
         let start = Instant::now();
 
