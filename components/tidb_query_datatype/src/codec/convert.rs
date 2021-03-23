@@ -1961,7 +1961,7 @@ mod tests {
             match expect {
                 Some(val) => {
                     assert_eq!(ff.unwrap(), *val);
-                },
+                }
                 None => {
                     assert!(
                         ff.is_err(),
