@@ -1,11 +1,33 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::storage_api::*;
+use std::fmt;
 
 /// Raw bytes of the request payload from the client to the coprocessor.
 pub type RawRequest = [u8];
 /// The response from the coprocessor encoded as raw bytes that are sent back to the client.
 pub type RawResponse = Vec<u8>;
+
+/// Error returned by a plugin.
+#[derive(Debug)]
+pub enum PluginError {
+    StorageError(StorageError),
+    Other(Box<dyn std::error::Error>),
+}
+
+impl fmt::Display for PluginError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Error while executing a coprocessor plugin")
+    }
+}
+
+impl std::error::Error for PluginError {}
+
+impl From<StorageError> for PluginError {
+    fn from(err: StorageError) -> Self {
+        PluginError::StorageError(err)
+    }
+}
 
 /// A plugin that allows users to execute arbitrary code on TiKV nodes.
 ///
@@ -38,5 +60,5 @@ pub trait CoprocessorPlugin: Send + Sync {
         region: &Region,
         request: &RawRequest,
         storage: &dyn RawStorage,
-    ) -> Result<RawResponse, Box<dyn std::error::Error>>;
+    ) -> Result<RawResponse, PluginError>;
 }

@@ -13,7 +13,7 @@ impl CoprocessorPlugin for ExamplePlugin {
         _region: &Region,
         _request: &RawRequest,
         _storage: &dyn RawStorage,
-    ) -> Result<RawResponse, Box<dyn std::error::Error>> {
+    ) -> Result<RawResponse, PluginError> {
         todo!()
     }
 }

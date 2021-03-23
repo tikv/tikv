@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
+use std::fmt;
 use std::ops::Range;
 
 /// A raw key in the storage.
@@ -39,6 +40,14 @@ pub enum StorageError {
     },
     OtherError(String),
 }
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Storage-related error: {:?}", self)
+    }
+}
+
+impl std::error::Error for StorageError {}
 
 /// Storage access for coprocessor plugins.
 ///

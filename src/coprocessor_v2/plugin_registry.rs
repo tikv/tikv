@@ -92,7 +92,7 @@ impl CoprocessorPlugin for LoadedPlugin {
         region: &Region,
         request: &RawRequest,
         storage: &dyn RawStorage,
-    ) -> Result<RawResponse, Box<dyn std::error::Error>> {
+    ) -> Result<RawResponse, PluginError> {
         self.plugin
             .on_raw_coprocessor_request(region, request, storage)
     }

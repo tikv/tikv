@@ -31,7 +31,7 @@
 //!         region: &Region,
 //!         request: &RawRequest,
 //!         storage: &dyn RawStorage,
-//!     ) -> Result<RawResponse, Box<dyn std::error::Error>> {
+//!     ) -> Result<RawResponse, PluginError> {
 //!         Ok(vec![])
 //!     }
 //! }
