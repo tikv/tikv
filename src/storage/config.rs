@@ -102,7 +102,7 @@ impl Config {
                 self.reserve_space
             );
         }
-        Ok(())
+        self.io_rate_limit.validate()
     }
 }
 
@@ -321,5 +321,20 @@ impl IORateLimitConfig {
         limiter.set_io_priority(IOType::Export, self.export_priority);
         limiter.set_io_priority(IOType::Other, self.other_priority);
         limiter
+    }
+
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.other_priority != IOPriority::High {
+            warn!(
+                "Occasionally some critical IO operations is tagged as Other, \
+                  e.g. IOs are fired from unmanaged threads, thread-local type \
+                  storage exceeds capacity. To be on the safe side, change it \
+                  from {:?} to {:?}",
+                self.other_priority,
+                IOPriority::High
+            );
+            self.other_priority = IOPriority::High;
+        }
+        Ok(())
     }
 }
