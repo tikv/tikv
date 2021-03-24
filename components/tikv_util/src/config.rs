@@ -634,6 +634,8 @@ mod check_data_dir {
     use std::path::Path;
     use std::sync::Mutex;
 
+    use lazy_static::lazy_static;
+
     use super::{canonicalize_path, ConfigError};
 
     #[derive(Debug, Default)]

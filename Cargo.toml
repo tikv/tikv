@@ -107,6 +107,7 @@ testing = []
 name = "tikv"
 
 [dependencies]
+anyhow = "1.0"
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
@@ -128,7 +129,6 @@ engine_traits = { path = "components/engine_traits", default-features = false }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.4"
-failure = "0.1"
 file_system = { path = "components/file_system" }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
@@ -183,6 +183,7 @@ sysinfo = "0.16"
 tempfile = "3.0"
 match_template = { path = "components/match_template" }
 paste = "1.0"
+thiserror = "1.0"
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
