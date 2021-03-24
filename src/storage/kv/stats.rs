@@ -1,13 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD:src/storage/kv/stats.rs
-use crate::server::metrics::{GcKeysCF, GcKeysDetail};
-=======
 use std::cell::RefCell;
 
-use super::metrics::{GcKeysCF, GcKeysDetail};
+use crate::server::metrics::{GcKeysCF, GcKeysDetail};
 use engine_rocks::PerfContext;
->>>>>>> ddc075015... storage: Add ttl tombstone statistics (#9784):components/tikv_kv/src/stats.rs
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};

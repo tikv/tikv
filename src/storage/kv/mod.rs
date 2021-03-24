@@ -31,7 +31,7 @@ pub use self::mock_engine::{ExpectedWrite, MockEngineBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{write_modifies, RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
-    CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
+    CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary, TTL_TOMBSTONE,
 };
 use crate::storage::mvcc;
 use error_code::{self, ErrorCode, ErrorCodeExt};

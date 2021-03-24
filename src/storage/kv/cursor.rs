@@ -11,12 +11,8 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
-<<<<<<< HEAD:src/storage/kv/cursor.rs
+use crate::storage::kv::stats::{StatsCollector, StatsKind};
 use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
-=======
-use crate::stats::{StatsCollector, StatsKind};
-use crate::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
->>>>>>> ddc075015... storage: Add ttl tombstone statistics (#9784):components/tikv_kv/src/cursor.rs
 
 pub struct Cursor<I: Iterator> {
     iter: I,
