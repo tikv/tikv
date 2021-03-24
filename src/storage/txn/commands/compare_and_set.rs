@@ -3,6 +3,7 @@
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::raw;
+use crate::storage::raw::ttl::convert_to_expire_ts;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -41,13 +42,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSet {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let expire_ts = self.ttl.map(|ttl| {
-            if ttl > 0 {
-                ttl + raw::TTLSnapshot::<S>::current_ts()
-            } else {
-                0
-            }
-        });
+        let expire_ts = self.ttl.map(|ttl| convert_to_expire_ts(ttl));
         let old_value = if expire_ts.is_some() {
             raw::TTLSnapshot::from(snapshot).get_cf(cf, &key)?
         } else {

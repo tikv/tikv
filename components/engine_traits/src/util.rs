@@ -4,6 +4,8 @@ use super::{Error, Result};
 use tikv_util::codec;
 use tikv_util::codec::number::{self, NumberEncoder};
 
+pub const TEST_CURRENT_TS: u64 = 100;
+
 /// Check if key in range [`start_key`, `end_key`).
 #[allow(dead_code)]
 pub fn check_key_in_range(

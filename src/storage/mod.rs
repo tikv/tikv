@@ -71,6 +71,7 @@ use crate::storage::{
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     mvcc::PointGetterBuilder,
+    raw::ttl::convert_to_expire_ts,
     txn::{commands::TypedCommand, scheduler::Scheduler as TxnScheduler, Command},
     types::StorageCallbackType,
 };
@@ -1167,11 +1168,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let mut m = Modify::Put(Self::rawkv_cf(&cf)?, Key::from_encoded(key), value);
         if self.enable_ttl {
-            let expire_ts = if ttl == 0 {
-                0
-            } else {
-                ttl + TTLSnapshot::<E::Snap>::current_ts()
-            };
+            let expire_ts = convert_to_expire_ts(ttl);
             m.with_ttl(expire_ts);
         } else if ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
@@ -1206,11 +1203,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         if !self.enable_ttl && ttl != 0 {
             return Err(Error::from(ErrorInner::TTLNotEnabled));
         }
-        let expire_ts = if ttl == 0 {
-            0
-        } else {
-            ttl + TTLSnapshot::<E::Snap>::current_ts()
-        };
+        let expire_ts = convert_to_expire_ts(ttl);
 
         let modifies = pairs
             .into_iter()
@@ -1937,13 +1930,13 @@ mod tests {
     use crate::config::TitanDBConfig;
     use crate::storage::kv::{ExpectedWrite, MockEngineBuilder};
     use crate::storage::mvcc::LockType;
-    use crate::storage::raw::TTLSnapshot;
     use crate::storage::txn::commands::{AcquirePessimisticLock, Prewrite};
     use crate::storage::{
         config::BlockCacheConfig,
         kv::{Error as EngineError, ErrorInner as EngineErrorInner},
         lock_manager::{Lock, WaitTimeout},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        raw::ttl::current_ts,
         txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner},
     };
     use collections::HashMap;
@@ -4330,6 +4323,7 @@ mod tests {
             (b"c".to_vec(), b"cc".to_vec(), 0),
             (b"d".to_vec(), b"dd".to_vec(), 10),
             (b"e".to_vec(), b"ee".to_vec(), 20),
+            (b"f".to_vec(), b"ff".to_vec(), u64::MAX),
         ];
 
         // Write key-value pairs one by one
@@ -4351,9 +4345,13 @@ mod tests {
             let res =
                 block_on(storage.raw_get_key_ttl(Context::default(), "".to_string(), key.clone()))
                     .unwrap();
-            if ttl != 0 && ttl <= TTLSnapshot::<<RocksEngine as Engine>::Snap>::current_ts() {
-                assert_eq!(res, Some(ttl));
-            } else if ttl == 0 {
+            if ttl != 0 {
+                if ttl > u64::MAX - current_ts() {
+                    assert_eq!(res, Some(u64::MAX - current_ts()));
+                } else {
+                    assert_eq!(res, Some(ttl));
+                }
+            } else {
                 assert_eq!(res, Some(0));
             }
         }

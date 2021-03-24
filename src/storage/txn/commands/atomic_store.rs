@@ -2,7 +2,7 @@
 
 use crate::storage::kv::{Modify, WriteData};
 use crate::storage::lock_manager::LockManager;
-use crate::storage::raw;
+use crate::storage::raw::ttl::convert_to_expire_ts;
 use crate::storage::txn::commands::{
     Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
 };
@@ -52,13 +52,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        let expire_ts = self.ttl.map(|ttl| {
-            if ttl > 0 {
-                ttl + raw::TTLSnapshot::<S>::current_ts()
-            } else {
-                0
-            }
-        });
+        let expire_ts = self.ttl.map(|ttl| convert_to_expire_ts(ttl));
         for m in mutations {
             match m {
                 Mutation::Put((key, value)) => {
