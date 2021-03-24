@@ -25,7 +25,9 @@ use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
 use super::metrics::*;
-use super::util::{build_forward_metadata, check_resp_header, sync_request, Client, PdConnector};
+use super::util::{
+    build_forward_metadata, check_resp_header, sync_request, trim_http_prefix, Client, PdConnector,
+};
 use super::{Config, FeatureGate, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 
@@ -75,6 +77,15 @@ impl RpcClient {
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg).await {
                 Ok((client, forwarded_host, members)) => {
+                    if !forwarded_host.is_empty() {
+                        // The reason why we don't directly save the trimmed result here is we need it
+                        // as the part of metadata of the request so that PD can use it to connect to the actual leader.
+                        // But the trimmed result cannot be parsed by the go standard library correctly.
+                        let host = trim_http_prefix(&forwarded_host);
+                        REQUEST_FORWARDED_GAUGE_VEC
+                            .with_label_values(&[host])
+                            .set(1);
+                    }
                     let rpc_client = RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         pd_client: Arc::new(Client::new(
