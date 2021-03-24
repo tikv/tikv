@@ -250,7 +250,9 @@ impl Client {
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
-                PD_RECONNECT_COUNTER_VEC.with_label_values(&["cancel"]).inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["cancel"])
+                    .inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
@@ -275,7 +277,9 @@ impl Client {
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
-                PD_RECONNECT_COUNTER_VEC.with_label_values(&["cancel"]).inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["cancel"])
+                    .inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             inner.last_try_reconnect = start;
@@ -284,15 +288,21 @@ impl Client {
         slow_log!(start.elapsed(), "try reconnect pd");
         let (client, forwarded_host, members) = match future.await {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC.with_label_values(&["failure"]).inc();
-                return Err(e)
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["failure"])
+                    .inc();
+                return Err(e);
             }
             Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC.with_label_values(&["no-need"]).inc();
-                return Ok(())
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["no-need"])
+                    .inc();
+                return Ok(());
             }
             Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC.with_label_values(&["success"]).inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["success"])
+                    .inc();
                 tuple
             }
         };
