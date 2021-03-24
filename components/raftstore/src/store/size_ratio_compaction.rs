@@ -45,6 +45,9 @@ impl<P: RegionInfoProvider + Sync> LevelRegionAccessor for SizeRatioCompaction<P
                     .iter()
                     .map(|region| LevelRegionBoundaries{start_key: data_key(&region.start_key),
                         end_key: data_end_key(&region.end_key)}).collect();
+                info!("smallest key"; "smallest key" => ?req.smallest_user_key);
+                info!("largest key"; "largest key" => ?req.largest_user_key);
+                info!("get region boundaries"; "boundaries" => ?boundaries);
                 LevelRegionAccessorResult{
                     regions: boundaries,
                 }
