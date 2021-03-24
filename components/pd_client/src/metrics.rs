@@ -48,4 +48,10 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref REQUEST_FORWARDED_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_pd_request_forwarded",
+        "The status to indicate if the request is forwarded",
+        &["host"]
+    )
+    .unwrap();
 }
