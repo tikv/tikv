@@ -3,6 +3,7 @@
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -40,7 +41,7 @@ pub struct Inner {
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
-    last_update: Instant,
+    last_try_reconnect: Instant,
 }
 
 pub struct HeartbeatReceiver {
@@ -109,7 +110,7 @@ impl LeaderClient {
                 security_mgr,
                 on_reconnect: None,
 
-                last_update: Instant::now(),
+                last_try_reconnect: Instant::now(),
             })),
         }
     }
@@ -142,7 +143,7 @@ impl LeaderClient {
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
-            reconnect_count: retry,
+            remain_reconnect_count: retry,
             request_sent: 0,
             client: LeaderClient {
                 timer: self.timer.clone(),
@@ -159,28 +160,43 @@ impl LeaderClient {
     }
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
+    ///
+    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self) -> Result<()> {
-        let (future, start) = {
+        let start = Instant::now();
+
+        let future = {
             let inner = self.inner.rl();
-            if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
+            if start
+                .checked_duration_since(inner.last_try_reconnect)
+                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            {
                 // Avoid unnecessary updating.
-                return Ok(());
+                // Prevent a large number of reconnections in a short time.
+                return Err(box_err!("cancel reconnection due to too small interval"));
             }
-
-            let start = Instant::now();
-
-            (
-                try_connect_leader(
-                    Arc::clone(&inner.env),
-                    Arc::clone(&inner.security_mgr),
-                    inner.members.clone(),
-                ),
-                start,
+            try_connect_leader(
+                Arc::clone(&inner.env),
+                Arc::clone(&inner.security_mgr),
+                inner.members.clone(),
             )
         };
 
+        {
+            let mut inner = self.inner.wl();
+            if start
+                .checked_duration_since(inner.last_try_reconnect)
+                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            {
+                // There may be multiple reconnections that pass the read lock at the same time.
+                // Check again in the write lock to avoid unnecessary updating.
+                return Err(box_err!("cancel reconnection due to too small interval"));
+            }
+            inner.last_try_reconnect = start;
+        }
+
         let (client, members) = future.await?;
-        fail_point!("leader_client_reconnect");
+        fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
             let mut inner = self.inner.wl();
@@ -201,7 +217,6 @@ impl LeaderClient {
             inner.hb_receiver = Either::Left(Some(rx));
             inner.client_stub = client;
             inner.members = members;
-            inner.last_update = Instant::now();
             if let Some(ref on_reconnect) = inner.on_reconnect {
                 on_reconnect();
             }
@@ -211,11 +226,13 @@ impl LeaderClient {
     }
 }
 
-pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
+// FIXME: Use a request-independent way to handle reconnection.
+const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
+pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
 /// The context of sending requets.
 pub struct Request<Req, Resp, F> {
-    reconnect_count: usize,
+    remain_reconnect_count: usize,
     request_sent: usize,
 
     client: LeaderClient,
@@ -234,14 +251,14 @@ where
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
     fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
-        debug!("reconnecting ..."; "remain" => self.reconnect_count);
+        debug!("reconnecting ..."; "remain" => self.remain_reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
             return Box::new(ok(self));
         }
 
         // Updating client.
-        self.reconnect_count -= 1;
+        self.remain_reconnect_count -= 1;
 
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
@@ -250,12 +267,17 @@ where
                 self.request_sent = 0;
                 Box::new(ok(self))
             }
-            Err(_) => Box::new(
-                self.client
-                    .timer
-                    .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
-                    .then(|_| Err(self)),
-            ),
+            Err(_) => {
+                // Make a request before the next reconnection.
+                self.request_sent = MAX_REQUEST_COUNT - 1;
+
+                Box::new(
+                    self.client
+                        .timer
+                        .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                        .then(|_| Err(self)),
+                )
+            }
         }
     }
 
@@ -283,7 +305,7 @@ where
         let ctx = match ctx {
             Ok(ctx) | Err(ctx) => ctx,
         };
-        let done = ctx.reconnect_count == 0
+        let done = ctx.remain_reconnect_count == 0
             || (ctx.resp.is_some() && Self::should_not_retry(ctx.resp.as_ref().unwrap()));
         if done {
             Ok(Loop::Break(ctx))
@@ -326,12 +348,11 @@ where
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
+pub fn sync_request<F, R>(client: &LeaderClient, mut retry: usize, func: F) -> Result<R>
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
-    let mut err = None;
-    for _ in 0..retry {
+    loop {
         let ret = {
             // Drop the read lock immediately to prevent the deadlock between the caller thread
             // which may hold the read lock and wait for PD client thread completing the request
@@ -345,15 +366,18 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
-                if let Err(e) = block_on(client.reconnect()) {
-                    error!(?e; "reconnect failed");
+                if retry == 0 {
+                    return Err(e);
                 }
-                err.replace(e);
             }
         }
+        // try reconnect
+        retry -= 1;
+        if let Err(e) = block_on(client.reconnect()) {
+            error!(?e; "reconnect failed");
+            thread::sleep(REQUEST_RECONNECT_INTERVAL);
+        }
     }
-
-    Err(err.unwrap_or(box_err!("fail to request")))
 }
 
 pub fn validate_endpoints(
