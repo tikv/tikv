@@ -27,7 +27,7 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
-use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+use super::{metrics::*, Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -163,6 +163,7 @@ impl LeaderClient {
     ///
     /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self) -> Result<()> {
+        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
 
         let future = {
@@ -173,6 +174,9 @@ impl LeaderClient {
             {
                 // Avoid unnecessary updating.
                 // Prevent a large number of reconnections in a short time.
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["cancel"])
+                    .inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             try_connect_leader(
@@ -190,12 +194,28 @@ impl LeaderClient {
             {
                 // There may be multiple reconnections that pass the read lock at the same time.
                 // Check again in the write lock to avoid unnecessary updating.
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["cancel"])
+                    .inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
             inner.last_try_reconnect = start;
         }
 
-        let (client, members) = future.await?;
+        let (client, members) = match future.await {
+            Err(e) => {
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["failure"])
+                    .inc();
+                return Err(e);
+            }
+            Ok(tuple) => {
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["success"])
+                    .inc();
+                tuple
+            }
+        };
         fail_point!("leader_client_reconnect", |_| Ok(()));
 
         {
