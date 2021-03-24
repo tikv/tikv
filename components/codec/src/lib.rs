@@ -6,8 +6,6 @@
 
 #[macro_use]
 extern crate static_assertions;
-#[macro_use]
-extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
