@@ -22,6 +22,7 @@ use configuration::{ConfigChange, Configuration};
 use file_system::{IOType, WithIOType};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_err, debug, error, info, warn};
 
 use super::metrics::*;
 

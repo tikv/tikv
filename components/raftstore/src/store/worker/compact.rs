@@ -7,7 +7,10 @@ use std::time::Instant;
 
 use engine_traits::KvEngine;
 use engine_traits::CF_WRITE;
+use fail::fail_point;
+use quick_error::*;
 use tikv_util::worker::Runnable;
+use tikv_util::{box_try, error, info, warn};
 
 use super::metrics::COMPACT_RANGE_CF;
 
