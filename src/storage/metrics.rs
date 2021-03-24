@@ -130,6 +130,9 @@ make_auto_flush_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        raw_get_key_ttl,
+        raw_compare_and_set,
+        raw_atomic_store,
     }
 
     pub label_enum CommandStageKind {
@@ -177,6 +180,12 @@ make_auto_flush_static_metric! {
         prev_tombstone,
         seek_tombstone,
         seek_for_prev_tombstone,
+        ttl_tombstone,
+    }
+
+    pub label_enum CheckMemLockResult {
+        locked,
+        unlocked,
     }
 
     pub struct CommandScanDetails: LocalIntCounter {
@@ -221,6 +230,11 @@ make_auto_flush_static_metric! {
     pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
+
+    pub struct CheckMemLockHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+        "result" => CheckMemLockResult,
+    }
 }
 
 impl From<ServerGcKeysCF> for GcKeysCF {
@@ -247,6 +261,7 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::prev_tombstone => GcKeysDetail::prev_tombstone,
             ServerGcKeysDetail::seek_tombstone => GcKeysDetail::seek_tombstone,
             ServerGcKeysDetail::seek_for_prev_tombstone => GcKeysDetail::seek_for_prev_tombstone,
+            ServerGcKeysDetail::ttl_tombstone => GcKeysDetail::ttl_tombstone,
         }
     }
 }
@@ -361,4 +376,13 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_check_mem_lock_duration_seconds",
+        "Histogram of the duration of checking memory locks",
+        &["type", "result"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref CHECK_MEM_LOCK_DURATION_HISTOGRAM_VEC: CheckMemLockHistogramVec =
+        auto_flush_from!(CHECK_MEM_LOCK_DURATION_HISTOGRAM, CheckMemLockHistogramVec);
 }

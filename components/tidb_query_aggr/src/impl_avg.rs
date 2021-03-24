@@ -371,7 +371,7 @@ mod tests {
         let function = AggrFnAvgForEnum::new();
         let mut state = function.create_state();
 
-        // AVG will returns <Int, Decimal>
+        // AVG will return <Int, Decimal>
         let mut result = [
             VectorValue::with_capacity(0, EvalType::Int),
             VectorValue::with_capacity(0, EvalType::Decimal),

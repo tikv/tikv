@@ -21,7 +21,7 @@ use tokio::runtime::Builder as TokioBuilder;
 use super::*;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use encryption::DataKeyManager;
+use encryption_export::DataKeyManager;
 use engine_rocks::{PerfLevel, RocksEngine, RocksSnapshot};
 use engine_traits::{Engines, MiscExt};
 use pd_client::PdClient;
@@ -38,6 +38,7 @@ use raftstore::store::{
 use raftstore::Result;
 use security::SecurityManager;
 use tikv::coprocessor;
+use tikv::coprocessor_v2;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::read_pool::ReadPool;
 use tikv::server::gc_worker::GcWorker;
@@ -58,6 +59,7 @@ use tikv_util::config::VersionTrack;
 use tikv_util::time::ThreadReadId;
 use tikv_util::worker::{Builder as WorkerBuilder, FutureWorker, LazyWorker};
 use tikv_util::HandyRwLock;
+use txn_types::TxnExtraScheduler;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RocksEngine>>;
 type SimulateServerTransport =
@@ -121,6 +123,7 @@ pub struct ServerCluster {
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub security_mgr: Arc<SecurityManager>,
+    pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole>,
@@ -163,6 +166,7 @@ impl ServerCluster {
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
+            txn_extra_schedulers: HashMap::default(),
         }
     }
 
@@ -244,7 +248,10 @@ impl Simulator for ServerCluster {
             raft_engine.clone(),
         ));
 
-        let engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
+            engine.set_txn_extra_scheduler(scheduler);
+        }
 
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -307,6 +314,7 @@ impl Simulator for ServerCluster {
             concurrency_manager.clone(),
             PerfLevel::EnableCount,
         );
+        let coprv2 = coprocessor_v2::Endpoint::new();
         let mut server = None;
         // Create Debug service.
         let debug_thread_pool = Arc::new(
@@ -331,6 +339,7 @@ impl Simulator for ServerCluster {
                 &security_mgr,
                 store.clone(),
                 cop.clone(),
+                coprv2.clone(),
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
@@ -555,8 +564,17 @@ pub fn new_incompatible_server_cluster(id: u64, count: usize) -> Cluster<ServerC
 }
 
 pub fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
+    must_new_and_configure_cluster(|_| ())
+}
+
+pub fn must_new_and_configure_cluster(
+    mut configure: impl FnMut(&mut Cluster<ServerCluster>),
+) -> (Cluster<ServerCluster>, metapb::Peer, Context)
+where
+{
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
+    configure(&mut cluster);
     cluster.run();
 
     let region_id = 1;

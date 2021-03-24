@@ -126,6 +126,10 @@ impl TestSuite {
                 .push(Box::new(move || {
                     create_change_data(cdc::Service::new(scheduler.clone()))
                 }));
+            sim.txn_extra_schedulers.insert(
+                id,
+                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
+            );
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());

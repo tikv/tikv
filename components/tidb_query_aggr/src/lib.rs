@@ -18,6 +18,7 @@ mod impl_count;
 mod impl_first;
 mod impl_max_min;
 mod impl_sum;
+mod impl_variance;
 mod parser;
 mod summable;
 mod util;

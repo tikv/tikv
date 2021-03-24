@@ -43,7 +43,7 @@ macro_rules! request {
 fn test_pd_client_deadlock() {
     let (_server, client) = new_test_server_and_client(ReadableDuration::millis(100));
     let client = Arc::new(client);
-    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let pd_client_reconnect_fp = "pd_client_reconnect";
 
     // It contains all interfaces of PdClient.
     let test_funcs: Vec<(_, Box<dyn FnOnce() + Send>)> = vec![
@@ -74,10 +74,10 @@ fn test_pd_client_deadlock() {
     ];
 
     for (name, func) in test_funcs {
-        fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
+        fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
         // Wait for the PD client thread blocking on the fail point.
-        // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
-        thread::sleep(Duration::from_secs(2));
+        // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+        thread::sleep(Duration::from_millis(200));
 
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -86,10 +86,10 @@ fn test_pd_client_deadlock() {
         });
         // Only allow to reconnect once for a func.
         client.handle_reconnect(move || {
-            fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+            fail::cfg(pd_client_reconnect_fp, "return").unwrap();
         });
         // Remove the fail point to let the PD client thread go on.
-        fail::remove(leader_client_reconnect_fp);
+        fail::remove(pd_client_reconnect_fp);
 
         let timeout = Duration::from_millis(500);
         if rx.recv_timeout(timeout).is_err() {
@@ -99,14 +99,14 @@ fn test_pd_client_deadlock() {
     }
 
     drop(client);
-    fail::remove(leader_client_reconnect_fp);
+    fail::remove(pd_client_reconnect_fp);
 }
 
 // Updating pd leader may be slow, we need to make sure it does not block other
 // RPC in the same gRPC Environment.
 #[test]
 fn test_slow_periodical_update() {
-    let leader_client_reconnect_fp = "leader_client_reconnect";
+    let pd_client_reconnect_fp = "pd_client_reconnect";
     let server = MockServer::new(1);
     let eps = server.bind_addrs();
 
@@ -122,10 +122,10 @@ fn test_slow_periodical_update() {
     cfg.update_interval = ReadableDuration(Duration::from_secs(100));
     let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
 
-    fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
+    fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
     // Wait for the PD client thread blocking on the fail point.
-    // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
-    thread::sleep(Duration::from_secs(2));
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
 
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -139,6 +139,27 @@ fn test_slow_periodical_update() {
     }
 
     // Clean up the fail point.
-    fail::remove(leader_client_reconnect_fp);
+    fail::remove(pd_client_reconnect_fp);
     handle.join().unwrap();
+}
+
+// Reconnection will be speed limited.
+#[test]
+fn test_reconnect_limit() {
+    let pd_client_reconnect_fp = "pd_client_reconnect";
+    let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
+
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
+
+    // The first reconnection will succeed, and the last_update will not be updated.
+    fail::cfg(pd_client_reconnect_fp, "return").unwrap();
+    client.reconnect().unwrap();
+    // The subsequent reconnection will be cancelled.
+    for _ in 0..10 {
+        let ret = client.reconnect();
+        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel reconnection"));
+    }
+
+    fail::remove(pd_client_reconnect_fp);
 }

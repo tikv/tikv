@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use file_system::File;
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::box_err;
 
 use super::{Backend, MemAesGcmBackend};
 use crate::AesGcmCrypter;
