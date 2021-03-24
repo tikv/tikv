@@ -1,40 +1,38 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use failure::Fail;
-use openssl::error::ErrorStack as CrypterError;
-use protobuf::ProtobufError;
 use std::fmt::{Debug, Display};
 use std::io::{Error as IoError, ErrorKind};
 use std::{error, result};
+
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use openssl::error::ErrorStack as CrypterError;
+use protobuf::ProtobufError;
+use thiserror::Error;
 use tikv_util::stream::RetryError;
 
 pub trait RetryCodedError: Debug + Display + ErrorCodeExt + RetryError + Send + Sync {}
 
 /// The error type for encryption.
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[fail(display = "Other error {}", _0)]
-    Other(Box<dyn error::Error + Sync + Send>),
+    #[error("Other error {0}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
     // Currently only in use by cloud KMS
-    #[fail(display = "Cloud KMS error {}", _0)]
+    #[error("Cloud KMS error {0}")]
     RetryCodedError(Box<dyn RetryCodedError>),
-    #[fail(display = "RocksDB error {}", _0)]
+    #[error("RocksDB error {0}")]
     Rocks(String),
-    #[fail(display = "IO error {}", _0)]
-    Io(IoError),
-    #[fail(display = "OpenSSL error {}", _0)]
-    Crypter(CrypterError),
-    #[fail(display = "Protobuf error {}", _0)]
-    Proto(ProtobufError),
-    #[fail(display = "Unknown encryption error")]
+    #[error("IO error {0}")]
+    Io(#[from] IoError),
+    #[error("OpenSSL error {0}")]
+    Crypter(#[from] CrypterError),
+    #[error("Protobuf error {0}")]
+    Proto(#[from] ProtobufError),
+    #[error("Unknown encryption error")]
     UnknownEncryption,
-    #[fail(display = "Wrong master key error {}", _0)]
+    #[error("Wrong master key error {0}")]
     WrongMasterKey(Box<dyn error::Error + Sync + Send>),
-    #[fail(
-        display = "Both master key failed, current key {}, previous key {}.",
-        _0, _1
-    )]
+    #[error("Both master key failed, current key {0}, previous key {1}.")]
     BothMasterKeyFail(
         Box<dyn error::Error + Sync + Send>,
         Box<dyn error::Error + Sync + Send>,
@@ -54,11 +52,7 @@ macro_rules! impl_from {
 }
 
 impl_from! {
-    Box<dyn error::Error + Sync + Send> => Other,
     String => Rocks,
-    IoError => Io,
-    CrypterError => Crypter,
-    ProtobufError => Proto,
 }
 
 impl From<Error> for IoError {

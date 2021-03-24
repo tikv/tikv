@@ -49,6 +49,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 itertools = "0.8"
 
 [dev-dependencies]
-failure = "0.1"
+anyhow = "1.0"
 tipb_helper = { path = "../tipb_helper", default-features = false }
 tidb_query_codegen = { path = "../tidb_query_codegen", default-features = false }
