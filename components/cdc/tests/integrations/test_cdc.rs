@@ -826,7 +826,7 @@ fn test_old_value_basic() {
     m8.key = k1.clone();
     m8.value = b"v1".to_vec();
     let ts14 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    suite.must_kv_prewrite(1, vec![m8], k1.clone(), ts14);
+    suite.must_kv_prewrite(1, vec![m8], k1, ts14);
 
     let mut event_count = 0;
     loop {
