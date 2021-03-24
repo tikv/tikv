@@ -3,6 +3,7 @@
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -26,7 +27,18 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 use tokio_timer::timer::Handle;
 
+<<<<<<< HEAD
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
+=======
+const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
+const MAX_RETRY_TIMES: u64 = 5;
+// The max duration when retrying to connect to leader. No matter if the MAX_RETRY_TIMES is reached.
+const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
+
+// FIXME: Use a request-independent way to handle reconnection.
+const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
+pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -40,7 +52,7 @@ pub struct Inner {
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
-    last_update: Instant,
+    last_try_reconnect: Instant,
 }
 
 pub struct HeartbeatReceiver {
@@ -97,8 +109,12 @@ impl LeaderClient {
         let (tx, rx) = client_stub
             .region_heartbeat()
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+<<<<<<< HEAD
 
         LeaderClient {
+=======
+        Client {
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
@@ -108,9 +124,46 @@ impl LeaderClient {
                 members,
                 security_mgr,
                 on_reconnect: None,
+<<<<<<< HEAD
 
                 last_update: Instant::now(),
             })),
+=======
+                last_try_reconnect: Instant::now(),
+            }),
+            feature_gate: FeatureGate::default(),
+            enable_forwarding,
+        }
+    }
+
+    pub fn update_client(
+        &self,
+        client_stub: PdClientStub,
+        forwarded_host: String,
+        members: GetMembersResponse,
+    ) {
+        let start_refresh = Instant::now();
+        let mut inner = self.inner.wl();
+
+        let (tx, rx) = client_stub
+            .region_heartbeat_opt(call_option(&forwarded_host))
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        info!("heartbeat sender and receiver are stale, refreshing ...");
+
+        // Try to cancel an unused heartbeat sender.
+        if let Either::Left(Some(ref mut r)) = inner.hb_sender {
+            r.cancel();
+        }
+        inner.hb_sender = Either::Left(Some(tx));
+        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(rx)));
+        let _ = prev_receiver.right().map(|t| t.wake());
+        inner.client_stub = client_stub;
+        let prev_forwarded_host =
+            std::mem::replace(&mut inner.forwarded_host, forwarded_host.clone());
+        inner.members = members;
+        if let Some(ref on_reconnect) = inner.on_reconnect {
+            on_reconnect();
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
         }
     }
 
@@ -142,7 +195,7 @@ impl LeaderClient {
         F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
     {
         Request {
-            reconnect_count: retry,
+            remain_reconnect_count: retry,
             request_sent: 0,
             client: LeaderClient {
                 timer: self.timer.clone(),
@@ -159,13 +212,28 @@ impl LeaderClient {
     }
 
     /// Re-establishes connection with PD leader in asynchronized fashion.
+<<<<<<< HEAD
     pub async fn reconnect(&self) -> Result<()> {
         let (future, start) = {
+=======
+    ///
+    /// If `force` is false, it will reconnect only when members change.
+    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
+    pub async fn reconnect(&self, force: bool) -> Result<()> {
+        let start = Instant::now();
+
+        let future = {
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
             let inner = self.inner.rl();
-            if inner.last_update.elapsed() < Duration::from_secs(RECONNECT_INTERVAL_SEC) {
+            if start
+                .checked_duration_since(inner.last_try_reconnect)
+                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            {
                 // Avoid unnecessary updating.
-                return Ok(());
+                // Prevent a large number of reconnections in a short time.
+                return Err(box_err!("cancel reconnection due to too small interval"));
             }
+<<<<<<< HEAD
 
             let start = Instant::now();
 
@@ -178,6 +246,42 @@ impl LeaderClient {
                 start,
             )
         };
+=======
+            let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
+            let members = inner.members.clone();
+            async move {
+                connector
+                    .reconnect_pd(
+                        members,
+                        self.get_forwarded_host(),
+                        force,
+                        self.enable_forwarding,
+                    )
+                    .await
+            }
+        };
+
+        {
+            let mut inner = self.inner.wl();
+            if start
+                .checked_duration_since(inner.last_try_reconnect)
+                .map_or(true, |d| d < GLOBAL_RECONNECT_INTERVAL)
+            {
+                // There may be multiple reconnections that pass the read lock at the same time.
+                // Check again in the write lock to avoid unnecessary updating.
+                return Err(box_err!("cancel reconnection due to too small interval"));
+            }
+            inner.last_try_reconnect = start;
+        }
+
+        slow_log!(start.elapsed(), "try reconnect pd");
+        let (client, forwarded_host, members) = match future.await? {
+            Some(tuple) => tuple,
+            None => return Ok(()),
+        };
+
+        fail_point!("pd_client_reconnect", |_| Ok(()));
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
 
         let (client, members) = future.await?;
         fail_point!("leader_client_reconnect");
@@ -211,11 +315,14 @@ impl LeaderClient {
     }
 }
 
-pub const RECONNECT_INTERVAL_SEC: u64 = 1; // 1s
-
 /// The context of sending requets.
+<<<<<<< HEAD
 pub struct Request<Req, Resp, F> {
     reconnect_count: usize,
+=======
+pub struct Request<Req, F> {
+    remain_reconnect_count: usize,
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
     request_sent: usize,
 
     client: LeaderClient,
@@ -233,30 +340,49 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
+<<<<<<< HEAD
     fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
             return Box::new(ok(self));
+=======
+    async fn reconnect_if_needed(&mut self) -> Result<()> {
+        debug!("reconnecting ..."; "remain" => self.remain_reconnect_count);
+        if self.request_sent < MAX_REQUEST_COUNT {
+            return Ok(());
         }
-
+        if self.remain_reconnect_count == 0 {
+            return Err(box_err!("request retry exceeds limit"));
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
+        }
         // Updating client.
-        self.reconnect_count -= 1;
-
+        self.remain_reconnect_count -= 1;
         // FIXME: should not block the core.
         debug!("(re)connecting PD client");
         match block_on(self.client.reconnect()) {
             Ok(_) => {
                 self.request_sent = 0;
+<<<<<<< HEAD
                 Box::new(ok(self))
+=======
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
             }
             Err(_) => Box::new(
                 self.client
                     .timer
+<<<<<<< HEAD
                     .delay(Instant::now() + Duration::from_secs(RECONNECT_INTERVAL_SEC))
                     .then(|_| Err(self)),
             ),
+=======
+                    .delay(Instant::now() + REQUEST_RECONNECT_INTERVAL)
+                    .compat()
+                    .await;
+            }
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
         }
+        Ok(())
     }
 
     fn send_and_receive(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
@@ -312,6 +438,7 @@ where
 
     /// Returns a Future, it is resolves once a future returned by the closure
     /// is resolved successfully, otherwise it repeats `retry` times.
+<<<<<<< HEAD
     pub fn execute(self) -> PdFuture<Resp> {
         let ctx = self;
         Box::new(
@@ -322,16 +449,33 @@ where
             })
             .then(Self::post_loop),
         )
+=======
+    pub fn execute(mut self) -> PdFuture<Resp> {
+        Box::pin(async move {
+            loop {
+                {
+                    let resp = self.send_and_receive().await;
+                    if Self::should_not_retry(&resp) {
+                        return resp;
+                    }
+                }
+                self.reconnect_if_needed().await?;
+            }
+        })
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
     }
 }
 
 /// Do a request in synchronized fashion.
+<<<<<<< HEAD
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
+=======
+pub fn sync_request<F, R>(client: &Client, mut retry: usize, func: F) -> Result<R>
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
 where
     F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
-    let mut err = None;
-    for _ in 0..retry {
+    loop {
         let ret = {
             // Drop the read lock immediately to prevent the deadlock between the caller thread
             // which may hold the read lock and wait for PD client thread completing the request
@@ -345,15 +489,30 @@ where
             }
             Err(e) => {
                 error!(?e; "request failed");
+<<<<<<< HEAD
                 if let Err(e) = block_on(client.reconnect()) {
                     error!(?e; "reconnect failed");
                 }
                 err.replace(e);
+=======
+                if retry == 0 {
+                    return Err(e);
+                }
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
             }
         }
+        // try reconnect
+        retry -= 1;
+        if let Err(e) = block_on(client.reconnect(true)) {
+            error!(?e; "reconnect failed");
+            thread::sleep(REQUEST_RECONNECT_INTERVAL);
+        }
     }
+<<<<<<< HEAD
 
     Err(err.unwrap_or(box_err!("fail to request")))
+=======
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
 }
 
 pub fn validate_endpoints(
@@ -476,6 +635,7 @@ pub async fn try_connect_leader(
         }
     }
 
+<<<<<<< HEAD
     // Then try to connect the PD cluster leader.
     if let Some(resp) = resp {
         let leader = resp.get_leader().clone();
@@ -483,6 +643,29 @@ pub async fn try_connect_leader(
             if let Ok((client, _)) = connect(Arc::clone(&env), &security_mgr, ep.as_str()).await {
                 info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
+=======
+    pub async fn reconnect_leader(&self, leader: &Member) -> Result<(Option<PdClientStub>, bool)> {
+        fail_point!("connect_leader", |_| Ok((None, true)));
+        let mut retry_times = MAX_RETRY_TIMES;
+        let timer = Instant::now();
+
+        // Try to connect the PD cluster leader.
+        loop {
+            let (res, has_network_err) = self.connect_member(leader).await?;
+            match res {
+                Some((client, _)) => return Ok((Some(client), has_network_err)),
+                None => {
+                    if has_network_err && retry_times > 0 && timer.elapsed() <= MAX_RETRY_DURATION {
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(Instant::now() + RETRY_INTERVAL)
+                            .compat()
+                            .await;
+                        retry_times -= 1;
+                        continue;
+                    }
+                    return Ok((None, has_network_err));
+                }
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
             }
         }
     }

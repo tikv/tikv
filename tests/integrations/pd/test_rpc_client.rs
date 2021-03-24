@@ -332,8 +332,8 @@ fn restart_leader(mgr: SecurityManager) {
     server.stop();
     server.start(&mgr, eps);
 
-    // RECONNECT_INTERVAL_SEC is 1s.
-    thread::sleep(Duration::from_secs(1));
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
 
     let region = client.get_region_by_id(region.get_id()).wait().unwrap();
     assert_eq!(region.unwrap().get_id(), region_id);
@@ -469,3 +469,64 @@ fn test_periodical_update() {
 
     panic!("failed, leader should changed");
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_cluster_version() {
+    let server = MockServer::<Service>::new(3);
+    let eps = server.bind_addrs();
+
+    let feature_a = Feature::require(0, 0, 1);
+    let feature_b = Feature::require(5, 0, 0);
+    let feature_c = Feature::require(5, 0, 1);
+
+    let client = new_client(eps, None);
+    let feature_gate = client.feature_gate();
+    assert!(!feature_gate.can_enable(feature_a));
+
+    let emit_heartbeat = || {
+        let req = pdpb::StoreStats::default();
+        block_on(client.store_heartbeat(req)).unwrap();
+    };
+
+    let set_cluster_version = |version: &str| {
+        let h = server.default_handler();
+        h.set_cluster_version(version.to_owned());
+    };
+
+    // Empty version string will be treated as invalid.
+    emit_heartbeat();
+    assert!(!feature_gate.can_enable(feature_a));
+
+    // Explicitly invalid version string.
+    set_cluster_version("invalid-version");
+    emit_heartbeat();
+    assert!(!feature_gate.can_enable(feature_a));
+
+    // Correct version string.
+    set_cluster_version("5.0.0");
+    emit_heartbeat();
+    assert!(feature_gate.can_enable(feature_a));
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
+
+    // Version can't go backwards.
+    set_cluster_version("4.99");
+    emit_heartbeat();
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
+
+    // After reconnect the version should be still accessable.
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
+    client.reconnect().unwrap();
+    assert!(feature_gate.can_enable(feature_b));
+    assert!(!feature_gate.can_enable(feature_c));
+
+    // Version can go forwards.
+    set_cluster_version("5.0.1");
+    emit_heartbeat();
+    assert!(feature_gate.can_enable(feature_c));
+}
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)

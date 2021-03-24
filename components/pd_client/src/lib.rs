@@ -27,8 +27,14 @@ pub mod errors;
 pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
+<<<<<<< HEAD
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
+=======
+pub use self::feature_gate::{Feature, FeatureGate};
+pub use self::util::PdConnector;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
 
 use std::ops::Deref;
 

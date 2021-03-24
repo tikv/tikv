@@ -73,8 +73,8 @@ fn test_pd_client_deadlock() {
     for (name, func) in test_funcs {
         fail::cfg(leader_client_reconnect_fp, "pause").unwrap();
         // Wait for the PD client thread blocking on the fail point.
-        // The RECONNECT_INTERVAL_SEC is 1s so sleeps 2s here.
-        thread::sleep(Duration::from_secs(2));
+        // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+        thread::sleep(Duration::from_millis(200));
 
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -89,11 +89,43 @@ fn test_pd_client_deadlock() {
         handle.join().unwrap();
     }
 
+<<<<<<< HEAD
     // Handle region_heartbeat specially which is a stream-future.
     let poller = Builder::new()
         .pool_size(1)
         .name_prefix(thd_name!("poller"))
         .create();
+=======
+    drop(client);
+    fail::remove(pd_client_reconnect_fp);
+}
+
+// Updating pd leader may be slow, we need to make sure it does not block other
+// RPC in the same gRPC Environment.
+#[test]
+fn test_slow_periodical_update() {
+    let pd_client_reconnect_fp = "pd_client_reconnect";
+    let server = MockServer::new(1);
+    let eps = server.bind_addrs();
+
+    let mut cfg = new_config(eps);
+    let env = Arc::new(EnvBuilder::new().cq_count(1).build());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+    // client1 updates leader frequently (100ms).
+    cfg.update_interval = ReadableDuration(Duration::from_millis(100));
+    let _client1 = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
+
+    // client2 never updates leader in the test.
+    cfg.update_interval = ReadableDuration(Duration::from_secs(100));
+    let client2 = RpcClient::new(&cfg, Some(env), mgr).unwrap();
+
+    fail::cfg(pd_client_reconnect_fp, "pause").unwrap();
+    // Wait for the PD client thread blocking on the fail point.
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
+
+>>>>>>> 0e6f00aeb... pd_client: prevent a large number of reconnections in a short time (#9840)
     let (tx, rx) = mpsc::channel();
     poller
         .spawn(client.handle_region_heartbeat_response(1, move |resp| {
@@ -109,4 +141,32 @@ fn test_pd_client_deadlock() {
         ))
         .forget();
     rx.recv_timeout(Duration::from_millis(3000)).unwrap();
+}
+
+// Reconnection will be speed limited.
+#[test]
+fn test_reconnect_limit() {
+    let pd_client_reconnect_fp = "pd_client_reconnect";
+    let server = MockServer::new(1);
+    let eps = server.bind_addrs();
+
+    let mut cfg = new_config(eps);
+    let env = Arc::new(EnvBuilder::new().cq_count(1).build());
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    cfg.update_interval = ReadableDuration(Duration::from_secs(100));
+    let client = RpcClient::new(&cfg, Some(env), mgr).unwrap();
+
+    // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
+    thread::sleep(Duration::from_millis(200));
+
+    // The first reconnection will succeed, and the last_update will not be updated.
+    fail::cfg(pd_client_reconnect_fp, "return").unwrap();
+    client.reconnect().unwrap();
+    // The subsequent reconnection will be cancelled.
+    for _ in 0..10 {
+        let ret = client.reconnect();
+        assert!(format!("{:?}", ret.unwrap_err()).contains("cancel reconnection"));
+    }
+
+    fail::remove(pd_client_reconnect_fp);
 }
