@@ -761,7 +761,7 @@ fn test_old_value_basic() {
     // Insert value
     let mut m1 = Mutation::default();
     let k1 = b"k1".to_vec();
-    m1.set_op(Op::Put);
+    m1.set_op(Op::Insert);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
     let ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -817,7 +817,16 @@ fn test_old_value_basic() {
     let ts12 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_acquire_pessimistic_lock(1, vec![m7.clone()], k1.clone(), ts9, ts12);
     m7.set_op(Op::Del);
-    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1, ts9, ts12);
+    suite.must_kv_pessimistic_prewrite(1, vec![m7], k1.clone(), ts9, ts12);
+    let ts13 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(1, vec![k1.clone()], ts9, ts13);
+    // Insert value again
+    let mut m8 = Mutation::default();
+    m8.set_op(Op::Insert);
+    m8.key = k1.clone();
+    m8.value = b"v1".to_vec();
+    let ts14 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prewrite(1, vec![m8], k1, ts14);
 
     let mut event_count = 0;
     loop {
@@ -871,9 +880,9 @@ fn test_old_value_basic() {
                             assert_eq!(row.get_old_value(), b"v1");
                             event_count += 1;
                         } else if row.get_type() == EventLogType::Prewrite
-                            && row.get_start_ts() == ts9.into_inner()
+                            && row.get_start_ts() == ts14.into_inner()
                         {
-                            assert_eq!(row.get_old_value(), b"v6");
+                            assert_eq!(row.get_old_value(), b"");
                             event_count += 1;
                         }
                     }

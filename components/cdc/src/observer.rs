@@ -132,7 +132,6 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
                     match mutation_type {
                         MutationType::Insert => {
-                            assert!(!old_value.exists());
                             return None;
                         }
                         MutationType::Put | MutationType::Delete => {

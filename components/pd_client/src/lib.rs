@@ -12,7 +12,7 @@ pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
 pub use self::util::PdConnector;
-pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::ops::Deref;
 
