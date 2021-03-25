@@ -83,8 +83,7 @@ fn test_pd_client_deadlock() {
         });
         // Remove the fail point to let the PD client thread go on.
         fail::remove(leader_client_reconnect_fp);
-        // The REQUEST_RECONNECT_INTERVAL is 1s so waits 1.5s here. Not required for version 5.0 or higher.
-        if rx.recv_timeout(Duration::from_millis(1500)).is_err() {
+        if rx.recv_timeout(Duration::from_millis(500)).is_err() {
             panic!("PdClient::{}() hangs", name);
         }
         handle.join().unwrap();
