@@ -112,7 +112,7 @@ fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.4.3"
-crossbeam = "0.5"
+crossbeam = "0.8"
 derive_more = "0.11.0"
 num = { version = "0.2", default-features = false }
 num-traits = "0.2"
@@ -164,6 +164,7 @@ default-features = false
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
 "raft:0.4.3" = { git = "https://github.com/tikv/raft-rs", rev = "9782199fa6318f94bf0974129664d974b03f8f11" }
+"crossbeam-channel:0.5.0" = { git = "https://github.com/tikv/crossbeam", branch = "tikv-5.0" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }

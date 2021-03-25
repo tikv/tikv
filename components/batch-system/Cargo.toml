@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-crossbeam = "0.7"
+crossbeam = "0.8"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tikv_util = { path = "../tikv_util" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

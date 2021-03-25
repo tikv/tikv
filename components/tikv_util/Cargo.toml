@@ -39,7 +39,7 @@ serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = { version = "0.4", features = [ "secure" ] }
-crossbeam = "0.5"
+crossbeam = "0.8"
 
 [dependencies.prometheus]
 version = "0.4.2"

@@ -1207,6 +1207,8 @@ impl RaftBatchSystem {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
+        // clear cache.
+        self.router = self.router.clone();
         Ok(())
     }
 
