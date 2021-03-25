@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Bound;
 
-use engine_rocks::PerfContext;
 use engine_traits::CfName;
 use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
@@ -12,6 +11,7 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use txn_types::{Key, TimeStamp};
 
+use crate::storage::kv::stats::{StatsCollector, StatsKind};
 use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
@@ -329,36 +329,24 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_first().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_to_last().expect("Invalid Iterator");
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
-        statistics.seek += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek(key);
-        statistics.seek_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        self.iter.seek(key)
     }
 
     #[inline]
@@ -367,35 +355,23 @@ impl<I: Iterator> Cursor<I> {
         key: &Key,
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
-        statistics.seek_for_prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.seek_for_prev(key);
-        statistics.seek_for_prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before;
-        res
+        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
+        self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.next += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.next().expect("Invalid Iterator");
-        statistics.next_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Next, statistics);
+        self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
-        statistics.prev += 1;
         self.mark_unread();
-        let before = PerfContext::get().internal_delete_skipped_count() as usize;
-        let res = self.iter.prev().expect("Invalid Iterator");
-        statistics.prev_tombstone +=
-            PerfContext::get().internal_delete_skipped_count() as usize - before as usize;
-        res
+        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        self.iter.prev().expect("Invalid Iterator")
     }
 
     #[inline]
