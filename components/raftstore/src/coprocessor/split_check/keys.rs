@@ -185,11 +185,9 @@ pub fn get_region_approximate_keys(
     let start = keys::enc_start_key(region);
     let end = keys::enc_end_key(region);
     let range = Range::new(&start, &end);
-    Ok(box_try!(db.get_range_approximate_keys(
-        range,
-        region.get_id(),
-        large_threshold
-    )))
+    Ok(box_try!(
+        db.get_range_approximate_keys(range, large_threshold)
+    ))
 }
 
 pub fn get_region_approximate_keys_cf(
@@ -204,7 +202,6 @@ pub fn get_region_approximate_keys_cf(
     Ok(box_try!(db.get_range_approximate_keys_cf(
         cfname,
         range,
-        region.get_id(),
         large_threshold
     )))
 }
