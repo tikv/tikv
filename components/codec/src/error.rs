@@ -3,8 +3,8 @@
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use thiserror::Error;
 use static_assertions::const_assert;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
