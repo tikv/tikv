@@ -926,19 +926,22 @@ mod tests {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        let res = prewrite_with_cm(
-            &engine,
-            cm.clone(),
-            &mut statistics,
-            mutations,
-            key.to_vec(),
-            20,
-            Some(30),
-        )
-        .unwrap();
-        assert!(res.min_commit_ts.is_zero());
-        assert!(res.one_pc_commit_ts.is_zero());
-        must_locked(&engine, key, 20);
+        // Test the idempotency of prewrite when falling back to 2PC.
+        for _ in 0..2 {
+            let res = prewrite_with_cm(
+                &engine,
+                cm.clone(),
+                &mut statistics,
+                mutations.clone(),
+                key.to_vec(),
+                20,
+                Some(30),
+            )
+            .unwrap();
+            assert!(res.min_commit_ts.is_zero());
+            assert!(res.one_pc_commit_ts.is_zero());
+            must_locked(&engine, key, 20);
+        }
 
         must_rollback(&engine, key, 20);
         let mutations = vec![

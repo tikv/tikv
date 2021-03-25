@@ -1275,7 +1275,7 @@ fn test_prewrite_check_max_commit_ts() {
     assert_eq!(resp.get_min_commit_ts(), 101);
 
     let mut req = PrewriteRequest::default();
-    req.set_context(ctx);
+    req.set_context(ctx.clone());
     req.set_primary_lock(b"k2".to_vec());
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1293,6 +1293,29 @@ fn test_prewrite_check_max_commit_ts() {
         assert_eq!(resp.get_min_commit_ts(), 0);
         assert_eq!(resp.get_one_pc_commit_ts(), 0);
     }
+
+    // 1PC
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx);
+    req.set_primary_lock(b"k3".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k3".to_vec());
+    mutation.set_value(b"v3".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(20);
+    req.set_min_commit_ts(21);
+    req.set_max_commit_ts(50);
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    req.set_try_one_pc(true);
+    // Test the idempotency of prewrite when falling back to 2PC.
+    for _ in 0..2 {
+        let resp = client.kv_prewrite(&req).unwrap();
+        assert_eq!(resp.get_min_commit_ts(), 0);
+        assert_eq!(resp.get_one_pc_commit_ts(), 0);
+    }
+
     // There shouldn't be locks remaining in the lock table.
     assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
 }
