@@ -996,7 +996,7 @@ fn test_atomic_cas_lock_by_latch() {
 
     let latch_acquire_success_fp = "txn_scheduler_acquire_success";
     let latch_acquire_fail_fp = "txn_scheduler_acquire_fail";
-    let pending_cas_fp = "txn_commands_compare_and_set";
+    let pending_cas_fp = "txn_commands_compare_and_swap";
     let wakeup_latch_fp = "txn_scheduler_try_to_wake_up";
     let (cas_tx, cas_rx) = channel();
     let cas_rx = Mutex::new(Some(cas_rx));
@@ -1027,7 +1027,7 @@ fn test_atomic_cas_lock_by_latch() {
     .unwrap();
     let (cb, f1) = paired_future_callback();
     storage
-        .raw_compare_and_set_atomic(
+        .raw_compare_and_swap_atomic(
             ctx.clone(),
             "".to_string(),
             b"key".to_vec(),
@@ -1042,7 +1042,7 @@ fn test_atomic_cas_lock_by_latch() {
     acquire_flag.store(false, Ordering::Release);
     let (cb, f2) = paired_future_callback();
     storage
-        .raw_compare_and_set_atomic(
+        .raw_compare_and_swap_atomic(
             ctx.clone(),
             "".to_string(),
             b"key".to_vec(),
