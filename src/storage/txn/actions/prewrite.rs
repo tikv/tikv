@@ -28,14 +28,22 @@ pub fn prewrite<S: Snapshot>(
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
-    let fail_point = if txn_props.is_pessimistic() {
-        "pessimistic_prewrite"
-    } else {
-        "prewrite"
-    };
-    fail_point!(fail_point, |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &mutation.key, txn_props.start_ts).into()
-    ));
+    #[cfg(feature = "failpoints")]
+    {
+        let fail_point = if txn_props.is_pessimistic() {
+            "pessimistic_prewrite"
+        } else {
+            "prewrite"
+        };
+        fail_point!(fail_point, |err| Err(
+            crate::storage::mvcc::txn::make_txn_error(
+                err,
+                &mutation.key,
+                mutation.txn_props.start_ts
+            )
+            .into()
+        ));
+    }
 
     let lock_status = match txn.reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, is_pessimistic_lock)?,
@@ -252,7 +260,12 @@ impl<'a> PrewriteMutation<'a> {
 
         // Duplicated command. No need to overwrite the lock and data.
         MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-        Ok(LockStatus::Locked(lock.min_commit_ts))
+        let min_commit_ts = if lock.use_async_commit {
+            lock.min_commit_ts
+        } else {
+            TimeStamp::zero()
+        };
+        Ok(LockStatus::Locked(min_commit_ts))
     }
 
     fn check_for_newer_version<S: Snapshot>(&self, txn: &mut MvccTxn<S>) -> Result<Option<Write>> {
