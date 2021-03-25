@@ -161,7 +161,7 @@ mod tests {
                 }
                 Ok((previous_value, succeed))
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
