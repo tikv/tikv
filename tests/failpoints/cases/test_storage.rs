@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc, Mutex};
+use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -998,8 +998,6 @@ fn test_atomic_cas_lock_by_latch() {
     let latch_acquire_fail_fp = "txn_scheduler_acquire_fail";
     let pending_cas_fp = "txn_commands_compare_and_swap";
     let wakeup_latch_fp = "txn_scheduler_try_to_wake_up";
-    let (cas_tx, cas_rx) = channel();
-    let cas_rx = Mutex::new(Some(cas_rx));
     let acquire_flag = Arc::new(AtomicBool::new(false));
     let acquire_flag1 = acquire_flag.clone();
     let acquire_flag_fail = Arc::new(AtomicBool::new(false));
@@ -1007,12 +1005,7 @@ fn test_atomic_cas_lock_by_latch() {
     let wakeup_latch_flag = Arc::new(AtomicBool::new(false));
     let wakeup1 = wakeup_latch_flag.clone();
 
-    fail::cfg_callback(pending_cas_fp, move || {
-        if let Some(rx) = cas_rx.lock().unwrap().take() {
-            rx.recv().unwrap();
-        }
-    })
-    .unwrap();
+    fail::cfg(pending_cas_fp, "pause").unwrap();
     fail::cfg_callback(latch_acquire_success_fp, move || {
         acquire_flag1.store(true, Ordering::Release);
     })
@@ -1054,11 +1047,12 @@ fn test_atomic_cas_lock_by_latch() {
         .unwrap();
     assert!(acquire_flag_fail.load(Ordering::Acquire));
     assert!(!acquire_flag.load(Ordering::Acquire));
-    cas_tx.send(()).unwrap();
+    fail::remove(pending_cas_fp);
     let _ = block_on(f1).unwrap();
-    let (ret, _) = block_on(f2).unwrap().unwrap();
+    let (prev_val, succeed) = block_on(f2).unwrap().unwrap();
     assert!(wakeup_latch_flag.load(Ordering::Acquire));
-    assert!(ret.is_none());
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
     let f = storage.raw_get(ctx, "".to_string(), b"key".to_vec());
     let ret = block_on(f).unwrap().unwrap();
     assert_eq!(b"v2".to_vec(), ret);
