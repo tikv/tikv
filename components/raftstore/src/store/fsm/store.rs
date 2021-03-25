@@ -1324,6 +1324,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
+        // This router will not be accessed again, free all caches.
+        self.router.clear_cache();
         Ok(())
     }
 
