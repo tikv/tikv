@@ -81,6 +81,10 @@ fn test_pd_client_deadlock() {
             func();
             tx.send(()).unwrap();
         });
+        // Only allow to reconnect once for a func.
+        client.handle_reconnect(move || {
+            fail::cfg(leader_client_reconnect_fp, "return").unwrap();
+        });
         // Remove the fail point to let the PD client thread go on.
         fail::remove(leader_client_reconnect_fp);
         if rx.recv_timeout(Duration::from_millis(500)).is_err() {
