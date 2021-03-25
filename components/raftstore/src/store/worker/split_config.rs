@@ -1,8 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
-use serde::*;
-use serde_with::*;
+use serde::{Serialize,Deserialize};
 use std::sync::Arc;
 use tikv_util::config::VersionTrack;
 use tikv_util::info;

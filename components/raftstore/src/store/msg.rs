@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::time::Instant;
 
-use bitflags::*;
+use bitflags::bitflags;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::kvrpcpb::{ExtraOp as TxnExtraOp, LeaderInfo};

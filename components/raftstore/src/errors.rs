@@ -9,8 +9,7 @@ use crossbeam::TrySendError;
 #[cfg(feature = "prost-codec")]
 use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
-use quick_error::*;
-
+use quick_error::quick_error;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use tikv_util::codec;

@@ -25,7 +25,7 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
 use protobuf::Message;
-use quick_error::*;
+use quick_error::quick_error;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use collections::{HashMap, HashMapEntry as Entry};
