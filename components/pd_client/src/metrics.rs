@@ -15,6 +15,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref PD_RECONNECT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_pd_reconnect_total",
+        "Total number of PD reconnections.",
+        &["type"]
+    )
+    .unwrap();
     pub static ref PD_VALIDATE_PEER_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_pd_validate_peer_total",
         "Total number of pd worker validate peer task.",
