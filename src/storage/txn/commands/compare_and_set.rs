@@ -42,7 +42,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSet {
         let (cf, key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let expire_ts = self.ttl.map(|ttl| convert_to_expire_ts(ttl));
+        let expire_ts = self.ttl.map(convert_to_expire_ts);
         let old_value = if expire_ts.is_some() {
             raw::TTLSnapshot::from(snapshot).get_cf(cf, &key)?
         } else {

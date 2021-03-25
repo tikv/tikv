@@ -52,7 +52,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let mut data = vec![];
         let rows = self.mutations.len();
         let (cf, mutations, ctx) = (self.cf, self.mutations, self.ctx);
-        let expire_ts = self.ttl.map(|ttl| convert_to_expire_ts(ttl));
+        let expire_ts = self.ttl.map(convert_to_expire_ts);
         for m in mutations {
             match m {
                 Mutation::Put((key, value)) => {
