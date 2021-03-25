@@ -28,12 +28,12 @@ pub fn prewrite<S: Snapshot>(
 ) -> Result<(TimeStamp, OldValue)> {
     let mut mutation = PrewriteMutation::from_mutation(mutation, secondary_keys, txn_props)?;
 
-    let fail_point = if txn_props.is_pessimistic() {
+    let _fail_point = if txn_props.is_pessimistic() {
         "pessimistic_prewrite"
     } else {
         "prewrite"
     };
-    fail_point!(fail_point, |err| Err(
+    fail_point!(_fail_point, |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &mutation.key, mutation.txn_props.start_ts)
             .into()
     ));
