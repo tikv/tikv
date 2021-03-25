@@ -3,15 +3,15 @@
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use failure::{Backtrace, Fail};
+use thiserror::Error;
 use static_assertions::const_assert;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum ErrorInner {
-    #[fail(display = "Io error: {}", _0)]
-    Io(#[fail(cause)] io::Error),
+    #[error("Io error: {0}")]
+    Io(#[from] io::Error),
 
-    #[fail(display = "Data padding is incorrect")]
+    #[error("Data padding is incorrect")]
     BadPadding,
 }
 
@@ -27,30 +27,11 @@ impl ErrorInner {
     }
 }
 
-impl From<io::Error> for ErrorInner {
-    #[inline]
-    fn from(e: io::Error) -> Self {
-        ErrorInner::Io(e)
-    }
-}
-
 // ====== The code below is to box the error so that the it can be as small as possible ======
 
-impl Fail for Box<ErrorInner> {
-    #[inline]
-    fn cause(&self) -> Option<&dyn Fail> {
-        (**self).cause()
-    }
-
-    #[inline]
-    fn backtrace(&self) -> Option<&Backtrace> {
-        (**self).backtrace()
-    }
-}
-
-#[derive(Debug, Fail)]
-#[fail(display = "{}", _0)]
-pub struct Error(#[fail(cause)] pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl From<ErrorInner> for Error {
     #[inline]
