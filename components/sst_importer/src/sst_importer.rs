@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::fmt;
 use std::io::{self, Write};
 use std::marker::Unpin;
 use std::ops::Bound;
@@ -19,7 +18,7 @@ use kvproto::import_sstpb::*;
 use tokio::time::timeout;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use encryption::{DataKeyManager, EncrypterWriter};
+use encryption::DataKeyManager;
 use engine_rocks::{
     encryption::get_env as get_encrypted_env, file_system::get_env as get_inspected_env,
     RocksSstReader,
@@ -29,13 +28,15 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage::{create_storage, url_of_backend};
-use file_system::{sync_dir, File, OpenOptions};
+use file_system::{File, OpenOptions};
 use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
+use super::import_file::{ImportFile, ImportPath, SSTWriter};
 use super::{Error, Result};
 use crate::metrics::*;
+use crate::raw_sst_writer::RawSSTWriter;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
@@ -434,7 +435,7 @@ impl SSTImporter {
         self.dir.list_ssts()
     }
 
-    pub fn new_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<SSTWriter<E>> {
+    pub fn new_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSSTWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join(&default_meta)?;
@@ -453,7 +454,7 @@ impl SSTImporter {
             .build(write_path.temp.to_str().unwrap())
             .unwrap();
 
-        Ok(SSTWriter::new(
+        Ok(TxnSSTWriter::new(
             default,
             write,
             default_path,
@@ -463,9 +464,29 @@ impl SSTImporter {
             self.key_manager.clone(),
         ))
     }
+
+    pub fn new_raw_writer<E: KvEngine>(
+        &self,
+        db: &E,
+        mut meta: SstMeta,
+    ) -> Result<RawSSTWriter<E>> {
+        meta.set_cf_name(CF_DEFAULT.to_owned());
+        let default_path = self.dir.join(&meta)?;
+        let default = E::SstWriterBuilder::new()
+            .set_db(&db)
+            .set_cf(CF_DEFAULT)
+            .build(default_path.temp.to_str().unwrap())
+            .unwrap();
+        Ok(RawSSTWriter::new(
+            default,
+            default_path,
+            meta,
+            self.key_manager.clone(),
+        ))
+    }
 }
 
-pub struct SSTWriter<E: KvEngine> {
+pub struct TxnSSTWriter<E: KvEngine> {
     default: E::SstWriter,
     default_entries: u64,
     default_path: ImportPath,
@@ -477,7 +498,7 @@ pub struct SSTWriter<E: KvEngine> {
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
-impl<E: KvEngine> SSTWriter<E> {
+impl<E: KvEngine> TxnSSTWriter<E> {
     pub fn new(
         default: E::SstWriter,
         write: E::SstWriter,
@@ -487,7 +508,7 @@ impl<E: KvEngine> SSTWriter<E> {
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
-        SSTWriter {
+        TxnSSTWriter {
             default,
             default_path,
             default_entries: 0,
@@ -498,15 +519,6 @@ impl<E: KvEngine> SSTWriter<E> {
             write_meta,
             key_manager,
         }
-    }
-
-    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
-        let commit_ts = TimeStamp::new(batch.get_commit_ts());
-        for m in batch.get_pairs().iter() {
-            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
-        }
-        Ok(())
     }
 
     fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
@@ -525,8 +537,19 @@ impl<E: KvEngine> SSTWriter<E> {
         self.write_entries += 1;
         Ok(())
     }
+}
 
-    pub fn finish(self) -> Result<Vec<SstMeta>> {
+impl<E: KvEngine> SSTWriter<WriteBatch> for TxnSSTWriter<E> {
+    fn write(&mut self, batch: WriteBatch) -> Result<()> {
+        let commit_ts = TimeStamp::new(batch.get_commit_ts());
+        for m in batch.get_pairs().iter() {
+            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
+            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Vec<SstMeta>> {
         let default_meta = self.default_meta.clone();
         let write_meta = self.write_meta.clone();
         let mut metas = Vec::with_capacity(2);
@@ -535,12 +558,12 @@ impl<E: KvEngine> SSTWriter<E> {
         let (w1, w2, key_manager) = (self.default, self.write, self.key_manager);
         if default_entries > 0 {
             w1.finish()?;
-            Self::save(p1, key_manager.as_deref())?;
+            p1.save(key_manager.as_deref())?;
             metas.push(default_meta);
         }
         if write_entries > 0 {
             w2.finish()?;
-            Self::save(p2, key_manager.as_deref())?;
+            p2.save(key_manager.as_deref())?;
             metas.push(write_meta);
         }
         info!("finish write to sst";
@@ -549,29 +572,7 @@ impl<E: KvEngine> SSTWriter<E> {
         );
         Ok(metas)
     }
-
-    // move file from temp to save.
-    fn save(mut import_path: ImportPath, key_manager: Option<&DataKeyManager>) -> Result<()> {
-        file_system::rename(&import_path.temp, &import_path.save)?;
-        if let Some(key_manager) = key_manager {
-            let temp_str = import_path
-                .temp
-                .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(import_path.temp.clone()))?;
-            let save_str = import_path
-                .save
-                .to_str()
-                .ok_or_else(|| Error::InvalidSSTPath(import_path.save.clone()))?;
-            key_manager.link_file(temp_str, save_str)?;
-            key_manager.delete_file(temp_str)?;
-        }
-        // sync the directory after rename
-        import_path.save.pop();
-        sync_dir(&import_path.save)?;
-        Ok(())
-    }
 }
-
 /// ImportDir is responsible for operating SST files and related path
 /// calculations.
 ///
@@ -696,149 +697,6 @@ impl ImportDir {
             }
         }
         Ok(ssts)
-    }
-}
-
-#[derive(Clone)]
-pub struct ImportPath {
-    // The path of the file that has been uploaded.
-    save: PathBuf,
-    // The path of the file that is being uploaded.
-    temp: PathBuf,
-    // The path of the file that is going to be ingested.
-    clone: PathBuf,
-}
-
-impl fmt::Debug for ImportPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImportPath")
-            .field("save", &self.save)
-            .field("temp", &self.temp)
-            .field("clone", &self.clone)
-            .finish()
-    }
-}
-// `SyncableWrite` extends io::Write with sync
-trait SyncableWrite: io::Write + Send {
-    // sync all metadata to storage
-    fn sync(&self) -> io::Result<()>;
-}
-
-impl SyncableWrite for File {
-    fn sync(&self) -> io::Result<()> {
-        self.sync_all()
-    }
-}
-
-impl SyncableWrite for EncrypterWriter<File> {
-    fn sync(&self) -> io::Result<()> {
-        self.sync_all()
-    }
-}
-
-/// ImportFile is used to handle the writing and verification of SST files.
-pub struct ImportFile {
-    meta: SstMeta,
-    path: ImportPath,
-    file: Option<Box<dyn SyncableWrite>>,
-    digest: crc32fast::Hasher,
-    key_manager: Option<Arc<DataKeyManager>>,
-}
-
-impl ImportFile {
-    fn create(
-        meta: SstMeta,
-        path: ImportPath,
-        key_manager: Option<Arc<DataKeyManager>>,
-    ) -> Result<ImportFile> {
-        let file: Box<dyn SyncableWrite> = if let Some(ref manager) = key_manager {
-            // key manager will truncate existed file, so we should check exist manually.
-            if path.temp.exists() {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("file already exists, {}", path.temp.to_str().unwrap()),
-                )));
-            }
-            Box::new(manager.create_file(&path.temp)?)
-        } else {
-            Box::new(
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path.temp)?,
-            )
-        };
-        Ok(ImportFile {
-            meta,
-            path,
-            file: Some(file),
-            digest: crc32fast::Hasher::new(),
-            key_manager,
-        })
-    }
-
-    pub fn append(&mut self, data: &[u8]) -> Result<()> {
-        self.file.as_mut().unwrap().write_all(data)?;
-        self.digest.update(data);
-        Ok(())
-    }
-
-    pub fn finish(&mut self) -> Result<()> {
-        self.validate()?;
-        // sync is a wrapping for File::sync_all
-        self.file.take().unwrap().sync()?;
-        if self.path.save.exists() {
-            return Err(Error::FileExists(
-                self.path.save.clone(),
-                "finalize SST write cache",
-            ));
-        }
-        file_system::rename(&self.path.temp, &self.path.save)?;
-        if let Some(ref manager) = self.key_manager {
-            let tmp_str = self.path.temp.to_str().unwrap();
-            let save_str = self.path.save.to_str().unwrap();
-            manager.link_file(tmp_str, save_str)?;
-            manager.delete_file(self.path.temp.to_str().unwrap())?;
-        }
-        Ok(())
-    }
-
-    fn cleanup(&mut self) -> Result<()> {
-        self.file.take();
-        if self.path.temp.exists() {
-            if let Some(ref manager) = self.key_manager {
-                manager.delete_file(self.path.temp.to_str().unwrap())?;
-            }
-            file_system::remove_file(&self.path.temp)?;
-        }
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<()> {
-        let crc32 = self.digest.clone().finalize();
-        let expect = self.meta.get_crc32();
-        if crc32 != expect {
-            let reason = format!("crc32 {}, expect {}", crc32, expect);
-            return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
-        }
-        Ok(())
-    }
-}
-
-impl Drop for ImportFile {
-    fn drop(&mut self) {
-        if let Err(e) = self.cleanup() {
-            warn!("cleanup failed"; "file" => ?self, "err" => %e);
-        }
-    }
-}
-
-impl fmt::Debug for ImportFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImportFile")
-            .field("meta", &self.meta)
-            .field("path", &self.path)
-            .finish()
     }
 }
 

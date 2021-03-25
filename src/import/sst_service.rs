@@ -16,6 +16,8 @@ use kvproto::errorpb;
 #[cfg(feature = "prost-codec")]
 use kvproto::import_sstpb::write_request::*;
 #[cfg(feature = "protobuf-codec")]
+use kvproto::import_sstpb::RawWriteRequest_oneof_chunk as RawChunk;
+#[cfg(feature = "protobuf-codec")]
 use kvproto::import_sstpb::WriteRequest_oneof_chunk as Chunk;
 use kvproto::import_sstpb::*;
 
@@ -33,7 +35,7 @@ use tikv_util::time::{Instant, Limiter};
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter};
+use sst_importer::{error_inc, sst_meta_to_path, Config, Error, Result, SSTImporter, SSTWriter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -483,6 +485,62 @@ where
             send_rpc_response!(res, sink, label, timer);
         };
 
+        self.threads.spawn_ok(buf_driver);
+        self.threads.spawn_ok(handle_task);
+    }
+
+    fn raw_write(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        stream: RequestStream<RawWriteRequest>,
+        sink: ClientStreamingSink<RawWriteResponse>,
+    ) {
+        let label = "write";
+        let timer = Instant::now_coarse();
+        let import = self.importer.clone();
+        let engine = self.engine.clone();
+        let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
+        let mut rx = rx.map_err(Error::from);
+        let handle_task = async move {
+            let res = async move {
+                let first_req = rx.try_next().await?;
+                let meta = match first_req {
+                    Some(r) => match r.chunk {
+                        Some(RawChunk::Meta(m)) => m,
+                        _ => return Err(Error::InvalidChunk),
+                    },
+                    _ => return Err(Error::InvalidChunk),
+                };
+
+                let writer = match import.new_raw_writer::<E>(&engine, meta) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        error!("build writer failed {:?}", e);
+                        return Err(Error::InvalidChunk);
+                    }
+                };
+                let writer = rx
+                    .try_fold(writer, |mut writer, req| async move {
+                        let start = Instant::now_coarse();
+                        let batch = match req.chunk {
+                            Some(RawChunk::Batch(b)) => b,
+                            _ => return Err(Error::InvalidChunk),
+                        };
+                        writer.write(batch)?;
+                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                        Ok(writer)
+                    })
+                    .await?;
+
+                writer.finish().map(|metas| {
+                    let mut resp = RawWriteResponse::default();
+                    resp.set_metas(metas.into());
+                    resp
+                })
+            }
+            .await;
+            send_rpc_response!(res, sink, label, timer);
+        };
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }

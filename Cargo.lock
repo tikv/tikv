@@ -2117,7 +2117,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a02e2549f82fe0f35455717fcb0a107ab264c486"
+source = "git+https://github.com/Little-Wallace/kvproto.git?branch=lightning#c3fbc53927e0a60743243b6e89d72f4f7adce026"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -4500,6 +4500,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "prometheus",
+ "protobuf",
  "quick-error",
  "serde",
  "serde_derive",

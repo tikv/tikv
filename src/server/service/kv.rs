@@ -36,6 +36,7 @@ use kvproto::coprocessor::*;
 use kvproto::coprocessor_v2::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
+use kvproto::metapb;
 use kvproto::mpp::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
@@ -123,6 +124,83 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Servi
             enable_req_batch,
             proxy,
         }
+    }
+
+    fn split_region_impl(
+        &mut self,
+        ctx: RpcContext<'_>,
+        region_id: u64,
+        split_keys: Vec<Vec<u8>>,
+        region_epoch: metapb::RegionEpoch,
+        sink: UnarySink<SplitRegionResponse>,
+    ) {
+        let begin_instant = Instant::now_coarse();
+
+        let (cb, f) = paired_future_callback();
+        let req = CasualMessage::SplitRegion {
+            region_epoch,
+            split_keys,
+            callback: Callback::write(cb),
+            source: ctx.peer().into(),
+        };
+
+        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
+            // Retrun region error instead a gRPC error.
+            let mut resp = SplitRegionResponse::default();
+            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
+            ctx.spawn(
+                async move {
+                    sink.success(resp).await?;
+                    ServerResult::Ok(())
+                }
+                .map_err(|_| ())
+                .map(|_| ()),
+            );
+            return;
+        }
+
+        let task = async move {
+            let mut res = f.await?;
+            let mut resp = SplitRegionResponse::default();
+            if res.response.get_header().has_error() {
+                resp.set_region_error(res.response.mut_header().take_error());
+            } else {
+                let admin_resp = res.response.mut_admin_response();
+                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
+                if regions.len() < 2 {
+                    error!(
+                        "invalid split response";
+                        "region_id" => region_id,
+                        "resp" => ?admin_resp
+                    );
+                    resp.mut_region_error().set_message(format!(
+                        "Internal Error: invalid response: {:?}",
+                        admin_resp
+                    ));
+                } else {
+                    if regions.len() == 2 {
+                        resp.set_left(regions[0].clone());
+                        resp.set_right(regions[1].clone());
+                    }
+                    resp.set_regions(regions.into());
+                }
+            }
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .split_region
+                .observe(duration_to_sec(begin_instant.elapsed()));
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            debug!("kv rpc failed";
+                "request" => "split_region",
+                "err" => ?e
+            );
+            GRPC_MSG_FAIL_COUNTER.split_region.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 }
 
@@ -355,6 +433,15 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         .map(|_| ());
 
         ctx.spawn(task);
+    }
+
+    fn raw_checksum(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: RawChecksumRequest,
+        _sink: UnarySink<RawChecksumResponse>,
+    ) {
+        unimplemented!()
     }
 
     fn register_lock_observer(
@@ -699,10 +786,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         sink: UnarySink<SplitRegionResponse>,
     ) {
         forward_unary!(self.proxy, split_region, ctx, req, sink);
-        let begin_instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
-        let (cb, f) = paired_future_callback();
         let mut split_keys = if !req.get_split_key().is_empty() {
             vec![Key::from_raw(req.get_split_key()).into_encoded()]
         } else {
@@ -712,70 +797,37 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
                 .collect()
         };
         split_keys.sort();
-        let req = CasualMessage::SplitRegion {
-            region_epoch: req.take_context().take_region_epoch(),
+        self.split_region_impl(
+            ctx,
+            region_id,
             split_keys,
-            callback: Callback::write(cb),
-            source: ctx.peer().into(),
+            req.take_context().take_region_epoch(),
+            sink,
+        );
+    }
+
+    fn raw_split_region(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: SplitRegionRequest,
+        sink: UnarySink<SplitRegionResponse>,
+    ) {
+        forward_unary!(self.proxy, raw_split_region, ctx, req, sink);
+
+        let region_id = req.get_context().get_region_id();
+        let mut split_keys = if !req.get_split_key().is_empty() {
+            vec![req.get_split_key().to_vec()]
+        } else {
+            req.take_split_keys().into_iter().collect()
         };
-
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = SplitRegionResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
-
-        let task = async move {
-            let mut res = f.await?;
-            let mut resp = SplitRegionResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let admin_resp = res.response.mut_admin_response();
-                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                if regions.len() < 2 {
-                    error!(
-                        "invalid split response";
-                        "region_id" => region_id,
-                        "resp" => ?admin_resp
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        admin_resp
-                    ));
-                } else {
-                    if regions.len() == 2 {
-                        resp.set_left(regions[0].clone());
-                        resp.set_right(regions[1].clone());
-                    }
-                    resp.set_regions(regions.into());
-                }
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .split_region
-                .observe(duration_to_sec(begin_instant.elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            debug!("kv rpc failed";
-                "request" => "split_region",
-                "err" => ?e
-            );
-            GRPC_MSG_FAIL_COUNTER.split_region.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        split_keys.sort();
+        self.split_region_impl(
+            ctx,
+            region_id,
+            split_keys,
+            req.take_context().take_region_epoch(),
+            sink,
+        );
     }
 
     fn read_index(
