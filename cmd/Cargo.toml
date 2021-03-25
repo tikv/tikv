@@ -78,7 +78,7 @@ name = "tikv-ctl"
 backup = { path = "../components/backup", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 chrono = "0.4"
-crossbeam = "0.7"
+crossbeam = "0.8"
 tempfile = "3.0"
 clap = "2.32"
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }

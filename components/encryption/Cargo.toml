@@ -24,7 +24,7 @@ failpoints = ["fail/failpoints"]
 async-trait = "0.1"
 byteorder = "1.2"
 bytes = "0.5"
-crossbeam = "0.7"
+crossbeam = "0.8"
 configuration = { path = "../configuration" }
 crc32fast = "1.2"
 derive_more = "0.99.3"

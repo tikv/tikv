@@ -120,7 +120,7 @@ concurrency_manager = { path = "components/concurrency_manager", default-feature
 configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.7.2"
+crossbeam = "0.8"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
@@ -221,6 +221,7 @@ raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master", defau
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", rev = "65e9df20fbcbcf2409d5ee86a2332ecd04c534f8" }
 openssl-src = { git = "https://github.com/busyjay/openssl-src-rs", branch = "patch-for-m1" }
+crossbeam-channel = { git = "https://github.com/tikv/crossbeam", branch = "tikv-5.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "5125fc1a69496b73b26b3c08b6e8afc3c665a56e" }

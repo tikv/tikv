@@ -283,7 +283,7 @@ version = "0.1.0"
 dependencies = [
  "collections",
  "criterion",
- "crossbeam",
+ "crossbeam 0.8.0",
  "derive_more",
  "file_system",
  "serde",
@@ -498,7 +498,7 @@ dependencies = [
  "bitflags",
  "collections",
  "concurrency_manager",
- "crossbeam",
+ "crossbeam 0.8.0",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -654,7 +654,7 @@ dependencies = [
  "clap",
  "collections",
  "concurrency_manager",
- "crossbeam",
+ "crossbeam 0.8.0",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
@@ -894,8 +894,22 @@ dependencies = [
  "crossbeam-channel 0.4.4",
  "crossbeam-deque 0.7.3",
  "crossbeam-epoch 0.8.2",
- "crossbeam-queue",
+ "crossbeam-queue 0.2.1",
  "crossbeam-utils 0.7.2",
+]
+
+[[package]]
+name = "crossbeam"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd01a6eb3daaafa260f6fc94c3a6c36390abc2080e38e3e34ced87393fb77d80"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-channel 0.5.0",
+ "crossbeam-deque 0.8.0",
+ "crossbeam-epoch 0.9.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-queue 0.3.1",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -911,11 +925,10 @@ dependencies = [
 [[package]]
 name = "crossbeam-channel"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dca26ee1f8d361640700bde38b2c37d8c22b3ce2d360e1fc1c74ea4b0aa7d775"
+source = "git+https://github.com/tikv/crossbeam?branch=tikv-5.0#049c7ebe06fff1c05fe49c4c31da211e5b9ec40e"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.1",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
 ]
 
 [[package]]
@@ -936,8 +949,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94af6efb46fef72616855b036a624cf27ba656ffc9be1b9a3c931cfc7749a9a9"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.2",
- "crossbeam-utils 0.8.1",
+ "crossbeam-epoch 0.9.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -957,14 +970,25 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d60ab4a8dba064f2fbb5aa270c28da5cf4bbd0e72dae1140a6b0353a779dbe00"
+checksum = "2584f639eb95fea8c798496315b297cf81b9b58b6d30ab066a75455333cf4b12"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils 0.8.1",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
- "loom",
+ "memoffset 0.6.1",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#049c7ebe06fff1c05fe49c4c31da211e5b9ec40e"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "lazy_static",
  "memoffset 0.6.1",
  "scopeguard",
 ]
@@ -980,13 +1004,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-skiplist"
-version = "0.0.0"
-source = "git+https://github.com/sticnarf/crossbeam.git?rev=a58551085ce0cfbb07f28c6c0a3071c2d7d4c878#a58551085ce0cfbb07f28c6c0a3071c2d7d4c878"
+name = "crossbeam-queue"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f6cb3c7f5b8e51bc3ebb73a2327ad4abdbd119dc13223f14f961d2f38486756"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch 0.9.2",
- "crossbeam-utils 0.8.1",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.0.0"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#049c7ebe06fff1c05fe49c4c31da211e5b9ec40e"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-epoch 0.9.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
+ "crossbeam-utils 0.8.3 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "scopeguard",
 ]
 
@@ -1003,9 +1037,19 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d96d1e189ef58269ebe5b97953da3274d83a93af647c2ddd6f9dab28cedb8d"
+checksum = "e7e9d99fa91428effe99c5c6d4634cdeba32b8cf784fc428a2a687f61a952c49"
+dependencies = [
+ "autocfg 1.0.0",
+ "cfg-if 1.0.0",
+ "lazy_static",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.3"
+source = "git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0#049c7ebe06fff1c05fe49c4c31da211e5b9ec40e"
 dependencies = [
  "autocfg 1.0.0",
  "cfg-if 1.0.0",
@@ -1194,7 +1238,7 @@ dependencies = [
  "bytes 0.5.3",
  "configuration",
  "crc32fast",
- "crossbeam",
+ "crossbeam 0.8.0",
  "derive_more",
  "engine_traits",
  "error_code",
@@ -1414,7 +1458,7 @@ dependencies = [
  "bcc",
  "collections",
  "crc32fast",
- "crossbeam-utils 0.8.1",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "fs2",
  "lazy_static",
  "libc 0.2.86",
@@ -1668,19 +1712,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
-]
-
-[[package]]
-name = "generator"
-version = "0.6.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9fed24fd1e18827652b4d55652899a1e9da8e54d91624dc3437a5bc3a9f9a9c"
-dependencies = [
- "cc",
- "libc 0.2.86",
- "log",
- "rustversion",
- "winapi 0.3.8",
 ]
 
 [[package]]
@@ -2291,17 +2322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "loom"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d44c73b4636e497b4917eb21c33539efa3816741a2d3ff26c6316f1b529481a4"
-dependencies = [
- "cfg-if 1.0.0",
- "generator",
- "scoped-tls",
-]
-
-[[package]]
 name = "lz4-sys"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2421,7 +2441,7 @@ name = "minitrace"
 version = "0.1.0"
 source = "git+https://github.com/pingcap-incubator/minitrace-rust.git#de69110975b42d898f4ba2d25fb4d334de80edd3"
 dependencies = [
- "crossbeam",
+ "crossbeam 0.7.3",
  "futures 0.1.29",
  "futures 0.3.7",
  "lazy_static",
@@ -3442,7 +3462,7 @@ source = "git+https://github.com/tikv/raft-engine#8452ee10d0b287f12053ba25183a9a
 dependencies = [
  "byteorder",
  "crc32fast",
- "crossbeam",
+ "crossbeam 0.7.3",
  "fxhash",
  "lazy_static",
  "log",
@@ -3495,7 +3515,7 @@ dependencies = [
  "concurrency_manager",
  "configuration",
  "crc32fast",
- "crossbeam",
+ "crossbeam 0.8.0",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -3752,7 +3772,7 @@ checksum = "9ab346ac5921dc62ffa9f89b7a773907511cdfa5490c572ae9be1be33e8afa4a"
 dependencies = [
  "crossbeam-channel 0.5.0",
  "crossbeam-deque 0.8.0",
- "crossbeam-utils 0.8.1",
+ "crossbeam-utils 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "num_cpus",
 ]
@@ -3860,7 +3880,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "crossbeam",
+ "crossbeam 0.8.0",
  "engine_traits",
  "fail",
  "futures 0.3.7",
@@ -4112,12 +4132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustversion"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb5d2a036dc6d2d8fd16fde3498b04306e29bd193bf306a57427019b823d5acd"
-
-[[package]]
 name = "rustyline"
 version = "6.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4165,12 +4179,6 @@ dependencies = [
  "lazy_static",
  "winapi 0.3.8",
 ]
-
-[[package]]
-name = "scoped-tls"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6a9290e3c9cf0f18145ef7ffa62d68ee0bf5fcd651017e586dc7fd5da448c2"
 
 [[package]]
 name = "scopeguard"
@@ -4870,7 +4878,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "crossbeam",
+ "crossbeam 0.8.0",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
@@ -4958,7 +4966,7 @@ dependencies = [
  "criterion",
  "criterion-cpu-time",
  "criterion-perf-events",
- "crossbeam",
+ "crossbeam 0.8.0",
  "encryption",
  "engine_rocks",
  "engine_traits",
@@ -5221,7 +5229,7 @@ dependencies = [
  "configuration",
  "crc32fast",
  "crc64fast",
- "crossbeam",
+ "crossbeam 0.8.0",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -5403,7 +5411,7 @@ dependencies = [
  "collections",
  "configuration",
  "crc32fast",
- "crossbeam",
+ "crossbeam 0.8.0",
  "derive_more",
  "error_code",
  "fail",

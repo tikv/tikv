@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use crossbeam::TrySendError;
+use crossbeam::channel::TrySendError;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use kvproto::metapb;

@@ -4,7 +4,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::{self, Config, StoreAddrResolver};
 use collections::{HashMap, HashSet};
-use crossbeam::queue::{ArrayQueue, PushError};
+use crossbeam::queue::ArrayQueue;
 use engine_rocks::RocksEngine;
 use futures::channel::oneshot;
 use futures::compat::Future01CompatExt;
@@ -74,7 +74,7 @@ impl Queue {
         if self.connected.load(Ordering::Relaxed) {
             match self.buf.push(msg) {
                 Ok(()) => (),
-                Err(PushError(_)) => return Err(DiscardReason::Full),
+                Err(_) => return Err(DiscardReason::Full),
             }
         } else {
             return Err(DiscardReason::Disconnected);
@@ -108,7 +108,7 @@ impl Queue {
 
     /// Gets message from the head of the queue.
     fn try_pop(&self) -> Option<RaftMessage> {
-        self.buf.pop().ok()
+        self.buf.pop()
     }
 
     /// Same as `try_pop` but register interest on readiness when `None` is returned.
@@ -118,15 +118,15 @@ impl Queue {
     #[inline]
     fn pop(&self, ctx: &Context) -> Option<RaftMessage> {
         match self.buf.pop() {
-            Ok(msg) => Some(msg),
-            Err(_) => {
+            Some(msg) => Some(msg),
+            None => {
                 {
                     let mut waker = self.waker.lock().unwrap();
                     *waker = Some(ctx.waker().clone());
                 }
                 match self.buf.pop() {
-                    Ok(msg) => Some(msg),
-                    Err(_) => None,
+                    Some(msg) => Some(msg),
+                    None => None,
                 }
             }
         }

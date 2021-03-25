@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use crossbeam::channel;
 #[cfg(feature = "prost-codec")]
 use kvproto::cdcpb::{
     event::{
@@ -121,11 +122,11 @@ impl Downstream {
         let sink = self.sink.as_ref().unwrap();
         if let Err(e) = sink.try_send(CdcEvent::Event(event)) {
             match e {
-                crossbeam::TrySendError::Disconnected(_) => {
+                channel::TrySendError::Disconnected(_) => {
                     debug!("send event failed, disconnected";
                         "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
                 }
-                crossbeam::TrySendError::Full(_) => {
+                channel::TrySendError::Full(_) => {
                     info!("send event failed, full";
                         "conn_id" => ?self.conn_id, "downstream_id" => ?self.id);
                 }
