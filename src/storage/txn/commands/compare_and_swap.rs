@@ -128,7 +128,7 @@ mod tests {
             None,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
     }
