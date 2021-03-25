@@ -437,8 +437,12 @@ fn test_receive_old_snapshot() {
     fail::remove(peer_2_handle_snap_mgr_gc_fp);
 }
 
+/// Test if snapshot can be genereated when there is a ready with no newly
+/// committed entries.
+/// The failpoint `before_no_ready_gen_snap_task` is used for skipping
+/// the code path that snapshot is generated when there is no ready.
 #[test]
-fn test_snapshot_after_isolation() {
+fn test_gen_snapshot_with_no_committed_entries_ready() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
 
