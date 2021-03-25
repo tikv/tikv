@@ -345,11 +345,10 @@ impl Worker {
     where
         F: FnMut() + Send + 'static,
     {
-        let handle = self.remote.clone();
         let mut interval = GLOBAL_TIMER_HANDLE
             .interval(std::time::Instant::now(), interval)
             .compat();
-        handle.spawn(async move {
+        self.remote.spawn(async move {
             while let Some(Ok(_)) = interval.next().await {
                 func();
             }

@@ -326,10 +326,10 @@ impl IORateLimitConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.other_priority != IOPriority::High {
             warn!(
-                "Occasionally some critical IO operations is tagged as Other, \
-                  e.g. IOs are fired from unmanaged threads, thread-local type \
-                  storage exceeds capacity. To be on the safe side, change it \
-                  from {:?} to {:?}",
+                "Occasionally some critical IO operations is tagged as IOType::Other, \
+                  e.g. IOs are fired from unmanaged threads, thread-local type storage exceeds \
+                  capacity. To be on the safe side, change priority for IOType::Other from \
+                  {:?} to {:?}",
                 self.other_priority,
                 IOPriority::High
             );

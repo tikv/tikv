@@ -870,6 +870,8 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
+        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
+        // dynamically applied later on.
         set_io_rate_limiter(Some(Arc::new(limiter)));
         start_global_io_rate_limiter_daemon(&self.background_worker);
         fetcher
