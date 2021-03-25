@@ -66,6 +66,8 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if mutation.should_not_write {
+        // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
+        txn.concurrency_manager.update_max_ts(txn_props.start_ts);
         let min_commit_ts = if mutation.need_min_commit_ts() {
             // Don't calculate the min_commit_ts according to the concurrency manager's max_ts
             // for a should_not_write mutation because it's not persisted and doesn't change data.
@@ -615,7 +617,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_prewrite_min_commit_ts() {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new(41.into());
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // should_not_write mutations don't write locks or change data so that they needn't ask
@@ -633,7 +635,21 @@ pub mod tests {
         .unwrap();
         assert!(min_ts > props.start_ts);
         assert!(min_ts >= props.min_commit_ts);
-        assert!(min_ts < 42.into());
+        assert!(min_ts < 41.into());
+
+        // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
+        let mut props = optimistic_txn_props(b"k0", 42.into());
+        props.min_commit_ts = 43.into();
+        let mut txn = MvccTxn::new(snapshot.clone(), 42.into(), false, cm.clone());
+        prewrite(
+            &mut txn,
+            &props,
+            Mutation::CheckNotExists(Key::from_raw(b"k0")),
+            &Some(vec![]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(cm.max_ts(), props.start_ts);
 
         // should_write mutations' min_commit_ts must be > max_ts
         let mut txn = MvccTxn::new(snapshot.clone(), 10.into(), false, cm.clone());
