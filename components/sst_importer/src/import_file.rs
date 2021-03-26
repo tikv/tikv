@@ -174,8 +174,3 @@ impl fmt::Debug for ImportFile {
             .finish()
     }
 }
-
-pub trait SSTWriter<M: protobuf::Message> {
-    fn write(&mut self, m: M) -> Result<()>;
-    fn finish(self) -> Result<Vec<SstMeta>>;
-}

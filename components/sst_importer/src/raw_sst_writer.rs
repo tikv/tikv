@@ -5,7 +5,7 @@ use std::sync::Arc;
 use encryption::DataKeyManager;
 use engine_traits::{KvEngine, SstWriter};
 
-use super::import_file::{ImportPath, SSTWriter};
+use super::import_file::ImportPath;
 use super::Result;
 
 pub struct RawSSTWriter<E: KvEngine> {
@@ -43,10 +43,8 @@ impl<E: KvEngine> RawSSTWriter<E> {
         }
         Ok(())
     }
-}
 
-impl<E: KvEngine> SSTWriter<RawWriteBatch> for RawSSTWriter<E> {
-    fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
+    pub fn write(&mut self, mut batch: RawWriteBatch) -> Result<()> {
         let ttl = batch.get_ttl();
         for mut m in batch.take_pairs().into_iter() {
             let mut value = m.take_value();
@@ -56,7 +54,7 @@ impl<E: KvEngine> SSTWriter<RawWriteBatch> for RawSSTWriter<E> {
         Ok(())
     }
 
-    fn finish(self) -> Result<Vec<SstMeta>> {
+    pub fn finish(self) -> Result<Vec<SstMeta>> {
         if self.default_entries > 0 {
             self.default.finish()?;
             self.default_path.save(self.key_manager.as_deref())?;

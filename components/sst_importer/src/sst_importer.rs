@@ -33,7 +33,7 @@ use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
 use tikv_util::time::Limiter;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteRef, WriteType};
 
-use super::import_file::{ImportFile, ImportPath, SSTWriter};
+use super::import_file::{ImportFile, ImportPath};
 use super::{Error, Result};
 use crate::metrics::*;
 use crate::raw_sst_writer::RawSSTWriter;
@@ -521,7 +521,16 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         }
     }
 
-    fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
+    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
+        let commit_ts = TimeStamp::new(batch.get_commit_ts());
+        for m in batch.get_pairs().iter() {
+            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
+            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
+        }
+        Ok(())
+    }
+
+    pub fn put(&mut self, key: &[u8], value: &[u8], op: PairOp) -> Result<()> {
         let k = keys::data_key(key);
         let (_, commit_ts) = Key::split_on_ts_for(key)?;
         let w = match (op, is_short_value(value)) {
@@ -537,19 +546,8 @@ impl<E: KvEngine> TxnSSTWriter<E> {
         self.write_entries += 1;
         Ok(())
     }
-}
 
-impl<E: KvEngine> SSTWriter<WriteBatch> for TxnSSTWriter<E> {
-    fn write(&mut self, batch: WriteBatch) -> Result<()> {
-        let commit_ts = TimeStamp::new(batch.get_commit_ts());
-        for m in batch.get_pairs().iter() {
-            let k = Key::from_raw(m.get_key()).append_ts(commit_ts);
-            self.put(k.as_encoded(), m.get_value(), m.get_op())?;
-        }
-        Ok(())
-    }
-
-    fn finish(self) -> Result<Vec<SstMeta>> {
+    pub fn finish(self) -> Result<Vec<SstMeta>> {
         let default_meta = self.default_meta.clone();
         let write_meta = self.write_meta.clone();
         let mut metas = Vec::with_capacity(2);
@@ -573,6 +571,7 @@ impl<E: KvEngine> SSTWriter<WriteBatch> for TxnSSTWriter<E> {
         Ok(metas)
     }
 }
+
 /// ImportDir is responsible for operating SST files and related path
 /// calculations.
 ///

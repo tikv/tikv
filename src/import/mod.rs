@@ -16,5 +16,5 @@ mod sst_service;
 
 pub use self::sst_service::ImportSSTService;
 pub use sst_importer::Config;
+pub use sst_importer::SSTImporter;
 pub use sst_importer::{Error, Result};
-pub use sst_importer::{SSTImporter, SSTWriter};
