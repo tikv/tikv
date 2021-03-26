@@ -12,7 +12,7 @@ use engine_traits::config as engine_config;
 use engine_traits::PerfLevel;
 use lazy_static::lazy_static;
 use prometheus::register_gauge_vec;
-use serde::{Serialize,Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::{box_err, info, warn};

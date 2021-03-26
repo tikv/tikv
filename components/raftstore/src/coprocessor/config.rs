@@ -5,7 +5,7 @@ use crate::store::SplitCheckTask;
 
 use configuration::{ConfigChange, ConfigManager, Configuration};
 use engine_traits::{config as engine_config, PerfLevel};
-use serde::{Serialize,Deserialize};
+use serde::{Deserialize, Serialize};
 
 use tikv_util::box_err;
 use tikv_util::config::ReadableSize;
