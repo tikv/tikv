@@ -399,8 +399,8 @@ fn test_atomic_basic() {
             0,
         )
         .unwrap();
-    assert!(prev_val.is_none());
-    assert!(!succeed);
+    assert!(succeed);
+    assert_eq!(prev_val, Some(b"v1".to_vec()));
     let value = storage
         .raw_get(ctx.clone(), "default".to_string(), b"k1".to_vec())
         .unwrap();
