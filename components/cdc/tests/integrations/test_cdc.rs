@@ -23,7 +23,7 @@ use test_raftstore::*;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
-use cdc::Task;
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task};
 
 #[test]
 fn test_cdc_basic() {
@@ -1697,5 +1697,49 @@ fn test_cdc_write_rollback_when_no_lock() {
         }
     }
 
+    suite.stop();
+}
+
+#[test]
+fn test_resolved_ts_cluster_upgrading() {
+    let cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    unsafe {
+        cluster
+            .pd_client
+            .feature_gate()
+            .reset_version("4.0.0")
+            .unwrap();
+    }
+    let mut suite = TestSuite::with_cluster(3, cluster);
+
+    let region = suite.cluster.get_region(&[]);
+    let req = suite.new_changedata_request(region.id);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(region.id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(true);
+    if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+        assert!(resolved_ts.regions == vec![region.id]);
+        assert_eq!(CDC_RESOLVED_TS_ADVANCE_METHOD.get(), 0);
+    }
+    suite
+        .cluster
+        .pd_client
+        .feature_gate()
+        .set_version("5.0.0")
+        .unwrap();
+
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            assert!(resolved_ts.regions == vec![region.id]);
+            if CDC_RESOLVED_TS_ADVANCE_METHOD.get() == 1 {
+                break;
+            }
+        }
+    }
+
+    event_feed_wrap.replace(None);
     suite.stop();
 }
