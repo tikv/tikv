@@ -4,7 +4,6 @@ use std::io::Error as IoError;
 use std::{error, result};
 
 use engine_traits::Error as EngineTraitError;
-use failure::Fail;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
@@ -95,23 +94,23 @@ impl From<Error> for ErrorPb {
 }
 
 /// The error type for backup.
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[fail(display = "Other error {}", _0)]
-    Other(Box<dyn error::Error + Sync + Send>),
-    #[fail(display = "RocksDB error {}", _0)]
+    #[error("Other error {0}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    #[error("RocksDB error {0}")]
     Rocks(String),
-    #[fail(display = "IO error {}", _0)]
-    Io(IoError),
-    #[fail(display = "Engine error {}", _0)]
-    Engine(EngineError),
-    #[fail(display = "Engine error {}", _0)]
-    EngineTrait(EngineTraitError),
-    #[fail(display = "Transaction error {}", _0)]
-    Txn(TxnError),
-    #[fail(display = "ClusterID error current {}, request {}", current, request)]
+    #[error("IO error {0}")]
+    Io(#[from] IoError),
+    #[error("Engine error {0}")]
+    Engine(#[from] EngineError),
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
+    #[error("Transaction error {0}")]
+    Txn(#[from] TxnError),
+    #[error("ClusterID error current {current}, request {request}")]
     ClusterID { current: u64, request: u64 },
-    #[fail(display = "Invalid cf {}", cf)]
+    #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
 }
 
@@ -128,12 +127,7 @@ macro_rules! impl_from {
 }
 
 impl_from! {
-    Box<dyn error::Error + Sync + Send> => Other,
     String => Rocks,
-    IoError => Io,
-    EngineError => Engine,
-    EngineTraitError => EngineTrait,
-    TxnError => Txn,
 }
 
 pub type Result<T> = result::Result<T, Error>;

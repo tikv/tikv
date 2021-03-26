@@ -665,7 +665,9 @@ pub mod test_util {
             _ => unreachable!(),
         };
         let ctx = Context::default();
-        engine.write(&ctx, ret.to_be_write).unwrap();
+        if !ret.to_be_write.modifies.is_empty() {
+            engine.write(&ctx, ret.to_be_write).unwrap();
+        }
         Ok(res)
     }
 

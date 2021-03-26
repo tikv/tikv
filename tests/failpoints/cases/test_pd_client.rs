@@ -147,14 +147,7 @@ fn test_slow_periodical_update() {
 #[test]
 fn test_reconnect_limit() {
     let pd_client_reconnect_fp = "pd_client_reconnect";
-    let server = MockServer::new(1);
-    let eps = server.bind_addrs();
-
-    let mut cfg = new_config(eps);
-    let env = Arc::new(EnvBuilder::new().cq_count(1).build());
-    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    cfg.update_interval = ReadableDuration(Duration::from_secs(100));
-    let client = RpcClient::new(&cfg, Some(env), mgr).unwrap();
+    let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
 
     // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
     thread::sleep(Duration::from_millis(200));
