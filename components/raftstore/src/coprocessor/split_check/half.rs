@@ -113,7 +113,7 @@ pub fn get_region_approximate_middle(
     let end_key = keys::enc_end_key(region);
     let range = Range::new(&start_key, &end_key);
     Ok(box_try!(db.get_range_approximate_split_keys(range, 2).map(
-        |mut v| if v.len() == 0 {
+        |mut v| if v.is_empty() {
             None
         } else {
             Some(v.remove(0))
