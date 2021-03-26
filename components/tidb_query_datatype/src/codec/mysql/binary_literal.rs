@@ -60,7 +60,7 @@ impl BinaryLiteral {
     }
 
     /// Parses hexadecimal string literal.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html>
     pub fn from_hex_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!(
@@ -100,7 +100,7 @@ impl BinaryLiteral {
 
     /// Parses bit string.
     /// The string format can be b'val', B'val' or 0bval, val must be 0 or 1.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html>
     pub fn from_bit_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!("invalid empty string for parsing bit type"));

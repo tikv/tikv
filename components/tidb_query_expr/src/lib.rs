@@ -444,7 +444,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_json_fn_meta(),
         // impl_compare_in
-        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<NormalInByHash::<Int>>(),
+        ScalarFuncSig::InInt => compare_in_int_type_by_hash_fn_meta(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<NormalInByHash::<Real>>(),
         ScalarFuncSig::InString => map_compare_in_string_sig(ft)?,
         ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<NormalInByHash::<Decimal>>(),
@@ -497,6 +497,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::JsonKeysSig => json_keys_fn_meta(),
         ScalarFuncSig::JsonKeys2ArgsSig => json_keys_fn_meta(),
+        ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
         ScalarFuncSig::RegexpSig => regexp_fn_meta(),
@@ -623,6 +624,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Lpad => lpad_fn_meta(),
         ScalarFuncSig::LpadUtf8 => lpad_utf8_fn_meta(),
         ScalarFuncSig::Rpad => rpad_fn_meta(),
+        ScalarFuncSig::RpadUtf8 => rpad_utf8_fn_meta(),
         ScalarFuncSig::AddStringAndDuration => add_string_and_duration_fn_meta(),
         ScalarFuncSig::SubStringAndDuration => sub_string_and_duration_fn_meta(),
         ScalarFuncSig::Trim1Arg => trim_1_arg_fn_meta(),

@@ -192,7 +192,7 @@ impl RaftEngine for RocksEngine {
         }
 
         // TODO: disable WAL here.
-        if !Mutable::is_empty(&raft_wb) {
+        if !WriteBatch::is_empty(&raft_wb) {
             raft_wb.write()?;
         }
         Ok((to - from) as usize)
@@ -240,7 +240,7 @@ impl RaftLogBatch for RocksWriteBatch {
     }
 
     fn is_empty(&self) -> bool {
-        Mutable::is_empty(self)
+        WriteBatch::is_empty(self)
     }
 }
 

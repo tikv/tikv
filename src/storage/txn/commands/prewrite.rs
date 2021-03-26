@@ -441,17 +441,19 @@ impl<K: PrewriteKind> Prewriter<K> {
                 secondaries = &self.secondary_keys;
             }
 
+            let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
             let prewrite_result = prewrite(txn, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
-                Ok((ts, old_value)) => {
-                    if (secondaries.is_some() || self.try_one_pc) && final_min_commit_ts < ts {
+                Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
+                    if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
                     if old_value.specified() {
+                        let key = key.append_ts(txn.start_ts);
                         self.old_values.insert(key, (old_value, mutation_type));
                     }
                 }
-                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) => {
+                Err(MvccError(box MvccErrorInner::CommitTsTooLarge { .. })) | Ok((_, _)) => {
                     // fallback to not using async commit or 1pc
                     props.commit_kind = CommitKind::TwoPc;
                     async_commit_pk = None;
@@ -924,19 +926,22 @@ mod tests {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
 
         let mut statistics = Statistics::default();
-        let res = prewrite_with_cm(
-            &engine,
-            cm.clone(),
-            &mut statistics,
-            mutations,
-            key.to_vec(),
-            20,
-            Some(30),
-        )
-        .unwrap();
-        assert!(res.min_commit_ts.is_zero());
-        assert!(res.one_pc_commit_ts.is_zero());
-        must_locked(&engine, key, 20);
+        // Test the idempotency of prewrite when falling back to 2PC.
+        for _ in 0..2 {
+            let res = prewrite_with_cm(
+                &engine,
+                cm.clone(),
+                &mut statistics,
+                mutations.clone(),
+                key.to_vec(),
+                20,
+                Some(30),
+            )
+            .unwrap();
+            assert!(res.min_commit_ts.is_zero());
+            assert!(res.one_pc_commit_ts.is_zero());
+            must_locked(&engine, key, 20);
+        }
 
         must_rollback(&engine, key, 20);
         let mutations = vec![
@@ -1073,25 +1078,28 @@ mod tests {
         ];
         let mut statistics = Statistics::default();
         // calculated_ts > max_commit_ts
-        let cmd = super::Prewrite::new(
-            mutations,
-            k1.to_vec(),
-            20.into(),
-            0,
-            false,
-            2,
-            TimeStamp::default(),
-            40.into(),
-            Some(vec![k2.to_vec()]),
-            false,
-            Context::default(),
-        );
+        // Test the idempotency of prewrite when falling back to 2PC.
+        for _ in 0..2 {
+            let cmd = super::Prewrite::new(
+                mutations.clone(),
+                k1.to_vec(),
+                20.into(),
+                0,
+                false,
+                2,
+                21.into(),
+                40.into(),
+                Some(vec![k2.to_vec()]),
+                false,
+                Context::default(),
+            );
 
-        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
-        assert!(res.min_commit_ts.is_zero());
-        assert!(res.one_pc_commit_ts.is_zero());
-        assert!(!must_locked(&engine, k1, 20).use_async_commit);
-        assert!(!must_locked(&engine, k2, 20).use_async_commit);
+            let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+            assert!(res.min_commit_ts.is_zero());
+            assert!(res.one_pc_commit_ts.is_zero());
+            assert!(!must_locked(&engine, k1, 20).use_async_commit);
+            assert!(!must_locked(&engine, k2, 20).use_async_commit);
+        }
     }
 
     #[test]

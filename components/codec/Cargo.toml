@@ -16,9 +16,9 @@ prost-codec = [
 [dependencies]
 byteorder = "1.2"
 error_code = { path = "../error_code", default-features = false }
-failure = "0.1"
 libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
+thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
