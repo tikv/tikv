@@ -19,7 +19,7 @@ use kvproto::cdcpb::*;
 use kvproto::kvrpcpb::{CheckLeaderRequest, ExtraOp as TxnExtraOp, LeaderInfo};
 use kvproto::metapb::{PeerRole, Region};
 use kvproto::tikvpb::TikvClient;
-use pd_client::PdClient;
+use pd_client::{Feature, PdClient};
 use raftstore::coprocessor::CmdBatch;
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::fsm::{ChangeObserver, ObserveID, StoreMeta};
@@ -46,6 +46,8 @@ use crate::delegate::{Delegate, Downstream, DownstreamID, DownstreamState};
 use crate::metrics::*;
 use crate::service::{CdcEvent, Conn, ConnID, FeatureGate};
 use crate::{CdcObserver, Error, Result};
+
+const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 
 pub enum Deregister {
     Downstream {
@@ -738,20 +740,25 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
 
-            let regions = if hibernate_regions_compatible {
-                Self::region_resolved_ts_store(
-                    regions,
-                    store_meta,
-                    pd_client,
-                    security_mgr,
-                    env,
-                    tikv_clients,
-                    min_ts,
-                )
-                .await
-            } else {
-                Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
-            };
+            let gate = pd_client.feature_gate();
+
+            let regions =
+                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
+                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
+                    Self::region_resolved_ts_store(
+                        regions,
+                        store_meta,
+                        pd_client,
+                        security_mgr,
+                        env,
+                        tikv_clients,
+                        min_ts,
+                    )
+                    .await
+                } else {
+                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
+                    Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
+                };
 
             if !regions.is_empty() {
                 match scheduler.schedule(Task::MinTS { regions, min_ts }) {
