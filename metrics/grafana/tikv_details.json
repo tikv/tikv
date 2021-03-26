@@ -5971,7 +5971,7 @@
           },
           "yaxes": [
             {
-              "format": "ops",
+              "format": "opm",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -6164,34 +6164,9 @@
             "show": true,
             "splitFactor": null
           },
-<<<<<<< HEAD
           "yBucketBound": "upper",
           "yBucketNumber": null,
           "yBucketSize": null
-=======
-          "yaxes": [
-            {
-              "format": "opm",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "opm",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
->>>>>>> 751255f28... pd_client: fix monitoring unit typo (#9900)
         },
         {
           "aliasColors": {},
