@@ -181,11 +181,13 @@ impl RangePropertiesExt for RocksEngine {
             return Ok(vec![]);
         }
 
+        const SAMPLING_THRESHOLD: usize = 20000;
+        const SAMPLE_RATIO: usize = 1000;
         // If there are too many keys, reduce its amount before sorting, or it may take too much
         // time to sort the keys.
-        if keys.len() > 20000 {
+        if keys.len() > SAMPLING_THRESHOLD {
             let len = keys.len();
-            keys = keys.into_iter().step_by(len / 10000).collect();
+            keys = keys.into_iter().step_by(len / SAMPLE_RATIO).collect();
         }
         keys.sort();
 
@@ -200,6 +202,7 @@ impl RangePropertiesExt for RocksEngine {
         for i in 1..parts {
             res.push(keys[(section_len * (i as f64)) as usize].clone())
         }
+        res.dedup();
         Ok(res)
     }
 }
