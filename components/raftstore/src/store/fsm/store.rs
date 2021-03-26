@@ -1217,7 +1217,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             trans,
             coprocessor_host,
             importer,
-            snap_mgr: mgr,
+            snap_mgr: mgr.clone(),
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
@@ -1234,6 +1234,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         } else {
@@ -1243,6 +1244,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 builder,
                 auto_split_controller,
                 concurrency_manager,
+                mgr,
                 pd_client,
             )?;
         }
@@ -1256,6 +1258,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
         pd_client: Arc<C>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
@@ -1317,6 +1320,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg.pd_store_heartbeat_tick_interval.0,
             auto_split_controller,
             concurrency_manager,
+            snap_mgr,
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
@@ -1901,8 +1905,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn store_heartbeat_pd(&mut self) {
         let mut stats = StoreStats::default();
 
-        let used_size = self.ctx.snap_mgr.get_total_snap_size();
-        stats.set_used_size(used_size);
         stats.set_store_id(self.ctx.store_id());
         {
             let meta = self.ctx.store_meta.lock().unwrap();
