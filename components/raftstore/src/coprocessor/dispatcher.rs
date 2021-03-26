@@ -296,27 +296,20 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CoprocessorHost<E>
 where
     E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
-}
-
-impl<E: KvEngine> Default for CoprocessorHost<E>
-where
-    E: 'static,
-{
-    fn default() -> Self {
-        CoprocessorHost {
-            registry: Default::default(),
-        }
-    }
+    pub cfg: Config,
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(ch: C) -> CoprocessorHost<E> {
+    pub fn new<C: CasualRouter<E> + Clone + Send + 'static>(
+        ch: C,
+        cfg: Config,
+    ) -> CoprocessorHost<E> {
         let mut registry = Registry::default();
         registry.register_split_check_observer(
             200,
@@ -332,7 +325,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             400,
             BoxSplitCheckObserver::new(TableCheckObserver::default()),
         );
-        CoprocessorHost { registry }
+        CoprocessorHost { registry, cfg }
     }
 
     /// Call all propose hooks until bypass is set to true.
@@ -425,14 +418,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn new_split_checker_host<'a>(
-        &self,
-        cfg: &'a Config,
+        &'a self,
         region: &Region,
         engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
     ) -> SplitCheckerHost<'a, E> {
-        let mut host = SplitCheckerHost::new(auto_split, cfg);
+        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,

@@ -190,22 +190,6 @@ pub fn get_region_approximate_keys(
     ))
 }
 
-pub fn get_region_approximate_keys_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-    large_threshold: u64,
-) -> Result<u64> {
-    let start = keys::enc_start_key(region);
-    let end = keys::enc_end_key(region);
-    let range = Range::new(&start, &end);
-    Ok(box_try!(db.get_range_approximate_keys_cf(
-        cfname,
-        range,
-        large_threshold
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;

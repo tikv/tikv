@@ -2186,6 +2186,23 @@ where
         if is_leader {
             self.fsm.peer.approximate_size = estimated_size;
             self.fsm.peer.approximate_keys = estimated_keys;
+
+            if let Some(estimated_size) = self.fsm.peer.approximate_size {
+                if estimated_size > self.ctx.coprocessor_host.cfg.region_max_size.0 {
+                    info!(
+                        "trigger split check immediately";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "size" => estimated_size,
+                    );
+                    self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
+                    // trigger a split check immediately when size is still large
+                    self.ctx
+                        .router
+                        .force_send(region_id, PeerMsg::Tick(PeerTicks::SPLIT_REGION_CHECK))
+                        .unwrap();
+                }
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(

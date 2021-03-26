@@ -231,7 +231,7 @@ impl Simulator for ServerCluster {
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
@@ -396,12 +396,8 @@ impl Simulator for ServerCluster {
 
         let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
 
-        let split_check_runner = SplitCheckRunner::new(
-            engines.kv.clone(),
-            router.clone(),
-            coprocessor_host.clone(),
-            cfg.coprocessor,
-        );
+        let split_check_runner =
+            SplitCheckRunner::new(engines.kv.clone(), router.clone(), coprocessor_host.clone());
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
 
         node.start(

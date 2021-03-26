@@ -208,22 +208,6 @@ pub fn get_region_approximate_size(
     ))
 }
 
-pub fn get_region_approximate_size_cf(
-    db: &impl KvEngine,
-    cfname: &str,
-    region: &Region,
-    large_threshold: u64,
-) -> Result<u64> {
-    let start_key = keys::enc_start_key(region);
-    let end_key = keys::enc_end_key(region);
-    let range = Range::new(&start_key, &end_key);
-    Ok(box_try!(db.get_range_approximate_size_cf(
-        cfname,
-        range,
-        large_threshold
-    )))
-}
-
 /// Get region approximate split keys based on default, write and lock cf.
 fn get_approximate_split_keys(
     db: &impl KvEngine,
@@ -739,10 +723,6 @@ pub mod tests {
         let region = make_region(1, vec![], vec![]);
         let size = get_region_approximate_size(&db, &region, 0).unwrap();
         assert_eq!(size, cf_size * LARGE_CFS.len() as u64);
-        for cfname in LARGE_CFS {
-            let size = get_region_approximate_size_cf(&db, cfname, &region, 0).unwrap();
-            assert_eq!(size, cf_size);
-        }
     }
 
     #[test]
