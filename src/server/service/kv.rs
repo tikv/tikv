@@ -370,6 +370,12 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         RawCasRequest,
         RawCasResponse
     );
+    handle_request!(
+        raw_checksum,
+        future_raw_checksum,
+        RawChecksumRequest,
+        RawChecksumResponse
+    );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
@@ -433,15 +439,6 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         .map(|_| ());
 
         ctx.spawn(task);
-    }
-
-    fn raw_checksum(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: RawChecksumRequest,
-        _sink: UnarySink<RawChecksumResponse>,
-    ) {
-        unimplemented!()
     }
 
     fn register_lock_observer(
@@ -1755,6 +1752,34 @@ fn future_raw_compare_and_set<E: Engine, L: LockManager>(
                             resp.set_value(val);
                         }
                     }
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_checksum<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    mut req: RawChecksumRequest,
+) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
+    let f = storage.raw_checksum(
+        req.take_context(),
+        req.get_algorithm(),
+        req.take_ranges().into(),
+    );
+    async move {
+        let v = f.await;
+        let mut resp = RawChecksumResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((checksum, kvs, bytes)) => {
+                    resp.set_checksum(checksum);
+                    resp.set_total_kvs(kvs);
+                    resp.set_total_bytes(bytes);
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
             }

@@ -3,5 +3,5 @@
 mod store;
 mod ttl;
 
-pub use store::RawStore;
+pub use store::{raw_checksum_ranges, RawStore};
 pub use ttl::TTLSnapshot;

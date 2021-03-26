@@ -105,50 +105,43 @@ where
 
 #[macro_export]
 macro_rules! write_stream_chunk {
-    ($import:expr, $engine:expr, $rx:expr, $sink:ident, $E:ident, $writer_ty:ident, $chunk_ty:ident, $resp_ty:ident) => {{
-        let timer = Instant::now_coarse();
-        let label = "write";
-        let handle_task = async move {
-            let res = async move {
-                let first_req = $rx.try_next().await?;
-                let meta = match first_req {
-                    Some(r) => match r.chunk {
-                        Some($chunk_ty::Meta(m)) => m,
-                        _ => return Err(Error::InvalidChunk),
-                    },
+    ($import:expr, $engine:expr, $rx:expr, $writer_ty:ident, $chunk_ty:ident, $resp_ty:ident) => {{
+        async move {
+            let first_req = $rx.try_next().await?;
+            let meta = match first_req {
+                Some(r) => match r.chunk {
+                    Some($chunk_ty::Meta(m)) => m,
                     _ => return Err(Error::InvalidChunk),
-                };
+                },
+                _ => return Err(Error::InvalidChunk),
+            };
 
-                let writer = match $import.$writer_ty::<$E>(&$engine, meta) {
-                    Ok(w) => w,
-                    Err(e) => {
-                        error!("build writer failed {:?}", e);
-                        return Err(Error::InvalidChunk);
-                    }
-                };
-                let writer = $rx
-                    .try_fold(writer, |mut writer, req| async move {
-                        let start = Instant::now_coarse();
-                        let batch = match req.chunk {
-                            Some($chunk_ty::Batch(b)) => b,
-                            _ => return Err(Error::InvalidChunk),
-                        };
-                        writer.write(batch)?;
-                        IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
-                        Ok(writer)
-                    })
-                    .await?;
-
-                writer.finish().map(|metas| {
-                    let mut resp = $resp_ty::default();
-                    resp.set_metas(metas.into());
-                    resp
+            let writer = match $import.$writer_ty(&$engine, meta) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("build writer failed {:?}", e);
+                    return Err(Error::InvalidChunk);
+                }
+            };
+            let writer = $rx
+                .try_fold(writer, |mut writer, req| async move {
+                    let start = Instant::now_coarse();
+                    let batch = match req.chunk {
+                        Some($chunk_ty::Batch(b)) => b,
+                        _ => return Err(Error::InvalidChunk),
+                    };
+                    writer.write(batch)?;
+                    IMPORT_WRITE_CHUNK_DURATION.observe(start.elapsed_secs());
+                    Ok(writer)
                 })
-            }
-            .await;
-            send_rpc_response!(res, $sink, label, timer);
-        };
-        handle_task
+                .await?;
+
+            writer.finish().map(|metas| {
+                let mut resp = $resp_ty::default();
+                resp.set_metas(metas.into());
+                resp
+            })
+        }
     }};
 }
 
@@ -491,17 +484,13 @@ where
         let engine = self.engine.clone();
         let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
         let mut rx = rx.map_err(Error::from);
-
-        let handle_task = write_stream_chunk!(
-            import,
-            engine,
-            rx,
-            sink,
-            E,
-            new_writer,
-            Chunk,
-            WriteResponse
-        );
+        let timer = Instant::now_coarse();
+        let label = "write";
+        let f = write_stream_chunk!(import, engine, rx, new_writer, Chunk, WriteResponse);
+        let handle_task = async move {
+            let res = f.await;
+            send_rpc_response!(res, sink, label, timer);
+        };
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
@@ -516,16 +505,20 @@ where
         let engine = self.engine.clone();
         let (rx, buf_driver) = create_stream_with_buffer(stream, self.cfg.stream_channel_window);
         let mut rx = rx.map_err(Error::from);
-        let handle_task = write_stream_chunk!(
+        let timer = Instant::now_coarse();
+        let label = "raw_write";
+        let f = write_stream_chunk!(
             import,
             engine,
             rx,
-            sink,
-            E,
             new_raw_writer,
             RawChunk,
             RawWriteResponse
         );
+        let handle_task = async move {
+            let res = f.await;
+            send_rpc_response!(res, sink, label, timer);
+        };
         self.threads.spawn_ok(buf_driver);
         self.threads.spawn_ok(handle_task);
     }
