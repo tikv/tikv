@@ -12,7 +12,7 @@ use engine_traits::CfName;
 use txn_types::Mutation;
 
 command! {
-    /// Run Put or Delete for keys which may be changed by `RawCompareAndSet`.
+    /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
     RawAtomicStore:
         cmd_ty => (),
         display => "kv::command::atomic_store {:?}", (ctx),
