@@ -32,6 +32,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
+use kvproto::coprocessor_v2::*;
 use kvproto::errorpb::{Error as RegionError, *};
 use kvproto::kvrpcpb::*;
 use kvproto::mpp::*;
@@ -320,6 +321,19 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
         .map(|_| ());
 
         ctx.spawn(task);
+    }
+
+    fn coprocessor_v2(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: RawCoprocessorRequest,
+        sink: UnarySink<RawCoprocessorResponse>,
+    ) {
+        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED, None);
+        ctx.spawn(
+            sink.fail(e)
+                .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
+        );
     }
 
     fn register_lock_observer(
@@ -1144,6 +1158,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         VerScan, future_ver_scan(storage), ver_scan;
         VerDeleteRange, future_ver_delete_range(storage), ver_delete_range;
         Coprocessor, future_cop(cop, Some(peer.to_string())), coprocessor;
+        CoprocessorV2, future_copr_v2(), coprocessor_v2;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
         Empty, future_handle_empty(), invalid;
@@ -1725,6 +1740,13 @@ fn future_cop<E: Engine>(
 ) -> impl Future<Output = ServerResult<Response>> {
     let ret = cop.parse_and_handle_unary_request(req, peer);
     async move { Ok(ret.await) }
+}
+
+async fn future_copr_v2(_: RawCoprocessorRequest) -> ServerResult<RawCoprocessorResponse> {
+    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+        RpcStatusCode::UNIMPLEMENTED,
+        None,
+    ))))
 }
 
 macro_rules! txn_command_future {
