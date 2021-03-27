@@ -379,7 +379,9 @@ fn test_cdc_scan() {
     mutation.value = v.clone();
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts2);
 
-    let req = suite.new_changedata_request(1);
+    let mut req = suite.new_changedata_request(1);
+    let req_id = 1u64;
+    req.set_request_id(req_id);
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -388,7 +390,9 @@ fn test_cdc_scan() {
         events.extend(receive_event(false).events.into_iter());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
-    match events.remove(0).event.unwrap() {
+    let event = events.remove(0);
+    assert_eq!(event.request_id, req_id);
+    match event.event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -407,7 +411,9 @@ fn test_cdc_scan() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    match events.pop().unwrap().event.unwrap() {
+    let event = events.pop().unwrap();
+    assert_eq!(event.request_id, req_id);
+    match event.event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -431,6 +437,7 @@ fn test_cdc_scan() {
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts3);
 
     let mut req = suite.new_changedata_request(1);
+    req.set_request_id(req_id);
     req.checkpoint_ts = checkpoint_ts.into_inner();
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.replace(Some(resp_rx));
@@ -440,7 +447,9 @@ fn test_cdc_scan() {
         events.extend(receive_event(false).events.to_vec());
     }
     assert_eq!(events.len(), 2, "{:?}", events);
-    match events.remove(0).event.unwrap() {
+    let event = events.remove(0);
+    assert_eq!(event.request_id, req_id);
+    match event.event.unwrap() {
         // Batch size is set to 2.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 2, "{:?}", es);
@@ -462,7 +471,9 @@ fn test_cdc_scan() {
         other => panic!("unknown event {:?}", other),
     }
     assert_eq!(events.len(), 1, "{:?}", events);
-    match events.pop().unwrap().event.unwrap() {
+    let event = events.pop().unwrap();
+    assert_eq!(event.request_id, req_id);
+    match event.event.unwrap() {
         // Then it outputs Initialized event.
         Event_oneof_event::Entries(es) => {
             assert!(es.entries.len() == 1, "{:?}", es);
@@ -591,21 +602,29 @@ fn test_region_split() {
 
     // Make sure resolved ts can be advanced normally.
     let mut counter = 0;
+    let mut counter_1 = 0;
     let mut previous_ts = 0;
+    let mut previous_ts_1 = 0;
     loop {
         // Even if there is no write,
         // resolved ts should be advanced regularly.
         let event = receive_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.ts >= previous_ts);
-            assert!(
-                resolved_ts.regions == vec![region.id, region1.id]
-                    || resolved_ts.regions == vec![region1.id, region.id]
-            );
-            previous_ts = resolved_ts.ts;
-            counter += 1;
+            for region_id in resolved_ts.regions.clone() {
+                if region_id == region.id {
+                    assert!(resolved_ts.ts >= previous_ts);
+                    previous_ts = resolved_ts.ts;
+                    counter += 1;
+                } else if region_id == region1.id {
+                    assert!(resolved_ts.ts >= previous_ts_1);
+                    previous_ts_1 = resolved_ts.ts;
+                    counter_1 += 1;
+                } else {
+                    panic!("unknown region_id {:?}", region_id);
+                }
+            }
         }
-        if counter > 5 {
+        if counter > 5 && counter_1 > 5 {
             break;
         }
     }

@@ -109,6 +109,10 @@ impl Resolver {
 
         self.resolved_ts
     }
+
+    pub fn min_lock_ts(&self) -> Option<TimeStamp> {
+        self.lock_ts_heap.keys().next().cloned()
+    }
 }
 
 #[cfg(test)]
