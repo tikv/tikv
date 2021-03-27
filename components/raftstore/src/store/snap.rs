@@ -356,7 +356,6 @@ pub struct Snap {
 }
 
 pub struct PreHandledSnapshot {
-    pub empty: bool,
     pub index: u64,
     pub term: u64,
     pub inner: engine_store_ffi::RawCppPtr,
@@ -442,13 +441,11 @@ impl Snap {
                 engine_store_ffi::name_to_cf(cf_file.cf),
             ));
         }
-        let empty = sst_views.is_empty();
 
         let res = engine_store_ffi::get_engine_store_server_helper()
             .pre_handle_snapshot(&region, peer_id, sst_views, index, term);
 
         PreHandledSnapshot {
-            empty,
             index,
             term,
             inner: res,
