@@ -5,6 +5,7 @@ use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use tikv_util::box_err;
 
 use crate::encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX};
 use crate::master_key::{Backend, PlaintextBackend};

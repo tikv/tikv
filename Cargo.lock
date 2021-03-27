@@ -195,7 +195,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
- "failure",
  "file_system",
  "futures 0.3.7",
  "futures-util",
@@ -216,6 +215,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "thiserror",
  "tidb_query_common",
  "tikv",
  "tikv_alloc",
@@ -505,7 +505,6 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "failure",
  "futures-io",
  "kvproto",
  "openssl",
@@ -513,6 +512,7 @@ dependencies = [
  "rusoto_core",
  "slog",
  "slog-global",
+ "thiserror",
  "tikv_util",
  "url",
 ]
@@ -598,12 +598,12 @@ dependencies = [
  "byteorder",
  "bytes 0.5.3",
  "error_code",
- "failure",
  "libc",
  "panic_hook",
  "protobuf",
  "rand",
  "static_assertions",
+ "thiserror",
  "tikv_alloc",
 ]
 
@@ -1085,7 +1085,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
- "failure",
  "file_system",
  "futures 0.3.7",
  "futures-util",
@@ -1102,6 +1101,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1285,28 +1285,6 @@ dependencies = [
  "lazy_static",
  "log",
  "rand",
-]
-
-[[package]]
-name = "failure"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8529c2421efa3066a5cbd8063d2244603824daccb6936b079010bb2aa89464b"
-dependencies = [
- "backtrace",
- "failure_derive",
-]
-
-[[package]]
-name = "failure_derive"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "030a733c8287d6213886dd487564ff5c8f6aae10278b3588ed177f9d18f8d231"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
 ]
 
 [[package]]
@@ -1962,11 +1940,10 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "derive_more",
- "failure",
  "kvproto",
  "log_wrappers",
  "panic_hook",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -1974,7 +1951,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a02e2549f82fe0f35455717fcb0a107ab264c486"
+source = "git+https://github.com/pingcap/kvproto.git#6ed99a08e262d8a32d6355dcba91cf99cb92074a"
 dependencies = [
  "futures 0.3.7",
  "grpcio",
@@ -2618,9 +2595,9 @@ checksum = "77af24da69f9d9341038eba93a073b1fdaaa1b788221b00a69bce9e762cb32de"
 
 [[package]]
 name = "openssl-src"
-version = "111.14.0+1.1.1j"
+version = "111.15.0+1.1.1k"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "055b569b5bd7e5462a1700f595c7c7d487691d73b5ce064176af7f9f0cbb80a9"
+checksum = "b1a5f6ae2ac04393b217ea9f700cd04fa9bf3d93fae2872069f3d15d908af70a"
 dependencies = [
  "cc",
 ]
@@ -4254,18 +4231,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "synstructure"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67656ea1dc1b41b1451851562ea232ec2e5a80242139f7e679ceccfb5d61f545"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "unicode-xid",
-]
-
-[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4472,15 +4437,16 @@ dependencies = [
 name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "byteorder",
  "derive_more",
  "error_code",
- "failure",
  "kvproto",
  "lazy_static",
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
+ "thiserror",
  "tikv_util",
  "time 0.1.42",
 ]
@@ -4498,7 +4464,6 @@ dependencies = [
  "codec",
  "collections",
  "error_code",
- "failure",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -4527,10 +4492,10 @@ dependencies = [
 name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "codec",
  "collections",
  "fail",
- "failure",
  "itertools 0.8.2",
  "kvproto",
  "log_wrappers",
@@ -4589,6 +4554,7 @@ dependencies = [
 name = "tikv"
 version = "5.0.0-rc.x"
 dependencies = [
+ "anyhow",
  "async-stream",
  "async-trait",
  "backtrace",
@@ -4603,7 +4569,6 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
- "derive_more",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -4612,7 +4577,6 @@ dependencies = [
  "engine_traits_tests",
  "error_code",
  "fail",
- "failure",
  "file_system",
  "fs2",
  "futures 0.3.7",
@@ -4667,16 +4631,17 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
- "slog_derive",
  "sst_importer",
  "sysinfo",
  "tempfile",
+ "thiserror",
  "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_executors",
  "tidb_query_expr",
  "tikv_alloc",
+ "tikv_kv",
  "tikv_util",
  "time 0.1.42",
  "tipb",
@@ -4738,6 +4703,36 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
  "tikv-jemallocator",
+]
+
+[[package]]
+name = "tikv_kv"
+version = "0.1.0"
+dependencies = [
+ "backtrace",
+ "derive_more",
+ "engine_panic",
+ "engine_rocks",
+ "engine_traits",
+ "error_code",
+ "fail",
+ "futures 0.3.7",
+ "into_other",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "panic_hook",
+ "prometheus",
+ "prometheus-static-metric",
+ "quick-error",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "slog_derive",
+ "tempfile",
+ "tikv_util",
+ "txn_types",
+ "vlog",
 ]
 
 [[package]]
