@@ -1453,8 +1453,18 @@ impl SnapManagerCore {
     fn get_total_snap_size(&self) -> Result<u64> {
         let mut total_size = 0;
         for entry in fs::read_dir(&self.base)? {
-            let entry = entry?;
-            let metadata = entry.metadata()?;
+            macro_rules! ignore_not_found {
+                ($op:expr) => {
+                    match $op {
+                        Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                        Err(e) => return Err(Error::from(e)),
+                        Ok(x) => x,
+                    }
+                };
+            }
+
+            let entry = ignore_not_found!(entry);
+            let metadata = ignore_not_found!(entry.metadata());
             let path = entry.path();
             let path_s = path.to_str().unwrap();
             if !metadata.is_file()
