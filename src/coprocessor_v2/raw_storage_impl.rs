@@ -31,7 +31,7 @@ impl<'a, E: Engine, L: LockManager> RawStorageImpl<'a, E, L> {
 impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn get(&self, key: Key) -> StorageResult<Option<Value>> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
 
         let res = self.storage.raw_get(ctx, cf, key);
 
@@ -41,7 +41,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_get(&self, keys: Vec<Key>) -> StorageResult<Vec<KvPair>> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
 
         let res = self.storage.raw_batch_get(ctx, cf, keys);
 
@@ -56,7 +56,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn scan(&self, key_range: Range<Key>) -> StorageResult<Vec<Value>> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
         let key_only = false;
         let reverse = false;
 
@@ -81,7 +81,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn put(&self, key: Key, value: Value) -> StorageResult<()> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
         let ttl = u64::MAX;
         let (cb, f) = paired_future_callback();
 
@@ -96,7 +96,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> StorageResult<()> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
         let ttl = u64::MAX;
         let (cb, f) = paired_future_callback();
 
@@ -111,7 +111,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn delete(&self, key: Key) -> StorageResult<()> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
 
         let res = self.storage.raw_delete(ctx, cf, key, cb);
@@ -125,7 +125,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn batch_delete(&self, keys: Vec<Key>) -> StorageResult<()> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
         let (cb, f) = paired_future_callback();
 
         let res = self.storage.raw_batch_delete(ctx, cf, keys, cb);
@@ -139,7 +139,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
 
     async fn delete_range(&self, key_range: Range<Key>) -> StorageResult<()> {
         let ctx = self.context.clone();
-        let cf = "".to_string();
+        let cf = engine_traits::CF_DEFAULT.to_string();
 
         let (cb, f) = paired_future_callback();
 
