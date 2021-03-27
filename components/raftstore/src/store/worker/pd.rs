@@ -671,7 +671,6 @@ where
         };
         stats.set_capacity(capacity);
 
-        // already include size of snapshot files
         let used_size = self.snap_mgr.get_total_snap_size().unwrap()
             + store_info.engine.get_engine_used_size().expect("cf");
         stats.set_used_size(used_size);
