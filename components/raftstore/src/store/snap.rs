@@ -1453,21 +1453,16 @@ impl SnapManagerCore {
     fn get_total_snap_size(&self) -> Result<u64> {
         let mut total_size = 0;
         for entry in fs::read_dir(&self.base)? {
-            macro_rules! ignore_not_found {
-                ($op:expr) => {
-                    match $op {
-                        Err(e) if e.kind() == ErrorKind::NotFound => continue,
-                        Err(e) => return Err(Error::from(e)),
-                        Ok(x) => x,
-                    }
-                };
-            }
+            let (entry, metadata) = match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
+                Ok((e, m)) => (e, m),
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
 
-            let entry = ignore_not_found!(entry);
-            let metadata = ignore_not_found!(entry.metadata());
             let path = entry.path();
             let path_s = path.to_str().unwrap();
             if !metadata.is_file()
+                // Ignore cloned files as they are hard links on posix systems.
                 || path_s.ends_with(CLONE_FILE_SUFFIX)
                 || path_s.ends_with(META_FILE_SUFFIX)
             {
