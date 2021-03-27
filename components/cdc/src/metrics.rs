@@ -61,4 +61,9 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_RESOLVED_TS_ADVANCE_METHOD: IntGauge = register_int_gauge!(
+        "tikv_cdc_resolved_ts_advance_method",
+        "Resolved Ts advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
+    )
+    .unwrap();
 }
