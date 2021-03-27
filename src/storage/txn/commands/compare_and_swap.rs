@@ -14,7 +14,7 @@ use txn_types::{Key, Value};
 
 command! {
     /// RawCompareAndSwap checks whether the previous value of the key equals to the given value.
-    /// If they are equal, write the new value. The bool indicates whether the comparison succeed.
+    /// If they are equal, write the new value. The bool indicates whether they are equal.
     /// The previous value is always returned regardless of whether the new value is set.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
