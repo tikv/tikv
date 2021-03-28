@@ -69,7 +69,7 @@ impl Endpoint {
         let raw_storage_api = RawStorageImpl::new(req.get_context(), storage);
         let region = Region {
             id: req.get_context().get_region_id(),
-            start_key: vec![], // TODO
+            start_key: vec![], // TODO how to get start_key and end_key?
             end_key: vec![],   // TODO
             region_epoch: RegionEpoch {
                 conf_ver: req.get_context().get_region_epoch().get_conf_ver(),
@@ -105,6 +105,3 @@ fn extract_region_error(error: &PluginError) -> Option<kvproto::errorpb::Error> 
         PluginError::Other(_) => None,
     }
 }
-
-#[cfg(test)]
-mod tests {}
