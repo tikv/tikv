@@ -12,7 +12,14 @@ pub type RawResponse = Vec<u8>;
 #[derive(Debug)]
 pub enum PluginError {
     StorageError(StorageError),
-    Other(Box<dyn std::error::Error>),
+    /// Field for custom errors that appeared while executing a coprocessor request.
+    ///
+    /// Errors that are reported to the client via `PluginError::Other` should be of a type were
+    /// the client can't handle them. Thus, only the error's message is sent to the client.
+    /// If the error can be handled by the client, coprocessor plugins should perform proper error
+    /// reporting via their `data` fields.
+    /// TODO: Should we even include "non-recoverable user errors"?
+    Other(String),
 }
 
 impl fmt::Display for PluginError {
