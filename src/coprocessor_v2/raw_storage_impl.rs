@@ -8,8 +8,8 @@ use std::ops::Range;
 use tikv_util::future::paired_future_callback;
 
 use crate::storage::errors::extract_kv_pairs;
-use crate::storage::{self, Engine, Storage, lock_manager::LockManager};
 use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use crate::storage::{self, lock_manager::LockManager, Engine, Storage};
 
 /// Implementation of the [`RawStorage`] trait.
 ///
@@ -188,8 +188,8 @@ impl From<storage::errors::Error> for StorageErrorShim {
             storage::errors::ErrorInner::Engine(EngineError(box EngineErrorInner::Timeout(
                 duration,
             ))) => StorageError::Timeout(duration),
-            // Other errors are passed as-is.
-            err => StorageError::Other(Box::new(err)),
+            // Other errors are passed as-is inside their `Result` so we get a `&Result` when using `Any::downcast_ref`.
+            _ => StorageError::Other(Box::new(storage::Result::<()>::Err(error))),
         };
         StorageErrorShim(inner)
     }
@@ -201,3 +201,7 @@ impl From<Canceled> for StorageErrorShim {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+}

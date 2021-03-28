@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
-use std::error::Error;
+use std::any::Any;
 use std::fmt;
 use std::ops::Range;
 use std::time::Duration;
@@ -48,22 +48,18 @@ pub enum StorageError {
     ///
     /// If such an error appears, plugins can run some cleanup code and return early from the
     /// request. The error will be passed to the client and the client might retry the request.
-    /// TODO: we said `Box<dyn Any>`, but isn't `Box<dyn Error>` also fine?
-    Other(Box<dyn Error>),
+    Other(Box<dyn Any>),
 }
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            StorageError::KeyNotInRegion {
-                key,
-                region,
-                start_key,
-                end_key,
-            } => write!(f, "key {:?} not found in region {:?}", key, region.id),
+            StorageError::KeyNotInRegion { key, region, .. } => {
+                write!(f, "key {:?} not found in region {:?}", key, region.id)
+            }
             StorageError::Timeout(d) => write!(f, "timeout after {:?}", d),
             StorageError::Canceled => write!(f, "request canceled"),
-            StorageError::Other(e) => write!(f, "{}", e),
+            StorageError::Other(e) => write!(f, "{:?}", e),
         }
     }
 }
