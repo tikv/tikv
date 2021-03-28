@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coprocessor_plugin_api::{CoprocessorPlugin, PluginError, Region, RegionEpoch};
+use coprocessor_plugin_api::{CoprocessorPlugin, PluginError, RawResponse, Region, RegionEpoch};
 use kvproto::coprocessor_v2 as coprv2pb;
 use std::future::Future;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ impl Endpoint {
     ) -> impl Future<Output = coprv2pb::RawCoprocessorResponse> {
         let mut response = coprv2pb::RawCoprocessorResponse::default();
 
-        let coprocessor_result = self.handle_request_inner(storage, req);
+        let coprocessor_result = self.handle_request_impl(storage, req);
 
         match coprocessor_result {
             Ok(data) => response.set_data(data),
@@ -53,11 +53,11 @@ impl Endpoint {
     }
 
     #[inline]
-    fn handle_request_inner<E: Engine, L: LockManager>(
+    fn handle_request_impl<E: Engine, L: LockManager>(
         &self,
         storage: &Storage<E, L>,
         req: coprv2pb::RawCoprocessorRequest,
-    ) -> Result<Vec<u8>, CoprocessorError> {
+    ) -> Result<RawResponse, CoprocessorError> {
         let plugin =
             self.plugin_registry
                 .get_plugin(&req.copr_name)
