@@ -81,7 +81,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn put(&self, key: Key, value: Value) -> StorageResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
-        let ttl = u64::MAX;
+        let ttl = 0; // unlimited
         let (cb, f) = paired_future_callback();
 
         let res = self.storage.raw_put(ctx, cf, key, value, ttl, cb);
@@ -97,7 +97,7 @@ impl<E: Engine, L: LockManager> RawStorage for RawStorageImpl<'_, E, L> {
     async fn batch_put(&self, kv_pairs: Vec<KvPair>) -> StorageResult<()> {
         let ctx = self.context.clone();
         let cf = engine_traits::CF_DEFAULT.to_string();
-        let ttl = u64::MAX;
+        let ttl = 0; // unlimited
         let (cb, f) = paired_future_callback();
 
         let res = self.storage.raw_batch_put(ctx, cf, kv_pairs, ttl, cb);
