@@ -204,4 +204,117 @@ impl From<Canceled> for StorageErrorShim {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::storage::{lock_manager::DummyLockManager, TestStorageBuilder};
+    use futures::executor::block_on;
+    use kvproto::kvrpcpb::Context;
+
+    #[test]
+    fn test_storage_api() {
+        let storage = TestStorageBuilder::new(DummyLockManager, false)
+            .build()
+            .unwrap();
+        let ctx = Context::new();
+
+        let raw_storage = RawStorageImpl::new(&ctx, &storage);
+
+        let key = vec![0];
+        let val1 = vec![42];
+        let val2 = vec![43];
+
+        // Put
+        block_on(raw_storage.put(key.clone(), val1.clone())).unwrap();
+
+        // Get
+        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        assert_eq!(r, Some(val1.clone()));
+
+        // Put overwrite
+        block_on(raw_storage.put(key.clone(), val2.clone())).unwrap();
+        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        assert_eq!(r, Some(val2.clone()));
+
+        // Delete
+        block_on(raw_storage.delete(key.clone())).unwrap();
+
+        // Get non-existent
+        let r = block_on(raw_storage.get(key.clone())).unwrap();
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn test_storage_api_batch() {
+        let storage = TestStorageBuilder::new(DummyLockManager, false)
+            .build()
+            .unwrap();
+        let ctx = Context::new();
+
+        let raw_storage = RawStorageImpl::new(&ctx, &storage);
+
+        let keys = vec![0, 8, 16].into_iter().map(|k| vec![k]);
+        let values = vec![42, 99, 128].into_iter().map(|v| vec![v]);
+        let non_existing_key = std::iter::once(vec![33]);
+
+        let full_scan = Range {
+            start: vec![u8::MIN],
+            end: vec![u8::MAX],
+        };
+
+        // Batch put
+        block_on(raw_storage.batch_put(keys.clone().zip(values.clone()).collect())).unwrap();
+
+        // Batch get
+        let r = block_on(raw_storage.batch_get(keys.clone().take(2).collect())).unwrap();
+        assert_eq!(
+            r,
+            keys.clone()
+                .take(2)
+                .zip(values.clone())
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+        );
+
+        // Batch get (one non-existent)
+        let r = block_on(
+            raw_storage.batch_get(
+                keys.clone()
+                    .take(1)
+                    .chain(non_existing_key.clone())
+                    .collect(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            r,
+            keys.clone()
+                .take(1)
+                .zip(values.clone())
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+        );
+
+        // Full scan
+        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        assert_eq!(r.len(), 3);
+
+        // Batch delete (one non-existent)
+        block_on(
+            raw_storage.batch_delete(
+                keys.clone()
+                    .take(2)
+                    .chain(non_existing_key.clone())
+                    .collect(),
+            ),
+        )
+        .unwrap();
+        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        assert_eq!(r.len(), 1);
+
+        // Batch put (one overwrite)
+        block_on(raw_storage.batch_put(keys.clone().zip(values.clone()).collect())).unwrap();
+        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        assert_eq!(r.len(), 3);
+
+        // Delete range (all)
+        block_on(raw_storage.delete_range(full_scan.clone())).unwrap();
+        let r = block_on(raw_storage.scan(full_scan.clone())).unwrap();
+        assert_eq!(r.len(), 0);
+    }
 }
