@@ -219,6 +219,8 @@ where
             return Poll::Ready(Ok(()));
         }
 
+        // We set the threshold to flush the inner_sink to 32
+        // TODO find a way to determine the best number
         if this.buf.as_ref().unwrap().len() >= 32 {
             this.prepare_flush();
             ready!(this.inner_sink.poll_flush_unpin(cx))?;
@@ -296,7 +298,6 @@ bitflags::bitflags! {
 
 pub struct Conn {
     id: ConnID,
-    // sink: BatchSender<CdcEvent>,
     sink: RateLimiter<CdcEvent>,
     downstreams: HashMap<u64, DownstreamID>,
     peer: String,
@@ -468,7 +469,7 @@ impl ChangeData for Service {
                     semver::Version::new(0, 0, 0)
                 }
             };
-            debug!("new cdc request"; "request_id" => req_id);
+            debug!("new cdc request"; "peer" => ?peer, "conn_id" => ?conn_id, "request_id" => req_id);
             let downstream = Downstream::new(
                 peer.clone(),
                 region_epoch,
@@ -490,7 +491,7 @@ impl ChangeData for Service {
                         Some(format!("{:?}", e)),
                     ))
                 });
-            debug!("cdc request ready"; "request_id" => req_id);
+            debug!("cdc request ready"; "peer" => ?peer, "conn_id" => ?conn_id, "request_id" => req_id);
             future::ready(ret)
         });
 

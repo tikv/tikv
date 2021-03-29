@@ -734,12 +734,12 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
                 features
             } else {
                 // None means there is no downsteam registered yet.
-                info!("skip sending batched resolved event"; "conn" => ?conn.get_id());
+                debug!("skip sending batched resolved event"; "conn" => ?conn.get_id());
                 continue;
             };
 
             if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                info!("sending batched resolved event"; "conn" => ?conn.get_id());
+                debug!("sending batched resolved event"; "conn" => ?conn.get_id());
                 send_cdc_event(conn, CdcEvent::ResolvedTs(resolved_ts.clone()));
             } else {
                 // Fallback to previous non-batch resolved ts event.
@@ -1214,13 +1214,6 @@ impl Initializer {
             Ok(res) => res,
             Err(e) => Err(Error::Other(Box::new(e))),
         });
-
-        /*tokio::time::timeout(std::time::Duration::from_secs(30), job_handle)
-        .map(|res| match res {
-            Ok(res) => res,
-            Err(elapsed) => Err(Error::Other(Box::new(elapsed))),
-        })
-        .await*/
         job_handle.await
     }
 
@@ -1232,14 +1225,6 @@ impl Initializer {
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
-
-        /*
-        let resolver = if self.build_resolver {
-            Some(Resolver::new(region_id))
-        } else {
-            None
-        };
-        */
 
         /* We need a resolver to track locks encountered in the incremental scan */
         let resolver = Some(Resolver::new(region_id));
@@ -1421,11 +1406,6 @@ impl Initializer {
         if self.build_resolver {
             self.finish_building_resolver(resolver.unwrap(), region, takes);
         }
-        /*
-        if let Some(resolver) = scan_context.lock().unwrap().resolver.take() {
-            self.finish_building_resolver(resolver, region, takes);
-        }
-        */
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 

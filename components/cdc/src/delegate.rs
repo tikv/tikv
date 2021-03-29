@@ -134,7 +134,7 @@ impl Downstream {
         let rate_limiter = self.sink.as_ref().unwrap();
         if let Err(e) = rate_limiter.send_realtime_event(CdcEvent::Event(event)) {
             info!("cdc send event failed";
-                        "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "err" => ?e);
         }
     }
 
@@ -377,18 +377,15 @@ impl Delegate {
         let change_data_err = self.error_event(err);
 
         for d in self.downstreams() {
-            {
-                let mut incremental_state = d.incremental_scan_state.lock().unwrap();
-                match *incremental_state {
-                    IncrementalScanState::Ongoing => {
-                        info!("cdc incremental scan not done, holding off error"; "region_id" => self.region_id);
-                        *incremental_state =
-                            IncrementalScanState::ErrorPending(change_data_err.clone())
-                    }
-                    _ => {
-                        d.state.store(DownstreamState::Stopped);
-                        d.sink_error(change_data_err.clone());
-                    }
+            let mut incremental_state = d.incremental_scan_state.lock().unwrap();
+            match *incremental_state {
+                IncrementalScanState::Ongoing => {
+                    info!("cdc incremental scan not done, holding off error"; "region_id" => self.region_id);
+                    *incremental_state = IncrementalScanState::ErrorPending(change_data_err.clone())
+                }
+                _ => {
+                    d.state.store(DownstreamState::Stopped);
+                    d.sink_error(change_data_err.clone());
                 }
             }
         }
@@ -414,7 +411,6 @@ impl Delegate {
                     }
                 }
             }
-            info!("cdc broadcast"; "request_id" => downstream.req_id, "region_id" => self.region_id);
             if normal_only {
                 downstream.sink_event(event);
             } else {
