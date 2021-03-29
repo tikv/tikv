@@ -4,7 +4,7 @@ use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnap
 use crate::storage::mvcc::{
     default_not_found_error,
     reader::{OverlappedWrite, TxnCommitRecord},
-    seek_for_valid_write, Result,
+    Result,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
@@ -65,8 +65,8 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn get_old_value(&mut self, key: &Key, prev_write: Write) -> Result<OldValue> {
-        self.reader.get_old_value(key, self.start_ts, prev_write)
+    pub fn get_old_value(&mut self, prev_write: Write) -> Result<OldValue> {
+        self.reader.get_old_value(self.start_ts, prev_write)
     }
 
     #[inline(always)]
@@ -448,36 +448,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// Read the old value for key for CDC.
     /// `prev_write` stands for the previous write record of the key
     /// it must be read in the caller and be passed in for optimization
-    fn get_old_value(
-        &mut self,
-        key: &Key,
-        start_ts: TimeStamp,
-        prev_write: Write,
-    ) -> Result<OldValue> {
-        // Precondition:
-        debug_assert!({
-            let cursor = self.write_cursor.as_ref().unwrap();
-            let key_under_cursor =
-                Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
-                    .truncate_ts()
-                    .unwrap();
-            let write_under_cursor =
-                txn_types::WriteRef::parse(cursor.value(&mut self.statistics.write))
-                    .unwrap()
-                    .to_owned();
-            key == &key_under_cursor && prev_write == write_under_cursor
-        });
-
-        if !prev_write.may_have_old_value() {
-            let write_cursor = self.write_cursor.as_mut().unwrap();
-            // Skip the current write record.
-            write_cursor.next(&mut self.statistics.write);
-            let write =
-                seek_for_valid_write(write_cursor, key, start_ts, start_ts, &mut self.statistics)?;
-            Ok(write.into())
-        } else if prev_write
-            .as_ref()
-            .check_gc_fence_as_latest_version(start_ts)
+    fn get_old_value(&mut self, start_ts: TimeStamp, prev_write: Write) -> Result<OldValue> {
+        if prev_write.may_have_old_value()
+            && prev_write
+                .as_ref()
+                .check_gc_fence_as_latest_version(start_ts)
         {
             Ok(OldValue::Value {
                 short_value: prev_write.short_value,
@@ -1660,10 +1635,7 @@ pub mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(4),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
@@ -1687,10 +1659,7 @@ pub mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(3),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
@@ -1755,7 +1724,7 @@ pub mod tests {
                     .unwrap()
                     .1;
                 let result = reader
-                    .get_old_value(&Key::from_raw(b"a"), TimeStamp::new(25), prev_write)
+                    .get_old_value(TimeStamp::new(25), prev_write)
                     .unwrap();
                 assert_eq!(result, case.expected);
             }

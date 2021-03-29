@@ -77,7 +77,7 @@ pub fn prewrite<S: Snapshot>(
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
         if let Some(w) = prev_write {
-            reader.get_old_value(&mutation.key, w)?
+            reader.get_old_value(w)?
         } else {
             OldValue::None
         }
@@ -1047,7 +1047,8 @@ pub mod tests {
             (b"k1" as &[u8], None),
             (b"k2", Some((b"v2" as &[u8], 11))),
             (b"k3", None),
-            (b"k4", Some((b"v4", 13))),
+            // `get_old_value` won't seek before Lock record
+            (b"k4", None),
             (b"k5", None),
             (b"k6", Some((b"v6x", 22))),
             (b"k7", None),
