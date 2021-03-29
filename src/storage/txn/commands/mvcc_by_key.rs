@@ -33,14 +33,9 @@ impl CommandExt for MvccByKey {
 
 impl<S: Snapshot> ReadCommand<S> for MvccByKey {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        let mut reader = MvccReader::new(
-            snapshot,
-            None,
-            !self.ctx.get_not_fill_cache(),
-            self.ctx.get_isolation_level(),
-        );
+        let mut reader = MvccReader::new(snapshot, None, !self.ctx.get_not_fill_cache());
         let result = find_mvcc_infos_by_key(&mut reader, &self.key, TimeStamp::max());
-        statistics.add(reader.get_statistics());
+        statistics.add(&reader.statistics);
         let (lock, writes, values) = result?;
         Ok(ProcessResult::MvccKey {
             mvcc: MvccInfo {
