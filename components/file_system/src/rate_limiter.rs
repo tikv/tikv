@@ -136,18 +136,17 @@ impl IOThroughputEstimator {
 macro_rules! request_imp {
     ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
-        let mut total_wait_secs = 0.0;
-        let amount = loop {
+        loop {
             let cached_bytes_per_refill =
                 $self.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
             if cached_bytes_per_refill == 0 {
-                break $amount;
+                return $amount;
             }
             let amount = std::cmp::min($amount, cached_bytes_per_refill);
             let bytes_through =
                 $self.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
             if bytes_through <= cached_bytes_per_refill {
-                break amount;
+                return amount;
             }
             let now = Instant::now_coarse();
             let (next_refill_time, pending) = {
@@ -160,25 +159,20 @@ macro_rules! request_imp {
                 locked.pending_bytes[priority_idx] += amount;
                 (locked.next_refill_time, locked.pending_bytes[priority_idx])
             };
+            let mut wait = DEFAULT_REFILL_PERIOD * (pending / cached_bytes_per_refill) as u32;
             if next_refill_time > now {
-                let wait = next_refill_time - now;
-                total_wait_secs += wait.as_secs_f64();
-                do_sleep!(wait, $mode);
+                // limit update is infrequent, let's assume it won't happen during the sleep
+                wait += next_refill_time - now;
             } else if next_refill_time + DEFAULT_REFILL_PERIOD / 2 < now {
                 // expected refill delayed too long
                 $self.refill();
             }
-            // our request will be passed to new epoch in `refill()`
-            if pending <= cached_bytes_per_refill {
-                break amount;
-            }
-        };
-        if total_wait_secs > 0.0 {
             RATE_LIMITER_REQUEST_WAIT_DURATION
                 .with_label_values(&[$priority.as_str()])
-                .observe(total_wait_secs);
+                .observe(wait.as_secs_f64());
+            do_sleep!(wait, $mode);
+            return amount;
         }
-        amount
     }};
 }
 
@@ -222,7 +216,8 @@ impl PriorityBasedIORateLimiter {
     fn refill(&self) {
         let mut locked = self.protected.lock();
 
-        if self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed) == 0 {
+        let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
+        if limit == 0 {
             return;
         }
         let now = Instant::now_coarse();
@@ -237,30 +232,33 @@ impl PriorityBasedIORateLimiter {
         debug_assert!(IOPriority::High as usize > IOPriority::Medium as usize);
         for p in &[IOPriority::High, IOPriority::Medium] {
             let pi = *p as usize;
-            let limit = self.bytes_per_epoch[pi].load(Ordering::Relaxed);
+            // reset IO consuption
             let bytes_through = std::cmp::min(
                 self.bytes_through[pi].swap(locked.pending_bytes[pi], Ordering::Release),
                 limit,
             );
+            // pending IOs are inherited across epochs
+            locked.pending_bytes[pi] = locked.pending_bytes[pi].saturating_sub(limit);
+            // calibrate and update IO quotas for next lower priority
             if let Some(bytes_through) =
                 locked.estimated_bytes_through[pi].maybe_update_estimation(bytes_through)
             {
-                self.bytes_per_epoch[pi - 1].store(
-                    if limit > bytes_through {
-                        limit - bytes_through
-                    } else {
-                        1 // a small positive value
-                    },
-                    Ordering::Relaxed,
-                );
+                limit = if limit > bytes_through {
+                    limit - bytes_through
+                } else {
+                    1 // a small positive value
+                };
+                self.bytes_per_epoch[pi - 1].store(limit, Ordering::Relaxed);
+            } else {
+                limit = self.bytes_per_epoch[pi - 1].load(Ordering::Relaxed);
             }
-            locked.pending_bytes[pi] = 0;
         }
         self.bytes_through[IOPriority::Low as usize].store(
             locked.pending_bytes[IOPriority::Low as usize],
             Ordering::Release,
         );
-        locked.pending_bytes[IOPriority::Low as usize] = 0;
+        locked.pending_bytes[IOPriority::Low as usize] =
+            locked.pending_bytes[IOPriority::Low as usize].saturating_sub(limit);
     }
 }
 
