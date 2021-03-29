@@ -54,8 +54,7 @@ lazy_static! {
             "tikv_rate_limiter_request_wait_duration",
             "Bucketed histogram of IO rate limiter request wait duration",
             &["type"],
-            // 0 ~ 1s, 50ms resolution
-            linear_buckets(0.0, 0.05, 22).unwrap()
+            exponential_buckets(0.001, 1.8, 20).unwrap()
         )
         .unwrap();
 }

@@ -3,8 +3,10 @@
 use super::metrics::RATE_LIMITER_REQUEST_WAIT_DURATION;
 use super::{IOOp, IOPriority, IOType};
 
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -134,17 +136,18 @@ impl IOThroughputEstimator {
 macro_rules! request_imp {
     ($self:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         let priority_idx = $priority as usize;
-        loop {
+        let mut total_wait_secs = 0.0;
+        let amount = loop {
             let cached_bytes_per_refill =
                 $self.bytes_per_epoch[priority_idx].load(Ordering::Relaxed);
             if cached_bytes_per_refill == 0 {
-                return $amount;
+                break $amount;
             }
             let amount = std::cmp::min($amount, cached_bytes_per_refill);
             let bytes_through =
                 $self.bytes_through[priority_idx].fetch_add(amount, Ordering::AcqRel) + amount;
             if bytes_through <= cached_bytes_per_refill {
-                return amount;
+                break amount;
             }
             let now = Instant::now_coarse();
             let (next_refill_time, pending) = {
@@ -159,9 +162,7 @@ macro_rules! request_imp {
             };
             if next_refill_time > now {
                 let wait = next_refill_time - now;
-                RATE_LIMITER_REQUEST_WAIT_DURATION
-                    .with_label_values(&[$priority.as_str()])
-                    .observe(wait.as_secs_f64());
+                total_wait_secs += wait.as_secs_f64();
                 do_sleep!(wait, $mode);
             } else if next_refill_time + DEFAULT_REFILL_PERIOD / 2 < now {
                 // expected refill delayed too long
@@ -169,9 +170,15 @@ macro_rules! request_imp {
             }
             // our request will be passed to new epoch in `refill()`
             if pending <= cached_bytes_per_refill {
-                return amount;
+                break amount;
             }
+        };
+        if total_wait_secs > 0.0 {
+            RATE_LIMITER_REQUEST_WAIT_DURATION
+                .with_label_values(&[$priority.as_str()])
+                .observe(total_wait_secs);
         }
+        amount
     }};
 }
 
