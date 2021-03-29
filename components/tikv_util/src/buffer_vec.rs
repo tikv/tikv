@@ -230,8 +230,8 @@ impl BufferVec {
             if len > 0 {
                 let mut data_write_offset = 0;
                 let mut offsets_write_offset = 0;
-                for i in 0..len - 1 {
-                    if retain_arr[i] {
+                for (i, retain) in retain_arr.iter().enumerate().take(len - 1) {
+                    if *retain {
                         let write_len = self.offsets[i + 1] - self.offsets[i];
                         std::ptr::copy(
                             self.data.as_ptr().add(self.offsets[i]),
