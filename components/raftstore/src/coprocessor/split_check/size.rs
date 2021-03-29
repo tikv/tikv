@@ -323,7 +323,7 @@ pub mod tests {
         };
 
         let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // so split key will be [z0006]
         for i in 0..7 {
@@ -451,8 +451,7 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
-            CoprocessorHost::new(tx.clone()),
-            cfg.clone(),
+            CoprocessorHost::new(tx.clone(), cfg.clone()),
         );
 
         for cf in LARGE_CFS {
@@ -484,7 +483,7 @@ pub mod tests {
         let engine = engine_test::kv::new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
         let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx), cfg);
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {

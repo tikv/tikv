@@ -296,13 +296,25 @@ macro_rules! loop_ob {
 }
 
 /// Admin and invoke all coprocessors.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CoprocessorHost<E>
 where
     E: KvEngine + 'static,
 {
     pub registry: Registry<E>,
     pub cfg: Config,
+}
+
+impl<E: KvEngine> Default for CoprocessorHost<E>
+where
+    E: 'static,
+{
+    fn default() -> Self {
+        CoprocessorHost {
+            registry: Default::default(),
+            cfg: Default::default(),
+        }
+    }
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
