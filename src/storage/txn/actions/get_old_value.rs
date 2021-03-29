@@ -1,47 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{seek_for_valid_write, MvccTxn, Result as MvccResult};
+use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use txn_types::{Key, OldValue, Write};
+use txn_types::{OldValue, Write};
 
 /// Read the old value for key for CDC.
 /// `prev_write` stands for the previous write record of the key
 /// it must be read in the caller and be passed in for optimization
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
-    key: &Key,
     prev_write: Option<Write>,
 ) -> MvccResult<OldValue> {
-    // Precondition:
-    debug_assert!(if let Some(w) = &prev_write {
-        let cursor = txn.reader.write_cursor.as_ref().unwrap();
-        let key_under_cursor =
-            Key::from_encoded(cursor.key(&mut txn.reader.statistics.write).to_vec())
-                .truncate_ts()
-                .unwrap();
-        let write_under_cursor =
-            txn_types::WriteRef::parse(cursor.value(&mut txn.reader.statistics.write))
-                .unwrap()
-                .to_owned();
-        key.clone() == key_under_cursor && w.clone() == write_under_cursor
-    } else {
-        true
-    });
     match prev_write {
-        Some(w) if !w.may_have_old_value() => {
-            let write_cursor = txn.reader.write_cursor.as_mut().unwrap();
-            // Skip the current write record.
-            write_cursor.next(&mut txn.reader.statistics.write);
-            let write = seek_for_valid_write(
-                write_cursor,
-                key,
-                txn.start_ts,
-                txn.start_ts,
-                &mut txn.reader.statistics,
-            )?;
-            Ok(write.into())
-        }
-        Some(w) if w.as_ref().check_gc_fence_as_latest_version(txn.start_ts) => {
+        Some(w)
+            if w.may_have_old_value()
+                && w.as_ref().check_gc_fence_as_latest_version(txn.start_ts) =>
+        {
             Ok(OldValue::Value {
                 short_value: w.short_value,
                 start_ts: w.start_ts,
@@ -58,7 +32,7 @@ mod tests {
     use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use txn_types::{TimeStamp, WriteType};
+    use txn_types::{Key, TimeStamp, WriteType};
 
     #[test]
     fn test_get_old_value() {
@@ -79,10 +53,7 @@ mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(4),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
@@ -106,10 +77,7 @@ mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(3),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
@@ -179,7 +147,7 @@ mod tests {
                         .1,
                 )
             };
-            let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
+            let result = get_old_value(&mut txn, prev_write).unwrap();
             assert_eq!(result, case.expected);
         }
     }
