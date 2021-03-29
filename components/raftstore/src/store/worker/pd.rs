@@ -14,14 +14,13 @@ use futures::future::TryFutureExt;
 use tokio::task::spawn_local;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb;
-use kvproto::pdpb;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
     SplitRequest,
 };
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::replication_modepb::RegionReplicationStatus;
+use kvproto::{metapb, pdpb};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -30,9 +29,9 @@ use crate::store::metrics::*;
 use crate::store::util::{is_epoch_stale, ConfChangeKind, KeysInfoFormatter};
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
+use crate::store::{
+    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+};
 
 use crate::engine_store_ffi::get_engine_store_server_helper;
 use collections::HashMap;
@@ -449,6 +448,7 @@ where
     stats_monitor: StatsMonitor<EK>,
 
     concurrency_manager: ConcurrencyManager,
+    snap_mgr: SnapManager,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -467,6 +467,7 @@ where
         store_heartbeat_interval: Duration,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
+        snap_mgr: SnapManager,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
@@ -485,6 +486,7 @@ where
             scheduler,
             stats_monitor,
             concurrency_manager,
+            snap_mgr,
         }
     }
 
