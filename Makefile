@@ -170,7 +170,7 @@ build:
 # enabled (the "sse" option)
 release: export TIKV_PROFILE=release
 release:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES} nortcheck"
 
 # An optimized build that builds an "unportable" RocksDB, which means it is
 # built with -march native. It again includes the "sse" option by default.
@@ -201,7 +201,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
-	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+	@python scripts/check-bins.py --features "${ENABLE_FEATURES} nortcheck" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
 # Build with release flag as if it were for distribution, but without
