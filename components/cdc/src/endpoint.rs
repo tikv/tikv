@@ -279,6 +279,7 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             .threaded_scheduler()
             .thread_name("cdcwkr")
             .core_threads(4)
+            .max_threads(16)
             .enable_time()
             .build()
             .unwrap();
