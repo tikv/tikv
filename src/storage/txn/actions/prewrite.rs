@@ -79,7 +79,7 @@ pub fn prewrite<S: Snapshot>(
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-        get_old_value(txn, &mutation.key, prev_write)?
+        get_old_value(txn, &mutation.key, txn_props.start_ts, prev_write)?
     } else {
         OldValue::Unspecified
     };
