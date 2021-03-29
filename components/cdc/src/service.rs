@@ -322,7 +322,7 @@ impl Conn {
         let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
 
         // Enable this only on 5.0.x
-        let v501_advanced_flow_control = semver::Version::new(5, 0, 0);
+        let v500_advanced_flow_control = semver::Version::new(4, 9999, 0);
 
         match &self.version {
             Some((version, _)) => {
@@ -343,7 +343,7 @@ impl Conn {
                 if v407_bacth_resoled_ts <= ver {
                     features.toggle(FeatureGate::BATCH_RESOLVED_TS);
                 }
-                if v501_advanced_flow_control <= ver {
+                if v500_advanced_flow_control <= ver {
                     features.toggle(FeatureGate::ADVANCED_FLOW_CONTROL);
                 }
                 info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
