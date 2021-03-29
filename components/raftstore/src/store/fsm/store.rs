@@ -1136,12 +1136,7 @@ impl RaftBatchSystem {
             pd_client,
             coprocessor_host: workers.coprocessor_host.clone(),
             importer,
-<<<<<<< HEAD
-            snap_mgr: mgr,
-=======
             snap_mgr: mgr.clone(),
-            global_replication_state,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
             global_stat: GlobalStoreStat::default(),
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
@@ -1154,12 +1149,6 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
-<<<<<<< HEAD
-=======
-                concurrency_manager,
-                mgr,
-                pd_client,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
             )?;
         } else {
             self.start_system::<T, C, RocksWriteBatch>(
@@ -1167,12 +1156,6 @@ impl RaftBatchSystem {
                 region_peers,
                 builder,
                 auto_split_controller,
-<<<<<<< HEAD
-=======
-                concurrency_manager,
-                mgr,
-                pd_client,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
             )?;
         }
         Ok(())
@@ -1188,12 +1171,6 @@ impl RaftBatchSystem {
         region_peers: Vec<SenderFsmPair<RocksEngine>>,
         builder: RaftPollerBuilder<T, C>,
         auto_split_controller: AutoSplitController,
-<<<<<<< HEAD
-=======
-        concurrency_manager: ConcurrencyManager,
-        snap_mgr: SnapManager,
-        pd_client: Arc<C>,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1254,7 +1231,7 @@ impl RaftBatchSystem {
 
         let region_runner = RegionRunner::new(
             engines.kv.c().clone(),
-            snap_mgr,
+            snap_mgr.clone(),
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             workers.coprocessor_host.clone(),
@@ -1283,11 +1260,7 @@ impl RaftBatchSystem {
             workers.pd_worker.scheduler(),
             cfg.pd_store_heartbeat_tick_interval.as_secs(),
             auto_split_controller,
-<<<<<<< HEAD
-=======
-            concurrency_manager,
             snap_mgr,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

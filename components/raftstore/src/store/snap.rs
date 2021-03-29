@@ -1225,13 +1225,9 @@ impl SnapManager {
         self.core.registry.rl().contains_key(key)
     }
 
-<<<<<<< HEAD
-    pub fn get_snapshot_for_building<E: KvEngine>(
-=======
     // NOTE: it calculates snapshot size by scanning the base directory.
     // Don't call it in raftstore thread until the size limitation mechanism gets refactored.
-    pub fn get_snapshot_for_building<EK: KvEngine>(
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
+    pub fn get_snapshot_for_building<E: KvEngine>(
         &self,
         key: &SnapKey,
     ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {

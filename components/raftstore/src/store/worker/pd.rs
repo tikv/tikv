@@ -10,7 +10,6 @@ use std::time::Duration;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-<<<<<<< HEAD
 use engine_rocks::util::*;
 use engine_rocks::RocksEngine;
 use fs2;
@@ -18,16 +17,6 @@ use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
-=======
-use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-    SplitRequest,
-};
-use kvproto::raft_serverpb::RaftMessage;
-use kvproto::replication_modepb::RegionReplicationStatus;
-use kvproto::{metapb, pdpb};
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
@@ -37,15 +26,9 @@ use crate::store::util::is_epoch_stale;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::worker::split_controller::{SplitInfo, TOP_N};
 use crate::store::worker::{AutoSplitController, ReadStats};
-<<<<<<< HEAD
-use crate::store::Callback;
-use crate::store::StoreInfo;
-use crate::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
-=======
 use crate::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+    Callback, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SnapManager, StoreInfo,
 };
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
 
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
@@ -414,16 +397,9 @@ pub struct Runner<T: PdClient> {
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-<<<<<<< HEAD
     scheduler: Scheduler<Task>,
     stats_monitor: StatsMonitor,
-=======
-    scheduler: Scheduler<Task<EK>>,
-    stats_monitor: StatsMonitor<EK>,
-
-    concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
 }
 
 impl<T: PdClient> Runner<T> {
@@ -436,15 +412,9 @@ impl<T: PdClient> Runner<T> {
         scheduler: Scheduler<Task>,
         store_heartbeat_interval: u64,
         auto_split_controller: AutoSplitController,
-<<<<<<< HEAD
+        snap_mgr: SnapManager,
     ) -> Runner<T> {
         let interval = Duration::from_secs(store_heartbeat_interval) / Self::INTERVAL_DIVISOR;
-=======
-        concurrency_manager: ConcurrencyManager,
-        snap_mgr: SnapManager,
-    ) -> Runner<EK, ER, T> {
-        let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
         let mut stats_monitor = StatsMonitor::new(interval, scheduler.clone());
         if let Err(e) = stats_monitor.start(auto_split_controller) {
             error!("failed to start stats collector, error = {:?}", e);
@@ -460,11 +430,7 @@ impl<T: PdClient> Runner<T> {
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
-<<<<<<< HEAD
-=======
-            concurrency_manager,
             snap_mgr,
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
         }
     }
 
@@ -658,14 +624,8 @@ impl<T: PdClient> Runner<T> {
         };
         stats.set_capacity(capacity);
 
-<<<<<<< HEAD
-        // already include size of snapshot files
-        let used_size =
-            stats.get_used_size() + get_engine_used_size(Arc::clone(&store_info.engine));
-=======
         let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info.engine.get_engine_used_size().expect("cf");
->>>>>>> 89acff1eb... calculate snap dir size by scan (#9904)
+            + get_engine_used_size(Arc::clone(&store_info.engine));
         stats.set_used_size(used_size);
 
         let mut available = if capacity > used_size {
