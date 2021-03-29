@@ -2,14 +2,13 @@
 
 use crate::storage::mvcc::{MvccTxn, Result as MvccResult};
 use crate::storage::Snapshot;
-use txn_types::{Key, OldValue, Write};
+use txn_types::{OldValue, Write};
 
 /// Read the old value for key for CDC.
 /// `prev_write` stands for the previous write record of the key
 /// it must be read in the caller and be passed in for optimization
 pub fn get_old_value<S: Snapshot>(
     txn: &mut MvccTxn<S>,
-    _key: &Key,
     prev_write: Option<Write>,
 ) -> MvccResult<OldValue> {
     match prev_write {
@@ -33,7 +32,7 @@ mod tests {
     use crate::storage::{Engine, TestEngineBuilder};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use txn_types::{TimeStamp, WriteType};
+    use txn_types::{Key, TimeStamp, WriteType};
 
     #[test]
     fn test_get_old_value() {
@@ -100,7 +99,7 @@ mod tests {
                         .1,
                 )
             };
-            let result = get_old_value(&mut txn, &Key::from_raw(b"a"), prev_write).unwrap();
+            let result = get_old_value(&mut txn, prev_write).unwrap();
             assert_eq!(result, case.expected);
         }
     }
