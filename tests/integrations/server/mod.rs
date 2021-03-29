@@ -179,7 +179,7 @@ trait MockKvService {
         RawDeleteRangeResponse
     );
     unary_call!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
-    unary_call!(raw_compare_and_set, RawCasRequest, RawCasResponse);
+    unary_call!(raw_compare_and_swap, RawCasRequest, RawCasResponse);
     unary_call!(ver_get, VerGetRequest, VerGetResponse);
     unary_call!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
     unary_call!(ver_mut, VerMutRequest, VerMutResponse);
@@ -301,7 +301,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
         RawDeleteRangeResponse
     );
     unary_call_dispatch!(raw_get_key_ttl, RawGetKeyTtlRequest, RawGetKeyTtlResponse);
-    unary_call_dispatch!(raw_compare_and_set, RawCasRequest, RawCasResponse);
+    unary_call_dispatch!(raw_compare_and_swap, RawCasRequest, RawCasResponse);
     unary_call_dispatch!(ver_get, VerGetRequest, VerGetResponse);
     unary_call_dispatch!(ver_batch_get, VerBatchGetRequest, VerBatchGetResponse);
     unary_call_dispatch!(ver_mut, VerMutRequest, VerMutResponse);

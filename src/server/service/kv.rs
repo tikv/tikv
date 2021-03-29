@@ -365,8 +365,8 @@ impl<T: RaftStoreRouter<RocksEngine> + 'static, E: Engine, L: LockManager> Tikv
     );
 
     handle_request!(
-        raw_compare_and_set,
-        future_raw_compare_and_set,
+        raw_compare_and_swap,
+        future_raw_compare_and_swap,
         RawCasRequest,
         RawCasResponse
     );
@@ -1716,7 +1716,7 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager>(
     }
 }
 
-fn future_raw_compare_and_set<E: Engine, L: LockManager>(
+fn future_raw_compare_and_swap<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
@@ -1726,7 +1726,7 @@ fn future_raw_compare_and_set<E: Engine, L: LockManager>(
     } else {
         Some(req.take_previous_value())
     };
-    let res = storage.raw_compare_and_set_atomic(
+    let res = storage.raw_compare_and_swap_atomic(
         req.take_context(),
         req.take_cf(),
         req.take_key(),
@@ -1745,13 +1745,13 @@ fn future_raw_compare_and_set<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((val, not_equal)) => {
-                    if not_equal {
-                        resp.set_not_equal(true);
-                        if let Some(val) = val {
-                            resp.set_value(val);
-                        }
+                Ok((val, succeed)) => {
+                    if let Some(val) = val {
+                        resp.set_previous_value(val);
+                    } else {
+                        resp.set_previous_not_exist(true);
                     }
+                    resp.set_succeed(succeed);
                 }
                 Err(e) => resp.set_error(format!("{}", e)),
             }
