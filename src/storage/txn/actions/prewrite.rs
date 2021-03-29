@@ -290,9 +290,11 @@ impl<'a> PrewriteMutation<'a> {
                     // TODO: Maybe we need to add a new error for the rolled back case.
                     self.write_conflict_error(&write, commit_ts)?;
                 }
+                let mut prev_write_cursor = txn.reader.write_cursor.take();
                 // Should check it when no lock exists, otherwise it can report error when there is
                 // a lock belonging to a committed transaction which deletes the key.
                 check_data_constraint(txn, self.should_not_exist, &write, commit_ts, &self.key)?;
+                std::mem::swap(&mut txn.reader.write_cursor, &mut prev_write_cursor);
 
                 Ok(Some(write))
             }
