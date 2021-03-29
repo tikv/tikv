@@ -328,17 +328,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
             let task = tctx.task.take().unwrap();
             drop(task_slot);
             self.execute(task);
+            return;
         }
+        fail_point!("txn_scheduler_acquire_fail");
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
     fn try_to_wake_up(&self, cid: u64) {
         if let Some(task) = self.inner.acquire_lock(cid) {
+            fail_point!("txn_scheduler_try_to_wake_up");
             self.execute(task);
         }
     }
@@ -787,7 +791,6 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds: Vec<Command> = vec![
-            commands::ScanLock::new(5.into(), None, 0, Context::default()).into(),
             commands::ResolveLockReadPhase::new(temp_map.clone(), None, Context::default()).into(),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
             commands::MvccByStartTs::new(25.into(), Context::default()).into(),

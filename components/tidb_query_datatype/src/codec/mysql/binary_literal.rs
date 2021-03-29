@@ -45,7 +45,7 @@ impl BinaryLiteral {
     /// byte size will be used as the length of the new BinaryLiteral, with leading bytes filled to zero.
     /// If byte size is -1, the leading zeros in new BinaryLiteral will be trimmed.
     pub fn from_u64(val: u64, byte_size: isize) -> Result<Self> {
-        if byte_size != -1 && (byte_size < 1 || byte_size > 8) {
+        if byte_size != -1 && !(1..=8).contains(&byte_size) {
             return Err(box_err!("invalid byte size: {}", byte_size));
         }
         let bytes = val.to_be_bytes();
@@ -60,7 +60,7 @@ impl BinaryLiteral {
     }
 
     /// Parses hexadecimal string literal.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/hexadecimal-literals.html>
     pub fn from_hex_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!(
@@ -100,7 +100,7 @@ impl BinaryLiteral {
 
     /// Parses bit string.
     /// The string format can be b'val', B'val' or 0bval, val must be 0 or 1.
-    /// See https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html
+    /// See <https://dev.mysql.com/doc/refman/5.7/en/bit-value-literals.html>
     pub fn from_bit_str(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(box_err!("invalid empty string for parsing bit type"));

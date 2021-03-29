@@ -35,13 +35,14 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::Result;
 use crate::config::{log_level_serde, ConfigController};
 use collections::HashMap;
 use configuration::Configuration;
-use pd_client::RpcClient;
+use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
 use security::{self, SecurityConfig};
 use tikv_alloc::error::ProfError;
 use tikv_util::logger::set_log_level;
@@ -525,6 +526,7 @@ where
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
                 warn!("failed to reconnect pd client"; "err" => ?e);
+                thread::sleep(REQUEST_RECONNECT_INTERVAL);
             }
         }
         warn!(
@@ -584,6 +586,7 @@ where
             // refresh the pd leader
             if let Err(e) = pd_client.reconnect() {
                 warn!("failed to reconnect pd client"; "err" => ?e);
+                thread::sleep(REQUEST_RECONNECT_INTERVAL);
             }
         }
         warn!(
@@ -714,16 +717,16 @@ where
                             }
                         }
 
-                        let should_check_cert = match (&method, path.as_ref()) {
-                            (&Method::GET, "/metrics") => false,
-                            (&Method::GET, "/status") => false,
-                            (&Method::GET, "/config") => false,
-                            (&Method::GET, "/debug/pprof/profile") => false,
-                            // 1. POST "/config" will modify the configuration of TiKV.
-                            // 2. GET "/region" will get start key and end key. These keys could be actual
-                            // user data since in some cases the data itself is stored in the key.
-                            _ => true,
-                        };
+                        // 1. POST "/config" will modify the configuration of TiKV.
+                        // 2. GET "/region" will get start key and end key. These keys could be actual
+                        // user data since in some cases the data itself is stored in the key.
+                        let should_check_cert = !matches!(
+                            (&method, path.as_ref()),
+                            (&Method::GET, "/metrics")
+                                | (&Method::GET, "/status")
+                                | (&Method::GET, "/config")
+                                | (&Method::GET, "/debug/pprof/profile")
+                        );
 
                         if should_check_cert && !check_cert(security_config, x509) {
                             return Ok(StatusServer::err_response(
@@ -1014,7 +1017,7 @@ mod tests {
     use crate::server::status_server::{LogLevelRequest, StatusServer};
     use collections::HashSet;
     use configuration::Configuration;
-    use engine_rocks::RocksEngine;
+    use engine_test::kv::KvTestEngine;
     use raftstore::store::transport::CasualRouter;
     use raftstore::store::CasualMessage;
     use security::SecurityConfig;
@@ -1024,8 +1027,8 @@ mod tests {
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<RocksEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<RocksEngine>) -> raftstore::Result<()> {
+    impl CasualRouter<KvTestEngine> for MockRouter {
+        fn send(&self, region_id: u64, _: CasualMessage<KvTestEngine>) -> raftstore::Result<()> {
             Err(raftstore::Error::RegionNotFound(region_id))
         }
     }

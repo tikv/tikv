@@ -222,6 +222,10 @@ fn test_analyze_index() {
     let hist = analyze_resp.get_hist();
     assert_eq!(hist.get_ndv(), 6);
     assert_eq!(hist.get_buckets().len(), 2);
+    assert_eq!(hist.get_buckets()[0].get_count(), 5);
+    assert_eq!(hist.get_buckets()[0].get_ndv(), 3);
+    assert_eq!(hist.get_buckets()[1].get_count(), 9);
+    assert_eq!(hist.get_buckets()[1].get_ndv(), 3);
     let rows = analyze_resp.get_cms().get_rows();
     assert_eq!(rows.len(), 4);
     let sum: u32 = rows.first().unwrap().get_counters().iter().sum();

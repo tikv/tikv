@@ -57,7 +57,7 @@ pub fn inet_aton(addr: BytesRef) -> Result<Option<Int>> {
     }
     let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
     for c in addr.chars() {
-        if c >= '0' && c <= '9' {
+        if ('0'..='9').contains(&c) {
             let digit = c as u64 - '0' as u64;
             byte_result = byte_result * 10 + digit;
             if byte_result > 255 {

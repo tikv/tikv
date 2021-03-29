@@ -38,12 +38,8 @@ impl CbReceivers {
 
     // When fails to propose, only applied callback will be invoked.
     fn assert_err(&self) {
-        assert!(self
-            .applied
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .get_header()
-            .has_error());
+        let resp = self.applied.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(resp.get_header().has_error(), "{:?}", resp);
         self.proposed.try_recv().unwrap_err();
         self.committed.try_recv().unwrap_err();
     }
@@ -300,7 +296,7 @@ fn test_reject_proposal_during_leader_transfer() {
 
     // Don't allow leader transfer succeed if it is actually triggered.
     cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 2)
+        RegionPacketFilter::new(r, 2)
             .msg_type(MessageType::MsgTimeoutNow)
             .direction(Direction::Recv),
     ));
@@ -364,4 +360,47 @@ fn test_accept_proposal_during_conf_change() {
         .get_header()
         .has_error());
     must_get_equal(&cluster.get_engine(2), b"k", b"v");
+}
+
+#[test]
+fn test_not_invoke_committed_cb_when_fail_to_commit() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k", b"v");
+
+    // Partiton the leader and followers to let the leader fails to commit the proposal.
+    cluster.partition(vec![1], vec![2, 3]);
+    let write_req = make_write_req(&mut cluster, b"k1");
+    let (cb, cb_receivers) = make_cb(&write_req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, write_req, cb)
+        .unwrap();
+    // Check the request is proposed but not committed.
+    cb_receivers
+        .committed
+        .recv_timeout(Duration::from_millis(200))
+        .unwrap_err();
+    cb_receivers.proposed.try_recv().unwrap();
+
+    // The election timeout is 250ms by default.
+    let election_timeout = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
+    std::thread::sleep(2 * election_timeout);
+
+    // Make sure a new leader is elected and will discard the previous proposal when partition is
+    // recovered.
+    cluster.must_put(b"k2", b"v");
+    cluster.clear_send_filters();
+
+    let resp = cb_receivers
+        .applied
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    // The committed callback shouldn't be invoked.
+    cb_receivers.committed.try_recv().unwrap_err();
 }

@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use file_system::calc_crc32;
 use futures::executor::block_on;
 use futures::{stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::Builder;
 use test_raftstore::Simulator;
@@ -85,6 +88,52 @@ fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<U
 }
 
 #[test]
+fn test_ingest_reentrant() {
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_reentrant")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    upload_sst(&import, &meta, &data).unwrap();
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx);
+    ingest.set_sst(meta.clone());
+
+    // Don't delete ingested sst file or we cannot find sst file in next ingest.
+    fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
+
+    let node_id = *cluster.sim.rl().get_node_ids().iter().next().unwrap();
+    // Use sst save path to track the sst file checksum.
+    let save_path = cluster
+        .sim
+        .rl()
+        .importers
+        .get(&node_id)
+        .unwrap()
+        .get_path(&meta);
+
+    let checksum1 = calc_crc32(save_path.clone()).unwrap();
+    // Do ingest and it will ingest successs.
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+
+    let checksum2 = calc_crc32(save_path).unwrap();
+    // Checksums are different because ingest changed global seqno in sst file.
+    assert_ne!(checksum1, checksum2);
+    // Do ingest again and it can be reentrant
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+}
+
+#[test]
 fn test_ingest_key_manager_delete_file_failed() {
     // test with tde
     let (_tmp_key_dir, cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client_tde();
@@ -140,6 +189,52 @@ fn test_ingest_key_manager_delete_file_failed() {
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
     ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+}
+
+#[test]
+fn test_ingest_file_twice_and_conflict() {
+    // test with tde
+    let (_tmp_key_dir, _cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client_tde();
+
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_file_twice_and_conflict")
+        .tempdir()
+        .unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    upload_sst(&import, &meta, &data).unwrap();
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx);
+    ingest.set_sst(meta);
+
+    let latch_fp = "import::sst_service::ingest";
+    let (tx1, rx1) = channel();
+    let (tx2, rx2) = channel();
+    let tx1 = Arc::new(Mutex::new(tx1));
+    let rx2 = Arc::new(Mutex::new(rx2));
+    fail::cfg_callback(latch_fp, move || {
+        tx1.lock().unwrap().send(()).unwrap();
+        rx2.lock().unwrap().recv().unwrap();
+    })
+    .unwrap();
+    let resp_recv = import.ingest_async(&ingest).unwrap();
+
+    // Make sure the before request has acquired lock.
+    rx1.recv().unwrap();
+
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(resp.has_error());
+    assert_eq!("ingest file conflict", resp.get_error().get_message());
+    tx2.send(()).unwrap();
+    let resp = block_on(resp_recv).unwrap();
+    assert!(!resp.has_error());
+
+    fail::remove(latch_fp);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
 }

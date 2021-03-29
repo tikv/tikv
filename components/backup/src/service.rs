@@ -1,12 +1,11 @@
 use std::sync::atomic::*;
-use std::sync::Arc;
 
 use futures::channel::mpsc;
 use futures::{FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::backup::*;
-use security::{check_common_name, SecurityManager};
 use tikv_util::worker::*;
+use tikv_util::{error, info};
 
 use super::Task;
 
@@ -14,16 +13,12 @@ use super::Task;
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    security_mgr: Arc<SecurityManager>,
 }
 
 impl Service {
     /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, security_mgr: Arc<SecurityManager>) -> Service {
-        Service {
-            scheduler,
-            security_mgr,
-        }
+    pub fn new(scheduler: Scheduler<Task>) -> Service {
+        Service { scheduler }
     }
 }
 
@@ -34,9 +29,6 @@ impl Backup for Service {
         req: BackupRequest,
         mut sink: ServerStreamingSink<BackupResponse>,
     ) {
-        if !check_common_name(self.security_mgr.cert_allowed_cn(), &ctx) {
-            return;
-        }
         let mut cancel = None;
         // TODO: make it a bounded channel.
         let (tx, rx) = mpsc::unbounded();
@@ -93,16 +85,14 @@ mod tests {
     use super::*;
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
-    use security::*;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
-        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::new(scheduler, security_mgr);
+        let backup_service = super::Service::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

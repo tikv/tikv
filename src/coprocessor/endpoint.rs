@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{borrow::Cow, time::Duration};
 
 use async_stream::try_stream;
@@ -40,6 +41,7 @@ use txn_types::Lock;
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
+#[derive(Clone)]
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPoolHandle,
@@ -67,17 +69,6 @@ pub struct Endpoint<E: Engine> {
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
-}
-
-impl<E: Engine> Clone for Endpoint<E> {
-    fn clone(&self) -> Self {
-        Self {
-            read_pool: self.read_pool.clone(),
-            semaphore: self.semaphore.clone(),
-            concurrency_manager: self.concurrency_manager.clone(),
-            ..*self
-        }
-    }
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -117,6 +108,7 @@ impl<E: Engine> Endpoint<E> {
         let start_ts = req_ctx.txn_start_ts;
         self.concurrency_manager.update_max_ts(start_ts);
         if req_ctx.context.get_isolation_level() == IsolationLevel::Si {
+            let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
                 let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
                 let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
@@ -129,8 +121,16 @@ impl<E: Engine> Endpoint<E> {
                             &req_ctx.bypass_locks,
                         )
                     })
-                    .map_err(MvccError::from)?;
+                    .map_err(|e| {
+                        MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                            .locked
+                            .observe(begin_instant.elapsed().as_secs_f64());
+                        MvccError::from(e)
+                    })?;
             }
+            MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC
+                .unlocked
+                .observe(begin_instant.elapsed().as_secs_f64());
         }
         Ok(())
     }
@@ -1299,9 +1299,12 @@ mod tests {
             engine,
         ));
 
-        let mut config = Config::default();
-        config.end_point_request_max_handle_duration =
-            ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
+        let config = Config {
+            end_point_request_max_handle_duration: ReadableDuration::millis(
+                (PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2,
+            ),
+            ..Default::default()
+        };
 
         let cm = ConcurrencyManager::new(1.into());
         let cop =

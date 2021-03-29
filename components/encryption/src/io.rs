@@ -13,7 +13,8 @@ use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
 
 use crate::{Iv, Result};
-use std::fs::File;
+use file_system::File;
+use tikv_util::box_err;
 
 /// Encrypt content as data being read.
 pub struct EncrypterReader<R>(CrypterReader<R>);

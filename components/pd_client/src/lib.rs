@@ -1,21 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(min_specialization)]
-
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate quick_error;
-#[macro_use]
-extern crate serde_derive;
-extern crate hex;
-extern crate kvproto;
-#[macro_use(fail_point)]
-extern crate fail;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-#[macro_use]
-extern crate tikv_util;
 
 mod client;
 mod feature_gate;
@@ -28,8 +13,8 @@ pub use self::client::{DummyPdClient, RpcClient};
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::validate_endpoints;
-pub use self::util::RECONNECT_INTERVAL_SEC;
+pub use self::util::PdConnector;
+pub use self::util::REQUEST_RECONNECT_INTERVAL;
 
 use std::ops::Deref;
 
@@ -161,8 +146,18 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Gets Region which the key belongs to asynchronously.
+    fn get_region_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<metapb::Region>> {
+        unimplemented!();
+    }
+
     /// Gets Region info which the key belongs to.
     fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
+    }
+
+    /// Gets Region info which the key belongs to asynchronously.
+    fn get_region_info_async<'k>(&'k self, _key: &'k [u8]) -> BoxFuture<'k, Result<RegionInfo>> {
         unimplemented!();
     }
 
@@ -244,8 +239,8 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Gets store state if it is not a tombstone store.
-    fn get_store_stats(&self, _store_id: u64) -> Result<pdpb::StoreStats> {
+    /// Gets store state if it is not a tombstone store asynchronously.
+    fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         unimplemented!();
     }
 

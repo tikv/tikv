@@ -13,35 +13,24 @@ use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
 use configuration::ConfigValue;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ConfigError {
-        Limit(msg: String) {
-            description(msg)
-            display("{}", msg)
-        }
-        Address(msg: String) {
-            description(msg)
-            display("config address error: {}", msg)
-        }
-        StoreLabels(msg: String) {
-            description(msg)
-            display("store label error: {}", msg)
-        }
-        Value(msg: String) {
-            description(msg)
-            display("config value error: {}", msg)
-        }
-        FileSystem(msg: String) {
-            description(msg)
-            display("config fs: {}", msg)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("0")]
+    Limit(String),
+    #[error("config address error: {0}")]
+    Address(String),
+    #[error("store label error: {0}")]
+    StoreLabels(String),
+    #[error("config value error: {0}")]
+    Value(String),
+    #[error("config fs: {0}")]
+    FileSystem(String),
 }
 
 const UNIT: u64 = 1;
@@ -79,12 +68,12 @@ impl From<ReadableSize> for ConfigValue {
     }
 }
 
-impl Into<ReadableSize> for ConfigValue {
-    fn into(self) -> ReadableSize {
-        if let ConfigValue::Size(s) = self {
+impl From<ConfigValue> for ReadableSize {
+    fn from(c: ConfigValue) -> ReadableSize {
+        if let ConfigValue::Size(s) = c {
             ReadableSize(s)
         } else {
-            panic!("expect: ConfigValue::Size, got: {:?}", self);
+            panic!("expect: ConfigValue::Size, got: {:?}", c);
         }
     }
 }
@@ -103,9 +92,9 @@ impl From<Option<ReadableSize>> for OptionReadableSize {
     }
 }
 
-impl Into<Option<ReadableSize>> for OptionReadableSize {
-    fn into(self) -> Option<ReadableSize> {
-        self.0
+impl From<OptionReadableSize> for Option<ReadableSize> {
+    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
+        s.0
     }
 }
 
@@ -115,12 +104,12 @@ impl From<OptionReadableSize> for ConfigValue {
     }
 }
 
-impl Into<OptionReadableSize> for ConfigValue {
-    fn into(self) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = self {
+impl From<ConfigValue> for OptionReadableSize {
+    fn from(s: ConfigValue) -> OptionReadableSize {
+        if let ConfigValue::OptionSize(s) = s {
             OptionReadableSize(s.map(ReadableSize))
         } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", self);
+            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
@@ -297,12 +286,12 @@ impl From<ReadableDuration> for ConfigValue {
     }
 }
 
-impl Into<ReadableDuration> for ConfigValue {
-    fn into(self) -> ReadableDuration {
-        if let ConfigValue::Duration(d) = self {
+impl From<ConfigValue> for ReadableDuration {
+    fn from(d: ConfigValue) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = d {
             ReadableDuration(Duration::from_millis(d))
         } else {
-            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+            panic!("expect: ConfigValue::Duration, got: {:?}", d);
         }
     }
 }
@@ -644,6 +633,8 @@ mod check_data_dir {
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 
@@ -1108,7 +1099,7 @@ impl TomlLine {
 
 /// TomlWriter use to update the config file and only cover the most commom toml
 /// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,

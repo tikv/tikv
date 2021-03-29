@@ -130,7 +130,7 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TxnEntry {
     Prewrite {
         default: KvPair,
@@ -166,6 +166,16 @@ impl TxnEntry {
                     Ok((k, v))
                 }
             }
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
+    /// This method will generate this kv pair's key
+    pub fn to_key(&self) -> Result<Key> {
+        match self {
+            TxnEntry::Commit { write, .. } => Ok(Key::from_encoded_slice(
+                Key::truncate_ts_for(&write.0).unwrap(),
+            )),
             // Prewrite are not support
             _ => unreachable!(),
         }
@@ -586,8 +596,8 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
-        SnapContext, TestEngineBuilder, WriteData,
+        Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, SnapContext,
+        TestEngineBuilder, WriteData,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
     use crate::storage::txn::{
@@ -650,6 +660,7 @@ mod tests {
                             txn_size: 0,
                             lock_ttl: 0,
                             min_commit_ts: TimeStamp::default(),
+                            need_old_value: false,
                         },
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         &None,
@@ -757,24 +768,11 @@ mod tests {
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOptions, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter(&self, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
-        fn iter_cf(
-            &self,
-            _: CfName,
-            _: IterOptions,
-            _: ScanMode,
-        ) -> EngineResult<Cursor<Self::Iter>> {
-            Ok(Cursor::new(
-                MockRangeSnapshotIter::default(),
-                ScanMode::Forward,
-                false,
-            ))
+        fn iter_cf(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
+            Ok(MockRangeSnapshotIter::default())
         }
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
