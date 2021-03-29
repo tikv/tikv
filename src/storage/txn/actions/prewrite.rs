@@ -79,15 +79,7 @@ pub fn prewrite<S: Snapshot>(
     }
 
     let old_value = if txn_props.need_old_value && mutation.mutation_type.may_have_old_value() {
-<<<<<<< HEAD
-        get_old_value(txn, &mutation.key, prev_write)?
-=======
-        if let Some(w) = prev_write {
-            reader.get_old_value(w)?
-        } else {
-            OldValue::None
-        }
->>>>>>> 60101e904... Fix reuse of invalid write cursor (#9916)
+        get_old_value(txn, prev_write)?
     } else {
         OldValue::Unspecified
     };
