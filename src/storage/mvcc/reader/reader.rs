@@ -1635,10 +1635,7 @@ pub mod tests {
             },
             // prev_write is Rollback, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(4),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
@@ -1662,10 +1659,7 @@ pub mod tests {
             },
             // prev_write is Lock, and there exists a more previous valid write
             Case {
-                expected: OldValue::Value {
-                    short_value: None,
-                    start_ts: TimeStamp::new(3),
-                },
+                expected: OldValue::None,
 
                 written: vec![
                     (
