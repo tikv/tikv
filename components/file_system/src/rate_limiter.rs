@@ -69,7 +69,7 @@ macro_rules! do_sleep {
     };
 }
 
-const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(40);
+const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 
 /// Limit total IO flow below provided threshold by throttling lower-priority IOs.
 /// Rate limit is disabled when total IO threshold is set to zero.
@@ -85,10 +85,11 @@ struct PriorityBasedIORateLimiter {
 #[derive(Debug)]
 struct PriorityBasedIORateLimiterProtected {
     next_refill_time: Instant,
-    // IO amount that is drew from the next epoch in advance
+    // IOs that are can't be fulfilled in current epoch
     pending_bytes: [usize; IOPriority::COUNT],
-    // estimated throughput of recent epochs
-    estimated_bytes_through: [IOThroughputEstimator; IOPriority::COUNT],
+    // Used to smoothly update IO budgets
+    count_of_history_bytes: usize,
+    sum_of_history_bytes: [usize; IOPriority::COUNT],
 }
 
 impl PriorityBasedIORateLimiterProtected {
@@ -96,35 +97,8 @@ impl PriorityBasedIORateLimiterProtected {
         PriorityBasedIORateLimiterProtected {
             next_refill_time: Instant::now_coarse() + DEFAULT_REFILL_PERIOD,
             pending_bytes: [0; IOPriority::COUNT],
-            estimated_bytes_through: [IOThroughputEstimator::new(); IOPriority::COUNT],
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-struct IOThroughputEstimator {
-    /// total count of sampled epochs
-    count: usize,
-    /// sum of IOs amount over a window
-    sum: usize,
-}
-
-impl IOThroughputEstimator {
-    fn new() -> IOThroughputEstimator {
-        IOThroughputEstimator { count: 0, sum: 0 }
-    }
-
-    fn maybe_update_estimation(&mut self, v: usize) -> Option<usize> {
-        const WINDOW_SIZE: usize = 5;
-        self.count += 1;
-        self.sum += v;
-        // average over DEFAULT_REFILL_PERIOD*WINDOW_SIZE=200ms window
-        if self.count % WINDOW_SIZE == 0 {
-            let avg = self.sum / WINDOW_SIZE;
-            self.sum = 0;
-            Some(avg)
-        } else {
-            None
+            count_of_history_bytes: 0,
+            sum_of_history_bytes: [0; IOPriority::COUNT],
         }
     }
 }
@@ -152,7 +126,7 @@ macro_rules! request_imp {
             let mut locked = $limiter.protected.lock();
             locked.pending_bytes[priority_idx] += amount;
             if locked.next_refill_time <= now {
-                $limiter.refill_with_lock(&mut locked);
+                $limiter.refill(&mut locked, now);
             } else {
                 wait += locked.next_refill_time - now;
             }
@@ -176,8 +150,7 @@ impl PriorityBasedIORateLimiter {
         }
     }
 
-    /// Dynamically changes the total IO flow threshold, effective after at most
-    /// `DEFAULT_REFILL_PERIOD`.
+    /// Dynamically changes the total IO flow threshold.
     #[allow(dead_code)]
     fn set_bytes_per_sec(&self, bytes_per_sec: usize) {
         let now = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
@@ -201,50 +174,68 @@ impl PriorityBasedIORateLimiter {
         request_imp!(self, priority, amount, async)
     }
 
-    fn refill_with_lock(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>) {
-        let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
-        if limit == 0 {
-            return;
-        }
-        let now = Instant::now_coarse();
-        if locked.next_refill_time > now + DEFAULT_REFILL_PERIOD / 2 {
-            // already refilled
-            return;
-        }
+    #[cfg(test)]
+    fn critical_section(&self, now: Instant) {
+        let mut locked = self.protected.lock();
+        self.refill(&mut locked, now);
+    }
+
+    fn refill(&self, locked: &mut MutexGuard<PriorityBasedIORateLimiterProtected>, now: Instant) {
+        const UPDATE_BUDGETS_EVERY_N_EPOCHS: usize = 5;
 
         // keep in sync with a potentially skewed clock
         locked.next_refill_time = now + DEFAULT_REFILL_PERIOD;
+        let mut limit = self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
+        debug_assert!(limit > 0);
+        let should_update_budgets =
+            if locked.count_of_history_bytes == UPDATE_BUDGETS_EVERY_N_EPOCHS - 1 {
+                locked.count_of_history_bytes = 0;
+                true
+            } else {
+                locked.count_of_history_bytes += 1;
+                false
+            };
 
-        debug_assert!(IOPriority::High as usize > IOPriority::Medium as usize);
+        debug_assert!(
+            IOPriority::High as usize == IOPriority::Medium as usize + 1
+                && IOPriority::Medium as usize == IOPriority::Low as usize + 1
+        );
         for p in &[IOPriority::High, IOPriority::Medium] {
-            let pi = *p as usize;
-            // reset IO consuption
-            let bytes_through = std::cmp::min(
-                self.bytes_through[pi].swap(locked.pending_bytes[pi], Ordering::Release),
+            let p = *p as usize;
+            // calculate budgets from next epoch used to satisfy pending IOs
+            let satisfied = if locked.pending_bytes[p] > limit {
+                // preserve pending IOs that still can't be satisfied
+                locked.pending_bytes[p] -= limit;
+                limit
+            } else {
+                std::mem::replace(&mut locked.pending_bytes[p], 0)
+            };
+            locked.sum_of_history_bytes[p] += std::cmp::min(
+                self.bytes_through[p].swap(satisfied, Ordering::Release),
                 limit,
             );
-            // pending IOs are inherited across epochs
-            locked.pending_bytes[pi] = locked.pending_bytes[pi].saturating_sub(limit);
-            // calibrate and update IO quotas for next lower priority
-            if let Some(bytes_through) =
-                locked.estimated_bytes_through[pi].maybe_update_estimation(bytes_through)
-            {
-                limit = if limit > bytes_through {
-                    limit - bytes_through
+            if should_update_budgets {
+                let estimated_bytes_through =
+                    std::mem::replace(&mut locked.sum_of_history_bytes[p], 0)
+                        / UPDATE_BUDGETS_EVERY_N_EPOCHS;
+                limit = if limit > estimated_bytes_through {
+                    limit - estimated_bytes_through
                 } else {
                     1 // a small positive value
                 };
-                self.bytes_per_epoch[pi - 1].store(limit, Ordering::Relaxed);
+                self.bytes_per_epoch[p - 1].store(limit, Ordering::Relaxed);
             } else {
-                limit = self.bytes_per_epoch[pi - 1].load(Ordering::Relaxed);
+                limit = self.bytes_per_epoch[p - 1].load(Ordering::Relaxed);
             }
         }
-        self.bytes_through[IOPriority::Low as usize].store(
-            locked.pending_bytes[IOPriority::Low as usize],
-            Ordering::Release,
-        );
-        locked.pending_bytes[IOPriority::Low as usize] =
-            locked.pending_bytes[IOPriority::Low as usize].saturating_sub(limit);
+        let p = IOPriority::Low as usize;
+        let satisfied = if locked.pending_bytes[p] > limit {
+            locked.pending_bytes[p] -= limit;
+            limit
+        } else {
+            std::mem::replace(&mut locked.pending_bytes[p], 0)
+        };
+        self.bytes_through[p].store(satisfied, Ordering::Release);
     }
 }
 
@@ -512,5 +503,15 @@ mod tests {
             total_bytes as f64,
             bytes_per_sec as f64 * duration.as_secs_f64(),
         );
+    }
+
+    #[bench]
+    fn bench_critical_section(b: &mut test::Bencher) {
+        let inner_limiter = PriorityBasedIORateLimiter::new();
+        inner_limiter.set_bytes_per_sec(1 * 1024);
+        let now = Instant::now();
+        b.iter(|| {
+            inner_limiter.critical_section(now);
+        });
     }
 }
