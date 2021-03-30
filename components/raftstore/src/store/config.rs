@@ -744,6 +744,26 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
+        cfg.hibernate_regions = true;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(256));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+
+        cfg = Config::new();
+        cfg.hibernate_regions = false;
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(1024));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(256));
+
+        cfg = Config::new();
+        cfg.hibernate_regions = true;
+        cfg.store_batch_system.max_batch_size = Some(123);
+        cfg.apply_batch_system.max_batch_size = Some(234);
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.store_batch_system.max_batch_size, Some(123));
+        assert_eq!(cfg.apply_batch_system.max_batch_size, Some(234));
+
+        cfg = Config::new();
         cfg.future_poll_size = 0;
         assert!(cfg.validate().is_err());
 
