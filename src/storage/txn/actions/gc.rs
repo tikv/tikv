@@ -1,12 +1,17 @@
 use crate::storage::mvcc::{
-    GcInfo, MvccTxn, Result as MvccResult, GC_DELETE_VERSIONS_HISTOGRAM, MAX_TXN_WRITE_SIZE,
-    MVCC_VERSIONS_HISTOGRAM,
+    GcInfo, MvccReader, MvccTxn, Result as MvccResult, GC_DELETE_VERSIONS_HISTOGRAM,
+    MAX_TXN_WRITE_SIZE, MVCC_VERSIONS_HISTOGRAM,
 };
 use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
-pub fn gc(txn: &mut MvccTxn<impl Snapshot>, key: Key, safe_point: TimeStamp) -> MvccResult<GcInfo> {
-    let gc = Gc::new(txn, key);
+pub fn gc<'a, S: Snapshot>(
+    txn: &'a mut MvccTxn,
+    reader: &'a mut MvccReader<S>,
+    key: Key,
+    safe_point: TimeStamp,
+) -> MvccResult<GcInfo> {
+    let gc = Gc::new(txn, reader, key);
     let info = gc.run(safe_point)?;
     info.report_metrics();
 
@@ -18,11 +23,12 @@ struct Gc<'a, S: Snapshot> {
     key: Key,
     cur_ts: TimeStamp,
     info: GcInfo,
-    txn: &'a mut MvccTxn<S>,
+    txn: &'a mut MvccTxn,
+    reader: &'a mut MvccReader<S>,
 }
 
 impl<'a, S: Snapshot> Gc<'a, S> {
-    fn new(txn: &'a mut MvccTxn<S>, key: Key) -> Gc<'a, S> {
+    fn new(txn: &'a mut MvccTxn, reader: &'a mut MvccReader<S>, key: Key) -> Gc<'a, S> {
         Gc {
             key,
             cur_ts: TimeStamp::max(),
@@ -32,6 +38,7 @@ impl<'a, S: Snapshot> Gc<'a, S> {
                 is_completed: false,
             },
             txn,
+            reader,
         }
     }
 
@@ -44,7 +51,7 @@ impl<'a, S: Snapshot> Gc<'a, S> {
     }
 
     fn next_write(&mut self) -> MvccResult<Option<(TimeStamp, Write)>> {
-        let result = self.txn.reader.seek_write(&self.key, self.cur_ts)?;
+        let result = self.reader.seek_write(&self.key, self.cur_ts)?;
         if let Some((commit, _)) = result {
             self.cur_ts = commit.prev();
             self.info.found_versions += 1;
@@ -140,14 +147,9 @@ pub mod tests {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let cm = ConcurrencyManager::new(1.into());
-        let mut txn = MvccTxn::for_scan(
-            snapshot,
-            Some(ScanMode::Forward),
-            TimeStamp::zero(),
-            true,
-            cm,
-        );
-        gc(&mut txn, Key::from_raw(key), safe_point.into()).unwrap();
+        let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
+        gc(&mut txn, &mut reader, Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &Context::default(), txn.into_modifies());
     }
 
@@ -169,7 +171,7 @@ pub mod tests {
         must_prewrite_lock(&engine, k, k, 45);
         must_commit(&engine, k, 45, 50);
         must_prewrite_put(&engine, k, v4, k, 55);
-        must_rollback(&engine, k, 55);
+        must_rollback(&engine, k, 55, false);
 
         // Transactions:
         // startTS commitTS Command
