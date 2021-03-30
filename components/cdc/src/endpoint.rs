@@ -450,6 +450,9 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Endpoint<T> {
             }
 
             // send a barrier to the scheduler
+            // The whole incremental scan process now by-passes the scheduler,
+            // so we have to make sure all real-time events that have been produced by this point
+            // have been processed before proceeding, or otherwise the resolved ts might not be correct.
             let (tx, rx) = tokio::sync::oneshot::channel();
             if let Err(e) = scheduler.schedule(Task::Barrier(Box::new(move || {
                 // TODO any risk with unwrap?
@@ -1204,7 +1207,7 @@ impl Initializer {
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
     }
 
-    async fn async_do_blocking<F, O>(&self, job: F) -> Result<O>
+    async fn spawn_blocking<F, O>(&self, job: F) -> Result<O>
     where
         F: FnOnce() -> Result<O> + Send + 'static,
         O: Send + 'static,
@@ -1226,7 +1229,7 @@ impl Initializer {
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id);
 
-        /* We need a resolver to track locks encountered in the incremental scan */
+        // We need a resolver to track locks encountered in the incremental scan
         let resolver = Some(Resolver::new(region_id));
 
         fail_point!("cdc_incremental_scan_start");
@@ -1274,7 +1277,7 @@ impl Initializer {
             }
             let scan_context = scan_context.clone();
             let entries = match self
-                .async_do_blocking(move || {
+                .spawn_blocking(move || {
                     let context = scan_context.lock().unwrap();
                     let result = Self::scan_batch(
                         &mut context.scanner.borrow_mut(),
@@ -1529,7 +1532,6 @@ impl<T: 'static + RaftStoreRouter<RocksEngine>> Runnable for Endpoint<T> {
 
 impl<T: 'static + RaftStoreRouter<RocksEngine>> RunnableWithTimer for Endpoint<T> {
     fn on_timeout(&mut self) {
-        debug!("cdc thread pool is alive");
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         if self.min_resolved_ts != TimeStamp::max() {
             CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
