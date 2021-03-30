@@ -6,15 +6,21 @@ use tikv_util::config::ReadableDuration;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub max_batch_size: usize,
+    pub max_batch_size: Option<usize>,
     pub pool_size: usize,
     pub reschedule_duration: ReadableDuration,
+}
+
+impl Config {
+    pub fn max_batch_size(&self) -> usize {
+        self.max_batch_size.unwrap()
+    }
 }
 
 impl Default for Config {
     fn default() -> Config {
         Config {
-            max_batch_size: 256,
+            max_batch_size: None,
             pool_size: 2,
             reschedule_duration: ReadableDuration::secs(5),
         }
